@@ -621,9 +621,9 @@ Index: psprint/source/fontmanager/fontconfig.cxx
 ===================================================================
 RCS file: psprint/source/fontmanager/fontconfig.cxx
 diff -N psprint/source/fontmanager/fontconfig.cxx
---- /dev/null	1 Jan 1970 00:00:00 -0000
-+++ psprint/source/fontmanager/fontconfig.cxx	1 Jun 2004 09:35:26 -0000	1.4
-@@ -0,0 +1,412 @@
+--- psprint/source/fontmanager/fontconfig.cxx.orig	2004-09-27 15:34:15.000000000 -0400
++++ psprint/source/fontmanager/fontconfig.cxx	2004-09-29 15:29:34.904889950 -0400
+@@ -0,0 +1,433 @@
 +/*************************************************************************
 + *
 + *  
@@ -695,7 +695,7 @@ diff -N psprint/source/fontmanager/fontconfig.cxx
 +typedef int FcResult;
 +typedef int FcBool;
 +typedef char FcChar8;
-+
++typedef void FcCharSet;
 +#endif
 +
 +#include <cstdio>
@@ -736,6 +736,7 @@ diff -N psprint/source/fontmanager/fontconfig.cxx
 +    FcResult		(*m_pFcPatternGetInteger)(const FcPattern*,const char*,int,int*);
 +    FcResult		(*m_pFcPatternGetDouble)(const FcPattern*,const char*,int,double*);
 +    FcResult		(*m_pFcPatternGetBool)(const FcPattern*,const char*,int,FcBool*);
++    FcResult		(*m_pFcPatternGetCharSet)(const FcPattern*,const char*,int,FcCharSet**);
 +    
 +    void* loadSymbol( const char* );
 +public:
@@ -783,6 +784,9 @@ diff -N psprint/source/fontmanager/fontconfig.cxx
 +
 +    FcResult FcPatternGetBool( const FcPattern* pPattern, const char* object, int n, FcBool* s )
 +    { return m_pFcPatternGetBool( pPattern, object, n, s ); }
++
++    FcResult FcPatternGetCharSet( const FcPattern* pPattern, const char* object, int n, FcCharSet** s )
++    { return m_pFcPatternGetCharSet( pPattern, object, n, s ); }
 +};
 +
 +void* FontCfgWrapper::loadSymbol( const char* pSymbol )
@@ -838,6 +842,8 @@ diff -N psprint/source/fontmanager/fontconfig.cxx
 +        loadSymbol( "FcPatternGetDouble" );
 +    m_pFcPatternGetBool = (FcResult(*)(const FcPattern*,const char*,int,FcBool*))
 +        loadSymbol( "FcPatternGetBool" );
++    m_pFcPatternGetCharSet = (FcResult(*)(const FcPattern*,const char*,int,FcCharSet**))
++        loadSymbol( "FcPatternGetCharSet" );
 +
 +    if( ! (
 +            m_pFcInitLoadConfigAndFonts		&&
@@ -850,7 +856,8 @@ diff -N psprint/source/fontmanager/fontconfig.cxx
 +            m_pFcPatternGetString			&&
 +            m_pFcPatternGetInteger			&&
 +            m_pFcPatternGetDouble			&&
-+            m_pFcPatternGetBool
++            m_pFcPatternGetBool			&&
++            m_pFcPatternGetCharSet
 +            ) )
 +     {
 +         osl_unloadModule( m_pLib );
@@ -890,6 +897,7 @@ diff -N psprint/source/fontmanager/fontconfig.cxx
 +                                                    FC_SPACING,
 +                                                    FC_FILE,
 +                                                    FC_OUTLINE,
++                                                    FC_CHARSET,
 +                                                    NULL );
 +    FcPattern* pPattern = aWrapper.FcPatternCreate();
 +    FcFontSet* pFSet = aWrapper.FcFontList( pConfig, pPattern, pOSet );
@@ -908,6 +916,7 @@ diff -N psprint/source/fontmanager/fontconfig.cxx
 +            int weight = 0;
 +            int spacing = 0;
 +            FcBool outline = false;
++            FcCharSet *charset = 0;
 +            
 +            FcResult eFileRes	= aWrapper.FcPatternGetString( pFSet->fonts[i], FC_FILE, 0, &file );
 +            FcResult eFamilyRes	= aWrapper.FcPatternGetString( pFSet->fonts[i], FC_FAMILY, 0, &family );
@@ -916,7 +925,7 @@ diff -N psprint/source/fontmanager/fontconfig.cxx
 +            FcResult eWeightRes	= aWrapper.FcPatternGetInteger( pFSet->fonts[i], FC_WEIGHT, 0, &weight );
 +            FcResult eSpacRes	= aWrapper.FcPatternGetInteger( pFSet->fonts[i], FC_SPACING, 0, &spacing );
 +            FcResult eOutRes	= aWrapper.FcPatternGetBool( pFSet->fonts[i], FC_OUTLINE, 0, &outline );
-+            
++            FcResult eCharSet	= aWrapper.FcPatternGetCharSet( pFSet->fonts[i], FC_CHARSET, 0, &charset );
 +            
 +            if( eFileRes != FcResultMatch || eFamilyRes != FcResultMatch || eOutRes != FcResultMatch )
 +                continue;
@@ -1004,6 +1013,18 @@ diff -N psprint/source/fontmanager/fontconfig.cxx
 +                        (*it)->m_eItalic = italic::Italic;
 +                    else if( slant == FC_SLANT_OBLIQUE )
 +                        (*it)->m_eItalic = italic::Oblique;
++                }
++                if( (eCharSet == FcResultMatch) && charset)
++                {
++                    /* Ok, so we have to call Type1 fonts Unicode, because most
++                     * (for example, Luxi Sans) have their encoding set to "FontSpecific"
++                     * in their .afm file, which makes OOo decide to call the fonts "symbol"
++                     * fonts.  That messes up stuff a _lot_.  Therefore, call all Type1 fonts
++                     * unicode fonts unless they have "ymbol" or "ingbats" in their name.
++                     */
++                    if (   !strncmp ((file+strlen(file)-4), ".pf", 3)
++                        && !(strstr(family, "ymbol") || strstr(family, "ingbat")) )
++                        (*it)->m_aEncoding = RTL_TEXTENCODING_UNICODE;
 +                }
 +                
 +                // update font cache
