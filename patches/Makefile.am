@@ -1,6 +1,7 @@
 SUBDIRS=\
 	wpd \
 	evo2 \
+	gcc34 \
 	vclplug \
 	mscodec \
 	OOO_1_1   \
