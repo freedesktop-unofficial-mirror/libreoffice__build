@@ -1,0 +1,163 @@
+===================================================================
+RCS file: /var/cvsup/gsl/vcl/unx/gtk/window gtkframe.cxx,v
+retrieving revision 1.19.2.9
+retrieving revision 1.19.2.10
+diff -u -r1.19.2.9 -r1.19.2.10
+--- vcl/unx/gtk/window/gtkframe.cxx	2005/03/08 14:32:06	1.19.2.9
++++ vcl/unx/gtk/window/gtkframe.cxx	2005/03/15 14:22:29	1.19.2.10
+@@ -262,12 +262,7 @@
+                                     None );
+         XFreePixmap( getDisplay()->GetDisplay(), m_hBackgroundPixmap );
+     }
+-    
+-    if( m_pIMContext )
+-    {
+-        hardIMReset();
+-        gtk_im_context_set_client_window( m_pIMContext, NULL );
+-        g_object_unref( m_pIMContext );
+-    }
++
++    deleteIMContext();
+     if( m_pFixedContainer )
+         gtk_widget_destroy( GTK_WIDGET(m_pFixedContainer) );
+@@ -289,7 +284,9 @@
+ 
+ 	if( m_pIMContext )
+     {
++        m_bIgnoreCommit = true;
+         gtk_im_context_reset( m_pIMContext );
++        m_bIgnoreCommit = false;
+         
+         // a correctly implemented _reset method will
+         // emit a 'commit' signal if pending pre-edit
+@@ -348,6 +345,7 @@
+ 	m_bSendModChangeOnRelease = false;
+     m_pIMContext		= NULL;
+     m_bWasPreedit		= false;
++    m_bIgnoreCommit     = false;
+     m_aPrevKeyPresses.clear();
+     m_nPrevKeyPresses = 0;
+     m_hBackgroundPixmap = None;
+@@ -771,6 +769,9 @@
+                 m_nFloats++;
+                 if( ! getDisplay()->GetCaptureFrame() && m_nFloats == 1 )
+                     grabPointer( TRUE, TRUE );
++                // #i44068# reset parent's IM context
++                if( m_pParent )
++                    m_pParent->EndExtTextInput(0);
+             }
+         }
+         else
+@@ -1281,15 +1282,30 @@
+    }
+ }
+ 
++void GtkSalFrame::deleteIMContext()
++{
++    if( m_pIMContext )
++    {
++        // first give IC a chance to deinitialize
++        hardIMReset();
++        gtk_im_context_set_client_window( m_pIMContext, NULL );
++        // destroy old IC
++        g_object_unref( m_pIMContext );
++        m_pIMContext = NULL;
++    }
++}
++
+ void GtkSalFrame::SetInputContext( SalInputContext* pContext )
+ {
++    #if OSL_DEBUG_LEVEL > 1
++    fprintf( stderr, ":SetInputContext( 0x%x )\n", pContext );
++    #endif
+     if( ! pContext )
+         return;
+ 
+     if( ! (pContext->mnOptions & SAL_INPUTCONTEXT_TEXT) )
+     {
+-        if( m_pIMContext )
+-            gtk_im_context_focus_out( m_pIMContext );
++        deleteIMContext();
+         return;
+     }
+ 
+@@ -1301,6 +1317,9 @@
+ {
+     if( m_pIMContext )
+     {
++        #if OSL_DEBUG_LEVEL > 1
++        fprintf( stderr, ":EndExtTextInput\n" );
++        #endif
+         // since some IMs won't do a reset on gtk_im_context_reset
+         // and not empty their preedit buffer, there does not
+         // seem to be another choice than to create a completely
+@@ -1308,12 +1327,8 @@
+         // here (which disables the preedit state) since gtk
+         // does not give us that much control
+         
+-        // first give IC a chance to deinitialize
+-        hardIMReset();
+-        gtk_im_context_set_client_window( m_pIMContext, NULL );
+         // destroy old IC
+-        g_object_unref( m_pIMContext );
+-        m_pIMContext = NULL;
++        deleteIMContext();
+         // create new IC
+         createIMContext();
+     }
+@@ -2096,16 +2111,17 @@
+ 
+     SalExtTextInputEvent aTextEvent;
+ 
++    GTK_YIELD_GRAB();
++
+     aTextEvent.mnTime 			= 0;
+     aTextEvent.mpTextAttr 		= 0;
+-    aTextEvent.maText 			= String( pText, RTL_TEXTENCODING_UTF8 );
++    if( ! pThis->m_bIgnoreCommit )
++        aTextEvent.maText 		= String( pText, RTL_TEXTENCODING_UTF8 );
+     aTextEvent.mnCursorPos 		= aTextEvent.maText.Len();
+     aTextEvent.mnCursorFlags 	= 0;
+     aTextEvent.mnDeltaStart 	= 0;
+     aTextEvent.mbOnlyCursor 	= False;
+ 
+-    GTK_YIELD_GRAB();
+-
+ 	vcl::DeletionListener aDel( pThis );
+ 
+     /* necessary HACK: all keyboard input comes in here as soon as a IMContext is set
+@@ -2131,6 +2147,10 @@
+         pThis->doKeyCallback( rKP.state, rKP.keyval, rKP.hardware_keycode, rKP.group, rKP.time, true, true );
+         return;
+     }
++    
++    #if OSL_DEBUG_LEVEL > 1
++    fprintf( stderr, ":signalIMCommit '%s'\n", pText );
++    #endif
+ 
+     pThis->m_bWasPreedit = false;
+     pThis->CallCallback( SALEVENT_EXTTEXTINPUT, (void*)&aTextEvent);
+
+===================================================================
+RCS file: /var/cvsup/gsl/vcl/unx/inc/plugins/gtk gtkframe.hxx,v
+retrieving revision 1.11.2.2
+retrieving revision 1.11.2.3
+diff -u -r1.11.2.2 -r1.11.2.3
+--- vcl/unx/inc/plugins/gtk/gtkframe.hxx	2005/02/15 15:04:22	1.11.2.2
++++ vcl/unx/inc/plugins/gtk/gtkframe.hxx	2005/03/15 14:22:29	1.11.2.3
+@@ -182,6 +182,7 @@
+     bool                            m_bDefaultSize;
+     bool                            m_bSendModChangeOnRelease;
+     bool                            m_bWasPreedit;
++    bool                            m_bIgnoreCommit;
+     
+     Size                            m_aMaxSize;
+     Size                            m_aMinSize;
+@@ -225,6 +226,7 @@
+ 	void			setScreenSaverTimeout( int nTimeout );
+ 	void            hardIMReset();
+     void            createIMContext();
++    void            deleteIMContext();
+     
+     void            doKeyCallback( guint state,
+                                    guint keyval,
