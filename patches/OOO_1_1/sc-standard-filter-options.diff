@@ -1,0 +1,362 @@
+--- /home/sragavan/cvs/bk/ooo-build/build/OOO_1_1_2/sc/inc/global.hxx	2003-04-28 21:00:46.000000000 +0530
++++ sc/inc/global.hxx	2004-10-08 16:23:48.000000000 +0530
+@@ -1329,6 +1329,8 @@
+ 
+ enum ScQueryOp
+ 	{
++		SC_BEGINS_WITH,
++		SC_ENDS_WITH,
+ 		SC_EQUAL,
+ 		SC_LESS,
+ 		SC_GREATER,
+--- /home/sragavan/cvs/bk/ooo-build/build/OOO_1_1_2/sc/source/ui/dbgui/filtdlg.cxx	2004-01-09 20:11:10.000000000 +0530
++++ sc/source/ui/dbgui/filtdlg.cxx	2004-10-08 16:24:56.000000000 +0530
+@@ -83,6 +83,7 @@
+ #include "viewdata.hxx"
+ #include "document.hxx"
+ #include "scresid.hxx"
++#include "docoptio.hxx"
+ 
+ #include "foptmgr.hxx"
+ 
+@@ -219,6 +220,7 @@
+ 							aBtnMore,
+ 							aBtnCase,
+ 							aBtnRegExp,
++							aBtnWholeWord,
+ 							aBtnHeader,
+ 							aBtnUnique,
+ 							aBtnCopyResult,
+@@ -573,6 +575,17 @@
+ 		bCopyPosOk = ( SCA_VALID == (nResult & SCA_VALID) );
+ 	}
+ 
++	/*
++	  * The reg exp checkbutton read is moved up, since,
++	  * for begins and ends with query we are makeing them as re query transparently
++	  * Checking this later spoils the entire transparent work.
++	  */
++	theParam.bRegExp		= aBtnRegExp.IsChecked();
++
++	ScDocOptions pDocOpts = pDoc->GetDocOptions();
++	pDocOpts.SetMatchWholeCell(aBtnWholeWord.IsChecked());
++	pDoc->SetDocOptions(pDocOpts);
++
+ 	for ( USHORT i=0; i<3; i++ )
+ 	{
+ 		USHORT 		nField	= aFieldLbArr[i]->GetSelectEntryPos();
+@@ -606,6 +619,19 @@
+ 			}
+ 			else
+ 			{
++				if (eOp == SC_BEGINS_WITH ) {
++					String tmp ('^');
++					tmp .Append(aStrVal);
++					::rtl::OUString str (tmp);
++					aStrVal.Assign(tmp);
++					eOp = SC_EQUAL;
++					theParam.bRegExp		= TRUE;
++				}
++				else if (eOp == SC_ENDS_WITH ) {
++					aStrVal.Append (String('$'));
++					eOp = SC_EQUAL;
++					theParam.bRegExp		= TRUE;
++				}
+ 				*rEntry.pStr		  = aStrVal;
+ 				rEntry.nVal			  = 0;
+ 				rEntry.bQueryByString = TRUE;
+@@ -642,7 +668,7 @@
+ 	theParam.bByRow			= TRUE;
+ 	theParam.bDuplicate		= !aBtnUnique.IsChecked();
+ 	theParam.bCaseSens 		= aBtnCase.IsChecked();
+-	theParam.bRegExp		= aBtnRegExp.IsChecked();
++	
+ 	theParam.bDestPers		= aBtnDestPers.IsChecked();
+ 
+ 	//	nur die drei eingestellten - alles andere zuruecksetzen
+--- /home/sragavan/cvs/bk/ooo-build/build/OOO_1_1_2/sc/source/ui/inc/filtdlg.hxx	2001-09-24 22:59:58.000000000 +0530
++++ sc/source/ui/inc/filtdlg.hxx	2004-10-08 12:23:49.000000000 +0530
+@@ -101,6 +101,7 @@
+ 	CheckBox		aBtnCase; \
+ 	CheckBox		aBtnRegExp; \
+ 	CheckBox		aBtnHeader; \
++	CheckBox		aBtnWholeWord; \
+ 	CheckBox		aBtnUnique; \
+ 	CheckBox		aBtnCopyResult; \
+ 	ListBox			aLbCopyArea; \
+@@ -122,6 +123,7 @@
+     aFlOptions      ( this, ScResId( FL_OPTIONS ) ), \
+ 	aBtnCase		( this, ScResId( BTN_CASE ) ), \
+ 	aBtnRegExp		( this, ScResId( BTN_REGEXP ) ), \
++	aBtnWholeWord	( this, ScResId( BTN_MATCH) ), \
+ 	aBtnHeader		( this, ScResId( BTN_HEADER ) ), \
+ 	aBtnUnique		( this, ScResId( BTN_UNIQUE ) ), \
+ 	aBtnCopyResult	( this, ScResId( BTN_COPY_RESULT ) ), \
+--- /home/sragavan/cvs/bk/ooo-build/build/OOO_1_1_2/sc/source/ui/inc/filter.hrc	2001-05-21 14:52:56.000000000 +0530
++++ sc/source/ui/inc/filter.hrc	2004-10-08 12:27:21.000000000 +0530
+@@ -81,7 +81,7 @@
+ #define FT_DBAREA_LABEL		10
+ #define FT_DBAREA			11
+ #define BTN_DEST_PERS		12
+-
++#define BTN_MATCH		13
+ // Filter:
+ #define FT_OP				20
+ #define FT_FIELD			21
+--- /home/sragavan/cvs/bk/ooo-build/build/OOO_1_1_2/sc/source/ui/src/filter.src	2004-04-27 22:31:47.000000000 +0530
++++ sc/source/ui/src/filter.src	2004-10-08 14:55:38.000000000 +0530
+@@ -66,7 +66,7 @@
+ 	HelpId = SID_FILTER ;
+ 	Hide = TRUE ;
+ 	SVLook = TRUE ;
+-	Size = MAP_APPFONT ( 298 , 83 ) ;
++	Size = MAP_APPFONT ( 298 , 98 ) ;
+ 	Text = "Standardfilter" ;
+ 	Text [ ENGLISH ] = "Standard Filter" ;
+ 	Text [ norwegian ] = "Standardfilter" ;
+@@ -708,12 +708,14 @@
+ 		};
+ 		stringlist [ english_us ] =
+ 		{
+-			< "=" ; Default ; > ;
++			< "Begins with" ; Default ; > ;
++			< "Ends with" ; Default ; > ;
++			< "Equals" ; Default ; > ;
+ 			< "<" ; Default ; > ;
+ 			< ">" ; Default ; > ;
+ 			< "<=" ; Default ; > ;
+ 			< ">=" ; Default ; > ;
+-			< "<>" ; Default ; > ;
++			< "Not equals" ; Default ; > ;
+ 			< "Largest" ; Default ; > ;
+ 			< "Smallest" ; Default ; > ;
+ 			< "Largest %" ; Default ; > ;
+@@ -2278,6 +2280,14 @@
+ 		Text[ zulu ] = "Isisho esi~jwayelekile";
+ 		Text[ norwegian_nynorsk ] = "~Regulært uttrykk";
+ 	};
++
++        CheckBox BTN_MATCH
++        {
++        Pos = MAP_APPFONT ( 12 , 126 ) ;
++        Size = MAP_APPFONT ( 239 , 10 ) ;
++                Text [ english_us ] = "Search criteria must apply to ~whole cells" ;
++	};
++
+ 	CheckBox BTN_HEADER
+ 	{
+ 		Hide = TRUE ;
+@@ -2458,7 +2468,7 @@
+ 	{
+ 		Border = TRUE ;
+ 		Hide = TRUE ;
+-        Pos = MAP_APPFONT ( 21 , 126 ) ;
++        Pos = MAP_APPFONT ( 21 , 138 ) ;
+ 		Size = MAP_APPFONT ( 90 , 90 ) ;
+ 		TabStop = TRUE ;
+ 		DropDown = TRUE ;
+@@ -2467,7 +2477,7 @@
+ 	{
+ 		Border = TRUE ;
+ 		Hide = TRUE ;
+-        Pos = MAP_APPFONT ( 115 , 126 ) ;
++        Pos = MAP_APPFONT ( 115 , 138 ) ;
+         Size = MAP_APPFONT ( 104 , 12 ) ;
+ 		TabStop = TRUE ;
+ 	};
+@@ -2475,7 +2485,7 @@
+ 	{
+ 		QuickHelpText = "Verkleinern" ;
+ 		QuickHelpText [ ENGLISH ] = "Shrink" ;
+-        Pos = MAP_APPFONT ( 221 , 126 ) ;
++        Pos = MAP_APPFONT ( 221 , 138 ) ;
+ 		Size = MAP_APPFONT ( 12 , 12 ) ;
+ 		TabStop = FALSE ;
+ 		QuickHelpText [ english_us ] = "Shrink" ;
+@@ -2605,7 +2615,7 @@
+ 	FixedText FT_DBAREA_LABEL
+ 	{
+ 		Hide = TRUE ;
+-        Pos = MAP_APPFONT ( 6 , 144 ) ;
++        Pos = MAP_APPFONT ( 6 , 156 ) ;
+         Size = MAP_APPFONT ( 58 , 8 ) ;
+ 		Text = "Datenbereich:" ;
+ 		Text [ ENGLISH ] = "Data area:" ;
+@@ -3204,10 +3214,10 @@
+ 		Text [ danish ] = "dummy" ;
+ 		Text [ french ] = "factice" ;
+ 		Text [ swedish ] = "dummy" ;
++		Left = TRUE ;
+ 		Text [ dutch ] = "dummy" ;
+ 		Text [ spanish ] = "Texto ejemplo" ;
+ 		Text [ english_us ] = "dummy" ;
+-		Left = TRUE ;
+ 		Text[ chinese_simplified ] = "æ ·æœ¬";
+ 		Text[ russian ] = "ôèêòèâíûé";
+ 		Text[ polish ] = "Zaœlepka";
+--- /home/sragavan/cvs/bk/ooo-build/build/OOO_1_1_2/sc/source/ui/dbgui/foptmgr.cxx	2001-10-23 14:35:11.000000000 +0530
++++ sc/source/ui/dbgui/foptmgr.cxx	2004-10-08 16:04:15.000000000 +0530
+@@ -76,6 +76,7 @@
+ #include "dbcolect.hxx"
+ #include "viewdata.hxx"
+ #include "document.hxx"
++#include "docoptio.hxx"
+ 
+ #define _FOPTMGR_CXX
+ #include "foptmgr.hxx"
+@@ -111,6 +111,7 @@
+ 		rBtnMore		( refBtnMore ),
+ 		rBtnCase		( refBtnCase ),
+ 		rBtnRegExp		( refBtnRegExp ),
++		rBtnWholeWord		( refBtnRegExp ),
+ 		rBtnHeader		( refBtnHeader ),
+ 		rBtnUnique		( refBtnUnique ),
+ 		rBtnCopyResult	( refBtnCopyResult ),
+@@ -123,9 +124,53 @@
+ 		rStrNoName		( refStrNoName ),
+ 		rStrUndefined	( refStrUndefined )
+ {
+-	Init();
++	Init(FALSE);
+ }
+ 
++ScFilterOptionsMgr::ScFilterOptionsMgr(
++								Dialog*				ptrDlg,
++								ScViewData*			ptrViewData,
++								const ScQueryParam&	refQueryData,
++								MoreButton&			refBtnMore,
++								CheckBox&			refBtnCase,
++								CheckBox&			refBtnRegExp,
++								CheckBox&			refBtnWholeWord,								
++								CheckBox&			refBtnHeader,
++								CheckBox&			refBtnUnique,
++								CheckBox&			refBtnCopyResult,
++								CheckBox&			refBtnDestPers,
++								ListBox&			refLbCopyArea,
++								Edit&				refEdCopyArea,
++								ScRefButton&		refRbCopyArea,
++								FixedText&			refFtDbAreaLabel,
++								FixedInfo&			refFtDbArea,
++                                FixedLine&          refFlOptions,
++								const String&		refStrNoName,
++								const String&		refStrUndefined )
++
++	:	pDlg			( ptrDlg ),
++		pViewData		( ptrViewData ),
++		pDoc			( ptrViewData ? ptrViewData->GetDocument() : NULL ),
++		rQueryData		( refQueryData ),
++		rBtnMore		( refBtnMore ),
++		rBtnCase		( refBtnCase ),
++		rBtnRegExp		( refBtnRegExp ),
++		rBtnWholeWord      ( refBtnWholeWord),
++		rBtnHeader		( refBtnHeader ),
++		rBtnUnique		( refBtnUnique ),
++		rBtnCopyResult	( refBtnCopyResult ),
++		rBtnDestPers	( refBtnDestPers ),
++		rLbCopyPos		( refLbCopyArea ),
++		rEdCopyPos		( refEdCopyArea ),
++		rRbCopyPos		( refRbCopyArea ),
++		rFtDbAreaLabel	( refFtDbAreaLabel ),
++		rFtDbArea		( refFtDbArea ),
++        rFlOptions      ( refFlOptions ),
++		rStrNoName		( refStrNoName ),
++		rStrUndefined	( refStrUndefined )
++{
++	Init(TRUE);
++}
+ 
+ //----------------------------------------------------------------------------
+ 
+@@ -141,7 +186,7 @@
+ 
+ //----------------------------------------------------------------------------
+ 
+-void ScFilterOptionsMgr::Init()
++void ScFilterOptionsMgr::Init(BOOL param)
+ {
+ 	DBG_ASSERT( pViewData && pDoc, "Init failed :-/" );
+ 
+@@ -151,6 +196,8 @@
+ 
+ 	rBtnMore.AddWindow( &rBtnCase );
+ 	rBtnMore.AddWindow( &rBtnRegExp );
++	if (param)
++		rBtnMore.AddWindow(&rBtnWholeWord);	
+ 	rBtnMore.AddWindow( &rBtnHeader );
+ 	rBtnMore.AddWindow( &rBtnUnique );
+ 	rBtnMore.AddWindow( &rBtnCopyResult );
+@@ -160,13 +207,18 @@
+ 	rBtnMore.AddWindow( &rRbCopyPos );
+ 	rBtnMore.AddWindow( &rFtDbAreaLabel );
+ 	rBtnMore.AddWindow( &rFtDbArea );
+-    rBtnMore.AddWindow( &rFlOptions );
++       rBtnMore.AddWindow( &rFlOptions );
++
+ 
+ 	rBtnCase	.Check( rQueryData.bCaseSens );
+ 	rBtnHeader	.Check( rQueryData.bHasHeader );
+ 	rBtnRegExp	.Check( rQueryData.bRegExp );
+ 	rBtnUnique	.Check( !rQueryData.bDuplicate );
+-
++	if (param) {
++		BOOL	bMatchWholeCell = pDoc->GetDocOptions().IsMatchWholeCell();
++		rBtnWholeWord.Check(bMatchWholeCell);
++	}
++	
+ 	if ( pViewData && pDoc )
+ 	{
+ 		String			theAreaStr;
+@@ -266,6 +318,7 @@
+ 	}
+ 	else
+ 		rEdCopyPos.SetText( EMPTY_STRING );
++	rFtDbArea.SetPosPixel(Point(158,331));
+ }
+ 
+ 
+--- /home/sragavan/cvs/bk/ooo-build/build/OOO_1_1_2/sc/source/ui/inc/foptmgr.hxx	2001-05-21 14:52:56.000000000 +0530
++++ sc/source/ui/inc/foptmgr.hxx	2004-10-08 16:02:56.000000000 +0530
+@@ -108,6 +108,26 @@
+                                 FixedLine&          refFlOptions,
+ 								const String&		refStrNoName,
+ 								const String&		refStrUndefined );
++			ScFilterOptionsMgr( Dialog*				ptrDlg,
++								ScViewData*			ptrViewData,
++								const ScQueryParam&	refQueryData,
++								MoreButton&			refBtnMore,
++								CheckBox&			refBtnCase,
++								CheckBox&			refBtnRegExp,
++								CheckBox&			refBtnWholeWord,
++								CheckBox&			refBtnHeader,
++								CheckBox&			refBtnUnique,
++								CheckBox&			refBtnCopyResult,
++								CheckBox&			refBtnDestPers,
++								ListBox&			refLbCopyArea,
++								Edit&				refEdCopyArea,
++								ScRefButton&		refRbCopyArea,
++								FixedText&			refFtDbAreaLabel,
++								FixedInfo&			refFtDbArea,
++                                FixedLine&          refFlOptions,
++								const String&		refStrNoName,
++								const String&		refStrUndefined );
++			
+ 			~ScFilterOptionsMgr();
+ 
+ 	BOOL	VerifyPosStr ( const String& rPosStr ) const;
+@@ -119,6 +139,7 @@
+ 
+ 	MoreButton&		rBtnMore;
+ 	CheckBox&		rBtnCase;
++	CheckBox&		rBtnWholeWord;
+ 	CheckBox&		rBtnRegExp;
+ 	CheckBox&		rBtnHeader;
+ 	CheckBox&		rBtnUnique;
+@@ -138,7 +159,7 @@
+ 
+ #ifdef _FOPTMGR_CXX
+ private:
+-	void Init();
++	void Init(BOOL param);
+ 
+ 	// Handler:
+ 	DECL_LINK( EdPosModifyHdl,		Edit* );
