@@ -1,21 +1,18 @@
 --- vcl/unx/gtk/app/gtkdata.cxx
 +++ vcl/unx/gtk/app/gtkdata.cxx
-@@ -387,7 +400,8 @@
+@@ -387,7 +400,9 @@
      std::list<GSource *> m_aSources;
      GSource             *m_pTimeout;
  	GSource				*m_pUserEvent;
--	ULONG				 m_nTimeoutMs;
+ 	ULONG				 m_nTimeoutMs;
 +    oslMutex             m_aDispatchMutex;
 +    oslCondition         m_aDispatchCondition;
  
  	static gboolean      timeoutFn(gpointer data);
  	static gboolean      userEventFn(gpointer data);
-@@ -417,8 +431,10 @@
- #endif
-     m_pGtkSalDisplay = NULL;
+@@ -417,6 +431,8 @@
  	m_pTimeout = NULL;
--	m_nTimeoutMs = 0;
-+	m_nTimeoutMS = 0;
+	m_nTimeoutMs = 0;
      m_pUserEvent = NULL;
 +    m_aDispatchCondition = osl_createCondition();
 +    m_aDispatchMutex = osl_createMutex();
@@ -34,22 +31,12 @@
  }
  
  void GtkXLib::Init()
-@@ -562,7 +583,7 @@
- 	}
- 
- 	// Auto-restart immediately
--	pThis->StartTimer( pThis->m_nTimeoutMs );
-+	pThis->StartTimer( pThis->m_nTimeoutMS );
- 	
- 	GetSalData()->Timeout();
- 
 @@ -573,20 +594,30 @@
  
  void GtkXLib::StartTimer( ULONG nMS )
  {
 -	StopTimer();
--	m_nTimeoutMs = nMS; // for restarting
-+	m_nTimeoutMS = nMS; // for restarting
+ 	m_nTimeoutMs = nMS; // for restarting
  
 -//	fprintf (stderr, "Add timeout of '%d'ms\n", m_nTimeoutMs);
 +	if (m_pTimeout)
@@ -58,8 +45,7 @@
 +		g_source_unref (m_pTimeout);
 +	}
  
--	m_pTimeout = g_timeout_source_new (m_nTimeoutMs);
-+	m_pTimeout = g_timeout_source_new (m_nTimeoutMS);
+	m_pTimeout = g_timeout_source_new (m_nTimeoutMs);
 +    // #i36226# timers should be executed with lower priority
 +    // than XEvents like in generic plugin
 +    g_source_set_priority( m_pTimeout, G_PRIORITY_LOW );
