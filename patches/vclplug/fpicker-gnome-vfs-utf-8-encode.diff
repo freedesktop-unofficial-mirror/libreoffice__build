@@ -1,0 +1,156 @@
+Index: fpicker/source/unx/gnome/SalGtkFilePicker.cxx
+===================================================================
+RCS file: /cvs/gsl/fpicker/source/unx/gnome/SalGtkFilePicker.cxx,v
+retrieving revision 1.5
+diff -u -p -r1.5 SalGtkFilePicker.cxx
+--- fpicker/source/unx/gnome/SalGtkFilePicker.cxx	18 Mar 2005 09:48:46 -0000	1.5
++++ fpicker/source/unx/gnome/SalGtkFilePicker.cxx	30 Mar 2005 12:27:00 -0000
+@@ -857,10 +857,8 @@ uno::Sequence<rtl::OUString> SAL_CALL Sa
+     {
+ 		gchar *path = gtk_file_chooser_get_current_folder_uri( 
+             GTK_FILE_CHOOSER( m_pDialog ));
+-        nURLOffset = strlen( path );
+-        aSelectedFiles[0] = OUString( reinterpret_cast<const sal_Char*>(path),
+-            nURLOffset, RTL_TEXTENCODING_UTF8 );
+-        ++nURLOffset;
++        nURLOffset = strlen(path) + 1;
++        aSelectedFiles[0] = uritounicode(path);
+         g_free(path);
+     }
+ 
+@@ -872,9 +870,7 @@ uno::Sequence<rtl::OUString> SAL_CALL Sa
+ 	{
+ 		const gchar *path = reinterpret_cast<gchar*>(pPathList->data) 
+             + nURLOffset;
+-		aSelectedFiles[ nToIndex ] = 
+-			OUString( reinterpret_cast<const sal_Char*>( path ), 
+-				strlen( path ), RTL_TEXTENCODING_UTF8 );
++		aSelectedFiles[ nToIndex ] = uritounicode(path);
+ 
+ 		if( GTK_FILE_CHOOSER_ACTION_SAVE == eAction )
+ 		{
+@@ -986,7 +982,7 @@ sal_Int16 SAL_CALL SalGtkFilePicker::exe
+ 					Sequence < OUString > aPathSeq = getFiles();
+ 					if( aPathSeq.getLength() == 1 )
+ 					{
+-						OString sFileName = rtl::OUStringToOString( aPathSeq[0], RTL_TEXTENCODING_UTF8 );
++						OString sFileName = unicodetouri( aPathSeq[0] );
+ 						if( g_file_test( g_filename_from_uri( sFileName.getStr(), NULL, NULL ), G_FILE_TEST_IS_REGULAR ) )
+ 						{
+                             CResourceProvider aResProvider;
+Index: fpicker/source/unx/gnome/SalGtkFolderPicker.cxx
+===================================================================
+RCS file: /cvs/gsl/fpicker/source/unx/gnome/SalGtkFolderPicker.cxx,v
+retrieving revision 1.4
+diff -u -p -r1.4 SalGtkFolderPicker.cxx
+--- fpicker/source/unx/gnome/SalGtkFolderPicker.cxx	18 Mar 2005 09:49:04 -0000	1.4
++++ fpicker/source/unx/gnome/SalGtkFolderPicker.cxx	30 Mar 2005 12:27:00 -0000
+@@ -173,7 +173,7 @@ void SAL_CALL SalGtkFolderPicker::setDis
+ 	OSL_ASSERT( m_pDialog != NULL );
+ 	::vos::OGuard aGuard( Application::GetSolarMutex() );
+ 
+-	OString aTxt = OUStringToOString( aDirectory, RTL_TEXTENCODING_UTF8 );
++	OString aTxt = unicodetouri( aDirectory );
+ 
+ 	if( aTxt.lastIndexOf('/') == aTxt.getLength() - 1 )
+ 		aTxt = aTxt.copy( 0, aTxt.getLength() - 1 );
+@@ -191,9 +191,7 @@ rtl::OUString SAL_CALL SalGtkFolderPicke
+ 	
+ 	gchar* pCurrentFolder = 
+ 		gtk_file_chooser_get_current_folder_uri( GTK_FILE_CHOOSER( m_pDialog ) );
+-	::rtl::OUString aCurrentFolderName = 
+-		::rtl::OUString( const_cast<const sal_Char *>( pCurrentFolder ),
+-					strlen( pCurrentFolder ), RTL_TEXTENCODING_UTF8 );
++	::rtl::OUString aCurrentFolderName = uritounicode(pCurrentFolder);
+ 	g_free( pCurrentFolder );
+ 
+ 	return aCurrentFolderName;
+Index: fpicker/source/unx/gnome/SalGtkPicker.cxx
+===================================================================
+RCS file: /cvs/gsl/fpicker/source/unx/gnome/SalGtkPicker.cxx,v
+retrieving revision 1.5
+diff -u -p -r1.5 SalGtkPicker.cxx
+--- fpicker/source/unx/gnome/SalGtkPicker.cxx	18 Mar 2005 09:49:17 -0000	1.5
++++ fpicker/source/unx/gnome/SalGtkPicker.cxx	30 Mar 2005 12:27:01 -0000
+@@ -90,6 +90,9 @@
+ #ifndef _SALGTKPICKER_HXX_
+ #include "SalGtkPicker.hxx"
+ #endif
++#ifndef _URLOBJ_HXX
++#include <tools/urlobj.hxx>
++#endif
+ #include <stdio.h>
+ 
+ //------------------------------------------------------------------------
+@@ -101,6 +104,34 @@ using namespace ::com::sun::star;
+ using namespace ::com::sun::star::lang;
+ using namespace ::com::sun::star::uno;
+ 
++rtl::OUString SalGtkPicker::uritounicode(const gchar* pIn)
++{
++    rtl::OUString sURL( const_cast<const sal_Char *>(pIn), strlen(pIn),
++        RTL_TEXTENCODING_UTF8 );
++    INetURLObject aURL(sURL);
++    if (INET_PROT_FILE == aURL.GetProtocol())
++    {
++        gchar *pEncodedFileName = g_filename_from_uri(pIn, NULL, NULL);
++        rtl::OUString sEncoded(pEncodedFileName, strlen(pEncodedFileName), osl_getThreadTextEncoding());
++	INetURLObject aCurrentURL(OUString::createFromAscii("file:///") + sEncoded);
++	aCurrentURL.SetHost(aURL.GetHost());
++	sURL = aCurrentURL.getExternalURL();
++    }
++    return sURL;
++}
++
++rtl::OString SalGtkPicker::unicodetouri(const rtl::OUString &rURL)
++{
++    OString sURL = OUStringToOString(rURL, RTL_TEXTENCODING_UTF8);
++    INetURLObject aURL(rURL);
++    if (INET_PROT_FILE == aURL.GetProtocol())
++    {
++        rtl::OUString sOUURL = aURL.getExternalURL(INetURLObject::DECODE_WITH_CHARSET, osl_getThreadTextEncoding());
++        sURL = OUStringToOString( sOUURL, osl_getThreadTextEncoding());
++    }
++    return sURL;
++}
++
+ gboolean rundialog(RunDialog *pDialog)
+ {
+     pDialog->run();
+@@ -136,7 +167,7 @@ void SAL_CALL SalGtkPicker::implsetDispl
+ 	OSL_ASSERT( m_pDialog != NULL );
+ 	::vos::OGuard aGuard( Application::GetSolarMutex() );
+ 
+-	OString aTxt = OUStringToOString( aDirectory, RTL_TEXTENCODING_UTF8 );
++	OString aTxt = unicodetouri(aDirectory);
+ 
+ 	if( aTxt.lastIndexOf('/') == aTxt.getLength() - 1 )
+ 		aTxt = aTxt.copy( 0, aTxt.getLength() - 1 );
+@@ -154,9 +185,7 @@ rtl::OUString SAL_CALL SalGtkPicker::imp
+ 	
+ 	gchar* pCurrentFolder = 
+ 		gtk_file_chooser_get_current_folder_uri( GTK_FILE_CHOOSER( m_pDialog ) );
+-	::rtl::OUString aCurrentFolderName = 
+-		::rtl::OUString( const_cast<const sal_Char *>( pCurrentFolder ),
+-					strlen( pCurrentFolder ), RTL_TEXTENCODING_UTF8 );
++	::rtl::OUString aCurrentFolderName = uritounicode(pCurrentFolder);
+ 	g_free( pCurrentFolder );
+ 
+ 	return aCurrentFolderName;
+Index: fpicker/source/unx/gnome/SalGtkPicker.hxx
+===================================================================
+RCS file: /cvs/gsl/fpicker/source/unx/gnome/SalGtkPicker.hxx,v
+retrieving revision 1.3
+diff -u -p -r1.3 SalGtkPicker.hxx
+--- fpicker/source/unx/gnome/SalGtkPicker.hxx	18 Mar 2005 09:49:32 -0000	1.3
++++ fpicker/source/unx/gnome/SalGtkPicker.hxx	30 Mar 2005 12:27:01 -0000
+@@ -110,7 +110,8 @@ class SalGtkPicker
+ 
+ 		virtual rtl::OUString SAL_CALL implgetDisplayDirectory(  )
+ 			throw( com::sun::star::uno::RuntimeException );
+-
++		static rtl::OUString uritounicode(const gchar *pIn);
++		static rtl::OString unicodetouri(const rtl::OUString &rURL);
+ };
+ 
+ class RunDialog
