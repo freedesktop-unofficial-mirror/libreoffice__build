@@ -1,2 +1,0 @@
-SUBDIRS=OOO_1_1 OOO_1_1_0
-EXTRA_DIST=README apply.pl order
