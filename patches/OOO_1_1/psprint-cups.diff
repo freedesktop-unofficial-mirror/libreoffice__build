@@ -1,15 +1,44 @@
+ padmin/source/adddlg.cxx                      |    7 
+ psprint/inc/cupsmgr.hxx                       |  136 ++++
+ psprint/inc/psprint/fontcache.hxx             |    4 
+ psprint/inc/psprint/jobdata.hxx               |    5 
+ psprint/inc/psprint/ppdparser.hxx             |    4 
+ psprint/inc/psprint/printergfx.hxx            |   26 
+ psprint/inc/psprint/printerinfomanager.hxx    |  109 ++-
+ psprint/source/fontmanager/fontmanager.cxx    |   24 
+ psprint/source/fontmanager/makefile.mk        |    4 
+ psprint/source/fontmanager/parseAFM.cxx       |    3 
+ psprint/source/fontsubset/gsub.cxx            |    6 
+ psprint/source/fontsubset/list.c              |    5 
+ psprint/source/fontsubset/sft.c               |   19 
+ psprint/source/fontsubset/ttcr.c              |   12 
+ psprint/source/helper/helper.cxx              |   12 
+ psprint/source/helper/ppdparser.cxx           |  100 +-
+ psprint/source/helper/strhelper.cxx           |    6 
+ psprint/source/printer/cupsmgr.cxx            |  872 ++++++++++++++++++++++++++
+ psprint/source/printer/jobdata.cxx            |   24 
+ psprint/source/printer/makefile.mk            |   15 
+ psprint/source/printer/printerinfomanager.cxx |  310 ++++++---
+ psprint/source/printergfx/bitmap_gfx.cxx      |   23 
+ psprint/source/printergfx/common_gfx.cxx      |  119 ++-
+ psprint/source/printergfx/printerjob.cxx      |  250 +++++--
+ psprint/source/printergfx/psheader.ps         |   62 +
+ psprint/source/printergfx/psputil.cxx         |    6 
+ psprint/source/printergfx/text_gfx.cxx        |   62 +
+ 27 files changed, 1856 insertions(+), 369 deletions(-)
+
 Index: psprint/inc/cupsmgr.hxx
 ===================================================================
---- /dev/null
-+++ psprint/inc/cupsmgr.hxx
-@@ -0,0 +1,128 @@
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ psprint/inc/cupsmgr.hxx	2004-10-21 14:47:17.000000000 +0100
+@@ -0,0 +1,140 @@
 +/*************************************************************************
 + *
 + *  $RCSfile: psprint-cups.diff,v $
 + *
-+ *  $Revision: 1.7 $
++ *  $Revision: 1.8 $
 + *
-+ *  last change: $Author: challs $ $Date: 2004/07/07 23:12:06 $
++ *  last change: $Author: challs $ $Date: 2004/07/08 17:31:02 $
 + *
 + *  The Contents of this file are made available subject to the terms of
 + *  either of the following licenses
@@ -69,6 +98,8 @@ Index: psprint/inc/cupsmgr.hxx
 +
 +#include <psprint/printerinfomanager.hxx>
 +#include <osl/module.h>
++#include <osl/thread.h>
++#include <osl/mutex.hxx>
 +
 +namespace psp
 +{
@@ -88,8 +119,10 @@ Index: psprint/inc/cupsmgr.hxx
 +    std::hash_map< FILE*, rtl::OString, FPtrHash >				m_aSpoolFiles;
 +    int															m_nDests;
 +    void*														m_pDests;
-+    bool														m_bFirstDest;
++    bool														m_bNewDests;
 +    std::hash_map< rtl::OUString, int, rtl::OUStringHash >		m_aCUPSDestMap;
++
++    std::hash_map< rtl::OUString, PPDContext, rtl::OUStringHash > m_aDefaultContexts;
 +
 +    rtl::OString												m_aUser;
 +    // this is a security risk, but the CUPS API demands
@@ -97,10 +130,16 @@ Index: psprint/inc/cupsmgr.hxx
 +    // the password, so this cannot be helped
 +    rtl::OString												m_aPassword;
 +
-+    CUPSManager( CUPSWrapper*, int nDests = 0, void* pDests = NULL );
++    osl::Mutex													m_aCUPSMutex;
++    oslThread													m_aDestThread;
++
++    CUPSManager( CUPSWrapper* );
 +    virtual ~CUPSManager();
 +
 +    virtual void initialize();
++
++    void runDests();
++    static void runDestThread(void* pMgr);
 +public:
 +
 +    static CUPSManager* tryLoadCUPS();
@@ -126,30 +165,17 @@ Index: psprint/inc/cupsmgr.hxx
 +    virtual bool removePrinter( const rtl::OUString& rPrinterName, bool bCheckOnly = false );
 +    virtual bool writePrinterConfig();
 +    virtual bool setDefaultPrinter( const rtl::OUString& rPrinterName );
++    
++    virtual bool addOrRemovePossible() const;
 +};
 +
 +} // namespace psp
 +
 +#endif
-Index: psprint/inc/psprint/fontcache.hxx
-===================================================================
---- psprint/inc/psprint/fontcache.hxx.orig
-+++ psprint/inc/psprint/fontcache.hxx
-@@ -70,6 +70,10 @@
- #include <tools/string.hxx>
- #endif
- 
-+#ifndef _STRING_HXX
-+#include <tools/string.hxx>
-+#endif
-+
- #include <hash_map>
- 
- namespace psp
 Index: psprint/inc/psprint/jobdata.hxx
 ===================================================================
---- psprint/inc/psprint/jobdata.hxx.orig
-+++ psprint/inc/psprint/jobdata.hxx
+--- psprint/inc/psprint/jobdata.hxx.orig	2004-10-21 12:52:30.000000000 +0100
++++ psprint/inc/psprint/jobdata.hxx	2004-10-21 14:47:17.000000000 +0100
 @@ -105,6 +105,10 @@ struct JobData
              m_eOrientation( orientation::Portrait ),
              m_pParser( NULL ) {}
@@ -169,9 +195,23 @@ Index: psprint/inc/psprint/jobdata.hxx
  #endif // PSPRINT_JOBDATA_HXX
 Index: psprint/inc/psprint/ppdparser.hxx
 ===================================================================
---- psprint/inc/psprint/ppdparser.hxx.orig
-+++ psprint/inc/psprint/ppdparser.hxx
-@@ -149,11 +149,13 @@ public:
+--- psprint/inc/psprint/ppdparser.hxx.orig	2004-10-21 12:52:30.000000000 +0100
++++ psprint/inc/psprint/ppdparser.hxx	2004-10-21 14:47:17.000000000 +0100
+@@ -142,6 +142,13 @@ public:
+     int                 getOrderDependency() const { return m_nOrderDependency; }
+ };
+ 
++// define a hash for PPDKey
++struct PPDKeyhash
++{
++    size_t operator()( const PPDKey * pKey) const
++        { return (size_t)pKey; }
++};
++
+ // ----------------------------------------------------------------------
+ 
+ /*
+@@ -149,11 +156,13 @@ public:
   */
  
  class PPDContext;
@@ -186,10 +226,20 @@ Index: psprint/inc/psprint/ppdparser.hxx
      typedef ::std::hash_map< ::rtl::OUString, PPDKey*, ::rtl::OUStringHash > hash_type;
      typedef ::std::vector< PPDKey* > value_type;
  
+@@ -309,7 +318,8 @@ public:
+ 
+ class PPDContext
+ {
+-    ::std::hash_map< const PPDKey*, const PPDValue* >   m_aCurrentValues;
++    typedef ::std::hash_map< const PPDKey*, const PPDValue*, PPDKeyhash > hash_type;
++    hash_type m_aCurrentValues;
+     const PPDParser*                                    m_pParser;
+ 
+     // returns false: check failed, new value is constrained
 Index: psprint/inc/psprint/printergfx.hxx
 ===================================================================
---- psprint/inc/psprint/printergfx.hxx.orig
-+++ psprint/inc/psprint/printergfx.hxx
+--- psprint/inc/psprint/printergfx.hxx.orig	2004-10-21 12:52:30.000000000 +0100
++++ psprint/inc/psprint/printergfx.hxx	2004-10-21 14:47:18.000000000 +0100
 @@ -113,10 +113,10 @@ public:
              meColorspace (eRGB)
      {}
@@ -253,46 +303,43 @@ Index: psprint/inc/psprint/printergfx.hxx
                                const sal_Int32* pDeltaArray = NULL);
 Index: psprint/inc/psprint/printerinfomanager.hxx
 ===================================================================
---- psprint/inc/psprint/printerinfomanager.hxx.orig
-+++ psprint/inc/psprint/printerinfomanager.hxx
-@@ -80,6 +80,36 @@
+--- psprint/inc/psprint/printerinfomanager.hxx.orig	2004-10-21 12:52:30.000000000 +0100
++++ psprint/inc/psprint/printerinfomanager.hxx	2004-10-21 14:47:18.000000000 +0100
+@@ -80,6 +80,7 @@
  #ifndef _PSPRINT_HELPER_HXX_
  #include <psprint/helper.hxx>
  #endif
 +#include <cstdio>
-+
-+#ifdef MACOSX
-+/* MacOS X print system discovery constants:
-+ *
-+ * These values enumerate Apple OS printing systems we could use.
-+ * They are used as indications _as well as_ indexes into the
-+ * aParms structure used below for print commands.
-+ */
+ 
+ #ifdef MACOSX
+ /* MacOS X print system discovery constants:
+@@ -88,17 +89,20 @@
+  * They are used as indications _as well as_ indexes into the
+  * aParms structure used below for print commands.
+  */
+-#define		kApplePrintingFailure                   0		/* For whatever reason, we can't print at all */
 +#define		kApplePrintingFailure		0		/* For whatever reason, we can't print at all */
-+#define		kApplePrintingLPR			1		/* Darwin 5.x style LPR printing */
-+#define		kApplePrintingCUPS			2		/* MacOS X 10.2/Darwin 6 style CUPS (also CUPS installed by users on 10.1) */
+ #define		kApplePrintingLPR			1		/* Darwin 5.x style LPR printing */
+ #define		kApplePrintingCUPS			2		/* MacOS X 10.2/Darwin 6 style CUPS (also CUPS installed by users on 10.1) */
+-#define         kApplePrintingNewCUPS                   3               /* MacOSX 10.3/Darwin 7 style CUPS with integrated ghostscript like filters */
 +#define		kApplePrintingPrintCenter	3		/* MacOS X 10.1 /usr/sbin/Print printing */
-+
-+/* Constants for PostScript vs PDF printing */
+ 
+ /* Constants for PostScript vs PDF printing */
+-#define		kApplePrintingUsePDF		        1	/* Run PS through ps to pdfconversion first requires GhostScript in /usr/local */
+-#define		kApplePrintingUsePS			2	/* print PS directly to printer (requires PS printer or New CUPS) */
 +#define		kApplePrintingUsePDF		1		/* Default; Run PS through ps2pdf first (requires GhostScript) */
 +#define		kApplePrintingUsePS			2		/* Optional, print PS directly to printer (less compatible, requires PS printer) */
-+
-+/* Define various printing commands */
+ 
+ /* Define various printing commands */
+-#define		kApplePS2PDFLocation	        "/usr/local/bin/ps2pdf"	/* PS -> PDF conversion command (Ghostscript) */
 +#define		kApplePCPrintCommand	"/usr/sbin/Print"		/* Mac OS X 10.1 Print Center Printing command */
 +#define		kApplePS2PDFLocation	"/usr/local/bin/ps2pdf"	/* PS -> PDF conversion command */
 +#define		kApplePCQueueName		"Apple Print Center Default Printer"	/* Name that appears in Print... dialog as the default */
 +																/* printer for 10.1 Print Center printing */
-+
-+/* Prototype for print method discovery function.  Returns
-+ * a constant defined in printerinfomanager.hxx
-+ */
-+sal_Int32	macxp_GetSystemPrintMethod( void );
-+#endif
-+
  
- #ifdef MACOSX
- /* MacOS X print system discovery constants:
-@@ -115,16 +145,16 @@ class SystemQueueInfo;
+ /* Prototype for print method discovery function.  Returns
+  * a constant defined in printerinfomanager.hxx
+@@ -115,16 +119,16 @@ class SystemQueueInfo;
  struct PrinterInfo : JobData
  {
      // basename of PPD
@@ -314,7 +361,7 @@ Index: psprint/inc/psprint/printerinfomanager.hxx
      // a mapping of fonts to other fonts.
      // this provides a method for the user
      // to replace arbitrary fonts by printer builtin fonts
-@@ -135,20 +165,24 @@ struct PrinterInfo : JobData
+@@ -135,20 +139,29 @@ struct PrinterInfo : JobData
      // this vector is currently implicitly given by the adobe
      // standard encoding
      bool                        m_bPerformFontSubstitution;
@@ -324,6 +371,11 @@ Index: psprint/inc/psprint/printerinfomanager.hxx
 -    ::std::hash_map< fontID, fontID >
 +    std::hash_map< fontID, fontID >
      m_aFontSubstitutions;
++
++    PrinterInfo() :
++            JobData(),
++            m_bPerformFontSubstitution( false )
++    {}
  };
  
  class PrinterInfoManager
@@ -342,7 +394,7 @@ Index: psprint/inc/psprint/printerinfomanager.hxx
          // the last know modification time or 0, if file did not exist
          TimeValue               m_aModified;
      };
-@@ -158,33 +192,35 @@ class PrinterInfoManager
+@@ -158,88 +171,111 @@ class PrinterInfoManager
      {
          // configuration file containing this printer
          // empty means a freshly added printer that has to be saved yet
@@ -380,16 +432,23 @@ Index: psprint/inc/psprint/printerinfomanager.hxx
 -    PrinterInfoManager();
 -    ~PrinterInfoManager();
 +    Type								m_eType;
-+
-+    PrinterInfoManager( Type eType = Default );
-+    virtual ~PrinterInfoManager();
  
 -    void initialize();
++    PrinterInfoManager( Type eType = Default );
++    virtual ~PrinterInfoManager();
++
 +    virtual void initialize();
  
      // fill in font substitutions
      // the resulting hash_map maps from source to target font ids
-@@ -194,52 +230,65 @@ public:
+     void fillFontSubstitutions( PrinterInfo& rInfo ) const;
++    
++    // fill default paper if not configured in config file
++    // default paper is e.g. locale dependent
++    // if a paper is already set it will not be overwritten
++    void setDefaultPaper( PrinterInfo& rInfo ) const;
+ public:
+ 
      // there can only be one
      static PrinterInfoManager& get();
  
@@ -463,13 +522,16 @@ Index: psprint/inc/psprint/printerinfomanager.hxx
 +    // close the FILE* returned by startSpool and does the actual spooling
 +    // returns a numerical job id
 +    virtual int endSpool( const rtl::OUString& rPrinterName, const rtl::OUString& rJobTitle, FILE* pFile );
++    
++    // for spadmin: whether adding or removing a printer is possible
++    virtual bool addOrRemovePossible() const;
  };
      
  } // namespace
 Index: psprint/source/fontmanager/fontmanager.cxx
 ===================================================================
---- psprint/source/fontmanager/fontmanager.cxx.orig
-+++ psprint/source/fontmanager/fontmanager.cxx
+--- psprint/source/fontmanager/fontmanager.cxx.orig	2004-10-21 12:52:30.000000000 +0100
++++ psprint/source/fontmanager/fontmanager.cxx	2004-10-21 14:47:18.000000000 +0100
 @@ -543,12 +543,12 @@ bool PrintFontManager::TrueTypeFontFile:
  
  
@@ -486,6 +548,15 @@ Index: psprint/source/fontmanager/fontmanager.cxx
                      sal_uInt16 nCoverage    = getUInt16BE( pTable );
  
                      aPair.kern_x    = 0;
+@@ -775,7 +775,7 @@ bool PrintFontManager::PrintFont::readAf
+     if( ! fp )
+         return false;
+     FontInfo* pInfo = NULL;
+-    int nResult = parseFile( fp, &pInfo, P_ALL );
++    parseFile( fp, &pInfo, P_ALL );
+     fclose( fp );
+     if( ! pInfo || ! pInfo->numOfChars )
+     {
 @@ -863,7 +863,7 @@ bool PrintFontManager::PrintFont::readAf
                  RTL_TEXTENCODING_JIS_X_0208
              };
@@ -518,7 +589,161 @@ Index: psprint/source/fontmanager/fontmanager.cxx
  
      OString aDir( getDirectory( nDirID ) );
  
-@@ -2199,7 +2198,7 @@ void PrintFontManager::getServerDirector
+@@ -1424,7 +1423,7 @@ bool PrintFontManager::analyzeFontFile( 
+         // first look for an adjacent file
+         static const char* pSuffix[] = { ".afm", ".AFM" };
+         
+-        for( int i = 0; i < sizeof(pSuffix)/sizeof(pSuffix[0]); i++ )
++        for( unsigned int i = 0; i < sizeof(pSuffix)/sizeof(pSuffix[0]); i++ )
+         {
+             ByteString aName( rFontFile );
+             aName.Erase( aName.Len()-4 );
+@@ -1485,7 +1484,9 @@ bool PrintFontManager::analyzeFontFile( 
+         else
+             delete pFont;
+     }
+-    else if( aExt.EqualsIgnoreCaseAscii( "ttf" ) )
++    else if( aExt.EqualsIgnoreCaseAscii( "ttf" )
++         ||  aExt.EqualsIgnoreCaseAscii( "tte" )   // #i33947# for Gaiji support
++         ||  aExt.EqualsIgnoreCaseAscii( "otf" ) ) // #112957# allow GLYF-OTF
+     {
+         TrueTypeFontFile* pFont     = new TrueTypeFontFile();
+         pFont->m_nDirectory         = nDirID;
+@@ -1737,6 +1738,8 @@ void PrintFontManager::getFontAttributes
+                 case fonttype::TrueType:
+                     static_cast<TrueTypeFontFile*>(pFont)->m_aXLFD = rXLFDs.front();
+                     break;
++                default:
++                    break;
+             }
+         }
+         else
+@@ -1771,11 +1774,24 @@ void PrintFontManager::getFontAttributes
+     // handle iso8859-1 as ms1252 to fill the "gap" starting at 0x80
+     if( pFont->m_aEncoding == RTL_TEXTENCODING_ISO_8859_1 )
+         pFont->m_aEncoding = RTL_TEXTENCODING_MS_1252;
++    if( rXLFDs.begin() != rXLFDs.end() )
++    {
++        switch( pFont->m_eType )
++        {
++            case fonttype::Type1:
++                static_cast<Type1FontFile*>(pFont)->m_aXLFD = rXLFDs.front();
++                break;
++            case fonttype::TrueType:
++                static_cast<TrueTypeFontFile*>(pFont)->m_aXLFD = rXLFDs.front();
++                break;
++            default: break;
++        }
++    }
+ }
+ 
+ // -------------------------------------------------------------------------
+ 
+-ByteString PrintFontManager::getXLFD( PrintFont* pFont ) const
++OString PrintFontManager::getXLFD( PrintFont* pFont ) const
+ {
+     if( pFont->m_eType == fonttype::Type1 )
+     {
+@@ -1788,52 +1804,65 @@ ByteString PrintFontManager::getXLFD( Pr
+             return static_cast<TrueTypeFontFile*>(pFont)->m_aXLFD;
+     }
+ 
+-    ByteString aXLFD( "-misc-" );
++    OStringBuffer aXLFD( 128 );
++
++    aXLFD.append( "-misc-" );
+     ByteString aFamily( String( m_pAtoms->getString( ATOM_FAMILYNAME, pFont->m_nFamilyName ) ), RTL_TEXTENCODING_UTF8 );
+     aFamily.SearchAndReplaceAll( '-',' ' );
+     aFamily.SearchAndReplaceAll( '?',' ' );
+     aFamily.SearchAndReplaceAll( '*',' ' );
+-    aXLFD += aFamily;
+-    aXLFD += '-';
++    aXLFD.append( OString( aFamily ) );
++    aXLFD.append( '-' );
+     switch( pFont->m_eWeight )
+     {
+-        case weight::Thin:              aXLFD += "thin";break;
+-        case weight::UltraLight:        aXLFD += "ultralight";break;
+-        case weight::Light:         aXLFD += "light";break;
+-        case weight::SemiLight:     aXLFD += "semilight";break;
+-        case weight::Normal:            aXLFD += "normal";break;
+-        case weight::Medium:            aXLFD += "medium";break;
+-        case weight::SemiBold:          aXLFD += "semibold";break;
+-        case weight::Bold:              aXLFD += "bold";break;
+-        case weight::UltraBold:     aXLFD += "ultrabold";break;
+-        case weight::Black:         aXLFD += "black";break;
++        case weight::Thin:          aXLFD.append("thin");break;
++        case weight::UltraLight:    aXLFD.append("ultralight");break;
++        case weight::Light:         aXLFD.append("light");break;
++        case weight::SemiLight:     aXLFD.append("semilight");break;
++        case weight::Normal:        aXLFD.append("normal");break;
++        case weight::Medium:        aXLFD.append("medium");break;
++        case weight::SemiBold:      aXLFD.append("semibold");break;
++        case weight::Bold:          aXLFD.append("bold");break;
++        case weight::UltraBold:     aXLFD.append("ultrabold");break;
++        case weight::Black:         aXLFD.append("black");break;
++        default: break;
+     }
+-    aXLFD += '-';
++    aXLFD.append('-');
+     switch( pFont->m_eItalic )
+     {
+-        case italic::Upright:           aXLFD += 'r';break;
+-        case italic::Oblique:           aXLFD += 'o';break;
+-        case italic::Italic:            aXLFD += 'i';break;
++        case italic::Upright:       aXLFD.append('r');break;
++        case italic::Oblique:       aXLFD.append('o');break;
++        case italic::Italic:        aXLFD.append('i');break;
++        default: break;
+     }
+-    aXLFD += '-';
++    aXLFD.append('-');
+     switch( pFont->m_eWidth )
+     {
+-        case width::UltraCondensed: aXLFD += "ultracondensed";break;
+-        case width::ExtraCondensed: aXLFD += "extracondensed";break;
+-        case width::Condensed:          aXLFD += "condensed";break;
+-        case width::SemiCondensed:      aXLFD += "semicondensed";break;
+-        case width::Normal:         aXLFD += "normal";break;
+-        case width::SemiExpanded:       aXLFD += "semiexpanded";break;
+-        case width::Expanded:           aXLFD += "expanded";break;
+-        case width::ExtraExpanded:      aXLFD += "extraexpanded";break;
+-        case width::UltraExpanded:      aXLFD += "ultraexpanded";break;
+-    }
+-    aXLFD += "-utf8-0-0-0-0-";
+-    aXLFD += pFont->m_ePitch == pitch::Fixed ? "m" : "p";
+-    aXLFD += "-0-";
+-    aXLFD += rtl_getBestUnixCharsetFromTextEncoding( pFont->m_aEncoding );
++        case width::UltraCondensed: aXLFD.append("ultracondensed");break;
++        case width::ExtraCondensed: aXLFD.append("extracondensed");break;
++        case width::Condensed:      aXLFD.append("condensed");break;
++        case width::SemiCondensed:  aXLFD.append("semicondensed");break;
++        case width::Normal:         aXLFD.append("normal");break;
++        case width::SemiExpanded:   aXLFD.append("semiexpanded");break;
++        case width::Expanded:       aXLFD.append("expanded");break;
++        case width::ExtraExpanded:  aXLFD.append("extraexpanded");break;
++        case width::UltraExpanded:  aXLFD.append("ultraexpanded");break;
++        default: break;
++    }
++    aXLFD.append("-utf8-0-0-0-0-");
++    aXLFD.append( pFont->m_ePitch == pitch::Fixed ? "m" : "p" );
++    aXLFD.append("-0-");
++    const char* pEnc = rtl_getBestUnixCharsetFromTextEncoding( pFont->m_aEncoding );
++    if( ! pEnc )
++    {
++        if( pFont->m_aEncoding == RTL_TEXTENCODING_ADOBE_STANDARD )
++            pEnc = "adobe-standard";
++        else
++            pEnc = "iso8859-1";
++    }
++    aXLFD .append( pEnc );
+ 
+-    return aXLFD;
++    return aXLFD.makeStringAndClear();
+ }
+ #else /* FONTCONFIG_FONTS */
+ 
+@@ -2199,7 +2228,7 @@ void PrintFontManager::getServerDirector
      };
      ::std::list< ByteString > aLines;
  
@@ -527,7 +752,7 @@ Index: psprint/source/fontmanager/fontmanager.cxx
      {
          FILE* pPipe = popen( pCommands[i], "r" );
          aLines.clear();
-@@ -3334,7 +3333,7 @@ int PrintFontManager::importFonts( const
+@@ -3334,7 +3363,7 @@ int PrintFontManager::importFonts( const
      // find a directory with write access
      rtl_TextEncoding aEncoding = osl_getThreadTextEncoding();
      SvFileStream aFontsDir;
@@ -536,7 +761,7 @@ Index: psprint/source/fontmanager/fontmanager.cxx
      INetURLObject aDir;
      for( ::std::list< int >::const_iterator dir_it = m_aPrivateFontDirectories.begin();
           ! ( aFontsDir.IsOpen() && aFontsDir.IsWritable() ) && dir_it != m_aPrivateFontDirectories.end(); ++dir_it )
-@@ -3958,7 +3957,8 @@ bool PrintFontManager::createFontSubset(
+@@ -3958,7 +3987,8 @@ bool PrintFontManager::createFontSubset(
      memset( pGID, 0, sizeof( pGID ) );
      memset( pOldIndex, 0, sizeof( pOldIndex ) );
      int nChar = 1;
@@ -546,7 +771,7 @@ Index: psprint/source/fontmanager/fontmanager.cxx
      {
          if( pNewEncoding[i] == 0 )
          {
-@@ -4048,8 +4048,8 @@ std::list< OString > PrintFontManager::g
+@@ -4048,8 +4078,8 @@ std::list< OString > PrintFontManager::g
      if( aRet.begin() == aRet.end() && aChar != 0 )
      {
          sal_Char aBuf[8];
@@ -559,8 +784,8 @@ Index: psprint/source/fontmanager/fontmanager.cxx
      return aRet;
 Index: psprint/source/fontmanager/makefile.mk
 ===================================================================
---- psprint/source/fontmanager/makefile.mk.orig
-+++ psprint/source/fontmanager/makefile.mk
+--- psprint/source/fontmanager/makefile.mk.orig	2004-10-21 12:52:30.000000000 +0100
++++ psprint/source/fontmanager/makefile.mk	2004-10-21 14:47:18.000000000 +0100
 @@ -66,12 +66,12 @@ ENABLE_EXCEPTIONS=TRUE
  PRJNAME=psprint
  TARGET=fontman
@@ -578,8 +803,8 @@ Index: psprint/source/fontmanager/makefile.mk
  SLOFILES=\
 Index: psprint/source/fontmanager/parseAFM.cxx
 ===================================================================
---- psprint/source/fontmanager/parseAFM.cxx.orig
-+++ psprint/source/fontmanager/parseAFM.cxx
+--- psprint/source/fontmanager/parseAFM.cxx.orig	2004-10-21 12:52:30.000000000 +0100
++++ psprint/source/fontmanager/parseAFM.cxx	2004-10-21 14:47:18.000000000 +0100
 @@ -655,8 +655,7 @@ static int parseCharWidths( FILE* fp, re
   */ 
  
@@ -590,10 +815,34 @@ Index: psprint/source/fontmanager/parseAFM.cxx
  {
      char *p_tmpmetrics = NULL;
  
+@@ -788,8 +787,7 @@ static int parseCharMetrics( FILE* fp, r
+                 break;
+             case CHARNAME: 
+                 keyword = token(fp);
+-                temp->name = (char *) malloc(strlen(keyword) + 1);
+-                strcpy(temp->name, keyword);
++                temp->name = (char *)strdup(keyword);
+                 break;            
+             case CHARBBOX: 
+                 temp->charBBox.llx = atoi(token(fp));
+@@ -810,11 +808,9 @@ static int parseCharMetrics( FILE* fp, r
+                 
+                 *tail = (Ligature *) calloc(1, sizeof(Ligature));
+                 keyword = token(fp);
+-                (*tail)->succ = (char *) malloc(strlen(keyword) + 1);
+-                strcpy((*tail)->succ, keyword);
++                (*tail)->succ = (char *)strdup(keyword);
+                 keyword = token(fp);
+-                (*tail)->lig = (char *) malloc(strlen(keyword) + 1);
+-                strcpy((*tail)->lig, keyword);
++                (*tail)->lig = (char *)strdup(keyword);
+                 break; }
+             case ENDCHARMETRICS:
+                 cont = false;;
 Index: psprint/source/fontsubset/gsub.cxx
 ===================================================================
---- psprint/source/fontsubset/gsub.cxx.orig
-+++ psprint/source/fontsubset/gsub.cxx
+--- psprint/source/fontsubset/gsub.cxx.orig	2004-10-21 12:52:30.000000000 +0100
++++ psprint/source/fontsubset/gsub.cxx	2004-10-21 14:47:18.000000000 +0100
 @@ -149,7 +149,7 @@ int ReadGSUB( struct _TrueTypeFont* pTTF
          if( (nDefaultLangsysOfs != 0) && (nDefaultLangsysOfs != nLangsysOffset) )
          {       
@@ -623,8 +872,8 @@ Index: psprint/source/fontsubset/gsub.cxx
          // TODO: switch( eLookupType )
 Index: psprint/source/fontsubset/list.c
 ===================================================================
---- psprint/source/fontsubset/list.c.orig
-+++ psprint/source/fontsubset/list.c
+--- psprint/source/fontsubset/list.c.orig	2004-10-21 12:52:30.000000000 +0100
++++ psprint/source/fontsubset/list.c	2004-10-21 14:47:18.000000000 +0100
 @@ -72,8 +72,11 @@
  #include <stdlib.h>
  
@@ -638,10 +887,19 @@ Index: psprint/source/fontsubset/list.c
  #include <assert.h>
  
  #ifdef MALLOC_TRACE
+@@ -606,7 +609,7 @@ int main()
+ 
+     for(i=0; i<10; i++) {
+         ptr = malloc(20);
+-        sprintf(ptr, "element # %d", i);
++        snprintf(ptr, 20, "element # %d", i);
+         listAppend(l1, ptr);
+     }
+ 
 Index: psprint/source/fontsubset/sft.c
 ===================================================================
---- psprint/source/fontsubset/sft.c.orig
-+++ psprint/source/fontsubset/sft.c
+--- psprint/source/fontsubset/sft.c.orig	2004-10-21 12:52:30.000000000 +0100
++++ psprint/source/fontsubset/sft.c	2004-10-21 14:47:18.000000000 +0100
 @@ -67,7 +67,9 @@
   */
  
@@ -663,7 +921,7 @@ Index: psprint/source/fontsubset/sft.c
      int scflag = 1;                                         /*- start contour flag */
      int ecflag = 0;                                         /*- end contour flag */
      int cp = 0;                                             /*- current point */
-+    int StartContour = 0, EndContour = 0;
++    int StartContour = 0, EndContour = 1;
  
      listSetElementDtor(pList, free);
      *path = 0;
@@ -707,10 +965,18 @@ Index: psprint/source/fontsubset/sft.c
  
      DumpSfnts(outf, sfntP);
  
+@@ -2740,6 +2741,7 @@ int GetTTNameRecords(TrueTypeFont *ttf, 
+                 rec[i].slen = 0;
+                 continue;
+             }
++
+             rec_string = table + nStrBase + nStrOffset;
+             // sanity check
+             if( rec_string > (sal_uInt8*)ttf->ptr && rec_string < ((sal_uInt8*)ttf->ptr + ttf->fsize - rec[i].slen ) )
 Index: psprint/source/fontsubset/ttcr.c
 ===================================================================
---- psprint/source/fontsubset/ttcr.c.orig
-+++ psprint/source/fontsubset/ttcr.c
+--- psprint/source/fontsubset/ttcr.c.orig	2004-10-21 12:52:30.000000000 +0100
++++ psprint/source/fontsubset/ttcr.c	2004-10-21 14:47:18.000000000 +0100
 @@ -73,7 +73,9 @@
  #include <string.h>
  
@@ -760,8 +1026,8 @@ Index: psprint/source/fontsubset/ttcr.c
  
 Index: psprint/source/helper/helper.cxx
 ===================================================================
---- psprint/source/helper/helper.cxx.orig
-+++ psprint/source/helper/helper.cxx
+--- psprint/source/helper/helper.cxx.orig	2004-10-21 12:52:30.000000000 +0100
++++ psprint/source/helper/helper.cxx	2004-10-21 14:47:18.000000000 +0100
 @@ -359,8 +359,8 @@ bool psp::convertPfbToPfa( ::osl::File& 
      {
          // read leading bytes
@@ -795,22 +1061,61 @@ Index: psprint/source/helper/helper.cxx
                      {
                          buffer[ nBuffer++ ] = hexDigits[ pBuffer[ i ] >> 4 ];
                          buffer[ nBuffer++ ] = hexDigits[ pBuffer[ i ] & 15 ];
+@@ -450,3 +450,35 @@ bool psp::convertPfbToPfa( ::osl::File& 
+ 
+     return bSuccess;
+ }
++void psp::normPath( OString& rPath )
++{
++    char buf[PATH_MAX];
++    ByteString aPath( rPath );
++    
++    // double slashes and slash at end are probably
++    // removed by realpath anyway, but since this runs
++    // on many different platforms let's play it safe
++    while( aPath.SearchAndReplace( "//", "/" ) != STRING_NOTFOUND )
++        ;
++    if( aPath.Len() > 0 && aPath.GetChar( aPath.Len()-1 ) == '/' )
++        aPath.Erase( aPath.Len()-1 );
++
++    if( realpath( aPath.GetBuffer(), buf ) )
++        rPath = buf;
++    else
++        rPath = aPath;
++}
++
++void psp::splitPath( OString& rPath, OString& rDir, OString& rBase )
++{
++    normPath( rPath );
++    sal_Int32 nIndex = rPath.lastIndexOf( '/' );
++    if( nIndex > 0 )
++        rDir = rPath.copy( 0, nIndex );
++    else if( nIndex == 0 ) // root dir
++        rDir = rPath.copy( 0, 1 );
++    if( rPath.getLength() > nIndex+1 )
++        rBase = rPath.copy( nIndex+1 );
++}
++
++
 Index: psprint/source/helper/ppdparser.cxx
 ===================================================================
---- psprint/source/helper/ppdparser.cxx.orig
-+++ psprint/source/helper/ppdparser.cxx
-@@ -67,16 +67,19 @@
- // define a hash for PPDKey
- namespace psp { class PPDKey; }
+--- psprint/source/helper/ppdparser.cxx.orig	2004-10-21 12:52:30.000000000 +0100
++++ psprint/source/helper/ppdparser.cxx	2004-10-21 14:47:18.000000000 +0100
+@@ -61,22 +61,13 @@
+ #include <stdlib.h>
+ #include <stdio.h>
  
+-#ifndef __SGI_STL_HASH_MAP
+ #include <hash_map>
+-#endif
+-// define a hash for PPDKey
+-namespace psp { class PPDKey; }
+-
 -struct std::hash< const psp::PPDKey* >
-+namespace  _STL {
-+struct hash< const psp::PPDKey* >
- {
-     size_t operator()( const psp::PPDKey * pKey) const
-     { return (size_t)pKey; }
- };
-+}
+-{
+-    size_t operator()( const psp::PPDKey * pKey) const
+-    { return (size_t)pKey; }
+-};
  
  #include <psprint/ppdparser.hxx>
  #include <tools/debug.hxx>
@@ -820,7 +1125,7 @@ Index: psprint/source/helper/ppdparser.cxx
  #include <tools/urlobj.hxx>
  #include <tools/stream.hxx>
  #include <osl/mutex.hxx>
-@@ -104,13 +107,11 @@ static String aEmptyString;
+@@ -104,13 +95,11 @@ static String aEmptyString;
  void PPDParser::scanPPDDir( const String& rDir )
  {
      static const sal_Char* pSuffixes[] = { "PS", "PPD" };
@@ -834,7 +1139,38 @@ Index: psprint/source/helper/ppdparser.cxx
  
      INetURLObject aPPDDir(rDir);
      while( aDir.getNextItem( aItem ) == osl::FileBase::E_None )
-@@ -275,7 +276,8 @@ const PPDParser* PPDParser::getParser( S
+@@ -181,24 +170,21 @@ String PPDParser::getPPDFile( const Stri
+     if( ! aStream.IsOpen() )
+     {
+         initPPDFiles();
+-#ifdef MACOSX
++        // some PPD files contain dots beside the extension, so try name first,
++        // base after that
+         std::hash_map< OUString, OUString, OUStringHash >::const_iterator it =
+             pAllPPDFiles->find( aPPD.getName() );
+-#else
+-        std::hash_map< OUString, OUString, OUStringHash >::const_iterator it =
+-            pAllPPDFiles->find( aPPD.getBase() );
+-#endif // MACOSX
++        if( it == pAllPPDFiles->end() )
++            it = pAllPPDFiles->find( aPPD.getBase() );
+         if( it == pAllPPDFiles->end() )
+         {
+             // a new file ? rehash
+             delete pAllPPDFiles; pAllPPDFiles = NULL;
+             initPPDFiles();
+             // aPPD is already the file name minus the extension
+-#ifdef MACOSX
+             it = pAllPPDFiles->find( aPPD.getName() );
+-#else
+-            it = pAllPPDFiles->find( aPPD.getBase() );
+-#endif // MACOSX
++            if( it == pAllPPDFiles->end() )
++                it = pAllPPDFiles->find( aPPD.getBase() );
+             // note this is optimized for office start where
+             // no new files occur and initPPDFiles is called only once
+         }
+@@ -275,10 +261,13 @@ const PPDParser* PPDParser::getParser( S
      static ::osl::Mutex aMutex;
      ::osl::Guard< ::osl::Mutex > aGuard( aMutex );
  
@@ -843,8 +1179,14 @@ Index: psprint/source/helper/ppdparser.cxx
 +        aFile = getPPDFile( aFile );
      if( ! aFile.Len() )
      {
-         fprintf( stderr, "Could not get printer PPD file!\n" );
-@@ -286,8 +288,21 @@ const PPDParser* PPDParser::getParser( S
+-        fprintf( stderr, "Could not get printer PPD file!\n" );
++#if OSL_DEBUG_LEVEL > 1
++        fprintf( stderr, "Could not get printer PPD file \"%s\" !\n", OUStringToOString( aFile, osl_getThreadTextEncoding() ).getStr() );
++#endif
+         return NULL;
+     }
+ 
+@@ -286,8 +275,25 @@ const PPDParser* PPDParser::getParser( S
          if( (*it)->m_aFile == aFile )
              return *it;
  
@@ -859,16 +1201,20 @@ Index: psprint/source/helper/ppdparser.cxx
 +        if( rMgr.getType() == PrinterInfoManager::CUPS )
 +        {
 +            pNewParser = const_cast<PPDParser*>(static_cast<CUPSManager&>(rMgr).createCUPSParser( aFile ));
-+            if( pNewParser )
-+                pNewParser->m_aFile = aFile;
 +        }
 +    }
 +    if( pNewParser )
-+        aAllParsers.push_back( pNewParser );
++    {
++        // this may actually be the SGENPRT parser,
++        // so ensure uniquness here
++        aAllParsers.remove( pNewParser );
++        // insert new parser to list
++        aAllParsers.push_front( pNewParser );
++    }
      return pNewParser;
  }
  
-@@ -304,6 +319,7 @@ void PPDParser::freeAll()
+@@ -304,6 +310,7 @@ void PPDParser::freeAll()
  
  PPDParser::PPDParser( const String& rFile ) :
          m_aFile( rFile ),
@@ -876,7 +1222,7 @@ Index: psprint/source/helper/ppdparser.cxx
          m_pDefaultImageableArea( NULL ),
          m_pImageableAreas( NULL ),
          m_pDefaultPaperDimension( NULL ),
-@@ -314,8 +330,7 @@ PPDParser::PPDParser( const String& rFil
+@@ -314,8 +321,7 @@ PPDParser::PPDParser( const String& rFil
          m_pResolutions( NULL ),
          m_pDefaultDuplexType( NULL ),
          m_pDuplexTypes( NULL ),
@@ -886,7 +1232,71 @@ Index: psprint/source/helper/ppdparser.cxx
  {
      // read in the file
      ::std::list< String > aLines;
-@@ -490,7 +505,7 @@ void PPDParser::insertKey( const String&
+@@ -350,8 +356,8 @@ PPDParser::PPDParser( const String& rFil
+ 
+     // now get the Values
+     parse( aLines );
+-#ifdef __DEBUG
+-    fprintf( stderr, "acquired %d Keys from PPD %s:\n", m_aKeys.Count(), BSTRING( m_aFile ).GetBuffer() );
++#if OSL_DEBUG_LEVEL > 2
++    fprintf( stderr, "acquired %d Keys from PPD %s:\n", m_aKeys.size(), BSTRING( m_aFile ).GetBuffer() );
+     for( PPDParser::hash_type::const_iterator it = m_aKeys.begin(); it != m_aKeys.end(); ++it )
+     {
+         const PPDKey* pKey = it->second;
+@@ -375,7 +381,7 @@ PPDParser::PPDParser( const String& rFil
+         for( int j = 0; j < pKey->countValues(); j++ )
+         {
+             fprintf( stderr, "\t\t" );
+-            PPDValue* pValue = pKey->getValue( j );
++            const PPDValue* pValue = pKey->getValue( j );
+             if( pValue == pKey->m_pDefaultValue )
+                 fprintf( stderr, "(Default:) " );
+             char* pVType = "<unknown>";
+@@ -396,15 +402,14 @@ PPDParser::PPDParser( const String& rFil
+                      BSTRING( pValue->m_aValueTranslation ).GetBuffer() );
+         }
+     }
+-    fprintf( stderr, "constraints: (%d found)\n", m_aConstraints.Count() );
+-    for( int j = 0; j < m_aConstraints.Count(); j++ )
++    fprintf( stderr, "constraints: (%d found)\n", m_aConstraints.size() );
++    for( std::list< PPDConstraint >::const_iterator cit = m_aConstraints.begin(); cit != m_aConstraints.end(); ++cit )
+     {
+-        PPDConstraint* pCon = m_aConstraints.GetObject( j );
+         fprintf( stderr, "*\"%s\" \"%s\" *\"%s\" \"%s\"\n",
+-                 BSTRING( pCon->m_pKey1->getKey() ).GetBuffer(),
+-                 pCon->m_pOption1 ? BSTRING( pCon->m_pOption1->m_aOption ).GetBuffer() : "<nil>",
+-                 BSTRING( pCon->m_pKey2->getKey() ).GetBuffer(),
+-                 pCon->m_pOption2 ? BSTRING( pCon->m_pOption2->m_aOption ).GetBuffer() : "<nil>"
++                 BSTRING( cit->m_pKey1->getKey() ).GetBuffer(),
++                 cit->m_pOption1 ? BSTRING( cit->m_pOption1->m_aOption ).GetBuffer() : "<nil>",
++                 BSTRING( cit->m_pKey2->getKey() ).GetBuffer(),
++                 cit->m_pOption2 ? BSTRING( cit->m_pOption2->m_aOption ).GetBuffer() : "<nil>"
+                  );
+     }
+ #endif
+@@ -444,16 +449,16 @@ PPDParser::PPDParser( const String& rFil
+     DBG_ASSERT( m_pFontList, "Warning: no Font in PPD\n" );
+ 
+     // fill in direct values
+-    if( pKey = getKey( String( RTL_CONSTASCII_USTRINGPARAM( "ModelName" ) ) ) )
++    if( (pKey = getKey( String( RTL_CONSTASCII_USTRINGPARAM( "ModelName" ) ) )) )
+         m_aPrinterName = pKey->getValue( 0 )->m_aValue;
+-    if( pKey = getKey( String( RTL_CONSTASCII_USTRINGPARAM( "NickName" ) ) ) )
++    if( (pKey = getKey( String( RTL_CONSTASCII_USTRINGPARAM( "NickName" ) ) )) )
+         m_aNickName = pKey->getValue( 0 )->m_aValue;
+-    if( pKey = getKey( String( RTL_CONSTASCII_USTRINGPARAM( "ColorDevice" ) ) ) )
++    if( (pKey = getKey( String( RTL_CONSTASCII_USTRINGPARAM( "ColorDevice" ) ) )) )
+         m_bColorDevice = pKey->getValue( 0 )->m_aValue.CompareIgnoreCaseToAscii( "true", 4 ) == COMPARE_EQUAL ? true : false;
+ 
+-    if( pKey = getKey( String( RTL_CONSTASCII_USTRINGPARAM( "LanguageLevel" ) ) ) )
++    if( (pKey = getKey( String( RTL_CONSTASCII_USTRINGPARAM( "LanguageLevel" ) ) )) )
+         m_nLanguageLevel = pKey->getValue( 0 )->m_aValue.ToInt32();
+-    if( pKey = getKey( String( RTL_CONSTASCII_USTRINGPARAM( "TTRasterizer" ) ) ) )
++    if( (pKey = getKey( String( RTL_CONSTASCII_USTRINGPARAM( "TTRasterizer" ) ) )) )
+         m_bType42Capable = pKey->getValue( 0 )->m_aValue.EqualsIgnoreCaseAscii( "Type42" ) ? true : false;
+ 
+ #ifdef MACOSX
+@@ -490,7 +495,7 @@ void PPDParser::insertKey( const String&
  
  const PPDKey* PPDParser::getKey( int n ) const
  {
@@ -895,7 +1305,7 @@ Index: psprint/source/helper/ppdparser.cxx
  }
  
  const PPDKey* PPDParser::getKey( const String& rKey ) const
-@@ -1194,10 +1209,10 @@ const String& PPDParser::getFont( int nF
+@@ -1194,10 +1199,10 @@ const String& PPDParser::getFont( int nF
  
  PPDKey::PPDKey( const String& rKey ) :
          m_aKey( rKey ),
@@ -908,7 +1318,7 @@ Index: psprint/source/helper/ppdparser.cxx
          m_nOrderDependency( 100 ),
          m_eSetupType( AnySetup )
  {
-@@ -1213,14 +1228,13 @@ PPDKey::~PPDKey()
+@@ -1213,14 +1218,13 @@ PPDKey::~PPDKey()
  
  const PPDValue* PPDKey::getValue( int n ) const
  {
@@ -924,7 +1334,16 @@ Index: psprint/source/helper/ppdparser.cxx
      PPDKey::hash_type::const_iterator it = m_aValues.find( rOption );
      return it != m_aValues.end() ? &it->second : NULL;
  }
-@@ -1299,8 +1313,11 @@ const PPDKey* PPDContext::getModifiedKey
+@@ -1289,7 +1293,7 @@ PPDContext::~PPDContext()
+ 
+ const PPDKey* PPDContext::getModifiedKey( int n ) const
+ {
+-    ::std::hash_map< const PPDKey*, const PPDValue* >::const_iterator it;
++    hash_type::const_iterator it;
+     for( it = m_aCurrentValues.begin(); it != m_aCurrentValues.end() && n--; ++it )
+         ;
+     return it != m_aCurrentValues.end() ? it->first : NULL;
+@@ -1299,8 +1303,11 @@ const PPDKey* PPDContext::getModifiedKey
  
  void PPDContext::setParser( const PPDParser* pParser )
  {
@@ -938,18 +1357,63 @@ Index: psprint/source/helper/ppdparser.cxx
  }
  
  // -------------------------------------------------------------------
-@@ -1539,7 +1556,6 @@ void PPDContext::getUnconstrainedValues(
+@@ -1310,7 +1317,7 @@ const PPDValue* PPDContext::getValue( co
+     if( ! m_pParser )
+         return NULL;
+ 
+-    ::std::hash_map< const PPDKey*, const PPDValue* >::const_iterator it;
++    hash_type::const_iterator it;
+     it = m_aCurrentValues.find( pKey );
+     if( it != m_aCurrentValues.end() )
+         return it->second;
+@@ -1349,7 +1356,7 @@ const PPDValue* PPDContext::setValue( co
+             m_aCurrentValues[ pKey ] = pValue;
+ 
+             // after setting this value, check all constraints !
+-            ::std::hash_map< const PPDKey*, const PPDValue* >::iterator it = m_aCurrentValues.begin();
++            hash_type::iterator it = m_aCurrentValues.begin();
+             while(  it != m_aCurrentValues.end() )
+             {
+                 if( it->first != pKey &&
+@@ -1539,10 +1546,9 @@ void PPDContext::getUnconstrainedValues(
  void* PPDContext::getStreamableBuffer( ULONG& rBytes ) const
  {
      rBytes = 0;
 -    int i;
      if( ! m_aCurrentValues.size() )
          return NULL;
-     ::std::hash_map< const PPDKey*, const PPDValue* >::const_iterator it;
+-    ::std::hash_map< const PPDKey*, const PPDValue* >::const_iterator it;
++    hash_type::const_iterator it;
+     for( it = m_aCurrentValues.begin(); it != m_aCurrentValues.end(); ++it )
+     {
+         ByteString aCopy( it->first->getKey(), RTL_TEXTENCODING_MS_1252 );
 Index: psprint/source/helper/strhelper.cxx
 ===================================================================
---- psprint/source/helper/strhelper.cxx.orig
-+++ psprint/source/helper/strhelper.cxx
+--- psprint/source/helper/strhelper.cxx.orig	2004-10-21 12:52:30.000000000 +0100
++++ psprint/source/helper/strhelper.cxx	2004-10-21 14:47:18.000000000 +0100
+@@ -643,19 +643,19 @@ int getValueOfDouble( char* pBuffer, dou
+ 
+     if( ! finite( f ) )
+     {
+-        strcpy( pBuffer, "Inf" );
++        strncpy( pBuffer, "Inf", 3 );
+         return 3;
+     }
+ 
+     if( isnan( f ) )
+     {
+-        strcpy( pBuffer, "NaN" );
++        strncpy( pBuffer, "NaN", 3 );
+         return 3;
+     }
+ 
+     if( f == 0.0 )
+     {
+-        strcpy( pBuffer, "0" );
++        strncpy( pBuffer, "0", 3 );
+         return 1;
+     }
+ 
 @@ -664,12 +664,12 @@ int getValueOfDouble( char* pBuffer, dou
          *pBuffer++ = '-';
          f = -f;
@@ -976,16 +1440,16 @@ Index: psprint/source/helper/strhelper.cxx
              // hardware implementations seem to round at this point
 Index: psprint/source/printer/cupsmgr.cxx
 ===================================================================
---- /dev/null
-+++ psprint/source/printer/cupsmgr.cxx
-@@ -0,0 +1,755 @@
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ psprint/source/printer/cupsmgr.cxx	2004-10-21 14:47:18.000000000 +0100
+@@ -0,0 +1,911 @@
 +/*************************************************************************
 + *
 + *  $RCSfile: psprint-cups.diff,v $
 + *
-+ *  $Revision: 1.7 $
++ *  $Revision: 1.8 $
 + *
-+ *  last change: $Author: challs $ $Date: 2004/07/07 23:12:06 $
++ *  last change: $Author: challs $ $Date: 2004/07/08 17:31:02 $
 + *
 + *  The Contents of this file are made available subject to the terms of
 + *  either of the following licenses
@@ -1049,30 +1513,36 @@ Index: psprint/source/printer/cupsmgr.cxx
 +typedef void cups_option_t;
 +#endif
 +
++#include <unistd.h>
++
 +#include <osl/thread.h>
 +#include <osl/diagnose.h>
++#include <osl/conditn.hxx>
 +#include <rtl/ustrbuf.hxx>
 +#include <cupsmgr.hxx>
++
++#include <unistd.h>
 +
 +namespace psp
 +{
 +class CUPSWrapper
 +{
 +    oslModule		m_pLib;
++    osl::Mutex		m_aGetPPDMutex;
 +
 +    int				(*m_pcupsPrintFile)(const char*, const char*, const char*, int, cups_option_t*);
 +    int				(*m_pcupsGetDests)(cups_dest_t**);
 +    void			(*m_pcupsSetDests)(int,cups_dest_t*);
 +    void			(*m_pcupsFreeDests)(int,cups_dest_t*);
-+    const char*	(*m_pcupsGetPPD)(const char*);
++    const char*		(*m_pcupsGetPPD)(const char*);
 +    int				(*m_pcupsMarkOptions)(ppd_file_t*,int,cups_option_t*);
 +    int				(*m_pcupsAddOption)(const char*,const char*,int,cups_option_t**);
 +    void			(*m_pcupsFreeOptions)(int,cups_option_t*);
 +    ppd_file_t*		(*m_pppdOpenFile)(const char* pFile);
 +    void			(*m_pppdClose)(ppd_file_t*);
-+    const char*	(*m_pcupsServer)();
++    const char*		(*m_pcupsServer)();
 +    void			(*m_pcupsSetPasswordCB)(const char*(cb)(const char*));
-+    const char*	(*m_pcupsUser)();
++    const char*		(*m_pcupsUser)();
 +    void			(*m_pcupsSetUser)(const char*);
 +
 +    void* loadSymbol( const char* );
@@ -1098,8 +1568,7 @@ Index: psprint/source/printer/cupsmgr.cxx
 +                   cups_option_t* pOptions )
 +    { return m_pcupsPrintFile( pPrinter, pFileName, pTitle, nOptions, pOptions ); }
 +
-+    const char* cupsGetPPD( const char* pPrinter )
-+    { return m_pcupsGetPPD( pPrinter ); }
++    const char* cupsGetPPD( const char* pPrinter );
 +
 +    int cupsMarkOptions(ppd_file_t* pPPD, int nOptions, cups_option_t* pOptions )
 +    { return m_pcupsMarkOptions(pPPD, nOptions, pOptions); }
@@ -1232,6 +1701,70 @@ Index: psprint/source/printer/cupsmgr.cxx
 +    return m_pLib != NULL;
 +}
 +
++static struct GetPPDAttribs
++{
++    const char* (*pFunction)(const char*);
++    osl::Condition		m_aCondition;
++    const char*			m_pParameter;
++    const char*			m_pResult;
++    oslThread			m_aThread;
++} *pAttribs = NULL;
++
++extern "C" {
++    static void getPPDWorker(void*)
++    {
++        pAttribs->m_pResult = pAttribs->pFunction( pAttribs->m_pParameter );
++        if( pAttribs->m_aCondition.check() )
++        {
++            // timed out, unlink file
++            if( pAttribs->m_pResult )
++                unlink( pAttribs->m_pResult );
++            delete pAttribs;
++            pAttribs = NULL;
++        }
++        else
++            pAttribs->m_aCondition.set();
++    }
++}
++
++const char* CUPSWrapper::cupsGetPPD( const char* pPrinter )
++{
++    const char* pResult = NULL;
++
++    // if one thread hangs in cupsGetPPD already, don't start another
++    if( ! pAttribs )
++    {
++        pAttribs = new GetPPDAttribs();
++        pAttribs->pFunction			= m_pcupsGetPPD;
++        pAttribs->m_aCondition.reset();
++        pAttribs->m_pParameter		= pPrinter;
++        pAttribs->m_pResult			= NULL;
++        pAttribs->m_aThread			= osl_createThread( getPPDWorker, NULL );
++
++        TimeValue aValue;
++        aValue.Seconds = 5;
++        aValue.Nanosec = 0;
++        if( pAttribs->m_aCondition.wait( &aValue ) == Condition::result_ok )
++        {
++            osl_destroyThread( pAttribs->m_aThread );
++            pResult = pAttribs->m_pResult;
++            delete pAttribs;
++            pAttribs = NULL;
++        }
++        else
++        {
++#if OSL_DEBUG_LEVEL > 1
++            fprintf( stderr, "cupsGetPPD %s timed out\n", pPrinter );
++#endif
++            // should the thread awake again notify it to clean up itself
++            pAttribs->m_aCondition.set();
++            osl_destroyThread( pAttribs->m_aThread );
++        }
++    }
++
++    return pResult;
++}
++
 +static const char* setPasswordCallback( const char* pIn )
 +{
 +    const char* pRet = NULL;
@@ -1257,66 +1790,90 @@ Index: psprint/source/printer/cupsmgr.cxx
 +        // try to load CUPS
 +        CUPSWrapper* pWrapper = new CUPSWrapper();
 +        if( pWrapper->isValid() )
-+        {
-+            // check if there are any dests; if not
-+            // CUPS is unconfigured (at least) and
-+            // should not be used
-+            cups_dest_t* pDests = NULL;
-+            int nDests = pWrapper->cupsGetDests( &pDests );
-+            if( nDests && pDests )
-+                pManager = new CUPSManager( pWrapper, nDests, pDests );
-+#if OSL_DEBUG_LEVEL > 1
-+            else
-+                fprintf( stderr, "CUPS loaded but no dests -> CUPS disabled\n" );
-+#endif
-+        }
-+        // something failed, don't use CUPS
-+        if( ! pManager )
++            pManager = new CUPSManager( pWrapper );
++        else
 +            delete pWrapper;
 +    }
 +#endif
 +    return pManager;
 +}
 +
-+CUPSManager::CUPSManager( CUPSWrapper* pWrapper, int nDests, void* pDests ) :
++CUPSManager::CUPSManager( CUPSWrapper* pWrapper ) :
 +        PrinterInfoManager( CUPS ),
 +        m_pCUPSWrapper( pWrapper ),
-+        m_nDests( nDests ),
-+        m_pDests( pDests )
++        m_nDests( 0 ),
++        m_pDests( NULL ),
++        m_bNewDests( false )
 +{
-+        m_bFirstDest = (nDests && pDests);
++    m_aDestThread = osl_createThread( runDestThread, this );
 +}
 +
 +CUPSManager::~CUPSManager()
 +{
++    if( m_aDestThread )
++    {
++        // if the thread is still running here, then
++        // cupsGetDests is hung; terminate the thread instead of joining
++        osl_terminateThread( m_aDestThread );
++        osl_destroyThread( m_aDestThread );
++    }
++
 +    if( m_nDests && m_pDests )
 +        m_pCUPSWrapper->cupsFreeDests( m_nDests, (cups_dest_t*)m_pDests );
 +    delete m_pCUPSWrapper;
 +}
 +
++void CUPSManager::runDestThread( void* pThis )
++{
++    ((CUPSManager*)pThis)->runDests();
++}
++
++void CUPSManager::runDests()
++{
++#if OSL_DEBUG_LEVEL > 1
++    fprintf( stderr, "starting cupsGetDests\n" );
++#endif
++    int nDests = 0;
++    cups_dest_t* pDests = NULL;
++    nDests = m_pCUPSWrapper->cupsGetDests( &pDests );
++
++    osl::MutexGuard aGuard( m_aCUPSMutex );
++    m_nDests = nDests;
++    m_pDests = pDests;
++    m_bNewDests = true;
++#if OSL_DEBUG_LEVEL > 1
++    fprintf( stderr, "finished cupsGetDests\n" );
++#endif
++}
++
 +void CUPSManager::initialize()
 +{
-+#ifdef ENABLE_CUPS
-+    // there may have been a previous run
-+    if( m_nDests && m_pDests && !m_bFirstDest )
-+        m_pCUPSWrapper->cupsFreeDests( m_nDests, (cups_dest_t*)m_pDests );
-+    m_aPrinters.clear();
-+    m_aCUPSDestMap.clear();
-+
-+    // get normal printers
++    // get normal printers, clear printer list
 +    PrinterInfoManager::initialize();
 +
-+    rtl_TextEncoding aEncoding = osl_getThreadTextEncoding();
-+    int nPrinter = 0;
++#ifdef ENABLE_CUPS
++    // check whether thread has completed
++    // if not behave like old printing system
++    osl::MutexGuard aGuard( m_aCUPSMutex );
 +
-+    // get CUPS dests if this is not the first run after the constructor
-+    // in which case m_pDests was already intialized
-+    if( m_bFirstDest && m_nDests && m_pDests )
-+        nPrinter = m_nDests;
-+    else
-+        m_nDests = nPrinter = m_pCUPSWrapper->cupsGetDests( (cups_dest_t**)&m_pDests );
-+    
-+    m_bFirstDest = false;
++    if( ! (m_nDests && m_pDests ) )
++        return;
++
++    // dest thread has run, clean up
++    if( m_aDestThread )
++    {
++        osl_joinWithThread( m_aDestThread );
++        osl_destroyThread( m_aDestThread );
++        m_aDestThread = NULL;
++    }
++
++    // clear old stuff
++    m_aCUPSDestMap.clear();
++
++    m_bNewDests = false;
++
++    rtl_TextEncoding aEncoding = osl_getThreadTextEncoding();
++    int nPrinter = m_nDests;
 +
 +    // add CUPS printers, should there be a printer
 +    // with the same name as a CUPS printer, overwrite it
@@ -1352,6 +1909,12 @@ Index: psprint/source/printer/cupsmgr.cxx
 +        // behaviour
 +        aPrinter.m_aInfo.m_pParser = NULL;
 +        aPrinter.m_aInfo.m_aContext.setParser( NULL );
++        std::hash_map< OUString, PPDContext, OUStringHash >::const_iterator c_it = m_aDefaultContexts.find( aPrinterName );
++        if( c_it != m_aDefaultContexts.end() )
++        {
++            aPrinter.m_aInfo.m_pParser = c_it->second.getParser();
++            aPrinter.m_aInfo.m_aContext = c_it->second;
++        }
 +        aPrinter.m_aInfo.m_aDriverName = aBuf.makeStringAndClear();
 +        aPrinter.m_bModified = false;
 +
@@ -1383,7 +1946,7 @@ Index: psprint/source/printer/cupsmgr.cxx
 +}
 +
 +#ifdef ENABLE_CUPS
-+static void updatePrinterContextInfo( ppd_group_t* pPPDGroup, PrinterInfo& rInfo )
++static void updatePrinterContextInfo( ppd_group_t* pPPDGroup, PPDContext& rContext )
 +{
 +    rtl_TextEncoding aEncoding = osl_getThreadTextEncoding();
 +    for( int i = 0; i < pPPDGroup->num_options; i++ )
@@ -1394,7 +1957,7 @@ Index: psprint/source/printer/cupsmgr.cxx
 +            ppd_choice_t* pChoice = pOption->choices + n;
 +            if( pChoice->marked )
 +            {
-+                const PPDKey* pKey = rInfo.m_pParser->getKey( OStringToOUString( pOption->keyword, aEncoding ) );
++                const PPDKey* pKey = rContext.getParser()->getKey( OStringToOUString( pOption->keyword, aEncoding ) );
 +                if( pKey )
 +                {
 +                    const PPDValue* pValue = pKey->getValue( OStringToOUString( pChoice->choice, aEncoding ) );
@@ -1402,7 +1965,7 @@ Index: psprint/source/printer/cupsmgr.cxx
 +                    {
 +                        if( pValue != pKey->getDefaultValue() )
 +                        {
-+                            rInfo.m_aContext.setValue( pKey, pValue, true );
++                            rContext.setValue( pKey, pValue, true );
 +#if OSL_DEBUG_LEVEL > 1
 +                            fprintf( stderr, "key %s is set to %s\n", pOption->keyword, pChoice->choice );
 +#endif
@@ -1429,7 +1992,7 @@ Index: psprint/source/printer/cupsmgr.cxx
 +    // recurse through subgroups
 +    for( int g = 0; g < pPPDGroup->num_subgroups; g++ )
 +    {
-+        updatePrinterContextInfo( pPPDGroup->subgroups + g, rInfo );
++        updatePrinterContextInfo( pPPDGroup->subgroups + g, rContext );
 +    }
 +}
 +#endif // ENABLE_CUPS
@@ -1437,8 +2000,6 @@ Index: psprint/source/printer/cupsmgr.cxx
 +const PPDParser* CUPSManager::createCUPSParser( const OUString& rPrinter )
 +{
 +    const PPDParser* pNewParser = NULL;
-+    rtl_TextEncoding aEncoding = osl_getThreadTextEncoding();
-+
 +    OUString aPrinter;
 +
 +    if( rPrinter.compareToAscii( "CUPS:", 5 ) == 0 )
@@ -1447,53 +2008,71 @@ Index: psprint/source/printer/cupsmgr.cxx
 +        aPrinter = rPrinter;
 +
 +#ifdef ENABLE_CUPS
-+    std::hash_map< OUString, int, OUStringHash >::iterator dest_it =
-+        m_aCUPSDestMap.find( aPrinter );
-+    if( dest_it != m_aCUPSDestMap.end() )
++    if( m_aCUPSMutex.tryToAcquire() && m_nDests && m_pDests )
 +    {
-+        cups_dest_t* pDest = ((cups_dest_t*)m_pDests) + dest_it->second;
-+        const char* pPPDFile = m_pCUPSWrapper->cupsGetPPD( pDest->name );
-+#if OSL_DEBUG_LEVEL > 1
-+        fprintf( stderr, "PPD for %s is %s\n", OUStringToOString( aPrinter, osl_getThreadTextEncoding() ).getStr(), pPPDFile );
-+#endif
-+        if( pPPDFile )
++        std::hash_map< OUString, int, OUStringHash >::iterator dest_it =
++            m_aCUPSDestMap.find( aPrinter );
++        if( dest_it != m_aCUPSDestMap.end() )
 +        {
-+            rtl_TextEncoding aEncoding = osl_getThreadTextEncoding();
-+            OUString aFileName( OStringToOUString( pPPDFile, aEncoding ) );
-+            // create the new parser
-+            pNewParser = new PPDParser( aFileName );
-+
-+            // update the printer info with context information
-+            ppd_file_t* pPPD = m_pCUPSWrapper->ppdOpenFile( pPPDFile );
-+            /*int nConflicts =*/ m_pCUPSWrapper->cupsMarkOptions( pPPD, pDest->num_options, pDest->options );
++            cups_dest_t* pDest = ((cups_dest_t*)m_pDests) + dest_it->second;
++            const char* pPPDFile = m_pCUPSWrapper->cupsGetPPD( pDest->name );
 +#if OSL_DEBUG_LEVEL > 1
-+            fprintf( stderr, "processing the following options for printer %s (instance %s):\n",
-+                     pDest->name, pDest->instance );
-+            for( int k = 0; k < pDest->num_options; k++ )
-+                fprintf( stderr, "   \"%s\" = \"%s\"\n",
-+                         pDest->options[k].name,
-+                         pDest->options[k].value );
++            fprintf( stderr, "PPD for %s is %s\n", OUStringToOString( aPrinter, osl_getThreadTextEncoding() ).getStr(), pPPDFile );
 +#endif
-+            PrinterInfo& rInfo = m_aPrinters[ aPrinter ].m_aInfo;
++            if( pPPDFile )
++            {
++                rtl_TextEncoding aEncoding = osl_getThreadTextEncoding();
++                OUString aFileName( OStringToOUString( pPPDFile, aEncoding ) );
++                // update the printer info with context information
++                ppd_file_t* pPPD = m_pCUPSWrapper->ppdOpenFile( pPPDFile );
++                if( pPPD )
++                {
++                    // create the new parser
++                    PPDParser* pCUPSParser =  new PPDParser( aFileName );
++                    pCUPSParser->m_aFile = rPrinter;
++                    pNewParser = pCUPSParser;
++                    
++                    /*int nConflicts =*/ m_pCUPSWrapper->cupsMarkOptions( pPPD, pDest->num_options, pDest->options );
++#if OSL_DEBUG_LEVEL > 1
++                    fprintf( stderr, "processing the following options for printer %s (instance %s):\n",
++                    pDest->name, pDest->instance );
++                    for( int k = 0; k < pDest->num_options; k++ )
++                        fprintf( stderr, "   \"%s\" = \"%s\"\n",
++                    pDest->options[k].name,
++                    pDest->options[k].value );
++#endif
++                    PrinterInfo& rInfo = m_aPrinters[ aPrinter ].m_aInfo;
++                    
++                    // remember the default context for later use
++                    PPDContext& rContext = m_aDefaultContexts[ aPrinter ];
++                    rContext.setParser( pNewParser );
++                    for( int i = 0; i < pPPD->num_groups; i++ )
++                        updatePrinterContextInfo( pPPD->groups + i, rContext );
++                    
++                    rInfo.m_pParser = pNewParser;
++                    rInfo.m_aContext = rContext;
++                    
++                    // clean up the mess
++                    m_pCUPSWrapper->ppdClose( pPPD );
++                }
++#if OSL_DEBUG_LEVEL > 1
++                else
++                    fprintf( stderr, "ppdOpenFile failed, fallinmg back to generic driver\n" );
++#endif
 +
-+            rInfo.m_pParser = pNewParser;
-+            rInfo.m_aContext.setParser( pNewParser );
-+            for( int i = 0; i < pPPD->num_groups; i++ )
-+                updatePrinterContextInfo( pPPD->groups + i, rInfo );
-+
-+            // clean up the mess
-+            m_pCUPSWrapper->ppdClose( pPPD );
-+
-+            // remove temporary PPD file
-+            unlink( pPPDFile );
++                // remove temporary PPD file
++                unlink( pPPDFile );
++            }
++#if OSL_DEBUG_LEVEL > 1
++            else
++                fprintf( stderr, "no dest found for printer %s\n", OUStringToOString( aPrinter, osl_getThreadTextEncoding() ).getStr() );
++#endif
 +        }
-+#if OSL_DEBUG_LEVEL > 1
-+        else
-+            fprintf( stderr, "no dest found for printer %s\n", OUStringToOString( aPrinter, osl_getThreadTextEncoding() ).getStr() );
-+#endif
++        m_aCUPSMutex.release();
 +    }
-+    if( ! pNewParser )
 +#endif // ENABLE_CUPS
++
++    if( ! pNewParser )
 +    {
 +        // get the default PPD
 +        pNewParser = PPDParser::getParser( String( RTL_CONSTASCII_USTRINGPARAM( "SGENPRT" ) ) );
@@ -1532,6 +2111,16 @@ Index: psprint/source/printer/cupsmgr.cxx
 +        // which updates the printer info
 +        p_it->second.m_aInfo.m_pParser = PPDParser::getParser( p_it->second.m_aInfo.m_aDriverName );
 +    }
++    if( p_it->second.m_aInfo.m_aContext.getParser() == NULL )
++    {
++        OUString aPrinter;
++        if( p_it->second.m_aInfo.m_aDriverName.compareToAscii( "CUPS:", 5 ) == 0 )
++            aPrinter = p_it->second.m_aInfo.m_aDriverName.copy( 5 );
++        else
++            aPrinter = p_it->second.m_aInfo.m_aDriverName;
++
++        p_it->second.m_aInfo.m_aContext = m_aDefaultContexts[ aPrinter ];
++    }
 +
 +    rData.m_pParser		= p_it->second.m_aInfo.m_pParser;
 +    rData.m_aContext	= p_it->second.m_aInfo.m_aContext;
@@ -1540,6 +2129,9 @@ Index: psprint/source/printer/cupsmgr.cxx
 +
 +FILE* CUPSManager::startSpool( const OUString& rPrintername )
 +{
++    if( m_aCUPSDestMap.find( rPrintername ) == m_aCUPSDestMap.end() )
++        return PrinterInfoManager::startSpool( rPrintername );
++    
 +#ifdef ENABLE_CUPS
 +    OUString aTmpURL, aTmpFile;
 +    osl_createTempFile( NULL, NULL, &aTmpURL.pData );
@@ -1559,39 +2151,37 @@ Index: psprint/source/printer/cupsmgr.cxx
 +{
 +    int nJobID = 0;
 +
-+#ifdef ENABLE_CUPS
++    osl::MutexGuard aGuard( m_aCUPSMutex );
++    
++    std::hash_map< OUString, int, OUStringHash >::iterator dest_it =
++        m_aCUPSDestMap.find( rPrintername );
++    if( dest_it == m_aCUPSDestMap.end() )
++        return PrinterInfoManager::endSpool( rPrintername, rJobTitle, pFile );
++
++    #ifdef ENABLE_CUPS
 +    std::hash_map< FILE*, OString, FPtrHash >::const_iterator it = m_aSpoolFiles.find( pFile );
 +    if( it != m_aSpoolFiles.end() )
 +    {
 +        fclose( pFile );
 +        rtl_TextEncoding aEnc = osl_getThreadTextEncoding();
 +
-+        std::hash_map< OUString, int, OUStringHash >::iterator dest_it =
-+            m_aCUPSDestMap.find( rPrintername );
-+        if( dest_it != m_aCUPSDestMap.end() )
-+        {
-+            cups_dest_t* pDest = ((cups_dest_t*)m_pDests) + dest_it->second;
-+            nJobID = m_pCUPSWrapper->cupsPrintFile( pDest->name,
-+                                                    it->second.getStr(),
-+                                                    OUStringToOString( rJobTitle, aEnc ).getStr(),
-+                                                    0, NULL );
++        cups_dest_t* pDest = ((cups_dest_t*)m_pDests) + dest_it->second;
++        nJobID = m_pCUPSWrapper->cupsPrintFile( pDest->name,
++        it->second.getStr(),
++        OUStringToOString( rJobTitle, aEnc ).getStr(),
++        0, NULL );
 +#if OSL_DEBUG_LEVEL > 1
-+            fprintf( stderr, "cupsPrintFile( %s, %s, %s, 0, 0 ) returns %d\n",
-+                     pDest->name,
-+                     it->second.getStr(),
-+                     OUStringToOString( rJobTitle, aEnc ).getStr(),
-+                     nJobID );
-+            OString aCmd( "cp " );
-+            aCmd = aCmd + it->second;
-+            aCmd = aCmd + OString( " $HOME/cupsprint.ps" );
-+            system( aCmd.getStr() );
++        fprintf( stderr, "cupsPrintFile( %s, %s, %s, 0, 0 ) returns %d\n",
++        pDest->name,
++        it->second.getStr(),
++        OUStringToOString( rJobTitle, aEnc ).getStr(),
++        nJobID );
++        OString aCmd( "cp " );
++        aCmd = aCmd + it->second;
++        aCmd = aCmd + OString( " $HOME/cupsprint.ps" );
++        system( aCmd.getStr() );
 +#endif
-+        }
-+#if OSL_DEBUG_LEVEL > 1
-+        else
-+            fprintf( stderr, "Error: no CUPS dest for %s found, discarding job\n", OUStringToOString( rPrintername, aEnc ).getStr() );
-+#endif
-+
++        
 +        unlink( it->second.getStr() );
 +        m_aSpoolFiles.erase( pFile );
 +    }
@@ -1608,7 +2198,20 @@ Index: psprint/source/printer/cupsmgr.cxx
 +
 +bool CUPSManager::checkPrintersChanged()
 +{
-+    return PrinterInfoManager::checkPrintersChanged();
++    bool bChanged = false;
++    if( m_aCUPSMutex.tryToAcquire() )
++    {
++        bChanged = m_bNewDests;
++        m_aCUPSMutex.release();
++    }
++
++    if( ! bChanged )
++        bChanged = PrinterInfoManager::checkPrintersChanged();
++    
++    if( bChanged )
++        initialize();
++
++    return bChanged;
 +}
 +
 +bool CUPSManager::addPrinter( const OUString& rName, const OUString& rDriver )
@@ -1631,23 +2234,26 @@ Index: psprint/source/printer/cupsmgr.cxx
 +
 +bool CUPSManager::setDefaultPrinter( const OUString& rName )
 +{
++    bool bSuccess = false;
 +#ifdef ENABLE_CUPS
 +    std::hash_map< OUString, int, OUStringHash >::iterator nit =
 +        m_aCUPSDestMap.find( rName );
-+    if( nit == m_aCUPSDestMap.end() )
-+        return false;
-+
-+    cups_dest_t* pDests = (cups_dest_t*)m_pDests;
-+    for( int i = 0; i < m_nDests; i++ )
-+        pDests[i].is_default = 0;
-+    pDests[ nit->second ].is_default = 1;
-+    m_pCUPSWrapper->cupsSetDests( m_nDests, (cups_dest_t*)m_pDests );
-+    m_aDefaultPrinter = rName;
-+
-+    return true;
-+#else
-+    return false;
++    if( nit != m_aCUPSDestMap.end() && m_aCUPSMutex.tryToAcquire() )
++    {
++        cups_dest_t* pDests = (cups_dest_t*)m_pDests;
++        for( int i = 0; i < m_nDests; i++ )
++            pDests[i].is_default = 0;
++        pDests[ nit->second ].is_default = 1;
++        m_pCUPSWrapper->cupsSetDests( m_nDests, (cups_dest_t*)m_pDests );
++        m_aDefaultPrinter = rName;
++        m_aCUPSMutex.release();
++        bSuccess = true;
++    }
++    else
 +#endif
++        PrinterInfoManager::setDefaultPrinter( rName );
++        
++    return bSuccess;
 +}
 +
 +bool CUPSManager::writePrinterConfig()
@@ -1667,35 +2273,47 @@ Index: psprint/source/printer/cupsmgr.cxx
 +        if( ! prt->second.m_bModified )
 +            continue;
 +
-+        bDestModified = true;
-+        cups_dest_t* pDest = ((cups_dest_t*)m_pDests) + nit->second;
-+        PrinterInfo& rInfo = prt->second.m_aInfo;
-+
-+        // create new option list
-+        int nNewOptions = 0;
-+        cups_option_t* pNewOptions = NULL; 
-+        int nValues = rInfo.m_aContext.countValuesModified();
-+        for( int i = 0; i < nValues; i++ )
++        if( m_aCUPSMutex.tryToAcquire() )
 +        {
-+            const PPDKey* pKey = rInfo.m_aContext.getModifiedKey( i );
-+            const PPDValue* pValue = rInfo.m_aContext.getValue( pKey );
-+            if( pKey && pValue ) // sanity check
++            bDestModified = true;
++            cups_dest_t* pDest = ((cups_dest_t*)m_pDests) + nit->second;
++            PrinterInfo& rInfo = prt->second.m_aInfo;
++
++            // create new option list
++            int nNewOptions = 0;
++            cups_option_t* pNewOptions = NULL; 
++            int nValues = rInfo.m_aContext.countValuesModified();
++            for( int i = 0; i < nValues; i++ )
 +            {
-+                OString aName = OUStringToOString( pKey->getKey(), aEncoding );
-+                OString aValue = OUStringToOString( pValue->m_aOption, aEncoding );
-+                nNewOptions = m_pCUPSWrapper->cupsAddOption( aName.getStr(), aValue.getStr(), nNewOptions, &pNewOptions );
++                const PPDKey* pKey = rInfo.m_aContext.getModifiedKey( i );
++                const PPDValue* pValue = rInfo.m_aContext.getValue( pKey );
++                if( pKey && pValue ) // sanity check
++                {
++                    OString aName = OUStringToOString( pKey->getKey(), aEncoding );
++                    OString aValue = OUStringToOString( pValue->m_aOption, aEncoding );
++                    nNewOptions = m_pCUPSWrapper->cupsAddOption( aName.getStr(), aValue.getStr(), nNewOptions, &pNewOptions );
++                }
 +            }
++            // set PPD options on CUPS dest
++            m_pCUPSWrapper->cupsFreeOptions( pDest->num_options, pDest->options );
++            pDest->num_options = nNewOptions;
++            pDest->options = pNewOptions;
++            m_aCUPSMutex.release();
 +        }
-+        // set PPD options on CUPS dest
-+        m_pCUPSWrapper->cupsFreeOptions( pDest->num_options, pDest->options );
-+        pDest->num_options = nNewOptions;
-+        pDest->options = pNewOptions;
 +    }
-+    if( bDestModified )
++    if( bDestModified && m_aCUPSMutex.tryToAcquire() )
++    {
 +        m_pCUPSWrapper->cupsSetDests( m_nDests, (cups_dest_t*)m_pDests );
++        m_aCUPSMutex.release();
++    }
 +#endif // ENABLE_CUPS
 +
 +    return PrinterInfoManager::writePrinterConfig();
++}
++
++bool CUPSManager::addOrRemovePossible() const
++{
++    return (m_nDests && m_pDests) ? false : PrinterInfoManager::addOrRemovePossible();
 +}
 +
 +#include <rtsname.hxx>
@@ -1714,6 +2332,8 @@ Index: psprint/source/printer/cupsmgr.cxx
 +            (bool(*)(const OString&,OString&,OString&))osl_getSymbol( pLib, aSym.pData );
 +        if( getpw )
 +        {
++            osl::MutexGuard aGuard( m_aCUPSMutex );
++
 +            OString aUser = m_pCUPSWrapper->cupsUser();
 +            OString aServer = m_pCUPSWrapper->cupsServer();
 +            OString aPassword;
@@ -1736,8 +2356,8 @@ Index: psprint/source/printer/cupsmgr.cxx
 +}
 Index: psprint/source/printer/jobdata.cxx
 ===================================================================
---- psprint/source/printer/jobdata.cxx.orig
-+++ psprint/source/printer/jobdata.cxx
+--- psprint/source/printer/jobdata.cxx.orig	2004-10-21 12:52:30.000000000 +0100
++++ psprint/source/printer/jobdata.cxx	2004-10-21 14:47:18.000000000 +0100
 @@ -72,6 +72,30 @@
  using namespace psp;
  using namespace rtl;
@@ -1771,8 +2391,8 @@ Index: psprint/source/printer/jobdata.cxx
      // consistency checks
 Index: psprint/source/printer/makefile.mk
 ===================================================================
---- psprint/source/printer/makefile.mk.orig
-+++ psprint/source/printer/makefile.mk
+--- psprint/source/printer/makefile.mk.orig	2004-10-21 12:52:30.000000000 +0100
++++ psprint/source/printer/makefile.mk	2004-10-21 14:47:18.000000000 +0100
 @@ -70,6 +70,10 @@ TARGET=printer
  
  .INCLUDE :  settings.mk
@@ -1807,9 +2427,9 @@ Index: psprint/source/printer/makefile.mk
 +
 Index: psprint/source/printer/printerinfomanager.cxx
 ===================================================================
---- psprint/source/printer/printerinfomanager.cxx.orig
-+++ psprint/source/printer/printerinfomanager.cxx
-@@ -67,7 +67,7 @@
+--- psprint/source/printer/printerinfomanager.cxx.orig	2004-10-21 12:52:30.000000000 +0100
++++ psprint/source/printer/printerinfomanager.cxx	2004-10-21 14:47:18.000000000 +0100
+@@ -67,11 +67,12 @@
  #include <tools/stream.hxx>
  #include <tools/debug.hxx>
  #include <tools/config.hxx>
@@ -1818,7 +2438,12 @@ Index: psprint/source/printer/printerinfomanager.cxx
  #include <psprint/fontmanager.hxx>
  
  #include <osl/thread.hxx>
-@@ -123,17 +123,29 @@ class SystemQueueInfo : public Thread
+ #include <osl/mutex.hxx>
++#include <osl/process.h>
+ 
+ #ifdef MACOSX
+ #include <sys/stat.h>
+@@ -123,17 +124,32 @@ class SystemQueueInfo : public Thread
  
  PrinterInfoManager& PrinterInfoManager::get()
  {
@@ -1834,6 +2459,9 @@ Index: psprint/source/printer/printerinfomanager.cxx
 +
 +        if( pManager )
 +            pManager->initialize();
++#if OSL_DEBUG_LEVEL > 1
++        fprintf( stderr, "PrinterInfoManager::get create Manager of type %d\n", pManager->getType() );
++#endif
 +    }
 +
 +    return *pManager;
@@ -1853,7 +2481,7 @@ Index: psprint/source/printer/printerinfomanager.cxx
  }
  
  // -----------------------------------------------------------------
-@@ -172,7 +184,7 @@ bool PrinterInfoManager::checkPrintersCh
+@@ -172,7 +188,7 @@ bool PrinterInfoManager::checkPrintersCh
              }
          }
      }
@@ -1862,7 +2490,16 @@ Index: psprint/source/printer/printerinfomanager.cxx
          bChanged = m_pQueueInfo->hasChanged();
      if( bChanged )
      {
-@@ -254,8 +266,12 @@ void PrinterInfoManager::initialize()
+@@ -183,7 +199,7 @@ bool PrinterInfoManager::checkPrintersCh
+         sal_Int32    applePrintSystem;
+ 
+         applePrintSystem = macxp_GetSystemPrintMethod();
+-        if ( (applePrintSystem == kApplePrintingCUPS) || (applePrintSystem == kApplePrintingNewCUPS) )
++        if ( applePrintSystem == kApplePrintingCUPS )
+         {
+             m_aSystemPrintQueues.clear();
+             delete m_pQueueInfo;
+@@ -254,8 +270,12 @@ void PrinterInfoManager::initialize()
              m_aGlobalDefaults.m_eOrientation = aValue.EqualsIgnoreCaseAscii( "Landscape" ) ? orientation::Landscape : orientation::Portrait;
  
              aValue = aConfig.ReadKey( "Scale" );
@@ -1876,7 +2513,24 @@ Index: psprint/source/printer/printerinfomanager.cxx
  
              aValue = aConfig.ReadKey( "MarginAdjust" );
              m_aGlobalDefaults.m_nLeftMarginAdjust   = aValue.GetToken( 0, ',' ).ToInt32();
-@@ -415,60 +431,67 @@ void PrinterInfoManager::initialize()
+@@ -300,6 +320,7 @@ void PrinterInfoManager::initialize()
+                     m_aGlobalDefaults.m_aFontSubstitutes[ OStringToOUString( aKey.Copy( 10 ), RTL_TEXTENCODING_ISO_8859_1 ) ] = OStringToOUString( aValue, RTL_TEXTENCODING_ISO_8859_1 );
+                 }
+             }
++            setDefaultPaper( m_aGlobalDefaults );
+ #if OSL_DEBUG_LEVEL > 1
+             fprintf( stderr, "global settings: fontsubst = %s, %d substitutes\n", m_aGlobalDefaults.m_bPerformFontSubstitution ? "true" : "false", m_aGlobalDefaults.m_aFontSubstitutes.size() );
+ #endif
+@@ -313,7 +334,7 @@ void PrinterInfoManager::initialize()
+     // notified of queue/printer updates, but these don't necessarily
+     // happen when psprint.conf changes.  The user can change settings in
+     // the Print Center which should also make OOo update its queue list.
+-    if ( (applePrintSystem == kApplePrintingCUPS) || (applePrintSystem == kApplePrintingNewCUPS) )
++    if ( applePrintSystem == kApplePrintingCUPS )
+     {
+         // /etc/cups/printers.conf gets modified every time the Print Center printer
+         // list is modified, so we want to watch this file too.
+@@ -415,62 +436,71 @@ void PrinterInfoManager::initialize()
                  aPrinterName = String( aValue.Copy( nNamePos+1 ), RTL_TEXTENCODING_UTF8 );
                  aPrinter.m_aInfo.m_aPrinterName     = aPrinterName;
                  aPrinter.m_aInfo.m_aDriverName      = String( aValue.Copy( 0, nNamePos ), RTL_TEXTENCODING_UTF8 );
@@ -1887,57 +2541,60 @@ Index: psprint/source/printer/printerinfomanager.cxx
 -                // ignore this printer if its driver is not found
 -                if( ! aPrinter.m_aInfo.m_pParser )
 -                    continue;
--
+ 
 -                // merge the ppd context keys if the printer has the same keys and values
 -                // this is a bit tricky, since it involves mixing two PPDs
 -                // without constraints which might end up badly
 -                // this feature should be use with caution
 -                // it is mainly to select default paper sizes for new printers
 -                for( int nPPDValueModified = 0; nPPDValueModified < m_aGlobalDefaults.m_aContext.countValuesModified(); nPPDValueModified++ )
-+		// set parser, merge settings
-+		// don't do this for CUPS printers as this is done
-+		// by the CUPS system itself
++                // set parser, merge settings
++                // don't do this for CUPS printers as this is done
++                // by the CUPS system itself
++                if( aPrinter.m_aInfo.m_aDriverName.compareToAscii( "CUPS:", 5 ) != 0 )
                  {
 -                    const PPDKey* pDefKey = m_aGlobalDefaults.m_aContext.getModifiedKey( nPPDValueModified );
 -                    const PPDValue* pDefValue = m_aGlobalDefaults.m_aContext.getValue( pDefKey );
 -                    const PPDKey* pPrinterKey = pDefKey ? aPrinter.m_aInfo.m_pParser->getKey( pDefKey->getKey() ) : NULL;
 -                    if( pDefKey && pPrinterKey )
 -                        // at least the options exist in both PPDs
-+		    aPrinter.m_aInfo.m_pParser          = PPDParser::getParser( aPrinter.m_aInfo.m_aDriverName );
-+		    aPrinter.m_aInfo.m_aContext.setParser( aPrinter.m_aInfo.m_pParser );
-+		    // note: setParser also purges the context
-+		    // ignore this printer if its driver is not found
-+		    if ( ! aPrinter.m_aInfo.m_pParser )
-+			 continue;
++                    aPrinter.m_aInfo.m_pParser          = PPDParser::getParser( aPrinter.m_aInfo.m_aDriverName );
++                    aPrinter.m_aInfo.m_aContext.setParser( aPrinter.m_aInfo.m_pParser );
++                    // note: setParser also purges the context
 +
-+		    // merge the ppd context keys if the printer has the same keys and values
-+		    // this is a bit tricky, since it involves mixing two PPDs
-+		    // without constraints which might end up badly
-+		    // this feature should be use with caution
-+		    // it is mainly to select default paper sizes for new printers
-+		    for( int nPPDValueModified = 0; nPPDValueModified < m_aGlobalDefaults.m_aContext.countValuesModified(); nPPDValueModified++ )
++                    // ignore this printer if its driver is not found
++                    if( ! aPrinter.m_aInfo.m_pParser )
++                        continue;
++
++                    // merge the ppd context keys if the printer has the same keys and values
++                    // this is a bit tricky, since it involves mixing two PPDs
++                    // without constraints which might end up badly
++                    // this feature should be use with caution
++                    // it is mainly to select default paper sizes for new printers
++                    for( int nPPDValueModified = 0; nPPDValueModified < m_aGlobalDefaults.m_aContext.countValuesModified(); nPPDValueModified++ )
                      {
 -                        if( pDefValue )
-+			const PPDKey* pDefKey = m_aGlobalDefaults.m_aContext.getModifiedKey( nPPDValueModified );
-+			const PPDValue* pDefValue = m_aGlobalDefaults.m_aContext.getValue( pDefKey );
-+			const PPDKey* pPrinterKey = pDefKey ? aPrinter.m_aInfo.m_pParser->getKey( pDefKey->getKey() ) : NULL;
-+			if( pDefKey && pPrinterKey )
-+			    // at least the options exist in both PPDs
++                        const PPDKey* pDefKey = m_aGlobalDefaults.m_aContext.getModifiedKey( nPPDValueModified );
++                        const PPDValue* pDefValue = m_aGlobalDefaults.m_aContext.getValue( pDefKey );
++                        const PPDKey* pPrinterKey = pDefKey ? aPrinter.m_aInfo.m_pParser->getKey( pDefKey->getKey() ) : NULL;
++                        if( pDefKey && pPrinterKey )
++                            // at least the options exist in both PPDs
                          {
 -                            const PPDValue* pPrinterValue = pPrinterKey->getValue( pDefValue->m_aOption );
 -                            if( pPrinterValue )
 -                                // the printer has a corresponding option for the key
 -                                aPrinter.m_aInfo.m_aContext.setValue( pPrinterKey, pPrinterValue );
-+			    if( pDefValue )
-+			    {
-+			        const PPDValue* pPrinterValue = pPrinterKey->getValue( pDefValue->m_aOption );
-+				if( pPrinterValue )
-+				    // the printer has a corresponding option for the key
-+				    aPrinter.m_aInfo.m_aContext.setValue( pPrinterKey, pPrinterValue );
-+			    }
-                         }
+-                        }
++                            if( pDefValue )
++                            {
++                                const PPDValue* pPrinterValue = pPrinterKey->getValue( pDefValue->m_aOption );
++                                if( pPrinterValue )
++                                    // the printer has a corresponding option for the key
++                                    aPrinter.m_aInfo.m_aContext.setValue( pPrinterKey, pPrinterValue );
++                            }
                          else
                              aPrinter.m_aInfo.m_aContext.setValue( pPrinterKey, NULL );
++                        }
                      }
 -                }
  
@@ -1968,25 +2625,27 @@ Index: psprint/source/printer/printerinfomanager.cxx
 -                        aValue = "lpr";
 -                    }
 +#elif defined(MACOSX)
-+			if ( applePrintSystem == kApplePrintingCUPS )
-+			    aValue = "lp";
-+			else if ( applePrintSystem == kApplePrintingPrintCenter )
-+			    aValue = kApplePCPrintCommand;
-+			else
-+			{
-+			    // Fallback case is kApplePrintingLPR
-+			    aValue = "lpr";
-+			}
++                        if ( applePrintSystem == kApplePrintingCUPS )
++                            aValue = "lp";
++                        else if ( applePrintSystem == kApplePrintingPrintCenter )
++                            aValue = kApplePCPrintCommand;
++                        else
++                        {
++                            // Fallback case is kApplePrintingLPR
++                            aValue = "lpr";
++                        }
  #else
 -                    aValue = "lpr";
 +                        aValue = "lpr";
  #endif
-+		    }
-+		    aPrinter.m_aInfo.m_aCommand = String( aValue, RTL_TEXTENCODING_UTF8 );
++                    }
++                    aPrinter.m_aInfo.m_aCommand = String( aValue, RTL_TEXTENCODING_UTF8 );
                  }
-                 aPrinter.m_aInfo.m_aCommand = String( aValue, RTL_TEXTENCODING_UTF8 );
+-                aPrinter.m_aInfo.m_aCommand = String( aValue, RTL_TEXTENCODING_UTF8 );
  
-@@ -496,7 +519,11 @@ void PrinterInfoManager::initialize()
+                 aValue = aConfig.ReadKey( "Features" );
+                 aPrinter.m_aInfo.m_aFeatures = String( aValue, RTL_TEXTENCODING_UTF8 );
+@@ -496,7 +526,11 @@ void PrinterInfoManager::initialize()
  
                  aValue = aConfig.ReadKey( "Scale" );
                  if( aValue.Len() )
@@ -1998,7 +2657,7 @@ Index: psprint/source/printer/printerinfomanager.cxx
  
                  aValue = aConfig.ReadKey( "MarginAdjust" );
                  if( aValue.Len() )
-@@ -531,7 +558,7 @@ void PrinterInfoManager::initialize()
+@@ -531,7 +565,7 @@ void PrinterInfoManager::initialize()
                  for( int nKey = 0; nKey < aConfig.GetKeyCount(); nKey++ )
                  {
                      ByteString aKey( aConfig.GetKeyName( nKey ) );
@@ -2007,142 +2666,34 @@ Index: psprint/source/printer/printerinfomanager.cxx
                      {
                          aValue = aConfig.ReadKey( aKey );
                          const PPDKey* pKey = aPrinter.m_aInfo.m_pParser->getKey( String( aKey.Copy( 4 ), RTL_TEXTENCODING_ISO_8859_1 ) );
-@@ -568,6 +595,9 @@ void PrinterInfoManager::initialize()
-         }
-     }
+@@ -550,6 +584,7 @@ void PrinterInfoManager::initialize()
+                     }
+                 }
+ 
++                setDefaultPaper( aPrinter.m_aInfo );
+                 fillFontSubstitutions( aPrinter.m_aInfo );
+ 
+                 // finally insert printer
+@@ -578,6 +613,9 @@ void PrinterInfoManager::initialize()
+         aDefaultPrinter = OUString();
+     m_aDefaultPrinter = aDefaultPrinter;
  
 +    if( m_eType != Default )
 +        return;
 +
-     // set default printer
-     if( m_aPrinters.size() )
-     {
-@@ -741,6 +771,124 @@ void PrinterInfoManager::initialize()
-         }
- #endif
- 
-+#ifdef MACOSX
-+        // If we are using OS X 10.2 CUPS printing, we want to grab the PPD that this printer
-+        // is associated with from /etc/cups/ppd (it's autocreated by the OS X printing system) and
-+        // use those values instead of the ones generated in the merged defaults.  We want to make
-+        // this system printer just like we assigned it a PPD in padmin.
+     // add a default printer for every available print queue
+     // merge paper and font substitution from default printer,
+     // all else from global defaults
+@@ -628,7 +666,7 @@ void PrinterInfoManager::initialize()
+         // is associated with from /etc/cups/ppd (it's autocreated by the OS X printing system) and
+         // use those values instead of the ones generated in the merged defaults.  We want to make
+         // this system printer just like we assigned it a PPD in padmin.
+-        if ( (applePrintSystem == kApplePrintingCUPS) || (applePrintSystem == kApplePrintingNewCUPS) )
 +        if ( applePrintSystem == kApplePrintingCUPS )
-+        {
-+            aPrinter.m_aInfo.m_aFontSubstitutes.clear();
-+            aPrinter.m_aInfo.m_aFontSubstitutions.clear();
-+
-+            // Printer's autogenerated PPD will be /etc/cups/ppd/<printername-from-lpstat>.ppd
-+            aPrinter.m_aInfo.m_aDriverName      = String( *it );
-+            aPrinter.m_aInfo.m_pParser          = PPDParser::getParser( aPrinter.m_aInfo.m_aDriverName );
-+            aPrinter.m_aInfo.m_aContext.setParser( aPrinter.m_aInfo.m_pParser );
-+
-+            if( aPrinter.m_aInfo.m_pParser )
-+            {
-+                // merge the ppd context keys if the printer has the same keys and values
-+                // it is mainly to select default paper sizes for new printers
-+                for( int nPPDValueModified = 0; nPPDValueModified < m_aGlobalDefaults.m_aContext.countValuesModified(); nPPDValueModified++ )
-+                {
-+                    const PPDKey* pDefKey = m_aGlobalDefaults.m_aContext.getModifiedKey( nPPDValueModified );
-+                    const PPDValue* pDefValue = m_aGlobalDefaults.m_aContext.getValue( pDefKey );
-+				// If the default PPD has a certain key, attempt to get that same key in the Printer's PPD
-+                    const PPDKey* pPrinterKey = pDefKey ? aPrinter.m_aInfo.m_pParser->getKey( pDefKey->getKey() ) : NULL;
-+
-+                    // The key usually merged is PageSize
-+                    if( pDefKey && pPrinterKey )
-+                    {
-+                        // Key exists in both the Default PPD and the printer's specific PPD.
-+                        if( pDefValue )
-+                        {
-+                            const PPDValue* pPrinterValue = pPrinterKey->getValue( pDefValue->m_aOption );
-+                            // If the printer has a corresponding option for the key, use printer PPD's option
-+                            if( pPrinterValue )
-+                                aPrinter.m_aInfo.m_aContext.setValue( pPrinterKey, pPrinterValue );
-+                        }
-+                        else
-+                            aPrinter.m_aInfo.m_aContext.setValue( pPrinterKey, NULL );
-+                    }
-+                }
-+
-+                // Some CUPS PPDs on Mac OS X (Epson, HP) don't include the requisite
-+                // PageSize information for the value.  We have to fudge it from the
-+                // margin information.  Others (Canon BJC 8200) have the coordinates
-+			 // but not the "setpagedevice" stuff
-+                const PPDKey* pPSizeKey = aPrinter.m_aInfo.m_pParser->getKey( String(RTL_CONSTASCII_USTRINGPARAM("PageSize")) );
-+                if ( pPSizeKey )
-+                {
-+                    int           psIndex = 0;
-+                    int           nNumValues = pPSizeKey->countValues();
-+
-+                    for ( psIndex = 0; psIndex < nNumValues; psIndex++ )
-+                    {
-+                        const PPDValue*   pPSizeValue = pPSizeKey->getValue( psIndex );
-+
-+                        // Only take care of PPD values that are not formatted correctly.
-+                        if (  pPSizeValue &&
-+                              ( !(pPSizeValue->m_aValue.Len()) ||
-+                              (pPSizeValue->m_aValue.Len() && (pPSizeValue->m_aValue.SearchAscii("setpagedevice")==STRING_NOTFOUND)) )
-+                           )
-+                        {
-+                            // Deal with the two cases:  1) where there is a blank PageSize value and
-+                            // 2) where there are simply the dimensions as the PageSize value
-+                            if ( !pPSizeValue->m_aValue.Len() )
-+                            {
-+                                int     paperWidth;
-+                                int     paperHeight;
-+                                char    aWidth[ 32 ];
-+                                char    aHeight[ 32 ];
-+
-+                                // Grab dimensions for this paper size from the "PaperDimension" key of the PPD
-+                                aPrinter.m_aInfo.m_pParser->getPaperDimension( pPSizeValue->m_aOption, paperWidth, paperHeight );
-+                                snprintf( aWidth, 32, "%d", paperWidth );
-+                                snprintf( aHeight, 32, "%d", paperHeight );
-+
-+                                // Construct a suitable PageSize key value from the PaperDimension values for this paper size
-+                           	  pPSizeValue->m_aValue.AppendAscii( "<</PageSize [" );
-+                                pPSizeValue->m_aValue.AppendAscii( aWidth );
-+                           	  pPSizeValue->m_aValue.AppendAscii( " " );
-+                                pPSizeValue->m_aValue.AppendAscii( aHeight );
-+                           	  pPSizeValue->m_aValue.AppendAscii( "] /ImagingBBox null>> setpagedevice" );
-+                            }
-+                            else
-+            			   {
-+                                String  aBox( pPSizeValue->m_aValue );
-+				   
-+                                // The PageSize value was just the bounding box, add in the correct postscript
-+                                pPSizeValue->m_aValue.AssignAscii( "" );
-+                           	  pPSizeValue->m_aValue.AppendAscii( "<</PageSize [" );
-+                                pPSizeValue->m_aValue.Append( aBox );
-+                           	  pPSizeValue->m_aValue.AppendAscii( "] /ImagingBBox null>> setpagedevice" );
-+            			   }
-+                        }
-+                    }
-+                }
-+            }
-+		  else
-+            {
-+                ByteString  aBytePrinterName = ByteString( UniString(aPrinter.m_aInfo.m_aDriverName), RTL_TEXTENCODING_UTF8 );
-+                fprintf( stderr, "Could not get Printer PPD from /etc/cups/ppd for printer '%s'!  Using simple shared printer PPD...\n", aBytePrinterName.GetBuffer() );
-+
-+                // Some printers don't have the PPDs in /etc/cups/ppd (like Rendezvous-shared ones)
-+                // so we have to simply use a stripped down shared printer PPD for them
-+                aPrinter.m_aInfo.m_aDriverName    = String( RTL_CONSTASCII_USTRINGPARAM("MacShared") );
-+                aPrinter.m_aInfo.m_pParser        = PPDParser::getParser( aPrinter.m_aInfo.m_aDriverName );
-+                aPrinter.m_aInfo.m_aContext.setParser( aPrinter.m_aInfo.m_pParser );
-+                if( !(aPrinter.m_aInfo.m_pParser) )
-+                {
-+                    fprintf( stderr, "Warning:  still couldn't load the PPD, MacShared.ppd may be missing.  Will use generic printer PPD.\n" );
-+                    aPrinter.m_aInfo.m_aDriverName    = String( RTL_CONSTASCII_USTRINGPARAM("SGENPRT") );
-+                    aPrinter.m_aInfo.m_pParser        = PPDParser::getParser( aPrinter.m_aInfo.m_aDriverName );
-+                    aPrinter.m_aInfo.m_aContext.setParser( aPrinter.m_aInfo.m_pParser );
-+                }
-+            }
-+        }
-+#endif
-+
-         m_aPrinters[ aPrinterName ] = aPrinter;
-     }
- }
-@@ -896,16 +1044,19 @@ bool PrinterInfoManager::writePrinterCon
+         {
+             aPrinter.m_aInfo.m_aFontSubstitutes.clear();
+             aPrinter.m_aInfo.m_aFontSubstitutions.clear();
+@@ -896,16 +934,19 @@ bool PrinterInfoManager::writePrinterCon
              aValue += ByteString::CreateFromInt32( it->second.m_aInfo.m_nBottomMarginAdjust );
              pConfig->WriteKey( "MarginAdjust", aValue );
  
@@ -2171,7 +2722,7 @@ Index: psprint/source/printer/printerinfomanager.cxx
              }
  
              // write font substitution table
-@@ -968,6 +1119,14 @@ bool PrinterInfoManager::addPrinter( con
+@@ -968,6 +1009,14 @@ bool PrinterInfoManager::addPrinter( con
  
          m_aPrinters[ rPrinterName ] = aPrinter;
          bSuccess = true;
@@ -2186,7 +2737,29 @@ Index: psprint/source/printer/printerinfomanager.cxx
      }
      return bSuccess;
  }
-@@ -1145,7 +1304,7 @@ void PrinterInfoManager::fillFontSubstit
+@@ -1045,6 +1094,12 @@ bool PrinterInfoManager::setDefaultPrint
+ }
+ 
+ // -----------------------------------------------------------------
++bool PrinterInfoManager::addOrRemovePossible() const
++{
++    return true;
++}
++
++// -----------------------------------------------------------------
+ 
+ void PrinterInfoManager::fillFontSubstitutions( PrinterInfo& rInfo ) const
+ {
+@@ -1118,7 +1173,7 @@ void PrinterInfoManager::fillFontSubstit
+                 if( nSubstitute != -1 )
+                 {
+                     rInfo.m_aFontSubstitutions[ it->m_nID ] = nSubstitute;
+-#if OSL_DEBUG_LEVEL > 1
++#if OSL_DEBUG_LEVEL > 2
+                     FastPrintFontInfo aInfo;
+                     rFontManager.getFontFastInfo( nSubstitute, aInfo );
+                     fprintf( stderr,
+@@ -1145,7 +1200,7 @@ void PrinterInfoManager::fillFontSubstit
  
  void PrinterInfoManager::getSystemPrintCommands( std::list< OUString >& rCommands )
  {
@@ -2195,7 +2768,7 @@ Index: psprint/source/printer/printerinfomanager.cxx
      {
          m_aSystemPrintCommand = m_pQueueInfo->getCommand();
          m_pQueueInfo->getSystemQueues( m_aSystemPrintQueues );
-@@ -1164,7 +1323,7 @@ void PrinterInfoManager::getSystemPrintC
+@@ -1164,7 +1219,7 @@ void PrinterInfoManager::getSystemPrintC
  
  const std::list< OUString >& PrinterInfoManager::getSystemPrintQueues()
  {
@@ -2204,7 +2777,7 @@ Index: psprint/source/printer/printerinfomanager.cxx
      {
          m_aSystemPrintCommand = m_pQueueInfo->getCommand();
          m_pQueueInfo->getSystemQueues( m_aSystemPrintQueues );
-@@ -1173,6 +1332,32 @@ const std::list< OUString >& PrinterInfo
+@@ -1173,6 +1228,117 @@ const std::list< OUString >& PrinterInfo
      return m_aSystemPrintQueues;
  }
  
@@ -2212,8 +2785,9 @@ Index: psprint/source/printer/printerinfomanager.cxx
 +{
 +    const PrinterInfo&   rPrinterInfo	= getPrinterInfo (rPrintername);
 +    const rtl::OUString& rCommand		= rPrinterInfo.m_aCommand;
-+    const rtl::OString aShellCommand	= OUStringToOString (rCommand, RTL_TEXTENCODING_ISO_8859_1);
-+													  
++    rtl::OString aShellCommand	= OUStringToOString (rCommand, RTL_TEXTENCODING_ISO_8859_1);
++    aShellCommand += rtl::OString( " 2>/dev/null" );
++
 +    return popen (aShellCommand.getStr(), "w");
 +}
 +
@@ -2234,22 +2808,314 @@ Index: psprint/source/printer/printerinfomanager.cxx
 +    }
 +}
 +
++void PrinterInfoManager::setDefaultPaper( PrinterInfo& rInfo ) const
++{
++    if( ! rInfo.m_pParser || ! rInfo.m_aContext.getParser() )
++        return;
++ 
++    const PPDKey* pPageSizeKey = rInfo.m_pParser->getKey( String( RTL_CONSTASCII_USTRINGPARAM( "PageSize" ) ) );
++    if( ! pPageSizeKey )
++        return;
++    
++    int nModified = rInfo.m_aContext.countValuesModified();
++    while( nModified-- &&
++        rInfo.m_aContext.getModifiedKey( nModified ) != pPageSizeKey )
++    ;
++    
++    if( nModified >= 0 ) // paper was set already, do not modify
++    {
++        #if OSL_DEBUG_LEVEL > 1
++        fprintf( stderr, "not setting default paper, already set %s\n",
++            OUStringToOString( rInfo.m_aContext.getValue( pPageSizeKey )->m_aOption, RTL_TEXTENCODING_ISO_8859_1 ).getStr() );
++        #endif
++        return;
++    }
++    
++    // paper not set, fill in default value
++    // default value is Letter for US (en_US), Cannada (en_CA, fr_CA); else A4
++    // en will be interpreted as en_US
++    const PPDValue* pPaperVal = NULL;
++
++    // check for LC_PAPER
++    const char* pPaperLang = getenv( "LC_PAPER" );
++    if( pPaperLang && *pPaperLang )
++    {
++        OString aLang( pPaperLang );
++        if( aLang.getLength() > 5 )
++            aLang = aLang.copy( 0, 5 );
++        if( aLang.getLength() == 5 )
++        {
++            if(    aLang.equalsIgnoreAsciiCase( "en_us" )
++                || aLang.equalsIgnoreAsciiCase( "en_ca" )
++                || aLang.equalsIgnoreAsciiCase( "fr_ca" )
++                )
++                pPaperVal = pPageSizeKey->getValue( String( RTL_CONSTASCII_USTRINGPARAM( "Letter" ) ) );
++            else
++                pPaperVal = pPageSizeKey->getValue( String( RTL_CONSTASCII_USTRINGPARAM( "A4" ) ) );
++        }
++        else if( aLang.getLength() == 2 && aLang.equalsIgnoreAsciiCase( "en" ) )
++            pPaperVal = pPageSizeKey->getValue( String( RTL_CONSTASCII_USTRINGPARAM( "Letter" ) ) );
++        else
++            pPaperVal = pPageSizeKey->getValue( String( RTL_CONSTASCII_USTRINGPARAM( "A4" ) ) );
++    }
++    
++    // use process locale to determine paper
++    if( !pPaperVal )
++    {
++        rtl_Locale* pLoc = NULL;
++        osl_getProcessLocale( &pLoc );
++        if( pLoc )
++        {
++            pPaperVal = pPageSizeKey->getValue( String( RTL_CONSTASCII_USTRINGPARAM( "A4" ) ) );
++            if( 0 == rtl_ustr_ascii_compareIgnoreAsciiCase_WithLength( pLoc->Language->buffer, pLoc->Language->length, "en") )
++            {
++                if(    0 == rtl_ustr_ascii_compareIgnoreAsciiCase_WithLength( pLoc->Country->buffer, pLoc->Country->length, "us")
++                    || 0 == rtl_ustr_ascii_compareIgnoreAsciiCase_WithLength( pLoc->Country->buffer, pLoc->Country->length, "ca")
++                    || pLoc->Country->length == 0
++                    )
++                    pPaperVal = pPageSizeKey->getValue( String( RTL_CONSTASCII_USTRINGPARAM( "Letter" ) ) );
++            }
++            else if( 0 == rtl_ustr_ascii_compareIgnoreAsciiCase_WithLength( pLoc->Language->buffer, pLoc->Language->length, "fr") )
++            {
++                if( 0 == rtl_ustr_ascii_compareIgnoreAsciiCase_WithLength( pLoc->Country->buffer, pLoc->Country->length, "ca") )
++                    pPaperVal = pPageSizeKey->getValue( String( RTL_CONSTASCII_USTRINGPARAM( "Letter" ) ) );
++            }
++        }
++    }
++    
++    if( pPaperVal )
++    {
++        #if OSL_DEBUG_LEVEL > 1
++        fprintf( stderr, "setting default paper %s\n", OUStringToOString( pPaperVal->m_aOption, RTL_TEXTENCODING_ISO_8859_1 ).getStr() );
++        #endif
++        rInfo.m_aContext.setValue( pPageSizeKey, pPaperVal );
++    }
++}
++
  // -----------------------------------------------------------------
  
  SystemQueueInfo::SystemQueueInfo() :
-@@ -1253,7 +1438,7 @@ void SystemQueueInfo::run()
+@@ -1213,7 +1379,7 @@ struct SystemCommandParameters
+     const char*		pPrintCommand;
+     const char*		pForeToken;
+     const char*		pAftToken;
+-    int					nForeTokenCount;
++    unsigned int	nForeTokenCount;
+ };
  
+ static const struct SystemCommandParameters aParms[] =
+@@ -1227,11 +1393,11 @@ static const struct SystemCommandParamet
+      * printerinfomanager.hxx and are indexed by those constants.  ORDER IS IMPORTANT!!!
+ 	*/
+     /* Apple LPR printing (kApplePrintingLPR) */
+-    { "/usr/sbin/lpc status", "lpr -P (PRINTER)", "", ":", 0 },
++    { "/usr/bin/lpc status", "lpr -P (PRINTER)", "", ":", 0 },
+     /* Apple CUPS printing (kApplePrintingCUPS) */
+     { "LANG=C;LC_ALL=C;export LANG LC_ALL;/usr/bin/lpstat -s", "lp -d (PRINTER)", "device for ", ": ", 1 },
+-    /* Apple New CUPS printing (kApplePrintingCUPS) */
+-    { "LANG=C;LC_ALL=C;export LANG LC_ALL;/usr/bin/lpstat -s", "lp -d (PRINTER)", "device for ", ": ", 1 },
++    /* Apple Print Center printing (kApplePrintingPrintCenter) */
++    { kApplePCQueueName, kApplePCPrintCommand, "", ":", 0 }
+ #else
+     { "LANG=C;LC_ALL=C;export LANG LC_ALL;lpstat -s", "lp -d \"(PRINTER)\"", "system for ", ": ", 1 },
+     { "/usr/sbin/lpc status", "lpr -P \"(PRINTER)\"", "", ":", 0 },
+@@ -1241,19 +1407,9 @@ static const struct SystemCommandParamet
+ 
+ void SystemQueueInfo::run()
+ {
+-
+-#ifdef MACOSX
+-    // FIXME: revisit this to see why MacOSX needs to grab the mutex earlier
+-    // Workaround to allow MacOSX print queue detection to work
+-    // Must grab the mutex as early as possible to make
+-    // sure that run() actually runs before hasChanged() or
+-    // getSystemQueues() get called by the PrinterInfoManager
+-    MutexGuard aGuard( m_aMutex );
+-#endif
+-
      char pBuffer[1024];
      ByteString aPrtQueueCmd, aForeToken, aAftToken, aString;
 -    int nForeTokenCount, i;
-+    int nForeTokenCount = 0, i;
++    unsigned int nForeTokenCount = 0, i;
      FILE *pPipe;
      bool bSuccess = false;
      std::list< ByteString > aLines;
+@@ -1279,8 +1435,25 @@ void SystemQueueInfo::run()
+ #if OSL_DEBUG_LEVEL > 1
+         fprintf( stderr, "trying print queue command \"%s\" ... ", aParms[i].pQueueCommand );
+ #endif
++#ifdef MACOSX
++        /* For Mac OS X 10.1 Print Center printing, we only use the default queue.  We do not
++         * need to discover it.  So when it comes up in the list of possible queues,
++         * recognize it and declare success.
++         */
++        if ( applePrintSysType == kApplePrintingPrintCenter )
++        {
++            if ( strstr(aPrtQueueCmd.GetBuffer(), kApplePCQueueName) != NULL )
++                bSuccess = TRUE;
++#ifdef DEBUG
++            else
++                fprintf( stderr, "Ignoring print queue command \"%s\" because using 10.1 Print Center printing.\n", aParms[i].pQueueCommand );
++#endif
++        }
++        else
++#endif
+         {
+-            if( pPipe = popen( aPrtQueueCmd.GetBuffer(), "r" ) )
++			aPrtQueueCmd += ByteString( " 2>/dev/null" );	
++            if( (pPipe = popen( aPrtQueueCmd.GetBuffer(), "r" )) )
+             {
+                 while( fgets( pBuffer, 1024, pPipe ) )
+                     aLines.push_back( ByteString( pBuffer ) );
+@@ -1293,7 +1466,27 @@ void SystemQueueInfo::run()
+ #endif
+     }
+ 
+-   {
++#ifdef MACOSX
++    /* Since we only print to the default printer for MacOS X 10.1,
++     * queue discovery serves no purpose.
++     */
++    if ( applePrintSysType == kApplePrintingPrintCenter )
++    {
++        std::list< OUString > aSysPrintQueues;
++
++        aSysPrintQueues.push_back( OUString::createFromAscii(kApplePCQueueName) );
++      #ifdef DEBUG
++        fprintf( stderr, "printerinfomanager.cxx: using Print Center default print queue.\n" );
++      #endif
++
++        MutexGuard aGuard( m_aMutex );
++        m_bChanged	= true;
++        m_aQueues	= aSysPrintQueues;
++        m_aCommand	= aPrintCommand;
++    }
++    else
++#endif	/* MACOSX */
++    {
+         /* Normal Unix print queue discovery, also used for Darwin 5 LPR printing
+          * and MacOS X 10.2/Darwin 6 CUPS printing.
+          */
+@@ -1308,7 +1501,7 @@ void SystemQueueInfo::run()
+                 ByteString aOutLine( aLines.front() );
+                 aLines.pop_front();
+             
+-                for( int i = 0; i < nForeTokenCount && nPos != STRING_NOTFOUND; i++ )
++                for( i = 0; i < nForeTokenCount && nPos != STRING_NOTFOUND; i++ )
+                 {
+                     nPos = aOutLine.Search( aForeToken, nPos );
+                     if( nPos != STRING_NOTFOUND && aOutLine.Len() >= nPos+aForeToken.Len() )
+@@ -1330,11 +1523,7 @@ void SystemQueueInfo::run()
+                 }
+             }
+         
+-#ifndef MACOSX
+-            // FIXME: revisit this to see why MacOSX needs to grab the mutex earlier
+-            // A specific MacOSX workaround grabbed this Mutex earlier so do not regrab
+             MutexGuard aGuard( m_aMutex );
+-#endif
+             m_bChanged	= true;
+             m_aQueues	= aSysPrintQueues;
+             m_aCommand	= aPrintCommand;
+@@ -1346,10 +1535,13 @@ void SystemQueueInfo::run()
+ 
+ /* On Apple systems printing gets more complicated...
+  * 1)  Darwin 5:     use straight lpr system, user has to configure lpr correctly
+- * 2)  MacOS X 10.2: use CUPS duo of lpstat/lp
+- * 3)  Darwin 6:     Like MacOS X 10.2, use CUPS
+- * 4)  MacOS X 10.3:use New CUPS and duo lpstat/lp 
+- * 5)  Darwin 7: Like MacOS X 10.3
++ * 2)  MacOS X 10.1: use /usr/sbin/Print which prints to default Print Center printer
++ * 3)  MacOS X 10.2: use CUPS duo of lpstat/lp
++ * 4)  Darwin 6:     Like MacOS X 10.2, use CUPS
++ *
++ * --- FIXME ---   We don't support printer choosing on MacOS X 10.1 at this time,
++ *                 only printing to default Print Center printer.  The user can
++ *                 change the default Print Center printer at any point however.
+  */
+ 
+ /*
+@@ -1357,8 +1549,11 @@ void SystemQueueInfo::run()
+  *
+  * Find out which printing system/OS we are using.
+  *
+- * Darwin 5 is the fallback case.  For 10.2/Darwin 6, we attempt to find lpstat.
+- * For 10.3/Darwin 7, we attempt to fid pstopdf
++ * Darwin 5 is the fallback case.  To check for 10.1 printing we try to see if
++ * /usr/sbin/Print exists.  For 10.2/Darwin 6, we attempt to find lpstat.  Users
++ * might also have installed CUPS on Darwin 5 or MacOS X 10.1, but we default to
++ * Print Center (/usr/sbin/Print) printing on 10.1.
++ *
+  */
+ sal_Int32 macxp_GetSystemPrintMethod( void )
+ {
+@@ -1369,13 +1564,13 @@ sal_Int32 macxp_GetSystemPrintMethod( vo
+      /* Attempt to find out which OS we are on... */
+      applePrintSysType = kApplePrintingLPR;
+ 	
+-     /* Check for MacOS X 10.3 and later CUPS first. */
+-     err = stat( "/usr/bin/pstopdf", &status );
++     /* Check for MacOS X 10.1 first. */
++     err = stat( "/usr/sbin/Print", &status );
+      if ( err == 0 )
+      {
+-          applePrintSysType = kApplePrintingNewCUPS;
++          applePrintSysType = kApplePrintingPrintCenter;
+           #ifdef DEBUG
+-               fprintf( stderr, "printerinfomanager.cxx:  found MacOS X 10.3 or later type printing system.\n" );
++               fprintf( stderr, "printerinfomanager.cxx:  found MacOS X 10.1-type printing system.\n" );
+           #endif
+      }
+      else
+@@ -1399,6 +1594,7 @@ sal_Int32 macxp_GetSystemPrintMethod( vo
+      return( applePrintSysType );
+ }
+ 
++#if 0
+ /*
+  * macxp_GetSystemPrintFormat()
+  *
+@@ -1412,7 +1608,7 @@ sal_Int32 macxp_GetSystemPrintMethod( vo
+  * therefore the environment variable OOO_PRINT_PS_DIRECTLY, if set,
+  * forces OOo to NOT undergo the PS -> PDF translation by default.
+  */
+-/*sal_Int32 macxp_GetSystemPrintFormat( void )
++sal_Int32 macxp_GetSystemPrintFormat( void )
+ {
+      int			printFormat;
+      int			err;
+@@ -1423,15 +1619,15 @@ sal_Int32 macxp_GetSystemPrintMethod( vo
+ 	
+      /* Check for presence of OSAScript executable, which is
+       * believed to be MacOS X only (ie not present on Darwin).
+-      *
++      */
+      err = stat( "/usr/bin/osascript", &status );
+      if ( err == 0 )
+      {
+-          /* Check to see if the user wants to print PS anyway *
++         /* Check to see if the user wants to print PS anyway */
+           pPDFOverride = getenv( "OOO_PRINT_PS_DIRECTLY" );
+           if ( pPDFOverride == NULL )
+           {
+-               /* Now we have to check for ps2pdf to make sure we can do the conversion *
++          /* Now we have to check for ps2pdf to make sure we can do the conversion */
+                err = stat( kApplePS2PDFLocation, &status );
+                if ( err == 0 )
+                {
+@@ -1444,6 +1640,7 @@ sal_Int32 macxp_GetSystemPrintMethod( vo
+      }
+ 	
+      return( printFormat );
+-}*/
++}
++#endif
+ #endif
+ 
 Index: psprint/source/printergfx/bitmap_gfx.cxx
 ===================================================================
---- psprint/source/printergfx/bitmap_gfx.cxx.orig
-+++ psprint/source/printergfx/bitmap_gfx.cxx
+--- psprint/source/printergfx/bitmap_gfx.cxx.orig	2004-10-21 12:52:30.000000000 +0100
++++ psprint/source/printergfx/bitmap_gfx.cxx	2004-10-21 14:47:18.000000000 +0100
 @@ -71,8 +71,8 @@
  
  namespace psp {
@@ -2330,8 +3196,8 @@ Index: psprint/source/printergfx/bitmap_gfx.cxx
  
 Index: psprint/source/printergfx/common_gfx.cxx
 ===================================================================
---- psprint/source/printergfx/common_gfx.cxx.orig
-+++ psprint/source/printergfx/common_gfx.cxx
+--- psprint/source/printergfx/common_gfx.cxx.orig	2004-10-21 12:52:30.000000000 +0100
++++ psprint/source/printergfx/common_gfx.cxx	2004-10-21 14:47:18.000000000 +0100
 @@ -94,7 +94,9 @@ static const sal_Int32 nMaxTextColumn = 
  GraphicsStatus::GraphicsStatus() :
          mnTextHeight( 0 ),
@@ -2619,9 +3485,19 @@ Index: psprint/source/printergfx/common_gfx.cxx
                   "/b4_Inc_state save def\n"
 Index: psprint/source/printergfx/printerjob.cxx
 ===================================================================
---- psprint/source/printergfx/printerjob.cxx.orig
-+++ psprint/source/printergfx/printerjob.cxx
-@@ -143,8 +143,8 @@ AppendPS (FILE* pDst, osl::File* pSrc, s
+--- psprint/source/printergfx/printerjob.cxx.orig	2004-10-21 12:52:30.000000000 +0100
++++ psprint/source/printergfx/printerjob.cxx	2004-10-21 14:47:18.000000000 +0100
+@@ -107,7 +107,8 @@
+ 
+ #include "glyphset.hxx"
+ 
+-using namespace psp ;
++using namespace psp;
++using namespace rtl;
+ 
+ #ifdef MACOSX
+ // Prototype our MacOS X printing help function
+@@ -143,8 +144,8 @@ AppendPS (FILE* pDst, osl::File* pSrc, s
  
      pSrc->setPos (osl_Pos_Absolut, 0);
  
@@ -2632,7 +3508,7 @@ Index: psprint/source/printergfx/printerjob.cxx
      do
      {
          pSrc->read  (pBuffer, nBlockSize, nIn);
-@@ -267,8 +267,8 @@ PrinterJob::GetCurrentPageBody ()
+@@ -267,8 +268,8 @@ PrinterJob::GetCurrentPageBody ()
   */ 
  
  PrinterJob::PrinterJob () :
@@ -2643,7 +3519,7 @@ Index: psprint/source/printergfx/printerjob.cxx
  {
  }
  
-@@ -451,6 +451,8 @@ PrinterJob::StartJob (
+@@ -451,6 +452,8 @@ PrinterJob::StartJob (
      rtl::OUString aExt = rtl::OUString::createFromAscii (".ps");
      mpJobHeader  = CreateSpoolFile (rtl::OUString::createFromAscii("psp_head"), aExt);
      mpJobTrailer = CreateSpoolFile (rtl::OUString::createFromAscii("psp_tail"), aExt);
@@ -2652,7 +3528,7 @@ Index: psprint/source/printergfx/printerjob.cxx
  
      // write document header according to Document Structuring Conventions (DSC)
      WritePS (mpJobHeader,
-@@ -481,6 +483,7 @@ PrinterJob::StartJob (
+@@ -481,6 +484,7 @@ PrinterJob::StartJob (
  
      // Document Title
      aFilterWS = WhitespaceToSpace( rJobName, FALSE );
@@ -2660,7 +3536,16 @@ Index: psprint/source/printergfx/printerjob.cxx
      WritePS (mpJobHeader, "%%Title: "); 
      WritePS (mpJobHeader, aFilterWS);
      WritePS (mpJobHeader, "\n");
-@@ -519,8 +522,11 @@ PrinterJob::EndJob ()
+@@ -500,7 +504,7 @@ PrinterJob::StartJob (
+     WritePS (mpJobHeader, "%%EndComments\n");
+ 
+     // write Prolog
+-    writeProlog (mpJobHeader);
++    writeProlog (mpJobHeader, rSetupData);
+ 
+     // mark last job setup as not set
+     m_aLastJobData.m_pParser = NULL;
+@@ -519,8 +523,11 @@ PrinterJob::EndJob ()
  
      // write document setup (done here because it
      // includes the accumulated fonts
@@ -2673,7 +3558,7 @@ Index: psprint/source/printergfx/printerjob.cxx
  
      // write document trailer according to Document Structuring Conventions (DSC)
      rtl::OStringBuffer aTrailer(512);
-@@ -575,6 +581,12 @@ PrinterJob::EndJob ()
+@@ -575,6 +582,12 @@ PrinterJob::EndJob ()
      }
      else
      {
@@ -2686,7 +3571,7 @@ Index: psprint/source/printergfx/printerjob.cxx
          const PrinterInfoManager& rPrinterInfoManager = PrinterInfoManager::get ();
          const rtl::OUString& rPrinter     = m_aLastJobData.m_aPrinterName;
          const PrinterInfo&   rPrinterInfo = rPrinterInfoManager.getPrinterInfo (rPrinter);
-@@ -587,19 +599,12 @@ PrinterJob::EndJob ()
+@@ -587,26 +600,19 @@ PrinterJob::EndJob ()
           *           All other OS X/Darwin cases use spool to file.
  	    * Other UNIX:  always open a pipe.
           */
@@ -2707,7 +3592,18 @@ Index: psprint/source/printergfx/printerjob.cxx
          else
          {
              /* Spool to file instead so we can convert it.  Cases used here:
-@@ -624,7 +629,7 @@ PrinterJob::EndJob ()
+-             * 1) kApplePrintingCUPS && kApplePrintingUsePDF
+-             * 2) kApplePrintingCUPS && kApplePrintingUsePS
+-             * 3) kApplePrintingNewCUPS && kApplePrintingUseNewPDF
+-             * 2) kApplePrintingNewCUPS && kApplePrintingUsePS
++             * 1) kApplePrintingPrintCenter && kApplePrintingUsePDF
++             * 2) kApplePrintingPrintCenter && kApplePrintingUsePS
++             * 3) kApplePrintingCUPS && kApplePrintingUsePDF
++             * 4) kApplePrintingCUPS && kApplePrintingUsePS
+              */
+ 
+             /* Get a temporary file name for the spool file.
+@@ -624,7 +630,7 @@ PrinterJob::EndJob ()
                  return sal_False;
              }
          }
@@ -2716,7 +3612,7 @@ Index: psprint/source/printergfx/printerjob.cxx
      }
  
      /* spool the document parts to the destination */
-@@ -633,25 +638,36 @@ PrinterJob::EndJob ()
+@@ -633,25 +639,36 @@ PrinterJob::EndJob ()
  
      AppendPS (pDestFILE, mpJobHeader, pBuffer);
      mpJobHeader->close();
@@ -2762,7 +3658,7 @@ Index: psprint/source/printergfx/printerjob.cxx
      }
      
      AppendPS (pDestFILE, mpJobTrailer, pBuffer);
-@@ -662,8 +678,13 @@ PrinterJob::EndJob ()
+@@ -662,8 +679,13 @@ PrinterJob::EndJob ()
      if (bSpoolToFile)
          fclose (pDestFILE);
      else
@@ -2777,7 +3673,7 @@ Index: psprint/source/printergfx/printerjob.cxx
              sal_uInt32	nXdpi;
              sal_uInt32	nYdpi;
  
-@@ -691,14 +712,9 @@ PrinterJob::EndJob ()
+@@ -691,14 +713,9 @@ PrinterJob::EndJob ()
                                             aShellCommand,
                                             aDriverName,
                                             m_aLastJobData,
@@ -2793,7 +3689,7 @@ Index: psprint/source/printergfx/printerjob.cxx
      /* If we created a spool file for our Mac OS X/Darwin job,
       * delete it.  Also free the variable, since it is malloc()ed in macxp_tempnam()
       * and otherwise we'd leak memory.
-@@ -710,7 +726,7 @@ PrinterJob::EndJob ()
+@@ -710,7 +727,7 @@ PrinterJob::EndJob ()
      }
  #endif
  
@@ -2802,7 +3698,135 @@ Index: psprint/source/printergfx/printerjob.cxx
  }
  
  #ifdef MACOSX
-@@ -1014,6 +1030,9 @@ PrinterJob::StartPage (const JobData& rJ
+@@ -754,46 +771,73 @@ void macxp_ProcessAndPrintDocument( sal_
+          * "cupsFilter" key, or if the "cupsFilter" key _doesn't_ contain "application/pdf",
+          * then we print directly with PostScript.
+          */
+-
+-        /* For Jaguar default to using PDF unless no PDF filter in ppd */
+-        if (applePrintSysType==kApplePrintingCUPS) {
+-            printFormat = kApplePrintingUsePDF;
+-            if ( (sal_False == psprintDriverName.equals("SGENPRT")) && (sal_False == psprintDriverName.equals("MacShared")) )
++        printFormat = kApplePrintingUsePDF;
++        if ( (sal_False == psprintDriverName.equals("SGENPRT")) && (sal_False == psprintDriverName.equals("MacShared")) )
++        {
++            /* The should exist a valid PPD for this printer */
++            if ( pJobData.m_pParser )
+             {
+-                /* The should exist a valid PPD for this printer */
+-                if ( pJobData.m_pParser )
+-                {
+-                    const PPDKey    *pCupsFilterKey;
+-                    const PPDValue  *pCupsFilterValue;
++                const PPDKey    *pCupsFilterKey;
++                const PPDValue  *pCupsFilterValue;
+ 
+-                    pCupsFilterKey = pJobData.m_pParser->getKey( String(RTL_CONSTASCII_USTRINGPARAM("cupsFilter")) );
+-                    pCupsFilterValue = pCupsFilterKey != NULL ? pJobData.m_aContext.getValue( pCupsFilterKey ) : NULL;
+-                    if ( pCupsFilterValue )
+-                    {
+-                        ByteString    aCupsFilterString( pCupsFilterValue->m_aOption, RTL_TEXTENCODING_ISO_8859_1 );
+-                        if ( aCupsFilterString.Search("application/pdf") == 0 )
+-                        {
+-                            /* cupsFilter didn't have application/pdf */
+-                            printFormat = kApplePrintingUsePS;
+-                        }
+-                    }
+-                    else
++                pCupsFilterKey = pJobData.m_pParser->getKey( String(RTL_CONSTASCII_USTRINGPARAM("cupsFilter")) );
++                pCupsFilterValue = pCupsFilterKey != NULL ? pJobData.m_aContext.getValue( pCupsFilterKey ) : NULL;
++                if ( pCupsFilterValue )
++                {
++                    ByteString    aCupsFilterString( pCupsFilterValue->m_aOption, RTL_TEXTENCODING_ISO_8859_1 );
++                    if ( aCupsFilterString.Search("application/pdf") == 0 )
+                     {
+-                        /* No "cupsFilter" key */
++                        /* cupsFilter didn't have application/pdf */
+                         printFormat = kApplePrintingUsePS;
+                     }
+                 }
++                else
++                {
++                    /* No "cupsFilter" key */
++                    printFormat = kApplePrintingUsePS;
++                }
+             }
+-	}
+-
+-        /* For Panther and later simply use PS and let the new CUPS handle any conversions via filters */
+-        if (applePrintSysType==kApplePrintingNewCUPS) {         
+-            printFormat = kApplePrintingUsePS;
+         }
+ 
++        if ( (applePrintSysType==kApplePrintingPrintCenter) && (printFormat==kApplePrintingUsePS) )
++        {		  
++            /* Now pass the PS file to /usr/sbin/Print for printing. */
++            snprintf( sysCommandBuffer, kSysCommandBufferLen-1, "%s -M ps \"%s\"", kApplePCPrintCommand, spoolFileName );
++            #ifdef DEBUG
++                fprintf( stderr, "printerjob.cxx: printing doc with command '%s'\n", sysCommandBuffer );
++            #endif
+ 
+-        if ( ((applePrintSysType==kApplePrintingCUPS) || (applePrintSysType==kApplePrintingNewCUPS)) 
+-             && ((printFormat==kApplePrintingUsePDF) || (printFormat==kApplePrintingUsePS)) )
++            printCmdErr = system( sysCommandBuffer );
++        }
++        else if ( (applePrintSysType==kApplePrintingPrintCenter) && (printFormat==kApplePrintingUsePDF) )
++        {
++            char	pdfFileName[ kPDFFileNameBufferLen ];
++            char	pdfFileNameMacFormat[ kPDFFileNameBufferLen ];
++            char	*c;
++            
++            /* Convert file to PDF using GhostScript */
++            printCmdErr =  macxp_ConvertPSFileToPDF( spoolFileName, pdfFileName, kPDFFileNameBufferLen, jobDPI );
++            if ( printCmdErr == 0 )
++		  {
++                /* AppleScript expects MacOS-style paths, so convert Unix path to Mac OS Style.
++                 * If the Unix path is absolute, get rid of the starting slash
++                 */
++                strncpy( pdfFileNameMacFormat, pdfFileName, kPDFFileNameBufferLen-1 );
++                if ( *pdfFileNameMacFormat == '/' )
++                    strncpy( pdfFileNameMacFormat, pdfFileName+1, kPDFFileNameBufferLen-2 );
++                while ( (c=strchr(pdfFileNameMacFormat,'/')) != NULL )
++                    *c = ':';
++            
++                /* Construct and execute the actual printing command using AppleScript */
++                snprintf( sysCommandBuffer, kSysCommandBufferLen-1, "/usr/bin/osascript -e 'tell application \"Finder\"' -e 'print {file \"%s\"}' -e 'end tell'", pdfFileNameMacFormat );
++                #ifdef DEBUG
++                    fprintf( stderr, "printerjob.cxx: printing PDF with command '%s'\n", sysCommandBuffer );
++                #endif
++                printCmdErr = system( sysCommandBuffer );
++            }
++		  unlink( pdfFileName );
++        }
++        else if ( (applePrintSysType==kApplePrintingCUPS) && ((printFormat==kApplePrintingUsePDF) || (printFormat==kApplePrintingUsePS)) )
+         {
+             char	     pdfFileName[ kPDFFileNameBufferLen ];
+             char         numCopiesSwitch[ 5 ];
+@@ -923,18 +967,19 @@ int macxp_ConvertPSFileToPDF( char *psFi
+ 
+         /* Create the file name for the converted PDF and assemble the conversion command */
+         snprintf( pdfFileName, pdfFileNameBufferLen-1, "%s%s", psFileName, kPDFFileExtension );
+-	   
+-	   sysCommandBuffer = (char *)malloc( sizeof(char) * ( strlen(kSysPrintSetupString) +
++	   int nBufferSize = sizeof(char) * ( strlen(kSysPrintSetupString) +
+ 	                                               strlen(kApplePS2PDFLocation) +
+                                                     10 +	/* For " -r<DPI>" */
+                                                     strlen(psFileName) +
+                                                     strlen(pdfFileName) +
+-                                                    10) );  /*  10 bytes fudge factor */
++                                          10);  /*  10 bytes fudge factor */
++       
++	   sysCommandBuffer = (char *)malloc( nBufferSize ); 
+         if ( sysCommandBuffer == NULL )
+             returnVal = -1;
+         else
+ 	   {
+-            sprintf( sysCommandBuffer, "%s;%s -r%d \"%s\" \"%s\"'", kSysPrintSetupString, kApplePS2PDFLocation, jobDPI, psFileName, pdfFileName );
++            snprintf( sysCommandBuffer, nBufferSize, "%s;%s -r%d \"%s\" \"%s\"'", kSysPrintSetupString, kApplePS2PDFLocation, jobDPI, psFileName, pdfFileName );
+           #ifdef DEBUG
+                 fprintf( stderr, "printerjob.cxx: converting document to PDF with command '%s'\n", sysCommandBuffer );
+           #endif
+@@ -1014,6 +1059,9 @@ PrinterJob::StartPage (const JobData& rJ
      maHeaderList.push_back (pPageHeader);
      maPageList.push_back (pPageBody);
  
@@ -2812,7 +3836,7 @@ Index: psprint/source/printergfx/printerjob.cxx
      /* #i7262# write setup only before first page
       *  don't do this in StartJob since the jobsetup there may be
       *  different.
-@@ -1061,6 +1080,9 @@ PrinterJob::EndPage ()
+@@ -1061,6 +1109,9 @@ PrinterJob::EndPage ()
      osl::File* pPageHeader = maHeaderList.back();
      osl::File* pPageBody   = maPageList.back();
  
@@ -2822,7 +3846,7 @@ Index: psprint/source/printergfx/printerjob.cxx
      // copy page to paper and write page trailer according to DSC
  
      sal_Char pTrailer[256];
-@@ -1116,7 +1138,7 @@ bool PrinterJob::writeFeatureList( osl::
+@@ -1116,7 +1167,7 @@ bool PrinterJob::writeFeatureList( osl::
  
      // emit features ordered to OrderDependency
      // ignore features that are set to default
@@ -2831,7 +3855,65 @@ Index: psprint/source/printergfx/printerjob.cxx
      // sanity check
      if( rJob.m_pParser == rJob.m_aContext.getParser() &&
          rJob.m_pParser &&
-@@ -1287,6 +1309,12 @@ bool PrinterJob::writeProlog (osl::File*
+@@ -1223,10 +1274,55 @@ bool PrinterJob::writePageSetup( osl::Fi
+     return bSuccess;
+ }
+ 
+-bool PrinterJob::writeProlog (osl::File* pFile)
++void PrinterJob::writeJobPatch( osl::File* pFile, const JobData& rJobData )
++{
++    const PPDKey* pKey = NULL;
++    
++    if( rJobData.m_pParser )
++        pKey = rJobData.m_pParser->getKey( OUString( RTL_CONSTASCII_USTRINGPARAM( "JobPatchFile" ) ) );
++    if( ! pKey )
++        return;
++
++    // order the patch files
++    // according to PPD spec the JobPatchFile options must be int
++    // and should be emitted in order
++    std::list< sal_Int32 > patch_order;
++    int nValueCount = pKey->countValues();
++    for( int i = 0; i < nValueCount; i++ )
++    {
++        const PPDValue* pVal = pKey->getValue( i );
++        patch_order.push_back( pVal->m_aOption.ToInt32() );
++        if( patch_order.back() == 0 && ! pVal->m_aOption.EqualsAscii( "0" ) )
++        {
++            WritePS( pFile, "% Warning: left out JobPatchFile option \"" );
++            OString aOption = OUStringToOString( pVal->m_aOption, RTL_TEXTENCODING_ASCII_US );
++            WritePS( pFile, aOption.getStr() );
++            WritePS( pFile,
++                     "\"\n% as it violates the PPD spec;\n"
++                     "% JobPatchFile options need to be numbered for ordering.\n" );
++        }
++    }
++
++    patch_order.sort();
++    patch_order.unique();
++
++    while( patch_order.begin() != patch_order.end() )
++    {
++        // note: this discards patch files not adhering to the "int" scheme
++        // as there won't be a value for them
++        writeFeature( pFile, pKey, pKey->getValue( OUString::valueOf( patch_order.front() ) ) );
++        patch_order.pop_front();
++    }
++}
++
++bool PrinterJob::writeProlog (osl::File* pFile, const JobData& rJobData )
+ {
++    WritePS( pFile, "%%BeginProlog\n" );
++
++    // JobPatchFile feature needs to be emitted at begin of prolog
++    writeJobPatch( pFile, rJobData );
++
+     const sal_Char pProlog[] = {
+-        "%%BeginProlog\n"
+         "%%BeginResource: procset PSPrint-Prolog 1.0 0\n"
+         "/ISO1252Encoding [\n"
+         "/.notdef /.notdef /.notdef /.notdef /.notdef /.notdef /.notdef /.notdef\n"
+@@ -1287,6 +1383,12 @@ bool PrinterJob::writeProlog (osl::File*
          "rlineto closepath } def\n"
          "/rectfill { rectangle fill } def\n"
          "/rectstroke { rectangle stroke } def } if\n"
@@ -2846,8 +3928,8 @@ Index: psprint/source/printergfx/printerjob.cxx
  		"/psp_ascii85filter { currentfile /ASCII85Decode filter } def\n"
 Index: psprint/source/printergfx/psheader.ps
 ===================================================================
---- psprint/source/printergfx/psheader.ps.orig
-+++ psprint/source/printergfx/psheader.ps
+--- psprint/source/printergfx/psheader.ps.orig	2004-10-21 12:52:30.000000000 +0100
++++ psprint/source/printergfx/psheader.ps	2004-10-21 14:47:18.000000000 +0100
 @@ -339,3 +339,65 @@ if 
      /psp_reencodedfont exch definefont
  } def
@@ -2916,8 +3998,8 @@ Index: psprint/source/printergfx/psheader.ps
 +} def
 Index: psprint/source/printergfx/psputil.cxx
 ===================================================================
---- psprint/source/printergfx/psputil.cxx.orig
-+++ psprint/source/printergfx/psputil.cxx
+--- psprint/source/printergfx/psputil.cxx.orig	2004-10-21 12:52:30.000000000 +0100
++++ psprint/source/printergfx/psputil.cxx	2004-10-21 14:47:18.000000000 +0100
 @@ -193,7 +193,7 @@ WritePS (osl::File* pFile, const sal_Cha
      sal_uInt64 nInLength = rtl_str_getLength (pString);
      sal_uInt64 nOutLength = 0;
@@ -2947,8 +4029,8 @@ Index: psprint/source/printergfx/psputil.cxx
      return nInLength == nOutLength;
 Index: psprint/source/printergfx/text_gfx.cxx
 ===================================================================
---- psprint/source/printergfx/text_gfx.cxx.orig
-+++ psprint/source/printergfx/text_gfx.cxx
+--- psprint/source/printergfx/text_gfx.cxx.orig	2004-10-21 12:52:30.000000000 +0100
++++ psprint/source/printergfx/text_gfx.cxx	2004-10-21 14:47:18.000000000 +0100
 @@ -176,7 +176,9 @@ PrinterGfx::SetFont(
                      sal_Int32 nHeight,
                      sal_Int32 nWidth,
@@ -3098,19 +4180,108 @@ Index: psprint/source/printergfx/text_gfx.cxx
          PSUploadPS1Font (mnFontID);
 Index: padmin/source/adddlg.cxx
 ===================================================================
---- padmin/source/adddlg.cxx.orig
-+++ padmin/source/adddlg.cxx
+--- padmin/source/adddlg.cxx.orig	2004-10-21 12:52:30.000000000 +0100
++++ padmin/source/adddlg.cxx	2004-10-21 14:47:18.000000000 +0100
+@@ -82,9 +82,9 @@
+ #ifndef _OSL_THREAD_H_
+ #include <osl/thread.h>
+ #endif
+-
+ #include <hash_set>
+ 
++
+ using namespace rtl;
+ using namespace psp;
+ using namespace padmin;
 @@ -112,6 +112,13 @@ APChooseDevicePage::APChooseDevicePage( 
  	m_aOldBtn.Check( FALSE );
      if( ! AddPrinterDialog::getOldPrinterLocation().Len() )
          m_aOldBtn.Enable( FALSE );
-+	if( PrinterInfoManager::get().getType() != PrinterInfoManager::Default )
-+	{
-+		m_aPrinterBtn.Check( FALSE );
-+		m_aFaxBtn.Check( TRUE );
-+		m_aPrinterBtn.Enable( FALSE );
-+		m_aOldBtn.Enable( FALSE );
-+	}
++    if( ! PrinterInfoManager::get().addOrRemovePossible() )
++    {
++        m_aPrinterBtn.Check( FALSE );
++        m_aFaxBtn.Check( TRUE );
++        m_aPrinterBtn.Enable( FALSE );
++        m_aOldBtn.Enable( FALSE );
++    }
  }
  
  APChooseDevicePage::~APChooseDevicePage()
+@@ -615,21 +622,21 @@ APOldPrinterPage::APOldPrinterPage( AddP
+                 aInfo.m_aContext.setValue( pKey, pValue );
+             aValue = aConfig.ReadKey( "MarginLeft", aDefMarginLeft );
+             if( aValue.Len() )
+-                aInfo.m_nLeftMarginAdjust = aValue.ToInt32() - ((double)nLeft * 35.27777778 );
++                aInfo.m_nLeftMarginAdjust = aValue.ToInt32() - (int)((double)nLeft * 35.27777778 );
+             aValue = aConfig.ReadKey( "MarginRight", aDefMarginRight );
+             if( aValue.Len() )
+-                aInfo.m_nRightMarginAdjust = aValue.ToInt32() - ((double)nRight * 35.27777778 );
++                aInfo.m_nRightMarginAdjust = aValue.ToInt32() - (int)((double)nRight * 35.27777778 );
+             aValue = aConfig.ReadKey( "MarginTop", aDefMarginTop );
+             if( aValue.Len() )
+-                aInfo.m_nTopMarginAdjust = aValue.ToInt32() - ((double)nTop * 35.27777778 );
++                aInfo.m_nTopMarginAdjust = aValue.ToInt32() - (int)((double)nTop * 35.27777778 );
+             aValue = aConfig.ReadKey( "MarginBottom", aDefMarginBottom );
+             if( aValue.Len() )
+-                aInfo.m_nBottomMarginAdjust = aValue.ToInt32() - ((double)nBottom * 35.27777778 );
++                aInfo.m_nBottomMarginAdjust = aValue.ToInt32() - (int)((double)nBottom * 35.27777778 );
+         }
+ 
+         aValue = aConfig.ReadKey( "Scale", aDefScale );
+         if( aValue.Len() )
+-            aInfo.m_nScale = 100.0 * StringToDouble( aValue );
++            aInfo.m_nScale = (int)(100.0 * StringToDouble( aValue ));
+ 
+         aValue = aConfig.ReadKey( "Copies", aDefScale );
+         if( aValue.Len() )
+@@ -785,17 +792,17 @@ void APPdfDriverPage::fill( PrinterInfo&
+ 
+ AddPrinterDialog::AddPrinterDialog( Window* pParent )
+ 		: ModalDialog( pParent, PaResId( RID_ADD_PRINTER_DIALOG ) ),
+-		  m_aNextPB( this, PaResId( RID_ADDP_BTN_NEXT ) ),
++		  m_aCancelPB( this, PaResId( RID_ADDP_BTN_CANCEL ) ),
+ 		  m_aPrevPB( this, PaResId( RID_ADDP_BTN_PREV ) ),
++		  m_aNextPB( this, PaResId( RID_ADDP_BTN_NEXT ) ),
+ 		  m_aFinishPB( this, PaResId( RID_ADDP_BTN_FINISH ) ),
+-		  m_aCancelPB( this, PaResId( RID_ADDP_BTN_CANCEL ) ),
+ 		  m_aLine( this, PaResId( RID_ADDP_LINE ) ),
+           m_aTitleImage( this, PaResId( RID_ADDP_CTRL_TITLE ) ),
+ 		  m_pCurrentPage( NULL ),
+ 		  m_pChooseDevicePage( NULL ),
++		  m_pCommandPage( NULL ),
+ 		  m_pChooseDriverPage( NULL ),
+ 		  m_pNamePage( NULL ),
+-		  m_pCommandPage( NULL ),
+ 		  m_pOldPrinterPage( NULL ),
+ 		  m_pFaxDriverPage( NULL ),
+ 		  m_pFaxSelectDriverPage( NULL ),
+@@ -1103,7 +1110,6 @@ String AddPrinterDialog::uniquePrinterNa
+ 	PrinterInfoManager& rManager( PrinterInfoManager::get() );
+ 
+ 	int nVersion = 1;
+-	bool bDoublet;
+     list< OUString > aPrinterList;
+     rManager.listPrinters( aPrinterList );
+     hash_set< OUString, OUStringHash > aPrinters;
+@@ -1126,7 +1132,6 @@ String AddPrinterDialog::getOldPrinterLo
+     ByteString aFileName;
+ 
+ 	rtl_TextEncoding aEncoding = osl_getThreadTextEncoding();
+-	PrinterInfoManager& rManager( PrinterInfoManager::get() );
+ 	if( pHome )
+ 	{
+ 		aFileName = pHome;
+Index: psprint/inc/psprint/printerjob.hxx
+===================================================================
+--- psprint/inc/psprint/printerjob.hxx.orig	2004-10-20 19:42:56.000000000 +0100
++++ psprint/inc/psprint/printerjob.hxx	2004-10-21 14:47:18.000000000 +0100
+@@ -126,7 +126,8 @@ private:            // private methods
+     bool			writeFeatureList( osl::File* pFile, const JobData&, bool bDocumentSetup );
+     bool            writeSetup( osl::File* pFile, const JobData& );
+     bool            writePageSetup( osl::File* pFile, const JobData& );
+-    bool            writeProlog (osl::File* pFile);
++    void			writeJobPatch( osl::File* File, const JobData& );
++    bool            writeProlog (osl::File* pFile, const JobData& );
+ 
+ public:             // for usage in PrinterGfx
+             
