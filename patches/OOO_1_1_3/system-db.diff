@@ -1,42 +1,49 @@
---- berkeleydb/makefile.mk	2004-10-28 13:54:48.000000000 +0200
-+++ berkeleydb/makefile.mk	2005-01-23 23:04:15.000000000 +0100
-@@ -76,6 +76,7 @@
- # not needed for win32. comment out when causing problems...
+Index: makefile.mk
+===================================================================
+RCS file: /cvs/external/berkeleydb/makefile.mk,v
+retrieving revision 1.13
+diff -u -r1.13 makefile.mk
+--- berkeleydb/makefile.mk	12 Jun 2003 09:50:38 -0000	1.13
++++ berkeleydb/makefile.mk	29 Oct 2003 01:09:05 -0000
+@@ -77,6 +77,7 @@
+ PATCH_FILE_NAME=db-3.2.9.patch
  
  .IF "$(GUI)"=="UNX"
 +.IF "$(SYSTEM_DB)" != "YES"
  CONFIGURE_DIR=out
  #relative to CONFIGURE_DIR
  CONFIGURE_ACTION=..$/dist$/configure
-@@ -91,12 +92,28 @@
- .ELSE
+@@ -93,12 +94,30 @@ BUILD_ACTION=gmake
  BUILD_ACTION=make
  .ENDIF
-+.ENDIF
  
++.ENDIF
++
 +.IF "$(SYSTEM_DB)" != "YES"
  OUT2LIB=$(BUILD_DIR)$/.libs$/libdb*$(DLLPOST)
+ 
  .IF "$(SOLAR_JAVA)"!=""
- OUT2BIN=$(BUILD_DIR)$/db.jar
- OUT2CLASS=$(BUILD_DIR)$/db.jar
+ OUT2BIN=java$/classes$/db.jar
  .ENDIF
 +.ELSE
+ 
 +DB_LIB = \
-+	$/usr$/lib$/libdb-$(DB_VERSION).so
-+.IF "$(SOLAR_JAVA)"!=""
-+	DB_LIB += $/usr$/lib$/libdb_java-$(DB_VERSION).so
++       $/usr$/lib$/libdb-$(DB_VERSION).so \
++       $/usr$/lib$/libdb_cxx-$(DB_VERSION).so
++.IF "$(SOLAR_JAVA)" != ""
++       DB_LIB += $/usr$/lib$/libdb_java-$(DB_VERSION).so
 +.ENDIF
 +
 +all: $(DB_JAR) $(DB_INC) $(DB_LIB)
 +.IF "$(SOLAR_JAVA)" != ""
-+	+$(COPY) $(DB_JAR) $(BIN)/db.jar
-+	+$(COPY) $(DB_JAR) $(CLASSDIR)/db.jar
++      +$(COPY) $(DB_JAR) $(BIN)/db.jar
++      +$(COPY) $(DB_JAR) $(CLASSDIR)/db.jar
 +.ENDIF
 +
 +.ENDIF
- 
  .ENDIF			# "$(GUI)"=="UNX"
  
+ .IF "$(GUI)"=="WNT"
 Index: xmlhelp/source/cxxhelp/provider/makefile.mk
 ===================================================================
 --- xmlhelp/source/cxxhelp/provider/makefile.mk.orig	2003-04-28 18:19:35.000000000 +0200
@@ -51,49 +58,142 @@ Index: xmlhelp/source/cxxhelp/provider/makefile.mk
  
  .IF "$(GUI)"=="WNT"
  CFLAGS+=-GR
---- solenv/inc/libs.mk	2004-10-28 13:50:35.000000000 +0200
-+++ solenv/inc/libs.mk	2005-01-23 22:56:49.000000000 +0100
-@@ -183,7 +183,7 @@
+Index: xmlhelp/source/cxxhelp/provider/databases.cxx
+===================================================================
+--- xmlhelp/source/cxxhelp/provider/databases.cxx.orig	2003-04-04 19:09:36.000000000 +0200
++++ xmlhelp/source/cxxhelp/provider/databases.cxx	2004-01-08 00:36:53.000000000 +0100
+@@ -60,7 +60,11 @@
+  ************************************************************************/
+ 
+ 
++#ifdef SYSTEM_DB
++#include <db_cxx.h>
++#else
+ #include <berkeleydb/db_cxx.h>
++#endif
+ #ifndef _VOS_DIAGNOSE_HXX_
+ #include <vos/diagnose.hxx>
+ #endif
+@@ -497,7 +501,12 @@ Db* Databases::getBerkeley( const rtl::O
+ 		
+ 		rtl::OString fileName( fileNameOU.getStr(),fileNameOU.getLength(),osl_getThreadTextEncoding() );
+ 		
+-		if( table->open( fileName.getStr(),0,DB_BTREE,DB_RDONLY,0644 ) )
++#if DB_VERSION_MAJOR < 4 || (DB_VERSION_MAJOR == 4 && DB_VERSION_MINOR < 1)
++		int db_open_failure = table->open( fileName.getStr(),0,DB_BTREE,DB_RDONLY,0644 );
++#else
++		int db_open_failure = table->open( NULL, fileName.getStr(),0,DB_BTREE,DB_RDONLY,0644 );
++#endif
++		if( db_open_failure )
+ 		{
+ 			table->close( 0 );
+ 			delete table;
+@@ -711,7 +720,12 @@ KeywordInfo* Databases::getKeyword( cons
+                                osl_getThreadTextEncoding() );
+ 		
+ 		Db table(0,DB_CXX_NO_EXCEPTIONS);
+-		if( 0 == table.open( fileName.getStr(),0,DB_BTREE,DB_RDONLY,0644 ) )
++#if DB_VERSION_MAJOR < 4 || (DB_VERSION_MAJOR == 4 && DB_VERSION_MINOR < 1)
++		int db_open_failure = table.open( fileName.getStr(),0,DB_BTREE,DB_RDONLY,0644 );
++#else
++		int db_open_failure = table.open( NULL, fileName.getStr(),0,DB_BTREE,DB_RDONLY,0644 );
++#endif
++		if( 0 == db_open_failure )
+ 		{   
+ 			std::vector<KeywordInfo::KeywordElement> aVector;
+ 			Db* idmap = getBerkeley( Database,Language );
+Index: xmlhelp/source/cxxhelp/provider/urlparameter.cxx
+===================================================================
+--- xmlhelp/source/cxxhelp/provider/urlparameter.cxx.orig	2004-01-07 23:21:33.000000000 +0100
++++ xmlhelp/source/cxxhelp/provider/urlparameter.cxx	2004-01-08 00:36:53.000000000 +0100
+@@ -94,8 +94,12 @@
+ #include <sablot/shandler.h>
+ #endif
+ #ifndef _DB_CXX_H_
++#ifdef SYSTEM_DB
++#include <db_cxx.h>
++#else
+ #include <berkeleydb/db_cxx.h>
+ #endif
++#endif
+ #ifndef _URLPARAMETER_HXX_
+ #include <provider/urlparameter.hxx>
+ #endif
+Index: solenv/inc/libs.mk
+===================================================================
+--- solenv/inc/libs.mk.orig	2003-12-12 18:23:04.000000000 +0100
++++ solenv/inc/libs.mk	2004-01-08 00:36:53.000000000 +0100
+@@ -180,8 +180,8 @@ ZLIB3RDLIB=-lzlib
  .ENDIF
  JPEG3RDLIB=-ljpeglib
  NEON3RDLIB=-lneon
--BERKELEYLIB=-ldb-4.2
+-BERKELEYLIB=-ldb-3.2
+-BERKELEYCPPLIB=-ldb_cxx-3.2
 +BERKELEYLIB=-ldb-$(DB_VERSION)
++BERKELEYCPPLIB=-ldb_cxx-$(DB_VERSION)
  CURLLIB=-lcurl
  SFX2LIB=-lsfx$(OFFICEUPD)$(DLLPOSTFIX)
  SFXLIB=-lsfx$(OFFICEUPD)$(DLLPOSTFIX)
---- scp/source/office/files.scp	2005-01-23 22:51:55.000000000 +0100
-+++ scp/source/office/files.scp	2005-01-23 22:56:14.000000000 +0100
-@@ -1019,12 +1019,13 @@
+Index: files.scp
+===================================================================
+RCS file: /cvs/installation/scp/source/office/files.scp,v
+retrieving revision 1.369.16.2.8.2
+diff -u -r1.369.16.2.8.2 files.scp
+--- scp/source/office/files.scp	14 Oct 2003 15:44:57 -0000	1.369.16.2.8.2
++++ scp/source/office/files.scp	2 Nov 2003 01:21:27 -0000
+@@ -960,42 +960,50 @@
  
  #endif
  
 +#ifndef SYSTEM_DB
- File GID_FILE_LIB_DB42
++
+ File GID_FILE_LIB_DB31
          TXT_FILE_BODY;
          Styles          = (PACKED);
          Dir             = GID_DIR_PROGRAM;
          #ifdef UNX
--        Name            = STRING(CONCAT2(libdb-4.2,UNXSUFFIX));
+-        Name            = STRING(CONCAT2(libdb-3.2,UNXSUFFIX));
 +        Name            = STRING(CONCAT3(libdb-,DB_VERSION,UNXSUFFIX));
          #else
-         Name            = "libdb42.dll";
+         Name            = "libdb32.dll";
          #endif
-@@ -1037,13 +1038,14 @@
+ End
+ 
++#endif
++
+ #ifdef SOLAR_JAVA
++#ifndef SYSTEM_DB
+ 
+ File GID_FILE_LIB_DBJAVA31
+         TXT_FILE_BODY;
          Styles          = (PACKED);
          Dir             = GID_DIR_PROGRAM;
          #ifdef UNX
--        Name            = STRING(CONCAT2(libdb_java-4.2,UNXSUFFIX));
+-        Name            = STRING(CONCAT2(libdb_java-3.2,UNXSUFFIX));
 +        Name            = STRING(CONCAT3(libdb_java-,DB_VERSION,UNXSUFFIX));
          #else
-         Name            = "libdb_java42.dll";
+         Name            = "libdb_java32.dll";
          #endif
  End
  
  #endif
 +#endif
  
- // Helpfiles for version src640
+ #ifdef UNX
++#ifndef SYSTEM_DB
+ 
+ File GID_FILE_LIB_DB_CXX
+         TXT_FILE_BODY;
+         Styles          = (PACKED);
+         Dir             = GID_DIR_PROGRAM;
+-        Name            = STRING(CONCAT2(libdb_cxx-3.2,UNXSUFFIX));
++        Name            = STRING(CONCAT3(libdb_cxx-,DB_VERSION,UNXSUFFIX));
+ End
+ 
+ #endif
++#endif
+ 
+ #ifdef UNX
  
 --- /dev/null	2003-12-04 23:59:45.000000000 +0100
 +++ xmlhelp/source/com/sun/star/help/db4/CreateDb.java	2004-01-22 22:48:17.000000000 +0100
