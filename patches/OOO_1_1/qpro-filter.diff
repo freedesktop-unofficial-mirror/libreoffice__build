@@ -1,20 +1,6 @@
---- sc/inc/filter.hxx	2004-07-21 19:19:36.000000000 +0100
-+++ sc/inc/filter.hxx	2004-10-19 15:17:47.907974240 +0100
-@@ -122,6 +122,8 @@
- 
- FltError ScImportLotus123( SfxMedium&, ScDocument*, CharSet eSrc = RTL_TEXTENCODING_DONTKNOW );
- 
-+FltError ScImportQuattroPro( SfxMedium&, ScDocument* );
-+
- FltError ScImportExcel( SvStream&, ScDocument* );
- 
- FltError ScImportExcel( SfxMedium&, ScDocument* );
-
-
-
 --- /dev/null	2004-08-25 18:34:59.000000000 +0100
-+++ sc/source/filter/qpro/qpro.cxx	2004-10-19 16:21:56.993824248 +0100
-@@ -0,0 +1,92 @@
++++ sc/source/filter/qpro/qpro.cxx	2004-10-22 16:41:56.507081048 +0100
+@@ -0,0 +1,174 @@
 +#ifdef PCH
 +#include "filt_pch.hxx"
 +#endif
@@ -29,6 +15,8 @@
 +#include "flttools.hxx"
 +#include "filter.hxx"
 +#include "scerrors.hxx"
++#include "document.hxx"
++#include "cell.hxx"
 +
 +// Stream wrapper class
 +class BiffReader
@@ -38,6 +26,7 @@
 +	sal_uInt16  mnId;
 +	sal_uInt16  mnLength;
 +	sal_uInt32  mnOffset;
++	rtl_TextEncoding meCharSet;
 +
 +  public:
 +	           BiffReader( SfxMedium & rMedium );
@@ -46,14 +35,17 @@
 +	bool       nextRecord();
 +	sal_uInt16 getId() { return mnId; }
 +	sal_uInt16 getLength() { return mnLength; }
++    void       readString( String &rString, sal_uInt16 nLength );
 +
-+	inline SvStream&  operator>>( sal_uInt8 & rByte ) { *mpStream >> rByte; }
++	inline SvStream&  operator>>( sal_uInt8 & rByte )  { *mpStream >> rByte; }
++	inline SvStream&  operator>>( sal_uInt16 & rWord ) { *mpStream >> rWord; }
 +};
 +
 +BiffReader::BiffReader( SfxMedium & rMedium ) :
 +		mnId(0),
 +		mnLength(0),
-+		mnOffset(0)
++		mnOffset(0),
++		meCharSet( RTL_TEXTENCODING_ISO_8859_1 ) // FIXME detect as we parse
 +{
 +	mpStream = rMedium.GetInStream();
 +	if( mpStream )
@@ -81,22 +73,98 @@
 +#ifdef DEBUG
 +	fprintf( stderr, "Read record 0x%x length 0x%x at offset 0x%x\n",
 +			 mnId, mnLength, mnOffset );
++
++#if 1  // rather verbose
++	int len = mnLength;
++	while (len > 0) {
++		int i, chunk = len < 16 ? len : 16;
++		unsigned char data[16];
++		mpStream->Read( data, chunk );
++
++		for (i = 0; i < chunk; i++)
++			fprintf( stderr, "%.2x ", data[i] );
++		fprintf( stderr, "| " );
++		for (i = 0; i < chunk; i++)
++			fprintf( stderr, "%c", data[i] < 127 && data[i] > 30 ? data[i] : '.' );
++		fprintf( stderr, "\n" );
++
++		len -= chunk;
++	}
++	mpStream->Seek( mnOffset );
++#endif
 +#endif
 +	return true;
 +}
 +
++void BiffReader::readString( String &rString, sal_uInt16 nLength )
++{
++    sal_Char* pText = new sal_Char[ nLength + 1 ];
++	mpStream->Read( pText, nLength );
++	pText[ nLength ] = 0;
++	rString = String( pText, meCharSet );
++}
++
++static FltError
++readQProSheet( BiffReader &rReader, ScDocument *pDoc, sal_uInt16 nTab )
++{
++    sal_uInt8  nCol, nDummy;
++	sal_uInt16 nRow;
++	sal_uInt16 nStyle;
++	bool bEndOfSheet = false;
++
++#ifdef DEBUG
++	fprintf( stderr, "Read sheet (%d)\n", nTab );
++#endif
++
++	while( !bEndOfSheet && rReader.nextRecord() ) {
++		switch( rReader.getId() )
++		{
++		case 0x000f: { // Label cell
++			String aLabel;
++			rReader >> nCol >> nDummy >> nRow >> nStyle >> nDummy;
++			rReader.readString( aLabel, rReader.getLength() - 7 );
++#ifdef DEBUG
++			fprintf( stderr, "Put Cell %d %d %d '%s'\n",
++					 nCol, nRow, nTab,
++					 (const sal_Char *)rtl::OUStringToOString( aLabel, RTL_TEXTENCODING_UTF8 ) );
++#endif
++			pDoc->PutCell( nCol, nRow, nTab, new ScStringCell( aLabel ), (BOOL) TRUE );
++			break;
++		}
++		case 0x00cb: // End of sheet;
++			bEndOfSheet = true;
++			break;
++		}
++	}
++	return eERR_OK;
++}
 +
 +FltError ScImportQuattroPro( SfxMedium &rMedium, ScDocument *pDoc )
 +{
 +	FltError   eRet = eERR_OK;
 +	BiffReader aReader( rMedium );
++	sal_uInt16 nVersion;
++	int        nTab = 0;
 +
 +	if( !aReader.recordsLeft() )
 +		return eERR_OPEN;
 +
-+	while( aReader.nextRecord() ) {
++	while( aReader.nextRecord() && eRet == eERR_OK) {
 +		switch( aReader.getId() )
 +		{
++		case 0x0000: // Begginning of file
++			aReader >> nVersion;
++			break;
++		case 0x00ca: // Beginning of sheet
++			if( nTab < 26 )
++			{
++		        String aName;
++				aName.Append( sal_Unicode( 'A' + nTab ) );
++				pDoc->InsertTab( nTab, aName );
++			}
++			eRet = readQProSheet( aReader, pDoc, nTab );
++			nTab++;
++			break;
 +		case 0x0001:
 +			// Implement record handling here ...
 +			sal_uInt8 aData;
