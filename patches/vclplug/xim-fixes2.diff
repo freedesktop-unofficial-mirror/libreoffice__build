@@ -1,5 +1,5 @@
---- /opt/OpenOffice/vcl-DEVEL/unx/gtk/window/gtkframe.cxx	2004-11-29 13:30:02.000000000 +0000
-+++ vcl/unx/gtk/window/gtkframe.cxx	2004-12-07 12:08:58.877149560 +0000
+--- vcl/unx/gtk/window/gtkframe.cxx
++++ vcl/unx/gtk/window/gtkframe.cxx
 @@ -244,6 +244,9 @@
  	m_bSendModChangeOnRelease = false;
      m_pIMContext		= NULL;
@@ -10,7 +10,41 @@
      // delete graphics if InitCommon is called not from destructor
      for( int i = 0; i < nMaxGraphics; i++ )
      {
-@@ -1620,38 +1623,59 @@
+@@ -981,8 +984,13 @@
+                           G_CALLBACK (signalIMPreeditChanged), this );
+         g_signal_connect( m_pIMContext, "retrieve_surrounding",
+                           G_CALLBACK (signalIMRetrieveSurrounding), this );
++
+         g_signal_connect( m_pIMContext, "delete_surrounding",
+                           G_CALLBACK (signalIMDeleteSurrounding), this );
++        g_signal_connect( m_pIMContext, "preedit_start",
++                          G_CALLBACK (signalIMPreeditStart), this );
++        g_signal_connect( m_pIMContext, "preedit_end",
++                          G_CALLBACK (signalIMPreeditEnd), this );
+ 
+         gtk_im_context_set_client_window( m_pIMContext, GTK_WIDGET(m_pWindow)->window );
+ 		gtk_im_context_focus_in( m_pIMContext );
+@@ -990,6 +998,9 @@
+ }
+ void GtkSalFrame::EndExtTextInput( USHORT nFlags )
+ {
++#if OSL_DEBUG_LEVEL > 1
++	fprintf( stderr, "EndExtTextInput: ContextReset\n" );
++#endif
+     if( m_pIMContext )
+         gtk_im_context_reset( m_pIMContext );
+     m_bWasPreedit = false;
+@@ -1007,6 +1018,9 @@
+ 		aArea.y = aPosEvent.mnY;
+ 		aArea.width = aPosEvent.mnWidth;
+ 		aArea.height = aPosEvent.mnHeight;
++#if OSL_DEBUG_LEVEL > 1
++		fprintf( stderr, "UpdateIMSpotLocation: SetCursorLocation\n" );
++#endif
+ 		gtk_im_context_set_cursor_location( m_pIMContext, &aArea );
+ 	}
+ }
+@@ -1620,38 +1634,59 @@
  {
      GtkSalFrame* pThis = (GtkSalFrame*)frame;
  
@@ -88,7 +122,18 @@
  	// handle modifiers
      if( pEvent->keyval == GDK_Shift_L || pEvent->keyval == GDK_Shift_R ||
          pEvent->keyval == GDK_Control_L || pEvent->keyval == GDK_Control_R ||
-@@ -1882,12 +1906,12 @@
+@@ -1829,6 +1864,10 @@
+ {
+     GtkSalFrame* pThis = (GtkSalFrame*)frame;
+ 
++#if OSL_DEBUG_LEVEL > 1
++	fprintf( stderr, ":signalImCommit '%s'\n", pText );
++#endif
++
+     SalExtTextInputEvent aTextEvent;
+ 
+     aTextEvent.mnTime 			= 0;
+@@ -1882,13 +1921,19 @@
      GtkSalFrame* pThis = (GtkSalFrame*)frame;
  
      char*			pText			= NULL;
@@ -102,9 +147,16 @@
 -                                       &pAttribs,
 +                                       &pAttrs,
                                         &nCursorPos );
++
++#if OSL_DEBUG_LEVEL > 1
++	fprintf( stderr, ":signalImPreeditChanged '%s'\n", pText );
++#endif
++	bool bEmptyText = !pText || !strlen( pText );
++
      SalExtTextInputEvent aTextEvent;
  
-@@ -1899,15 +1923,60 @@
+     aTextEvent.mnTime 			= 0;
+@@ -1899,43 +1944,105 @@
      aTextEvent.mbOnlyCursor 	= False;
  
      USHORT* pSalAttribs = new USHORT[ aTextEvent.maText.Len() ];
@@ -167,11 +219,58 @@
 -    
 +    pango_attr_list_unref( pAttrs );
 +
++	vcl::DeletionListener aDel( pThis );
      GTK_YIELD_GRAB();
++
      pThis->m_bWasPreedit = true;
      pThis->CallCallback( SALEVENT_EXTTEXTINPUT, (void*)&aTextEvent);
---- /opt/OpenOffice/vcl-DEVEL/unx/inc/plugins/gtk/gtkframe.hxx	2004-11-29 13:30:02.000000000 +0000
-+++ vcl/unx/inc/plugins/gtk/gtkframe.hxx	2004-12-07 12:05:01.708204720 +0000
+ 
++	if( bEmptyText && !aDel.isDeleted() )
++			signalIMPreeditEnd( pContext, frame );
++
+     delete [] pSalAttribs;
+ }
+ 
+ void GtkSalFrame::signalIMPreeditStart( GtkIMContext* pContext, gpointer frame )
+ {
+     GtkSalFrame* pThis = (GtkSalFrame*)frame;
++#if OSL_DEBUG_LEVEL > 1
++	fprintf( stderr, "*** :signalImPreeditStart ***\n" );
++#endif
+ }
+ 
+ void GtkSalFrame::signalIMPreeditEnd( GtkIMContext* pContext, gpointer frame )
+ {
+     GtkSalFrame* pThis = (GtkSalFrame*)frame;
++#if OSL_DEBUG_LEVEL > 1
++	fprintf( stderr, "*** :signalImPreeditEnd ***\n" );
++#endif
++	pThis->m_bWasPreedit = false;
++	pThis->CallCallback( SALEVENT_ENDEXTTEXTINPUT, (void*)NULL );
+ }
+ 
+ gboolean GtkSalFrame::signalIMRetrieveSurrounding( GtkIMContext* pContext, gpointer frame )
+ {
+     GtkSalFrame* pThis = (GtkSalFrame*)frame;
+-
++#if OSL_DEBUG_LEVEL > 1
++	fprintf( stderr, ":signalIMRetrieveSurrounding\n" );
++#endif
+     return FALSE;
+ }
+ 
+ gboolean GtkSalFrame::signalIMDeleteSurrounding( GtkIMContext* pContext, gint arg1, gint arg2, gpointer frame )
+ {
+     GtkSalFrame* pThis = (GtkSalFrame*)frame;
+-
++#if OSL_DEBUG_LEVEL > 1
++	fprintf( stderr, ":signalIMDeleteSurrounding\n" );
++#endif
+     return FALSE;
+ }
+
+--- vcl/unx/inc/plugins/gtk/gtkframe.hxx
++++ vcl/unx/inc/plugins/gtk/gtkframe.hxx
 @@ -94,6 +94,60 @@
          ~GraphicsHolder();
      };
