@@ -1,0 +1,505 @@
+--- psprint/inc/psprint/fontmanager.hxx.lang	2005-01-05 11:52:20.000000000 -0500
++++ psprint/inc/psprint/fontmanager.hxx	2005-01-05 11:54:36.973031125 -0500
+@@ -75,6 +75,9 @@
+ #ifndef _PSPRINT_HELPER_HXX_
+ #include <psprint/helper.hxx>
+ #endif
++#ifndef _LANG_HXX
++#include <tools/lang.hxx>
++#endif
+ 
+ #ifndef _COM_SUN_STAR_LANG_LOCALE_HPP_
+ #include <com/sun/star/lang/Locale.hpp>
+@@ -193,6 +196,7 @@
+     weight::type            			m_eWeight;
+     pitch::type             			m_ePitch;
+     rtl_TextEncoding        			m_aEncoding;
++    std::vector< LanguageType >              m_aLangs;
+ 
+     FastPrintFontInfo() :
+             m_nID( 0 ),
+@@ -299,6 +303,7 @@
+         pitch::type                                 m_ePitch;
+         rtl_TextEncoding                            m_aEncoding;
+         bool										m_bFontEncodingOnly; // set if font should be only accessed by builtin encoding
++        std::vector< LanguageType >                 m_aLangs;
+         CharacterMetric                             m_aGlobalMetricX;
+         CharacterMetric                             m_aGlobalMetricY;
+         PrintFontMetrics*                           m_pMetrics;
+@@ -459,6 +464,10 @@
+      */
+     void deinitFontconfig();
+ 
++    // pLangSet should be of type FcLangSet* but since not everyone uses
++    // Fontconfig, we have to make it void* here
++    void fillFontSupportedLanguages (PrintFont *pFont, void *pLangSetIn);
++
+     static bool parseXLFD( const rtl::OString& rXLFD, XLFDEntry& rEntry );
+     void parseXLFD_appendAliases( const std::list< rtl::OString >& rXLFDs, std::list< XLFDEntry >& rEntries ) const;
+     void initFontsAlias();
+--- psprint/source/fontmanager/fontconfig.cxx.lang	2005-01-05 11:38:33.000000000 -0500
++++ psprint/source/fontmanager/fontconfig.cxx	2005-01-05 12:02:32.228042143 -0500
+@@ -74,6 +74,8 @@
+ typedef int FcBool;
+ typedef int FcMatchKind;
+ typedef char FcChar8;
++typedef void FcCharSet;
++typedef void FcLangSet;
+ #endif
+ 
+ #include <cstdio>
+@@ -97,6 +99,9 @@
+ #ifndef _RTL_USTRBUF_HXX
+ #include <rtl/ustrbuf.hxx>
+ #endif
++#ifndef _LANG_HXX
++#include <tools/lang.hxx>
++#endif
+ 
+ using namespace psp;
+ using namespace osl;
+@@ -125,6 +130,11 @@
+     FcBool			(*m_pFcConfigSubstitute)(FcConfig*,FcPattern*,FcMatchKind);
+     FcBool			(*m_pFcPatternAddInteger)(FcPattern*,const char*,int);
+     FcBool			(*m_pFcPatternAddString)(FcPattern*,const char*,const FcChar8*);
++    FcResult			(*m_pFcPatternGetCharSet)(const FcPattern*,const char*,int,FcCharSet**);
++    void			(*m_pFcCharSetDestroy)(FcCharSet *fcs);
++    FcResult			(*m_pFcPatternGetLangSet)(const FcPattern*,const char*,int,FcLangSet**);
++    FcLangResult		(*m_pFcLangSetHasLang)(const FcLangSet *ls, const FcChar8 *lang);
++    void			(*m_pFcLangSetDestroy)(FcLangSet *ls);
+ 
+     void* loadSymbol( const char* );
+ 
+@@ -193,6 +203,21 @@
+     { return m_pFcPatternAddInteger( pPattern, pObject, nValue ); }
+     FcBool FcPatternAddString( FcPattern* pPattern, const char* pObject, const FcChar8* pString )
+     { return m_pFcPatternAddString( pPattern, pObject, pString ); }
++
++    FcResult FcPatternGetCharSet( const FcPattern* pPattern, const char* object, int n, FcCharSet** s )
++    { return m_pFcPatternGetCharSet( pPattern, object, n, s ); }
++
++    void FcCharSetDestroy( FcCharSet *fcs )
++    { m_pFcCharSetDestroy( fcs ); }
++
++    FcResult FcPatternGetLangSet( const FcPattern* pPattern, const char* object, int n, FcLangSet** s )
++    { return m_pFcPatternGetLangSet( pPattern, object, n, s ); }
++
++    FcLangResult FcLangSetHasLang( const FcLangSet *ls, const FcChar8 *lang )
++    { return m_pFcLangSetHasLang( ls, lang ); }
++
++    void FcLangSetDestroy( FcLangSet *ls )
++    { m_pFcLangSetDestroy( ls ); }
+ };
+ 
+ void* FontCfgWrapper::loadSymbol( const char* pSymbol )
+@@ -263,6 +288,16 @@
+         loadSymbol( "FcPatternAddInteger" );
+     m_pFcPatternAddString = (FcBool(*)(FcPattern*,const char*,const FcChar8*))
+         loadSymbol( "FcPatternAddString" );
++    m_pFcPatternGetCharSet = (FcResult(*)(const FcPattern*,const char*,int,FcCharSet**))
++        loadSymbol( "FcPatternGetCharSet" );
++    m_pFcCharSetDestroy = (void(*)(FcCharSet *))
++        loadSymbol( "FcCharSetDestroy" );
++    m_pFcPatternGetLangSet = (FcResult(*)(const FcPattern*,const char*,int,FcLangSet**))
++        loadSymbol( "FcPatternGetLangSet" );
++    m_pFcLangSetHasLang = (FcLangResult(*)(const FcLangSet *ls, const FcChar8 *lang))
++        loadSymbol( "FcLangSetHasLang" );
++    m_pFcLangSetDestroy = (void(*)(FcLangSet *))
++        loadSymbol( "FcLangSetDestroy" );
+ 
+     if( ! (
+             m_pFcInitLoadConfigAndFonts		&&
+@@ -282,7 +317,14 @@
+             m_pFcFontMatch					&&
+             m_pFcConfigSubstitute			&&
+             m_pFcPatternAddInteger			&&
+-            m_pFcPatternAddString
++            m_pFcPatternAddString			&&
++            m_pFcPatternGetBool			&&
++            m_pFcPatternGetCharSet			&&
++            m_pFcPatternGetCharSet			&&
++            m_pFcCharSetDestroy              &&
++            m_pFcPatternGetLangSet			&&
++            m_pFcLangSetHasLang              &&
++            m_pFcLangSetDestroy
+             ) )
+      {
+          osl_unloadModule( m_pLib );
+@@ -324,6 +366,310 @@
+     }
+ }
+ 
++#ifdef ENABLE_FONTCONFIG
++
++// Copied from tools/intnl/isolang.cxx, this saves us
++// from having to iterate over the entire list of LANGUAGE_*
++// and call ConvertLanguageToIsoByteString(), which itself just
++// searches some tables.  Its faster this way, and perhaps we can
++// get the isolang API to do some form of iteration in the future.
++struct IsoLangEntry
++{
++    LanguageType        meLang;
++    sal_Char            maLangStr[3];
++    sal_Char            maCountry[3];
++};
++
++// -----------------------------------------------------------------------
++
++// Entries for languages are lower case, for countries upper case,
++// as recommended by rfc1766.
++// ConvertIsoNamesToLanguage is case insensitive
++
++// Sortorder: Most used first
++// The default entry for every language string has to be first.
++
++static IsoLangEntry aIsoLangEntries[] =
++{
++    // Lang (MS-LCID-Codes)             ISO639-1  ISO3166
++    { LANGUAGE_ENGLISH,                     "en", ""   },
++    { LANGUAGE_ENGLISH_US,                  "en", "US" },
++    { LANGUAGE_ENGLISH_UK,                  "en", "GB" },
++    { LANGUAGE_ENGLISH_AUS,                 "en", "AU" },
++    { LANGUAGE_ENGLISH_CAN,                 "en", "CA" },
++    { LANGUAGE_FRENCH,                      "fr", "FR" },
++    { LANGUAGE_GERMAN,                      "de", "DE" },
++    { LANGUAGE_ITALIAN,                     "it", "IT" },
++    { LANGUAGE_DUTCH,                       "nl", "NL" },
++    { LANGUAGE_SPANISH,                     "es", "ES" },
++    { LANGUAGE_SPANISH_MODERN,              "es", "ES" },
++    { LANGUAGE_PORTUGUESE,                  "pt", "PT" },
++    { LANGUAGE_PORTUGUESE_BRAZILIAN,        "pt", "BR" },
++    { LANGUAGE_DANISH,                      "da", "DK" },
++    { LANGUAGE_GREEK,                       "el", "GR" },
++    { LANGUAGE_CHINESE,                     "zh", ""   },
++    { LANGUAGE_CHINESE_TRADITIONAL,         "zh", "TW" },
++    { LANGUAGE_CHINESE_SIMPLIFIED,          "zh", "CN" },
++    { LANGUAGE_CHINESE_HONGKONG,            "zh", "HK" },
++    { LANGUAGE_CHINESE_SINGAPORE,           "zh", "SG" },
++    { LANGUAGE_CHINESE_MACAU,               "zh", "MO" },
++    { LANGUAGE_JAPANESE,                    "ja", "JP" },
++    { LANGUAGE_KOREAN,                      "ko", "KR" },
++    { LANGUAGE_KOREAN_JOHAB,                "ko", "KR" },
++    { LANGUAGE_KOREAN,                      "ko", "KP" },   // North Korea
++    { LANGUAGE_SWEDISH,                     "sv", "SE" },
++    { LANGUAGE_SWEDISH_FINLAND,             "sv", "FI" },
++    { LANGUAGE_FINNISH,                     "fi", "FI" },
++    { LANGUAGE_RUSSIAN,                     "ru", "RU" },
++    { LANGUAGE_ENGLISH_NZ,                  "en", "NZ" },
++    { LANGUAGE_ENGLISH_EIRE,                "en", "IE" },
++    { LANGUAGE_ENGLISH_SAFRICA,             "en", "ZA" },
++    { LANGUAGE_DUTCH_BELGIAN,               "nl", "BE" },
++    { LANGUAGE_FRENCH_BELGIAN,              "fr", "BE" },
++    { LANGUAGE_FRENCH_CANADIAN,             "fr", "CA" },
++    { LANGUAGE_FRENCH_SWISS,                "fr", "CH" },
++    { LANGUAGE_GERMAN_SWISS,                "de", "CH" },
++    { LANGUAGE_GERMAN_AUSTRIAN,             "de", "AT" },
++    { LANGUAGE_ITALIAN_SWISS,               "it", "CH" },
++    { LANGUAGE_ARABIC,                      "ar", ""   },
++    { LANGUAGE_ARABIC_SAUDI_ARABIA,         "ar", "SA" },
++    { LANGUAGE_ARABIC_EGYPT,                "ar", "EG" },
++    { LANGUAGE_ARABIC_UAE,                  "ar", "AE" },
++    { LANGUAGE_AFRIKAANS,                   "af", "ZA" },
++    { LANGUAGE_ALBANIAN,                    "sq", "AL" },
++    { LANGUAGE_ARABIC_IRAQ,                 "ar", "IQ" },
++    { LANGUAGE_ARABIC_LIBYA,                "ar", "LY" },
++    { LANGUAGE_ARABIC_ALGERIA,              "ar", "DZ" },
++    { LANGUAGE_ARABIC_MOROCCO,              "ar", "MA" },
++    { LANGUAGE_ARABIC_TUNISIA,              "ar", "TN" },
++    { LANGUAGE_ARABIC_OMAN,                 "ar", "OM" },
++    { LANGUAGE_ARABIC_YEMEN,                "ar", "YE" },
++    { LANGUAGE_ARABIC_SYRIA,                "ar", "SY" },
++    { LANGUAGE_ARABIC_JORDAN,               "ar", "JO" },
++    { LANGUAGE_ARABIC_LEBANON,              "ar", "LB" },
++    { LANGUAGE_ARABIC_KUWAIT,               "ar", "KW" },
++    { LANGUAGE_ARABIC_BAHRAIN,              "ar", "BH" },
++    { LANGUAGE_ARABIC_QATAR,                "ar", "QA" },
++    { LANGUAGE_BASQUE,                      "eu", ""   },
++    { LANGUAGE_BULGARIAN,                   "bg", "BG" },
++    { LANGUAGE_CROATIAN,                    "hr", "HR" },
++    { LANGUAGE_CZECH,                       "cs", "CZ" },
++    { LANGUAGE_CZECH,                       "cz", ""   },
++    { LANGUAGE_ENGLISH_JAMAICA,             "en", "JM" },
++    { LANGUAGE_ENGLISH_CARRIBEAN,           "en", "BS" },   // not 100%, because AG is Bahamas
++    { LANGUAGE_ENGLISH_BELIZE,              "en", "BZ" },
++    { LANGUAGE_ENGLISH_TRINIDAD,            "en", "TT" },
++    { LANGUAGE_ENGLISH_ZIMBABWE,            "en", "ZW" },
++    { LANGUAGE_ENGLISH_PHILIPPINES,         "en", "PH" },
++    { LANGUAGE_ESTONIAN,                    "et", "EE" },
++    { LANGUAGE_FAEROESE,                    "fo", "FO" },
++    { LANGUAGE_FARSI,                       "fa", ""   },
++    { LANGUAGE_FRENCH_LUXEMBOURG,           "fr", "LU" },
++    { LANGUAGE_FRENCH_MONACO,               "fr", "MC" },
++    { LANGUAGE_GERMAN_LUXEMBOURG,           "de", "LU" },
++    { LANGUAGE_GERMAN_LIECHTENSTEIN,        "de", "LI" },
++    { LANGUAGE_HEBREW,                      "he", "IL" },   // new: old was "iw"
++    { LANGUAGE_HEBREW,                      "iw", "IL" },   // old: new is "he"
++    { LANGUAGE_HUNGARIAN,                   "hu", "HU" },
++    { LANGUAGE_ICELANDIC,                   "is", "IS" },
++    { LANGUAGE_INDONESIAN,                  "id", "ID" },   // new: old was "in"
++    { LANGUAGE_INDONESIAN,                  "in", "ID" },   // old: new is "id"
++    { LANGUAGE_NORWEGIAN,                   "no", "NO" },
++    { LANGUAGE_NORWEGIAN_BOKMAL,            "nb", "NO" },
++    { LANGUAGE_NORWEGIAN_NYNORSK,           "nn", "NO" },
++    { LANGUAGE_POLISH,                      "pl", "PL" },
++    { LANGUAGE_RHAETO_ROMAN,                "rm", ""   },
++    { LANGUAGE_ROMANIAN,                    "ro", "RO" },
++    { LANGUAGE_ROMANIAN_MOLDOVA,            "ro", "MD" },
++    { LANGUAGE_SLOVAK,                      "sk", "SK" },
++    { LANGUAGE_SLOVENIAN,                   "sl", "SI" },
++    { LANGUAGE_SPANISH_MEXICAN,             "es", "MX" },
++    { LANGUAGE_SPANISH_GUATEMALA,           "es", "GT" },
++    { LANGUAGE_SPANISH_COSTARICA,           "es", "CR" },
++    { LANGUAGE_SPANISH_PANAMA,              "es", "PA" },
++    { LANGUAGE_SPANISH_DOMINICAN_REPUBLIC,  "es", "DO" },
++    { LANGUAGE_SPANISH_VENEZUELA,           "es", "VE" },
++    { LANGUAGE_SPANISH_COLOMBIA,            "es", "CO" },
++    { LANGUAGE_SPANISH_PERU,                "es", "PE" },
++    { LANGUAGE_SPANISH_ARGENTINA,           "es", "AR" },
++    { LANGUAGE_SPANISH_ECUADOR,             "es", "EC" },
++    { LANGUAGE_SPANISH_CHILE,               "es", "CL" },
++    { LANGUAGE_SPANISH_URUGUAY,             "es", "UY" },
++    { LANGUAGE_SPANISH_PARAGUAY,            "es", "PY" },
++    { LANGUAGE_SPANISH_BOLIVIA,             "es", "BO" },
++    { LANGUAGE_SPANISH_EL_SALVADOR,         "es", "SV" },
++    { LANGUAGE_SPANISH_HONDURAS,            "es", "HN" },
++    { LANGUAGE_SPANISH_NICARAGUA,           "es", "NI" },
++    { LANGUAGE_SPANISH_PUERTO_RICO,         "es", "PR" },
++    { LANGUAGE_TURKISH,                     "tr", "TR" },
++    { LANGUAGE_UKRAINIAN,                   "uk", "UA" },
++    { LANGUAGE_VIETNAMESE,                  "vi", "VN" },
++    { LANGUAGE_LATVIAN,                     "lv", "LV" },
++    { LANGUAGE_MACEDONIAN,                  "mk", "MK" },
++    { LANGUAGE_MALAY,                       "ms", ""   },
++    { LANGUAGE_MALAY_MALAYSIA,              "ms", "MY" },
++    { LANGUAGE_MALAY_BRUNEI_DARUSSALAM,     "ms", "BN" },
++    { LANGUAGE_THAI,                        "th", "TH" },
++    { LANGUAGE_LITHUANIAN,                  "lt", "LT" },
++    { LANGUAGE_LITHUANIAN_CLASSIC,          "lt", "LT" },
++    { LANGUAGE_CROATIAN,                    "hr", "HR" },   // Croatian in Croatia
++    { LANGUAGE_SERBIAN_LATIN,               "sh", "YU" },   // Serbo-Croatian in Yugoslavia (default)
++    { LANGUAGE_SERBIAN_LATIN,               "sh", "BA" },   // Serbo-Croatian in Bosnia And Herzegovina
++    { LANGUAGE_SERBIAN_CYRILLIC,            "sr", "YU" },
++    { LANGUAGE_SERBIAN,                     "sr", ""   },   // SERBIAN is only LID, MS-LCID not defined (was dupe of CROATIAN)
++    { LANGUAGE_ARMENIAN,                    "hy", "AM" },
++    { LANGUAGE_AZERI,                       "az", ""   },
++    { LANGUAGE_BENGALI,                     "bn", "BD" },
++    { LANGUAGE_KAZAK,                       "kk", "KZ" },
++    { LANGUAGE_URDU,                        "ur", "IN" },
++    { LANGUAGE_HINDI,                       "hi", "IN" },
++    { LANGUAGE_GUJARATI,                    "gu", "IN" },
++    { LANGUAGE_KANNADA,                     "kn", "IN" },
++    { LANGUAGE_ASSAMESE,                    "as", "IN" },
++    { LANGUAGE_KASHMIRI,                    "ks", ""   },
++    { LANGUAGE_KASHMIRI_INDIA,              "ks", "IN" },
++    { LANGUAGE_MALAYALAM,                   "ml", "IN" },
++    { LANGUAGE_MARATHI,                     "mr", "IN" },
++    { LANGUAGE_NEPALI,                      "ne", "NP" },
++    { LANGUAGE_NEPALI_INDIA,                "ne", "IN" },
++    { LANGUAGE_ORIYA,                       "or", "IN" },
++    { LANGUAGE_PUNJABI,                     "pa", "IN" },
++    { LANGUAGE_SANSKRIT,                    "sa", "IN" },
++    { LANGUAGE_SINDHI,                      "sd", "IN" },
++    { LANGUAGE_TAMIL,                       "ta", "IN" },
++    { LANGUAGE_TELUGU,                      "te", "IN" },
++    { LANGUAGE_BELARUSIAN,                  "be", "BY" },
++    { LANGUAGE_CATALAN,                     "ca", "ES" },   // Spain (default)
++    { LANGUAGE_CATALAN,                     "ca", "AD" },   // Andorra
++    { LANGUAGE_FRENCH_CAMEROON,             "fr", "CM" },
++    { LANGUAGE_FRENCH_COTE_D_IVOIRE,        "fr", "CI" },
++    { LANGUAGE_FRENCH_MALI,                 "fr", "ML" },
++    { LANGUAGE_FRENCH_SENEGAL,              "fr", "SN" },
++    { LANGUAGE_FRENCH_ZAIRE,                "fr", "CD" },   // Democratic Republic Of Congo
++    { LANGUAGE_FRISIAN_NETHERLANDS,         "fy", "NL" },
++    { LANGUAGE_GAELIC_IRELAND,              "ga", "IE" },
++    { LANGUAGE_GAELIC_SCOTLAND,             "gd", "GB" },
++    { LANGUAGE_GALICIAN,                    "gl", "ES" },
++    { LANGUAGE_GEORGIAN,                    "ka", "GE" },
++    { LANGUAGE_KHMER,                       "km", "KH" },
++    { LANGUAGE_KIRGHIZ,                     "ky", "KG" },
++    { LANGUAGE_LAO,                         "lo", "LA" },
++    { LANGUAGE_MALTESE,                     "mt", "MT" },
++    { LANGUAGE_MONGOLIAN,                   "mn", "MN" },
++    { LANGUAGE_RUSSIAN_MOLDOVA,             "mo", "MD" },
++    { LANGUAGE_SESOTHO,                     "st", "LS" },   // Lesotho (default)
++    { LANGUAGE_SESOTHO,                     "st", "ZA" },   // South Africa
++    { LANGUAGE_SWAHILI,                     "sw", "KE" },
++    { LANGUAGE_TAJIK,                       "tg", "TJ" },
++    { LANGUAGE_TIBETAN,                     "bo", "CN" },   // CN politically correct?
++    { LANGUAGE_TSONGA,                      "ts", "ZA" },
++    { LANGUAGE_TSWANA,                      "tn", "BW" },   // Botswana (default)
++    { LANGUAGE_TSWANA,                      "tn", "ZA" },   // South Africa
++    { LANGUAGE_TURKMEN,                     "tk", "TM" },
++    { LANGUAGE_WELSH,                       "cy", "GB" },
++    { LANGUAGE_NORTHERNSOTHO,               "ns", "ZA" },
++    { LANGUAGE_XHOSA,                       "xh", "ZA" },
++    { LANGUAGE_ZULU,                        "zu", "ZA" },
++//  { LANGUAGE_ARABIC_SUDAN,                "ar", "SD" },   // unknown MS-LCID
++//  { LANGUAGE_FRENCH_REUNION,              "fr",  ""   },  // unknown ISO country code
++//  { LANGUAGE_FRENCH_WEST_INDIES,          "fr",  ""   },  // unknown ISO country code
++//  { LANGUAGE_KONKANI,                     "kok", ""   },  // only ISO639-2 language code
++//  { LANGUAGE_MANIPURI,                    "mni", ""   },  // only ISO639-2 language code
++//  { LANGUAGE_SAMI_LAPPISH,                "",    ""   },  // unknown ISO code (could be "se_SE", but there is more than one Sami and more than one country)
++//  { LANGUAGE_SORBIAN,                     "wen", ""   },  // only ISO639-2 language code and is not used anymore from MS
++//  { LANGUAGE_VENDA,                       "ven", "ZA" },  // only ISO639-2 language code
++//  { LANGUAGE_BURMESE                      "my", ""   },   // undetermined ISO country code (could be Burma, Thailand, Yunna, Vietnam)
++    { LANGUAGE_USER_KINYARWANDA,            "rw", "RW" },
++    { LANGUAGE_USER_MAORI,                  "mi", "NZ" },
++    { LANGUAGE_USER_LATIN,                  "la", ""   },
++    { LANGUAGE_USER_ESPERANTO,              "eo", ""   },
++    { LANGUAGE_DONTKNOW,                    "",   ""   }    // marks end of table
++};
++#endif
++
++void PrintFontManager::fillFontSupportedLanguages (PrintFont *pFont, void *pLangSetIn)
++{
++#ifdef ENABLE_FONTCONFIG
++	// There really doesn't seem to be a better way to do this than looping over
++	// the entire set of languages that OOo supports, and asking Fontconfig whether
++	// the particular language set contains that language.  There's no iterator
++	// for FcLangSet structures that we can use, so what we're doing here is bound
++	// to be inefficient.  An API to covert an FcLangSet into an FcStrSet to fix this
++	// problem has been submitted for fontconfig 2.3 and should appear soon.
++
++	FcLangSet *pLangSet = (FcLangSet *)pLangSetIn;
++	IsoLangEntry *pLang = &aIsoLangEntries[0];
++	FontCfgWrapper& rWrapper = FontCfgWrapper::get();
++	std::vector<char*> found_locales;
++
++	if (!pFont || !pLang)
++		return;
++
++#if OSL_DEBUG_LEVEL > 1
++	int i = 0;
++	fprintf (stderr, "    Languages supported:");
++#endif
++	while (pLang->meLang != LANGUAGE_DONTKNOW)
++	{
++		char locale[10];
++		bool success = true;
++
++		memset (locale, 0, 10);
++		strncpy (locale, pLang->maLangStr, 3);
++		if (strnlen (pLang->maCountry, 3))
++		{
++			strcat (locale, "-");
++			strncat (locale, pLang->maCountry, 3);
++		}
++
++		if (rWrapper.FcLangSetHasLang (pLangSet, (const FcChar8*)locale) != FcLangEqual)
++		{
++			// Back down to just the language name like "en" or "da"
++			memset (locale, 0, 10);
++			strncpy (locale, pLang->maLangStr, 3);
++			if (rWrapper.FcLangSetHasLang (pLangSet, (const FcChar8*)locale) != FcLangEqual)
++				success = false;
++		}
++
++		if (success)
++		{
++			std::vector<char*>::iterator it = found_locales.begin();
++			std::vector<char*>::iterator end = found_locales.end();
++
++			while ((it != end) && strcmp (*it, locale))
++				it++;
++
++			if (it == end)
++			{
++				char *s = strdup (locale);
++				found_locales.push_back (s);
++
++				pFont->m_aLangs.push_back (pLang->meLang);
++			#if OSL_DEBUG_LEVEL > 1
++				fprintf (stderr, " %s", locale);
++				i++;
++			#endif
++			}
++		}
++
++		pLang++;
++	}
++#if OSL_DEBUG_LEVEL > 1
++	if (!i)
++		fprintf (stderr, " none");
++	fprintf (stderr, "\n");
++#endif
++
++	// Clear out the found locales list
++	while (!found_locales.empty())
++	{
++		free (found_locales.back());
++		found_locales.pop_back();
++	}
++#endif
++}
++
++
+ /*
+  * PrintFontManager::initFontconfig
+  */
+@@ -345,6 +691,7 @@
+                                                     FC_FILE,
+                                                     FC_OUTLINE,
+                                                     FC_INDEX,
++                                                    FC_LANG,
+                                                     NULL );
+     FcPattern* pPattern = rWrapper.FcPatternCreate();
+     FcFontSet* pFSet = rWrapper.FcFontList( pConfig, pPattern, pOSet );
+@@ -364,7 +711,9 @@
+             int spacing = 0;
+             int nCollectionEntry = -1;
+             FcBool outline = false;
+-            
++            FcCharSet *charset = NULL;
++            FcLangSet *langset = NULL;
++           
+             FcResult eFileRes	= rWrapper.FcPatternGetString( pFSet->fonts[i], FC_FILE, 0, &file );
+             FcResult eFamilyRes	= rWrapper.FcPatternGetString( pFSet->fonts[i], FC_FAMILY, 0, &family );
+             FcResult eStyleRes	= rWrapper.FcPatternGetString( pFSet->fonts[i], FC_STYLE, 0, &style );
+@@ -373,9 +722,19 @@
+             FcResult eSpacRes	= rWrapper.FcPatternGetInteger( pFSet->fonts[i], FC_SPACING, 0, &spacing );
+             FcResult eOutRes	= rWrapper.FcPatternGetBool( pFSet->fonts[i], FC_OUTLINE, 0, &outline );
+             FcResult eIndexRes = rWrapper.FcPatternGetInteger( pFSet->fonts[i], FC_INDEX, 0, &nCollectionEntry );            
+-            
+-            if( eFileRes != FcResultMatch || eFamilyRes != FcResultMatch || eOutRes != FcResultMatch )
++            FcResult eCharSet	= rWrapper.FcPatternGetCharSet( pFSet->fonts[i], FC_CHARSET, 0, &charset );
++            FcResult eLangRes = rWrapper.FcPatternGetLangSet( pFSet->fonts[i], FC_LANG, 0, &langset);
++
++            if( eFileRes != FcResultMatch || eFamilyRes != FcResultMatch || eOutRes != FcResultMatch  || eLangRes != FcResultMatch )
++            {
++#if 0
++                if (charset)
++                    aWrapper.FcCharSetDestroy (charset);
++                if (langset)
++                    aWrapper.FcLangSetDestroy (langset);
++#endif
+                 continue;
++            }
+ 
+ #if OSL_DEBUG_LEVEL > 1
+             fprintf( stderr, "found font \"%s\" in file %s\n"
+@@ -504,6 +863,25 @@
+                     else if( slant == FC_SLANT_OBLIQUE )
+                         pUpdate->m_eItalic = italic::Oblique;
+                 }
++                if( (eCharSet == FcResultMatch) && charset)
++                {
++                    /* Ok, so we have to call Type1 fonts Unicode, because most
++                     * (for example, Luxi Sans) have their encoding set to "FontSpecific"
++                     * in their .afm file, which makes OOo decide to call the fonts "symbol"
++                     * fonts.  That messes up stuff a _lot_.  Therefore, call all Type1 fonts
++                     * unicode fonts unless they have "ymbol" or "ingbats" in their name.
++                     */
++                    if (   !strncmp (((const char *)file+strlen((const char *)file)-4), ".pf", 3)
++                        && !(strstr((const char *)family, "ymbol") || strstr((const char *)family, "ingbat")) )
++                        pUpdate->m_aEncoding = RTL_TEXTENCODING_UNICODE;
++                }
++
++                fillFontSupportedLanguages (pUpdate, langset);
++
++#if 0
++                aWrapper.FcCharSetDestroy (charset);
++                aWrapper.FcLangSetDestroy (langset);
++#endif
+                 
+                 // update font cache
+                 m_pFontCache->updateFontCacheEntry( pUpdate, false );
