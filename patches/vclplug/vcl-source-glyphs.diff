@@ -2,10 +2,11 @@ Index: vcl/source/glyphs/gcach_ftyp.cxx
 ===================================================================
 RCS file: /cvs/gsl/vcl/source/glyphs/gcach_ftyp.cxx,v
 retrieving revision 1.98.20.2
-diff -u -p -u -r1.98.20.2 gcach_ftyp.cxx
---- vcl/source/glyphs/gcach_ftyp.cxx	28 Jan 2004 15:22:42 -0000	1.98.20.2
-+++ vcl/source/glyphs/gcach_ftyp.cxx	5 Jul 2004 14:01:28 -0000
-@@ -58,13 +59,10 @@
+Index: vcl/source/glyphs/gcach_ftyp.cxx
+===================================================================
+--- vcl/source/glyphs/gcach_ftyp.cxx.orig	2004-09-12 14:46:23.000000000 +0200
++++ vcl/source/glyphs/gcach_ftyp.cxx	2004-09-14 13:53:47.306959408 +0200
+@@ -58,13 +58,10 @@
   *
   ************************************************************************/
  
@@ -20,7 +21,7 @@ diff -u -p -u -r1.98.20.2 gcach_ftyp.cxx
  
  #include <gcach_ftyp.hxx>
  
-@@ -72,17 +70,25 @@
+@@ -72,17 +69,25 @@
  #include <outfont.hxx>
  #include <bitmap.hxx>
  #include <bmpacc.hxx>
@@ -53,19 +54,9 @@ diff -u -p -u -r1.98.20.2 gcach_ftyp.cxx
  
  #ifndef FREETYPE_PATCH
      // VERSION_MINOR in freetype.h is too coarse
-@@ -251,15 +258,22 @@ void FtFontFile::Unmap()
- // =======================================================================
- 
- FtFontInfo::FtFontInfo( const ImplFontData& rFontData,
--    const ::rtl::OString& rNativeFileName, int nFaceNum, int nFontId, int nSynthetic )
--:   mpFontFile( FtFontFile::FindFontFile( rNativeFileName ) ),
-+                        const ::rtl::OString& rNativeFileName,
-+                        int nFaceNum, int nFontId, int nSynthetic,
-+                        const unicodeKernMap* pKern
-+                        )
-+:   
+@@ -258,8 +263,8 @@ FtFontInfo::FtFontInfo( const ImplFontDa
+ :   mpFontFile( FtFontFile::FindFontFile( rNativeFileName ) ),
      maFontData( rFontData ),
-+    mpFontFile( FtFontFile::FindFontFile( rNativeFileName ) ),
      mnFaceNum( nFaceNum ),
 -    mnFontId( nFontId ),
      mnSynthetic( nSynthetic ),
@@ -73,57 +64,7 @@ diff -u -p -u -r1.98.20.2 gcach_ftyp.cxx
      maFaceFT( NULL ),
      mnRefCount( 0 )
  {
-+    if( pKern )
-+        maUnicodeKernPairs = *pKern;
-+
-     maFontData.mpSysData = (void*)nFontId;
-     maFontData.mpNext    = NULL;
- 
-@@ -336,6 +350,43 @@ void FtFontInfo::ReleaseFaceFT( FT_FaceR
-     }
- }
- 
-+void FtFontInfo::CacheGlyphIndex( sal_Unicode cChar, int nGI ) const
-+{
-+    maGlyphMap[ cChar ] = nGI;
-+
-+    if( maUnicodeKernPairs.size() != maGlyphKernPairs.size() )
-+    {
-+        // move kerning to glyph kerning map
-+        unicodeKernMap::const_iterator left_it =
-+            maUnicodeKernPairs.find( cChar );
-+        std::map< sal_Unicode, int >::const_iterator right_it;
-+        for( left_it = maUnicodeKernPairs.begin(); left_it != maUnicodeKernPairs.end(); ++left_it )
-+        {
-+            if( left_it->first == cChar )
-+            {
-+                for( right_it = left_it->second.begin(); right_it != left_it->second.end(); ++right_it )
-+                {
-+                    int nRightGlyph = GetGlyphIndex( right_it->first );
-+                    if( nRightGlyph != -1 )
-+                        maGlyphKernPairs[ nGI ][ nRightGlyph ] = right_it->second;
-+                }
-+            }
-+            else
-+            {
-+                int nLeftGlyph = GetGlyphIndex( left_it->first );
-+                if( nLeftGlyph != -1 )
-+                {
-+                    for( right_it = left_it->second.begin(); right_it != left_it->second.end(); ++right_it )
-+                    {
-+                        if( right_it->first == cChar )
-+                            maGlyphKernPairs[ nLeftGlyph ][ nGI ] = right_it->second;
-+                    }
-+                }
-+            }
-+        }
-+    }
-+}
-+
- // -----------------------------------------------------------------------
- 
- static unsigned GetUInt( const unsigned char* p ) { return((p[0]<<24)+(p[1]<<16)+(p[2]<<8)+p[3]);}
-@@ -382,11 +433,10 @@ const unsigned char* FtFontInfo::GetTabl
+@@ -425,11 +467,10 @@ const unsigned char* FtFontInfo::GetTabl
  // =======================================================================
  
  FreetypeManager::FreetypeManager()
@@ -137,28 +78,7 @@ diff -u -p -u -r1.98.20.2 gcach_ftyp.cxx
  #ifdef RTLD_DEFAULT // true if a good dlfcn.h header was included
      // Get version of freetype library to enable workarounds.
      // Freetype <= 2.0.9 does not have FT_Library_Version().
-@@ -449,7 +499,10 @@ void* FreetypeManager::GetFontHandle( in
- // -----------------------------------------------------------------------
- 
- void FreetypeManager::AddFontFile( const rtl::OString& rNormalizedName,
--    int nFaceNum, int nFontId, const ImplFontData* pData )
-+                                   int nFaceNum, int nFontId,
-+                                   const ImplFontData* pData,
-+                                   const unicodeKernMap* pKern
-+                                   )
- {
-     if( !rNormalizedName.getLength() )
-         return;
-@@ -457,7 +510,7 @@ void FreetypeManager::AddFontFile( const
-     if( maFontList.find( nFontId ) != maFontList.end() )
-         return;
- 
--    FtFontInfo* pFI = new FtFontInfo( *pData, rNormalizedName, nFaceNum, nFontId, 0 );
-+    FtFontInfo* pFI = new FtFontInfo( *pData, rNormalizedName, nFaceNum, nFontId, 0, pKern );
-     maFontList[ nFontId ] = pFI;
-     if( mnMaxFontId < nFontId )
-         mnMaxFontId = nFontId;
-@@ -482,8 +535,8 @@ long FreetypeManager::AddFontDir( const 
+@@ -527,8 +568,8 @@ long FreetypeManager::AddFontDir( const 
          rcOSL = aDirItem.getFileStatus( aFileStatus );
  
          ::rtl::OUString aUSytemPath;
@@ -169,7 +89,7 @@ diff -u -p -u -r1.98.20.2 gcach_ftyp.cxx
          ::rtl::OString aCFileName = rtl::OUStringToOString( aUSytemPath, theEncoding );
          const char* pszFontFileName = aCFileName.getStr();
  
-@@ -556,8 +609,21 @@ long FreetypeManager::FetchFontList( Imp
+@@ -601,8 +642,21 @@ long FreetypeManager::FetchFontList( Imp
      for( FontList::const_iterator it(maFontList.begin()); it != maFontList.end(); ++it, ++nCount )
      {
          const FtFontInfo& rFFI = *it->second;
@@ -193,27 +113,7 @@ diff -u -p -u -r1.98.20.2 gcach_ftyp.cxx
      }
  
      return nCount;
-@@ -581,7 +647,7 @@ FreetypeServerFont* FreetypeManager::Cre
-     if( it != maFontList.end() )
-     {
-         FtFontInfo* pFI = it->second;
--        FreetypeServerFont* pFont = new FreetypeServerFont( rFSD, pFI );
-+        FreetypeServerFont* pFont = new FreetypeServerFont( rFSD, pFI, pFI->GetGlyphKernMap(), pFI->GetUnicodeKernMap() );
-         return pFont;
-     }
- 
-@@ -592,8 +658,8 @@ FreetypeServerFont* FreetypeManager::Cre
- // FreetypeServerFont
- // =======================================================================
- 
--FreetypeServerFont::FreetypeServerFont( const ImplFontSelectData& rFSD, FtFontInfo* pFI )
--:   ServerFont( rFSD ),
-+FreetypeServerFont::FreetypeServerFont( const ImplFontSelectData& rFSD, FtFontInfo* pFI, const glyphKernMap* pKern, const unicodeKernMap* pUniKern )
-+:   ServerFont( rFSD, pKern, pUniKern ),
-     mpFontInfo( pFI ),
-     maFaceFT( NULL ),
-     maSizeFT( NULL ),
-@@ -856,23 +944,23 @@ int FreetypeServerFont::ApplyGlyphTransf
+@@ -903,23 +957,23 @@ int FreetypeServerFont::ApplyGlyphTransf
      case GF_ROTL:    // left
          nAngle += 900;
          bStretched = (mfStretch != 1.0);
@@ -248,7 +148,7 @@ diff -u -p -u -r1.98.20.2 gcach_ftyp.cxx
          break;
      }
  
-@@ -1049,9 +1137,9 @@ void FreetypeServerFont::InitGlyphData( 
+@@ -1096,9 +1150,9 @@ void FreetypeServerFont::InitGlyphData( 
      if( nGlyphFlags & GF_ROTMASK ) {  // for bVertical rotated glyphs
          const FT_Size_Metrics& rMetrics = maFaceFT->size->metrics;
  #if (FTVERSION < 2000)
@@ -260,7 +160,7 @@ diff -u -p -u -r1.98.20.2 gcach_ftyp.cxx
  #endif
      }
      rGD.SetCharWidth( (nCharWidth + 32) >> 6 );
-@@ -1314,34 +1402,6 @@ ULONG FreetypeServerFont::GetFontCodeRan
+@@ -1361,34 +1415,6 @@ ULONG FreetypeServerFont::GetFontCodeRan
  {
      int nRangeCount = 0;
  
@@ -295,7 +195,7 @@ diff -u -p -u -r1.98.20.2 gcach_ftyp.cxx
      const unsigned char* pCmap = NULL;
      ULONG nLength = 0;
      if( FT_IS_SFNT( maFaceFT ) )
-@@ -1409,8 +1469,6 @@ ULONG FreetypeServerFont::GetFontCodeRan
+@@ -1456,8 +1482,6 @@ ULONG FreetypeServerFont::GetFontCodeRan
                  *(pCodes++) = cCode;
          }
      }
@@ -304,34 +204,10 @@ diff -u -p -u -r1.98.20.2 gcach_ftyp.cxx
      return nRangeCount;
  }
  // -----------------------------------------------------------------------
-@@ -1420,7 +1478,10 @@ ULONG FreetypeServerFont::GetFontCodeRan
- int FreetypeServerFont::GetGlyphKernValue( int nGlyphLeft, int nGlyphRight ) const
- {
-     if( maSizeFT )
-+
-         pFTActivateSize( maSizeFT );
-+    if( !FT_HAS_KERNING( maFaceFT ) || !FT_IS_SFNT( maFaceFT ) )
-+        return ServerFont::GetGlyphKernValue( nGlyphLeft, nGlyphRight );
- 
-     FT_Vector aKernVal;
-     FT_Error rcFT = FT_Get_Kerning( maFaceFT, nGlyphLeft, nGlyphRight,
-@@ -1438,7 +1499,7 @@ ULONG FreetypeServerFont::GetKernPairs( 
- 
-     *ppKernPairs = NULL;
-     if( !FT_HAS_KERNING( maFaceFT ) || !FT_IS_SFNT( maFaceFT ) )
--        return 0;
-+        return ServerFont::GetKernPairs( ppKernPairs );
- 
-     // first figure out which glyph pairs are involved in kerning
-     ULONG nKernLength = 0;
 Index: vcl/source/glyphs/gcach_ftyp.hxx
 ===================================================================
-RCS file: /cvs/gsl/vcl/source/glyphs/gcach_ftyp.hxx,v
-retrieving revision 1.24
-retrieving revision 1.27
-diff -u -p -u -r1.24 -r1.27
---- vcl/source/glyphs/gcach_ftyp.hxx	4 Jul 2003 12:51:33 -0000	1.24
-+++ vcl/source/glyphs/gcach_ftyp.hxx	18 May 2004 10:55:11 -0000	1.27
+--- vcl/source/glyphs/gcach_ftyp.hxx.orig	2004-09-12 14:46:23.000000000 +0200
++++ vcl/source/glyphs/gcach_ftyp.hxx	2004-09-14 13:53:47.307959256 +0200
 @@ -65,11 +65,15 @@
  #include <glyphcache.hxx>
  #include <rtl/textcvt.h>
@@ -352,7 +228,7 @@ diff -u -p -u -r1.24 -r1.27
  
  // -----------------------------------------------------------------------
  
-@@ -87,7 +85,6 @@ public:
+@@ -87,7 +91,6 @@ public:
      const unsigned char*    GetBuffer() const { return mpFileMap; }
      int                     GetFileSize() const { return mnFileSize; }
      const ::rtl::OString*   GetFileName() const { return &maNativeFileName; }
@@ -360,72 +236,7 @@ diff -u -p -u -r1.24 -r1.27
  private:
                              FtFontFile( const ::rtl::OString& rNativeFileName );
  
-@@ -104,7 +101,9 @@ class FtFontInfo
- {
- public:
-     FtFontInfo( const ImplFontData&, const ::rtl::OString&,
--        int nFaceNum, int nFontId, int nSynthetic );
-+                int nFaceNum, int nFontId, int nSynthetic,
-+                const unicodeKernMap* pUnicodeKern = NULL
-+                );
- 
-     const unsigned char*  GetTable( const char*, ULONG* pLength=0 ) const;
- 
-@@ -121,6 +120,11 @@ public:
- 
-     int                   GetGlyphIndex( sal_Unicode cChar ) const;
-     void                  CacheGlyphIndex( sal_Unicode cChar, int nGI ) const;
-+    const glyphKernMap*	  GetGlyphKernMap() const
-+    { return (maUnicodeKernPairs.size() || maGlyphKernPairs.size()) ? &maGlyphKernPairs : NULL; }
-+    const unicodeKernMap* GetUnicodeKernMap() const
-+    { return maUnicodeKernPairs.size() ? &maUnicodeKernPairs : NULL; }
-+
- 
- private:
-     ImplFontData    maFontData;
-@@ -135,6 +139,9 @@ private:
-     // cache unicode->glyphid mapping because looking it up is expensive
-     typedef ::std::hash_map<sal_Unicode,int> FIGlyphMap;
-     mutable FIGlyphMap maGlyphMap;
-+
-+    mutable glyphKernMap maGlyphKernPairs;
-+    unicodeKernMap maUnicodeKernPairs;
- };
- 
- // these two inlines are very important for performance
-@@ -147,11 +154,6 @@ inline int FtFontInfo::GetGlyphIndex( sa
-     return -1;
- }
- 
--inline void FtFontInfo::CacheGlyphIndex( sal_Unicode cChar, int nGI ) const
--{
--    maGlyphMap[ cChar ] = nGI;
--}
--
- // -----------------------------------------------------------------------
- 
- class FreetypeManager
-@@ -162,7 +164,9 @@ public:
- 
-     long                AddFontDir( const String& rUrlName );
-     void                AddFontFile( const rtl::OString& rNormalizedName,
--                            int nFaceNum, int nFontId, const ImplFontData* );
-+                                     int nFaceNum, int nFontId, const ImplFontData*,
-+                                     const unicodeKernMap* pKern = NULL
-+                                     );
-     long                FetchFontList( ImplDevFontList* ) const;
-     void                ClearFontList();
- 
-@@ -182,7 +186,7 @@ private:
- class FreetypeServerFont : public ServerFont
- {
- public:
--                                FreetypeServerFont( const ImplFontSelectData&, FtFontInfo* );
-+                                FreetypeServerFont( const ImplFontSelectData&, FtFontInfo*, const glyphKernMap*, const unicodeKernMap* );
-     virtual                     ~FreetypeServerFont();
- 
-     virtual const ::rtl::OString* GetFontFileName() const { return mpFontInfo->GetFontFileName(); }
-@@ -206,9 +210,10 @@ public:
+@@ -211,9 +222,10 @@ public:
      const unsigned char*        GetTable( const char* pName, ULONG* pLength )
                                  { return mpFontInfo->GetTable( pName, pLength ); }
      int                         GetEmUnits() const;
@@ -439,13 +250,9 @@ diff -u -p -u -r1.24 -r1.27
      virtual void                InitGlyphData( int nGlyphIndex, GlyphData& ) const;
 Index: vcl/source/glyphs/gcach_layout.cxx
 ===================================================================
-RCS file: /cvs/gsl/vcl/source/glyphs/gcach_layout.cxx,v
-retrieving revision 1.23.20.1
-retrieving revision 1.29
-diff -u -p -u -r1.23.20.1 -r1.29
---- vcl/source/glyphs/gcach_layout.cxx	9 Jan 2004 18:13:49 -0000	1.23.20.1
-+++ vcl/source/glyphs/gcach_layout.cxx	25 Jun 2004 17:09:25 -0000	1.29
-@@ -59,30 +59,29 @@
+--- vcl/source/glyphs/gcach_layout.cxx.orig	2004-09-12 14:26:10.000000000 +0200
++++ vcl/source/glyphs/gcach_layout.cxx	2004-09-14 13:53:47.310958800 +0200
+@@ -59,28 +59,27 @@
   ************************************************************************/
  
  #define ENABLE_ICU_LAYOUT
@@ -483,9 +290,7 @@ diff -u -p -u -r1.23.20.1 -r1.29
  #endif
  
  #if OSL_DEBUG_LEVEL > 1
- #include <cstdio>
- #endif
-@@ -446,6 +446,13 @@
+@@ -450,6 +449,13 @@ IcuLayoutEngine::IcuLayoutEngine( Freety
      meScriptCode( USCRIPT_INVALID_CODE )
  {}
  
@@ -501,12 +306,8 @@ diff -u -p -u -r1.23.20.1 -r1.29
  IcuLayoutEngine::~IcuLayoutEngine()
 Index: vcl/source/glyphs/gcach_rbmp.cxx
 ===================================================================
-RCS file: /cvs/gsl/vcl/source/glyphs/gcach_rbmp.cxx,v
-retrieving revision 1.3
-retrieving revision 1.4
-diff -u -p -u -r1.3 -r1.4
---- vcl/source/glyphs/gcach_rbmp.cxx	13 Dec 2001 14:54:19 -0000	1.3
-+++ vcl/source/glyphs/gcach_rbmp.cxx	6 Jan 2004 13:58:48 -0000	1.4
+--- vcl/source/glyphs/gcach_rbmp.cxx.orig	2004-09-12 14:26:10.000000000 +0200
++++ vcl/source/glyphs/gcach_rbmp.cxx	2004-09-14 13:53:47.311958648 +0200
 @@ -64,7 +64,7 @@
  //------------------------------------------------------------------------
  
@@ -518,12 +319,8 @@ diff -u -p -u -r1.3 -r1.4
  //------------------------------------------------------------------------
 Index: vcl/source/glyphs/gcach_vdev.cxx
 ===================================================================
-RCS file: /cvs/gsl/vcl/source/glyphs/gcach_vdev.cxx,v
-retrieving revision 1.11
-retrieving revision 1.15
-diff -u -p -u -r1.11 -r1.15
---- vcl/source/glyphs/gcach_vdev.cxx	5 Aug 2002 07:19:22 -0000	1.11
-+++ vcl/source/glyphs/gcach_vdev.cxx	17 Jun 2004 12:21:43 -0000	1.15
+--- vcl/source/glyphs/gcach_vdev.cxx.orig	2004-09-12 14:26:10.000000000 +0200
++++ vcl/source/glyphs/gcach_vdev.cxx	2004-09-14 13:53:47.312958496 +0200
 @@ -75,10 +75,6 @@
  
  long VirtDevServerFont::FetchFontList( ImplDevFontList* pToAdd )
@@ -544,7 +341,7 @@ diff -u -p -u -r1.11 -r1.15
  	return nCount;
  }
  
-@@ -202,13 +197,16 @@ void VirtDevServerFont::InitGlyphData( i
+@@ -202,13 +196,16 @@ void VirtDevServerFont::InitGlyphData( i
  	vdev.SetFont( aFont );
  
  	// get glyph metrics
@@ -564,7 +361,7 @@ diff -u -p -u -r1.11 -r1.15
  	rGD.SetSize( aRect.GetSize() );
  }
  
-@@ -223,7 +221,7 @@ bool VirtDevServerFont::GetAntialiasAdvi
+@@ -223,7 +220,7 @@ bool VirtDevServerFont::GetAntialiasAdvi
  
  bool VirtDevServerFont::GetGlyphBitmap1( int nGlyphIndex, RawBitmap& ) const
  {
@@ -573,7 +370,7 @@ diff -u -p -u -r1.11 -r1.15
  	// draw bitmap
  	vdev.SetOutputSizePixel( aSize, TRUE );
  	vdev.DrawText( Point(0,0)-rGD.GetMetric().GetOffset(), nGlyphIndex );
-@@ -233,9 +231,8 @@ bool VirtDevServerFont::GetGlyphBitmap1(
+@@ -233,9 +230,8 @@ bool VirtDevServerFont::GetGlyphBitmap1(
  	const Bitmap& rBitmap = vdev.GetBitmap( Point(0,0), aSize );
  	rGD.SetBitmap( new Bitmap( rBitmap ) );
  	return true;
@@ -584,7 +381,7 @@ diff -u -p -u -r1.11 -r1.15
  }
  
  // -----------------------------------------------------------------------
-@@ -295,9 +292,8 @@ ULONG VirtDevServerFont::GetKernPairs( I
+@@ -295,9 +291,8 @@ ULONG VirtDevServerFont::GetKernPairs( I
  
  bool VirtDevServerFont::GetGlyphOutline( int nGlyphIndex, PolyPolygon& rPolyPoly ) const
  {
@@ -595,7 +392,7 @@ diff -u -p -u -r1.11 -r1.15
      Font aFont;
  	aFont.SetName		( GetFontSelData().maName );
  	aFont.SetStyleName	( GetFontSelData().maStyleName );
-@@ -311,7 +307,7 @@ bool VirtDevServerFont::GetGlyphOutline(
+@@ -311,7 +306,7 @@ bool VirtDevServerFont::GetGlyphOutline(
  
  	const bool bOptimize = true;
  	return vdev.GetGlyphOutline( nGlyphIndex, rPolyPoly, bOptimize );
@@ -606,12 +403,8 @@ diff -u -p -u -r1.11 -r1.15
  // =======================================================================
 Index: vcl/source/glyphs/gcach_vdev.hxx
 ===================================================================
-RCS file: /cvs/gsl/vcl/source/glyphs/gcach_vdev.hxx,v
-retrieving revision 1.5
-retrieving revision 1.7
-diff -u -p -u -r1.5 -r1.7
---- vcl/source/glyphs/gcach_vdev.hxx	15 Feb 2002 15:58:57 -0000	1.5
-+++ vcl/source/glyphs/gcach_vdev.hxx	4 Feb 2004 15:59:34 -0000	1.7
+--- vcl/source/glyphs/gcach_vdev.hxx.orig	2004-09-12 14:26:10.000000000 +0200
++++ vcl/source/glyphs/gcach_vdev.hxx	2004-09-14 13:53:47.312958496 +0200
 @@ -72,7 +72,7 @@ public:
  	virtual bool				GetGlyphOutline( int nGlyphIndex, PolyPolygon& ) const;
  
@@ -623,12 +416,8 @@ diff -u -p -u -r1.5 -r1.7
  
 Index: vcl/source/glyphs/glyphcache.cxx
 ===================================================================
-RCS file: /cvs/gsl/vcl/source/glyphs/glyphcache.cxx,v
-retrieving revision 1.22.40.2
-retrieving revision 1.26
-diff -u -p -u -r1.22.40.2 -r1.26
---- vcl/source/glyphs/glyphcache.cxx	26 Jan 2004 17:23:59 -0000	1.22.40.2
-+++ vcl/source/glyphs/glyphcache.cxx	18 May 2004 10:55:25 -0000	1.26
+--- vcl/source/glyphs/glyphcache.cxx.orig	2004-09-12 14:46:23.000000000 +0200
++++ vcl/source/glyphs/glyphcache.cxx	2004-09-14 13:53:47.313958344 +0200
 @@ -88,8 +88,8 @@ GlyphCache::GlyphCache( ULONG nMaxSize )
      mnBytesUsed(sizeof(GlyphCache)),
      mnLruIndex(0),
@@ -649,22 +438,7 @@ diff -u -p -u -r1.22.40.2 -r1.26
          if( pFontData != it->first.mpFontData )
              continue;
  
-@@ -219,10 +219,12 @@ void GlyphCache::AddFontPath( const Stri
- // -----------------------------------------------------------------------
- 
- void GlyphCache::AddFontFile( const rtl::OString& rNormalizedName, int nFaceNum,
--    int nFontId, const ImplFontData* pFontData )
-+                              int nFontId, const ImplFontData* pFontData,
-+                              const unicodeKernMap* pKern
-+                              )
- {
-     if( mpFtManager )
--        mpFtManager->AddFontFile( rNormalizedName, nFaceNum, nFontId, pFontData );
-+        mpFtManager->AddFontFile( rNormalizedName, nFaceNum, nFontId, pFontData, pKern );
- }
- 
- // -----------------------------------------------------------------------
-@@ -337,7 +339,7 @@ void GlyphCache::GarbageCollect()
+@@ -338,7 +338,7 @@ void GlyphCache::GarbageCollect()
              FontList::iterator it_next = maFontList.begin(), it;
              while( it_next != maFontList.end() )
              {
@@ -673,13 +447,7 @@ diff -u -p -u -r1.22.40.2 -r1.26
                  ServerFont* pSF = it->second;
                  if( (pSF != NULL)
                  &&  (pSF->GetRefCount() <= 0)
-@@ -401,15 +403,17 @@ inline void GlyphCache::RemovingGlyph( S
- // ServerFont
- // =======================================================================
- 
--ServerFont::ServerFont( const ImplFontSelectData& rFSD )
-+ServerFont::ServerFont( const ImplFontSelectData& rFSD, const glyphKernMap* pKern, const unicodeKernMap* pUniKern )
- :   maFontSelData(rFSD),
+@@ -407,8 +407,8 @@ ServerFont::ServerFont( const ImplFontSe
      mnExtInfo(0),
      mnRefCount(1),
      mnBytesUsed( sizeof(ServerFont) ),
@@ -687,80 +455,9 @@ diff -u -p -u -r1.22.40.2 -r1.26
      mpPrevGCFont( NULL ),
 +    mpNextGCFont( NULL ),
      nCos( 0x10000),
--    nSin( 0)
-+    nSin( 0),
-+    mpKernPairs( pKern ),
-+    mpUnicodeKernPairs( pUniKern )
- {
-     if( rFSD.mnOrientation != 0 )
-     {
-@@ -440,6 +444,65 @@ long ServerFont::Release() const
- 
- // -----------------------------------------------------------------------
- 
-+int ServerFont::GetGlyphKernValue( int left, int right ) const
-+{
-+    int kern = 0;
-+    if( mpKernPairs )
-+    {
-+        std::map< int, std::map< int, int > >::const_iterator left_it =
-+            mpKernPairs->find( left );
-+        if( left_it != mpKernPairs->end() )
-+        {
-+            std::map< int, int >::const_iterator right_it = left_it->second.find( right );
-+            if( right_it != left_it->second.end() )
-+                kern = right_it->second;
-+        }
-+    }
-+    return kern*(maFontSelData.mnWidth ? maFontSelData.mnWidth : maFontSelData.mnHeight)/1000;
-+}
-+
-+// -----------------------------------------------------------------------
-+
-+ULONG ServerFont::GetKernPairs( struct ImplKernPairData** ppKernPairs ) const
-+{
-+    int nKernEntry = 0;
-+    unicodeKernMap::const_iterator left_it;
-+    std::map< sal_Unicode, int >::const_iterator right_it;
-+    if( mpUnicodeKernPairs )
-+    {
-+        // count the kern entries
-+        for( left_it = mpUnicodeKernPairs->begin(); left_it != mpUnicodeKernPairs->end(); ++left_it )
-+        {
-+            nKernEntry += left_it->second.size();
-+        }
-+    }
-+
-+    // allocate kern pair table
-+    if( nKernEntry )
-+    {
-+        *ppKernPairs = new ImplKernPairData[ nKernEntry ];
-+
-+        // fill in kern pairs
-+        nKernEntry = 0;
-+        for( left_it = mpUnicodeKernPairs->begin(); left_it != mpUnicodeKernPairs->end(); ++left_it )
-+        {
-+            for( right_it = left_it->second.begin(); right_it != left_it->second.end(); ++right_it )
-+            {
-+                (*ppKernPairs)[ nKernEntry ].mnChar1 = (USHORT)left_it->first;
-+                (*ppKernPairs)[ nKernEntry ].mnChar2 = (USHORT)right_it->first;
-+                (*ppKernPairs)[ nKernEntry ].mnKern = right_it->second*(maFontSelData.mnWidth ? maFontSelData.mnWidth : maFontSelData.mnHeight)/1000;
-+                nKernEntry++;
-+            }
-+        }
-+    }
-+    else
-+        *ppKernPairs = NULL;
-+
-+    return (ULONG)nKernEntry;
-+}
-+
-+// -----------------------------------------------------------------------
-+
- GlyphData& ServerFont::GetGlyphData( int nGlyphIndex )
- {
-     // usually the GlyphData is cached
-@@ -465,7 +528,7 @@ void ServerFont::GarbageCollect( long nM
+     nSin( 0),
+     mpKernPairs( pKern ),
+@@ -527,7 +586,7 @@ void ServerFont::GarbageCollect( long nM
      GlyphList::iterator it_next = maGlyphList.begin(), it;
      while( it_next != maGlyphList.end() )
      {
@@ -771,13 +468,9 @@ diff -u -p -u -r1.22.40.2 -r1.26
          {
 Index: vcl/source/glyphs/makefile.mk
 ===================================================================
-RCS file: /cvs/gsl/vcl/source/glyphs/makefile.mk,v
-retrieving revision 1.5
-retrieving revision 1.6
-diff -u -p -u -r1.5 -r1.6
---- vcl/source/glyphs/makefile.mk	15 Feb 2002 15:52:27 -0000	1.5
-+++ vcl/source/glyphs/makefile.mk	6 Jan 2004 14:00:38 -0000	1.6
-@@ -76,11 +76,9 @@ TARGET=glyphs
+--- vcl/source/glyphs/makefile.mk.orig	2004-09-12 14:26:10.000000000 +0200
++++ vcl/source/glyphs/makefile.mk	2004-09-14 13:53:47.314958192 +0200
+@@ -77,11 +77,9 @@ CFLAGS += $(FREETYPE_CFLAGS)
  SLOFILES=\
  		$(SLO)$/glyphcache.obj		\
  		$(SLO)$/gcach_rbmp.obj		\
