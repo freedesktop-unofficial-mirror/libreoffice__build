@@ -1,0 +1,199 @@
+--- vcl/unx/kde/salnativewidgets-kde.cxx	2005-03-24 14:15:25.620450399 +0100
++++ vcl/unx/kde/salnativewidgets-kde.cxx	2005-03-24 15:24:07.582058524 +0100
+@@ -126,6 +126,14 @@
+ #include <iostream>
+ #include <sm.hxx>
+ 
++#ifndef _OSL_PROCESS_H_
++#include <osl/process.h>
++#endif
++#ifndef _RTL_LOCALE_HXX_
++#include <rtl/locale.hxx>
++#endif
++#include <fontconfig/fontconfig.h>
++
+ using namespace ::rtl;
+ 
+ /** Cached native widgets.
+@@ -1427,36 +1435,109 @@ static Color readColor( KConfig *pConfig
+     return toColor( pConfig->readColorEntry( pKey ) );
+ }
+ 
++/*getFontconfigAlias - get the appropriate font the specific locale
++   from font-config
++   
++   Cut&paste from the Gtk+ vclplug
++*/
++void getFontconfigAlias( const OUString &aFont)
++{
++	// Unfortunately, OOo is not smart enough to take font coverages into
++	// account when falling back to get the UI font.  For example, since the
++	// "Sans" font returned by Fontconfig as the system default gets re-mapped
++	// to an actual font from VCL.xcu, but that font may or may not have the
++	// correct coverage for all locales, we run into a situation where the
++	// locale is ja_JP but the font specified by VCL.xcu doesn't have Japanese
++	// coverage, resulting in no text drawn at all.  So, use fontconfig to
++	// return a font that actually can display the current locale's glyphs
++
++	FcPattern *    pFcOldFont;
++	FcPattern *    pFcNewFont;
++	FcResult       result = (FcResult)0;   // Matching fails if result is not initialized to 0
++	ByteString     aFontName;
++	FcChar8 *      pNewFontName = NULL;
++	OLocale        loc( osl_getSystemLocale(rtl_LocaleSystemMessages) );
++	ByteString     aLocale( UniString(loc.getRawName()), osl_getThreadTextEncoding() );
++
++	aFontName = ByteString(OUStringToOString(aFont, osl_getThreadTextEncoding()));
++	
++	pFcOldFont = FcPatternCreate();
++	if ( pFcOldFont )
++	{
++	        FcValue    aFcValLang;
++	        FcValue    aFcValName;
++
++	        // Since we always want to make sure that the font can display
++	        // characters in the current langauge, the font name is added
++	        // as a weak value, so that the locale will override it.
++	        aFcValLang.type = FcTypeString;
++	        aFcValLang.u.s = (FcChar8 *)(aLocale.GetBuffer());
++	        aFcValName.type = FcTypeString;
++	        aFcValName.u.s = (FcChar8 *)(aFontName.GetBuffer());
++
++	        FcPatternAdd( pFcOldFont, FC_LANG, aFcValLang, false );
++	        FcPatternAddWeak( pFcOldFont, FC_FAMILY, aFcValName, true );
++
++	        FcConfigSubstitute( 0, pFcOldFont, FcMatchPattern );
++	        FcDefaultSubstitute( pFcOldFont );
++
++	        // Ask fontconfig to pull together a list of fonts that match
++	        // our criteria, language coverage first, then font name
++	        pFcNewFont = FcFontMatch( NULL, pFcOldFont, &result );
++	        if ( (FcResultMatch == result) && pFcNewFont )
++	        {
++	            // Use the first font that Fontconfig returns
++	            result = FcPatternGetString( pFcNewFont, FC_FAMILY, 0, &pNewFontName );
++	            if ( FcResultMatch == result )
++	            {
++			aFont = rtl::OUString::createFromAscii((sal_Char *)pNewFontName);
++#if OSL_DEBUG_LEVEL > 1
++			fprintf(stderr, "aFont.getStr() = %s\n", 
++				OUStringToOString( aFont, RTL_TEXTENCODING_UTF8 ).getStr());
++#endif
++	            }
++	        }
++
++	        if ( pFcNewFont )
++	            FcPatternDestroy( pFcNewFont );
++
++	        FcPatternDestroy( pFcOldFont );
++    	}
++
++    	return;
++}
++
+ /** Helper function to add information to Font from QFont.
+ */
+-static void modifyFont( Font &rFont, const QFont &rQFont )
++static Font toFont( const QFont &rQFont )
+ {
+     QFontInfo qFontInfo( rQFont );
+     
+-    // Prepend the KDE font, do not override
+-    OUString aQFontName = String( rQFont.family().utf8(), RTL_TEXTENCODING_UTF8 );
+-    OUString aFontName = rFont.GetName();
+-
+-    if ( aQFontName.getLength() > 0 &&
+-         aFontName.compareTo( aQFontName, aQFontName.getLength() ) != 0 )
+-    {
+-        OUStringBuffer aBuffer( 1024 );
+-        aBuffer.append( aQFontName );
+-        aBuffer.appendAscii( ";", 1 );
+-        aBuffer.append( aFontName );
+-        
+-        rFont.SetName( aBuffer.makeStringAndClear() );
+-    }
++    // Get the real name of the KDE font
++    OUString aFontName = String( rQFont.family().utf8(), RTL_TEXTENCODING_UTF8 );
++    getFontconfigAlias( aFontName );
+     
+     // QFontInfo should give the right point size, but sometimes it does not,
+     // it seems.
+-    int nPointSize = qFontInfo.pointSize();
+-    if ( nPointSize <= 0 )
+-        nPointSize = rQFont.pointSize();
+-    if ( nPointSize > 0 )
+-        rFont.SetHeight( nPointSize );
++    int nPointHeight = qFontInfo.pointSize();
++    if ( nPointHeight <= 0 )
++        nPointHeight = rQFont.pointSize();
++
++    sal_Int32 nDPIX, nDPIY;
++    sal_Int32 nDispDPIY = GetSalData()->GetDisplay()->GetResolution().B();
++    GetSalData()->GetDisplay()->GetScreenFontResolution( nDPIX, nDPIY );
++
++    int nHeight = nPointHeight * nDispDPIY / nDPIY;
++    // allow for rounding in back conversion (at SetFont)
++    while( (nHeight * nDPIY / nDispDPIY) > nPointHeight )
++        nHeight--;
++    while( (nHeight * nDPIY / nDispDPIY) < nPointHeight )
++        nHeight++;
++
++    // Create the font and set its attributes
++    Font aFont( aFontName, Size( 0, nHeight ) );
+     
+-    rFont.SetItalic( qFontInfo.italic()? ITALIC_NORMAL: ITALIC_NONE );
++    aFont.SetItalic( qFontInfo.italic()? ITALIC_NORMAL: ITALIC_NONE );
+     
+     FontWeight eWeight = WEIGHT_DONTKNOW;
+     int nWeight = qFontInfo.weight();
+@@ -1470,7 +1551,9 @@ static void modifyFont( Font &rFont, con
+         eWeight = WEIGHT_BOLD;
+     else
+         eWeight = WEIGHT_BLACK;
+-    rFont.SetWeight( eWeight );
++    aFont.SetWeight( eWeight );
++
++    return aFont;
+ }
+ 
+ /** Implementation of KDE integration's main method.
+@@ -1514,8 +1597,7 @@ void KDESalFrame::UpdateSettings( AllSet
+         pKey = "titleFont";
+         if ( pConfig->hasKey( pKey ) )
+         {
+-            Font aFont= aStyleSettings.GetTitleFont();
+-            modifyFont( aFont, pConfig->readFontEntry( pKey ) );
++            Font aFont = toFont( pConfig->readFontEntry( pKey ) );
+             aStyleSettings.SetTitleFont( aFont );
+ 			bSetTitleFont = true;
+         }
+@@ -1564,8 +1646,7 @@ void KDESalFrame::UpdateSettings( AllSet
+     aStyleSettings.SetHighlightTextColor( toColor( qColorGroup.highlightedText() ) );
+ 
+     // Font
+-    Font aFont= aStyleSettings.GetAppFont();
+-    modifyFont( aFont, kapp->font() );
++    Font aFont = toFont( kapp->font() );
+ 
+     aStyleSettings.SetAppFont( aFont );
+     aStyleSettings.SetHelpFont( aFont );
+@@ -1598,8 +1679,7 @@ void KDESalFrame::UpdateSettings( AllSet
+         aStyleSettings.SetMenuHighlightTextColor( toColor ( qMenuCG.highlightedText() ) );
+ 
+         // Font
+-        Font aFont= aStyleSettings.GetMenuFont();
+-        modifyFont( aFont, pMenuBar->font() );
++        Font aFont = toFont( pMenuBar->font() );
+         aStyleSettings.SetMenuFont( aFont );
+     }
+ 
+@@ -1607,8 +1687,7 @@ void KDESalFrame::UpdateSettings( AllSet
+     KToolBar *pToolBar = qMainWindow.toolBar();
+     if ( pToolBar )
+     {
+-        Font aFont= aStyleSettings.GetToolFont();
+-        modifyFont( aFont, pToolBar->font() );
++        Font aFont = toFont( pToolBar->font() );
+         aStyleSettings.SetToolFont( aFont );
+     }
+ 
