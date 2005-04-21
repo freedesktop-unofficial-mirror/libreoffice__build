@@ -1,0 +1,787 @@
+--- vcl/unx/gtk/window/gtkobject.cxx
++++ vcl/unx/gtk/window/gtkobject.cxx
+@@ -115,6 +115,10 @@
+         gtk_container_remove( GTK_CONTAINER(gtk_widget_get_parent(m_pSocket)),
+                               m_pSocket );
+         // get rid of the socket
++        // actually the gtk_container_remove should let the ref count
++        // of the socket sink to 0 and destroy it (see signalDestroy)
++        // this is just a sanity check
++        if( m_pSocket )
+         gtk_widget_destroy( m_pSocket );
+     }
+ }
+
+
+
+
+--- vcl/unx/inc/plugins/gtk/gtkframe.hxx
++++ vcl/unx/inc/plugins/gtk/gtkframe.hxx
+@@ -76,6 +76,8 @@
+ #include <sysdata.hxx>
+ #endif
+ 
++#include <list>
++
+ class X11SalGraphics;
+ class GtkSalDisplay;
+ 
+@@ -110,13 +111,17 @@
+         guint32 time;
+         guint   state;
+         guint   keyval;
++        guint16 hardware_keycode;
++        guint8  group;
+         
+         PreviousKeyPress (GdkEventKey *event)
+         :   window (NULL),
+             send_event (0),
+             time (0),
+             state (0),
+-            keyval (0)
++            keyval (0),
++            hardware_keycode (0),
++            group (0)
+         {
+             if (event)
+             {
+@@ -125,6 +130,8 @@
+                 time = event->time;
+                 state = event->state;
+                 keyval = event->keyval;
++                hardware_keycode    = event->hardware_keycode;
++                group               = event->group;
+             }
+         }
+         
+@@ -133,7 +140,9 @@
+             send_event( rPrev.send_event ),
+             time( rPrev.time ),
+             state( rPrev.state ),
+-            keyval( rPrev.keyval )
++            keyval( rPrev.keyval ),
++            hardware_keycode( rPrev.hardware_keycode ),
++            group( rPrev.group )
+         {}
+         
+         bool PreviousKeyPress::operator== (GdkEventKey *event) const
+@@ -143,6 +152,8 @@
+                 && (event->send_event == send_event)
+                 && (event->state == state)
+                 && (event->keyval == keyval)
++                && (event->hardware_keycode == hardware_keycode)
++                && (event->group == group)
+                 && (event->time - time < 3)
+                 ;
+         }
+@@ -150,7 +161,9 @@
+ 
+     GtkWindow*				m_pWindow;
+     GdkWindow*				m_pForeignParent;
++    GdkNativeWindow                 m_aForeignParentWindow;
+     GdkWindow*				m_pForeignTopLevel;
++    GdkNativeWindow                 m_aForeignTopLevelWindow;
+     ULONG					m_nStyle;
+     GtkFixed*				m_pFixedContainer;
+     GtkSalFrame*			m_pParent;
+@@ -162,16 +176,21 @@
+ 	GdkCursor              *m_pCurrentCursor;
+     GdkVisibilityState		m_nVisibility;
+ 	int						m_nSavedScreenSaverTimeout;
+-    bool					m_bResizeable;
++    bool                            m_bFullscreen;
+ 	bool					m_bSingleAltPress;
+     bool					m_bDefaultPos;
+     bool					m_bDefaultSize;
+     bool					m_bSendModChangeOnRelease;
+     bool					m_bWasPreedit;
++    bool                            m_bIgnoreCommit;
++    
++    Size                            m_aMaxSize;
++    Size                            m_aMinSize;
+ 
+     std::list< PreviousKeyPress >   m_aPrevKeyPresses;
+     int                             m_nPrevKeyPresses; // avoid using size()
+ 
++    
+     void Init( SalFrame* pParent, ULONG nStyle );
+     void Init( SystemParentData* pSysData );
+     void InitCommon();    
+@@ -201,7 +220,20 @@
+     void			Center();
+     void			SetDefaultSize();
+ 	void			setAutoLock( bool bLock );
+ 	void			setScreenSaverTimeout( int nTimeout );
++	void            hardIMReset();
++    void            createIMContext();
++    void            deleteIMContext();
++    
++    void            doKeyCallback( guint state,
++                                   guint keyval,
++                                   guint16 hardware_keycode,
++                                   guint8 group,
++                                   guint32 time,
++                                   bool bDown,
++                                   bool bSendRelease
++                                   );
++
+ 
+     GdkNativeWindow findTopLevelSystemWindow( GdkNativeWindow aWindow );
+ 
+@@ -233,7 +267,9 @@
+     GtkWindow*	getWindow() const { return m_pWindow; }
+     GtkFixed*	getFixedContainer() const { return m_pFixedContainer; }
+     GdkWindow*	getForeignParent() const { return m_pForeignParent; }
++    GdkNativeWindow	getForeignParentWindow() const { return m_aForeignParentWindow; }
+     GdkWindow*	getForeignTopLevel() const { return m_pForeignTopLevel; }
++    GdkNativeWindow	getForeignTopLevelWindow() const { return m_aForeignTopLevelWindow; }
+     GdkVisibilityState getVisibilityState() const 
+     { return m_nVisibility; }
+ 
+
+
+--- vcl/unx/gtk/window/gtkframe.cxx
++++ vcl/unx/gtk/window/gtkframe.cxx
+@@ -68,6 +68,8 @@
+ #include <salbmp.h>
+ #include <salprn.h>
+ #include <floatwin.hxx>
++#include <salprn.h>
++#include <svapp.hxx>
+ 
+ #include <prex.h>
+ #include <X11/Xatom.h>
+@@ -75,6 +77,7 @@
+ 
+ #include <dlfcn.h>
+ #include <soicon.hxx>
++#include <salbtype.hxx>
+ 
+ #include <svapp.hxx>
+ 
+@@ -102,7 +105,7 @@
+     if( (state & GDK_MOD1_MASK) )
+ 	{
+         nCode |= KEY_MOD2;
+-		if( (state & GDK_MOD1_MASK) )
++		if( ! (nCode & KEY_MOD1) )
+ 			nCode |= KEY_CONTROLMOD;
+ 	}
+     if( (state & GDK_BUTTON1_MASK) )
+@@ -125,7 +128,7 @@
+         nCode = KEY_A + (keyval-GDK_a );
+     else if( keyval >= GDK_F1 && keyval <= GDK_F26 )
+         nCode = KEY_F1 + (keyval-GDK_F1);
+-    
++    else
+     {
+         switch( keyval )
+         {
+@@ -182,11 +185,69 @@
+             case GDK_Redo:                      nCode = KEY_REPEAT;             break;
+             case GDK_KP_Decimal:
+             case GDK_KP_Separator:     nCode = KEY_DECIMAL;    break;
++// ignored Sun X-Server bits (wrt. numlock etc.) cf saldisp.cxx
++// ignored XK_ISO_Left_Tab, XK_Hangul_Hanja
++// ignored Apollo apXK section
++// ignored DEC section
++// ignored HP & IBM/OSF sections
++// ignored SCO,SGI,SNI,SUN section
+         }
+     }
+     return nCode;
+ }
+ 
++void GtkSalFrame::doKeyCallback( guint state,
++                                 guint keyval,
++                                 guint16 hardware_keycode,
++                                 guint8 group,
++                                 guint32 time,
++                                 bool bDown,
++                                 bool bSendRelease
++                                 )
++{
++    SalKeyEvent aEvent;
++    
++    aEvent.mnTime			= time;    
++    aEvent.mnCode			= GetKeyCode( keyval ) | GetModCode( state );
++    aEvent.mnCharCode		= (USHORT)gdk_keyval_to_unicode( keyval );
++    aEvent.mnRepeat			= 0;
++    
++	vcl::DeletionListener aDel( this );
++    bool bHandled = CallCallback( bDown ? SALEVENT_KEYINPUT : SALEVENT_KEYUP, &aEvent );
++    if( bDown && ! aDel.isDeleted() )
++    {
++        /* #i42122# if application cannot handle the event (e.g. for a shortcut key)
++        *  then try the same key with the default keymap in group 0, so e.g. cyrillic
++        *  keys get translated to the english keyboard layout and can be recognized
++        *  as shortcuts (see also generic plugin)
++        */
++        if( ! bHandled && group != 0)
++        {
++            // check other mapping
++            gint eff_group, level;
++            GdkModifierType consumed;
++            guint updated_keyval = 0;
++            if( gdk_keymap_translate_keyboard_state( NULL,
++                                                     hardware_keycode,
++                                                     (GdkModifierType)0,
++                                                     0,
++                                                     &updated_keyval,
++                                                     &eff_group,
++                                                     &level,
++                                                     &consumed ) )
++            {
++                aEvent.mnCode	= GetKeyCode( updated_keyval ) | GetModCode( state );
++                aEvent.mnCharCode = (USHORT)gdk_keyval_to_unicode( updated_keyval );
++                CallCallback( SALEVENT_KEYINPUT, &aEvent );
++            }
++        }
++        if( bSendRelease && ! aDel.isDeleted() )
++        {
++            CallCallback( SALEVENT_KEYUP, &aEvent );
++        }
++    }
++}
++
+ GtkSalFrame::GraphicsHolder::~GraphicsHolder()
+ {
+     delete pGraphics;
+@@ -208,20 +269,51 @@
+ GtkSalFrame::~GtkSalFrame()
+ {
+ 	getDisplay()->deregisterFrame( this );
+-    if( m_pIMContext )
+-    {
+-        gtk_im_context_reset( m_pIMContext );
+-        gtk_im_context_set_client_window( m_pIMContext, NULL );
+-        g_object_unref( m_pIMContext );
+-    }
++    deleteIMContext();
+     if( m_pFixedContainer )
+         gtk_widget_destroy( GTK_WIDGET(m_pFixedContainer) );
+     if( m_pWindow )
+         gtk_widget_destroy( GTK_WIDGET(m_pWindow) );
+     if( m_pForeignParent )
+-        gdk_window_destroy( m_pForeignParent );
++        g_object_unref( G_OBJECT(m_pForeignParent) );
+     if( m_pForeignTopLevel )
+-        gdk_window_destroy( m_pForeignTopLevel );
++        g_object_unref(G_OBJECT( m_pForeignTopLevel) );
++}
++
++void GtkSalFrame::hardIMReset()
++{
++#if OSL_DEBUG_LEVEL > 1
++	fprintf( stderr, "IMReset - this should flush the IM's pre-edit buffer\n" );
++#endif
++
++	vcl::DeletionListener aDel( this );
++
++	if( m_pIMContext )
++    {
++        m_bIgnoreCommit = true;
++        gtk_im_context_reset( m_pIMContext );
++        m_bIgnoreCommit = false;
++        
++        // a correctly implemented _reset method will
++        // emit a 'commit' signal if pending pre-edit
++        // and also, a predit_changed to '' which will
++        // end input.
++        
++        // Since few IM's are correctly implemented,
++        // this will end the ext text input at least
++        // from OO.o's perspective if it is still active.
++    }
++    
++	if( !aDel.isDeleted() )
++	{
++#if OSL_DEBUG_LEVEL > 1
++		if( m_bWasPreedit )
++			fprintf( stderr, "Error: ** Your IM ('%s') is broken wrt. reset **\n",
++					 g_getenv ("GTK_IM_MODULE") );
++#endif
++	    m_bWasPreedit = false;
++        CallCallback( SALEVENT_ENDEXTTEXTINPUT, (void*)NULL );
++	}
+ }
+ 
+ void GtkSalFrame::InitCommon()
+@@ -251,7 +343,7 @@
+ 	m_pCurrentCursor    = NULL;
+ 	m_nKeyModifiers     = 0;
+ 	m_bSingleAltPress   = false;
+-    m_bResizeable		= true;
++    m_bFullscreen       = false;
+     m_bDefaultPos		= true;
+     m_bDefaultSize		= ( (m_nStyle & SAL_FRAME_STYLE_SIZEABLE) && ! m_pParent );
+     m_nState			= GDK_WINDOW_STATE_WITHDRAWN;
+@@ -259,16 +351,9 @@
+ 	m_bSendModChangeOnRelease = false;
+     m_pIMContext		= NULL;
+     m_bWasPreedit		= false;
++    m_bIgnoreCommit     = false;
+     m_aPrevKeyPresses.clear();
+     m_nPrevKeyPresses = 0;
+-
+-    // delete graphics if InitCommon is called not from destructor
+-    for( int i = 0; i < nMaxGraphics; i++ )
+-    {
+-        m_aGraphics[i].bInUse = false;
+-        delete m_aGraphics[i].pGraphics;
+-        m_aGraphics[i].pGraphics = NULL;
+-    }
+     
+     gtk_widget_set_app_paintable( GTK_WIDGET(m_pWindow), TRUE );
+     gtk_widget_set_double_buffered( GTK_WIDGET(m_pWindow), FALSE );
+@@ -336,7 +423,9 @@
+     m_pWindow = GTK_WINDOW( gtk_widget_new( GTK_TYPE_WINDOW, "type", (nStyle & SAL_FRAME_STYLE_FLOAT) ? GTK_WINDOW_POPUP : GTK_WINDOW_TOPLEVEL, "visible", FALSE, NULL ) );
+     m_pParent = static_cast<GtkSalFrame*>(pParent);
+     m_pForeignParent = NULL;
++    m_aForeignParentWindow = None;
+     m_pForeignTopLevel = NULL;
++    m_aForeignTopLevelWindow = None;
+     m_nStyle = nStyle;
+ 
+ 	if( m_pParent && m_pParent->m_pWindow && ! (m_pParent->m_nStyle & SAL_FRAME_STYLE_CHILD) )
+@@ -346,8 +435,7 @@
+ 
+     if( ! (nStyle & (SAL_FRAME_STYLE_FLOAT|SAL_FRAME_STYLE_CHILD)) )
+     {
+-        m_bResizeable = (nStyle & SAL_FRAME_STYLE_SIZEABLE) != 0;
+-        gtk_window_set_resizable( m_pWindow, m_bResizeable ? TRUE : FALSE );
++        gtk_window_set_resizable( m_pWindow, (m_nStyle & SAL_FRAME_STYLE_SIZEABLE) );
+         gtk_window_set_gravity( m_pWindow, GDK_GRAVITY_STATIC );
+         if( (nStyle & SAL_FRAME_STYLE_INTRO) )
+             gtk_window_set_type_hint( m_pWindow, GDK_WINDOW_TYPE_HINT_SPLASHSCREEN );
+@@ -391,9 +479,11 @@
+ void GtkSalFrame::Init( SystemParentData* pSysData )
+ {
+     m_pParent = NULL;
+-    m_pForeignParent = gdk_window_foreign_new_for_display( getGdkDisplay(), (GdkNativeWindow)pSysData->aWindow );
++    m_aForeignParentWindow = (GdkNativeWindow)pSysData->aWindow;
++    m_pForeignParent = gdk_window_foreign_new_for_display( getGdkDisplay(), m_aForeignParentWindow );
+     gdk_window_set_events( m_pForeignParent, GDK_STRUCTURE_MASK );
+-    m_pForeignTopLevel = gdk_window_foreign_new_for_display( getGdkDisplay(), findTopLevelSystemWindow( (GdkNativeWindow)pSysData->aWindow ) );
++    m_aForeignTopLevelWindow = findTopLevelSystemWindow( (GdkNativeWindow)pSysData->aWindow );
++    m_pForeignTopLevel = gdk_window_foreign_new_for_display( getGdkDisplay(), m_aForeignTopLevelWindow );
+     gdk_window_set_events( m_pForeignTopLevel, GDK_STRUCTURE_MASK );
+     m_pWindow = GTK_WINDOW(gtk_window_new( GTK_WINDOW_POPUP ));
+     m_nStyle = SAL_FRAME_STYLE_CHILD;
+@@ -581,6 +671,9 @@
+                 m_nFloats++;
+                 if( ! getDisplay()->GetCaptureFrame() && m_nFloats == 1 )
+                     grabPointer( TRUE, TRUE );
++                // #i44068# reset parent's IM context
++                if( m_pParent )
++                    m_pParent->EndExtTextInput(0);
+             }
+         }
+         else
+@@ -601,9 +695,10 @@
+             if( m_pIMContext )
+             {
+                 gtk_im_context_focus_out( m_pIMContext );
+-                gtk_im_context_reset( m_pIMContext );
++                hardIMReset();
+             }
+         }
++        CallCallback( SALEVENT_RESIZE, NULL );
+     }
+ }
+ 
+@@ -636,7 +731,7 @@
+ #endif
+         m_bDefaultSize = false;
+ 		gtk_window_resize( m_pWindow, nWidth, nHeight );
+-		if( ! m_bResizeable )
++		if( ! (m_nStyle & SAL_FRAME_STYLE_SIZEABLE) )
+ 		{
+ 			GdkGeometry aGeo;
+ 			aGeo.min_width = aGeo.max_width = nWidth;
+@@ -749,8 +844,12 @@
+     {
+         if( pState->mnState & SAL_FRAMESTATE_MAXIMIZED )
+             gtk_window_maximize( m_pWindow );
++        else
++            gtk_window_unmaximize( m_pWindow );
+         if( pState->mnState & SAL_FRAMESTATE_MINIMIZED )
+             gtk_window_iconify( m_pWindow );
++        else
++            gtk_window_deiconify( m_pWindow );
+     }
+ }
+ 
+@@ -792,18 +891,19 @@
+ 
+ void GtkSalFrame::ShowFullScreen( BOOL bFullScreen )
+ {
++    m_bFullscreen = bFullScreen;
+     if( m_pWindow && ! (m_nStyle & SAL_FRAME_STYLE_CHILD) )
+     {
+         if( bFullScreen )
+         {
+-            if( ! m_bResizeable )
++            if( !(m_nStyle & SAL_FRAME_STYLE_SIZEABLE) )
+                 gtk_window_set_resizable( m_pWindow, TRUE );
+             gtk_window_fullscreen( m_pWindow );
+         }
+         else
+         {
+             gtk_window_unfullscreen( m_pWindow );
+-            if( ! m_bResizeable )
++            if( !(m_nStyle & SAL_FRAME_STYLE_SIZEABLE) )
+                 gtk_window_set_resizable( m_pWindow, FALSE );
+         }
+     }
+@@ -934,6 +1034,10 @@
+     XWarpPointer( GDK_DISPLAY_XDISPLAY (pDisplay), None,
+ 				  GDK_WINDOW_XID (gdk_screen_get_root_window( pScreen ) ),
+                   0, 0, 0, 0, nWindowLeft, nWindowTop);
++    // #i38648# ask for the next motion hint
++    gint x, y;
++    GdkModifierType mask;
++    gdk_window_get_pointer( GTK_WIDGET(m_pWindow)->window, &x, &y, &mask );
+ }
+ 
+ void GtkSalFrame::Flush()
+@@ -979,19 +1083,8 @@
+     return GetModCode( aMask );
+ }
+ 
+-void GtkSalFrame::SetInputContext( SalInputContext* pContext )
++void GtkSalFrame::createIMContext()
+ {
+-    if( ! pContext )
+-        return;
+-    
+-    if( ! (pContext->mnOptions & SAL_INPUTCONTEXT_TEXT) )
+-    {
+-        if( m_pIMContext )
+-            gtk_im_context_focus_out( m_pIMContext );
+-        return;
+-    }
+-
+-    // create a new im context
+     if( ! m_pIMContext )
+     {
+         m_pIMContext = gtk_im_multicontext_new ();
+@@ -1011,17 +1104,60 @@
+ 
+         gtk_im_context_set_client_window( m_pIMContext, GTK_WIDGET(m_pWindow)->window );
+ 		gtk_im_context_focus_in( m_pIMContext );
++        m_bWasPreedit = false;
+     }
+ }
+-void GtkSalFrame::EndExtTextInput( USHORT nFlags )
++
++void GtkSalFrame::deleteIMContext()
++{
++    if( m_pIMContext )
++    {
++        // first give IC a chance to deinitialize
++        hardIMReset();
++        gtk_im_context_set_client_window( m_pIMContext, NULL );
++        // destroy old IC
++        g_object_unref( m_pIMContext );
++        m_pIMContext = NULL;
++    }
++}
++
++void GtkSalFrame::SetInputContext( SalInputContext* pContext )
+ {
+ #if OSL_DEBUG_LEVEL > 1
+-	fprintf( stderr, "EndExtTextInput: ContextReset\n" );
++    fprintf( stderr, ":SetInputContext( 0x%x )\n", pContext );
+ #endif
++    if( ! pContext )
++        return;
++
++    if( ! (pContext->mnOptions & SAL_INPUTCONTEXT_TEXT) )
++    {
++        deleteIMContext();
++        return;
++    }
++
++    // create a new im context
++    createIMContext();
++}
++
++void GtkSalFrame::EndExtTextInput( USHORT nFlags )
++{
+     if( m_pIMContext )
+-        gtk_im_context_reset( m_pIMContext );
+-    m_bWasPreedit = false;
+-	CallCallback( SALEVENT_ENDEXTTEXTINPUT, NULL );
++    {
++        #if OSL_DEBUG_LEVEL > 1
++        fprintf( stderr, ":EndExtTextInput\n" );
++        #endif
++        // since some IMs won't do a reset on gtk_im_context_reset
++        // and not empty their preedit buffer, there does not
++        // seem to be another choice than to create a completely
++        // new IC. We cannot use the same trick as the generic plugin
++        // here (which disables the preedit state) since gtk
++        // does not give us that much control
++        
++        // destroy old IC
++        deleteIMContext();
++        // create new IC
++        createIMContext();
++    }
+ }
+ 
+ void GtkSalFrame::UpdateIMSpotLocation()
+@@ -1328,12 +1464,35 @@
+ 
+ bool GtkSalFrame::SetPluginParent( SystemParentData* pSysParent )
+ {
++    if( m_pIMContext )
++    {
++        hardIMReset();
++        gtk_im_context_set_client_window( m_pIMContext, NULL );
++        g_object_unref( m_pIMContext );
++        m_pIMContext = NULL;
++    }
++    if( m_pFixedContainer )
++        gtk_widget_destroy( GTK_WIDGET(m_pFixedContainer) );
++    if( m_pWindow )
+     gtk_widget_destroy( GTK_WIDGET(m_pWindow) );
+     if( m_pForeignParent )
+-        gdk_window_destroy( m_pForeignParent );
++        g_object_unref( G_OBJECT(m_pForeignParent) );
+     if( m_pForeignTopLevel )
+-        gdk_window_destroy( m_pForeignTopLevel );
++        g_object_unref( G_OBJECT(m_pForeignTopLevel) );
++
++    // init new window
++    if( pSysParent && pSysParent->aWindow != None )
+     Init( pSysParent );
++    else
++        Init( NULL, SAL_FRAME_STYLE_DEFAULT );
++
++	// update graphics if necessary
++    for( unsigned int i = 0; i < sizeof(m_aGraphics)/sizeof(m_aGraphics[0]); i++ )
++    {
++        if( m_aGraphics[i].bInUse )
++            m_aGraphics[i].pGraphics->SetDrawable( GDK_WINDOW_XWINDOW(GTK_WIDGET(m_pWindow)->window) );
++    }
++
+     return true;
+ }
+ 
+@@ -1565,15 +1724,13 @@
+     {
+         if( pEvent->in )
+         {
++            pThis->hardIMReset();
++            gtk_im_context_set_client_window( pThis->m_pIMContext, GTK_WIDGET(pThis->m_pWindow)->window );
+             gtk_im_context_focus_in( pThis->m_pIMContext );
+-            gtk_im_context_reset( pThis->m_pIMContext );
+         }
+         else
+         {
+             gtk_im_context_focus_out( pThis->m_pIMContext );
+-            pThis->CallCallback( SALEVENT_ENDEXTTEXTINPUT, NULL );
+-			if (! aDel.isDeleted() )
+-	            gtk_im_context_reset( pThis->m_pIMContext );
+         }
+     }
+ 
+@@ -1683,8 +1840,6 @@
+ 
+     if( pThis->m_pIMContext )
+     {
+-        if( gtk_im_context_filter_keypress( pThis->m_pIMContext, pEvent ) )
+-        {
+             if( pEvent->type == GDK_KEY_PRESS )
+ 			{
+ 				// Add this key press event to the list of previous key presses
+@@ -1702,9 +1857,27 @@
+ 					pThis->m_aPrevKeyPresses.pop_front();
+ 					pThis->m_nPrevKeyPresses--;
+ 				}
+-			}
+ 
++            GObject* pRef = G_OBJECT( g_object_ref( G_OBJECT( pThis->m_pIMContext ) ) );
++            gboolean bResult = gtk_im_context_filter_keypress( pThis->m_pIMContext, pEvent );
++            g_object_unref( pRef );
++            if( bResult )
+             return TRUE;
++            else
++            {
++                DBG_ASSERT( pThis->m_nPrevKeyPresses > 0, "key press has vanished !" );
++                if( ! pThis->m_aPrevKeyPresses.empty() ) // sanity check
++                {
++                    // event was not swallowed, do not filter a following
++                    // key release event
++                    // note: this relies on gtk_im_context_filter_keypress
++                    // returning without calling a handler (in the "not swallowed"
++                    // case ) which might change the previous key press list so
++                    // we would pop the wrong event here
++                    pThis->m_aPrevKeyPresses.pop_back();
++                    pThis->m_nPrevKeyPresses--;
++                }
++            }
+         }    
+     }
+ 
+@@ -1836,15 +2009,7 @@
+     }
+     else
+     {
+-        SalKeyEvent aEvent;
+-        
+-        aEvent.mnTime			= pEvent->time;
+-        aEvent.mnCode			= GetKeyCode( pEvent->keyval ) | GetModCode( pEvent->state );
+-        aEvent.mnCharCode		= (USHORT)gdk_keyval_to_unicode( pEvent->keyval );
+-        aEvent.mnRepeat			= 0;
+-
+-        pThis->CallCallback( (pEvent->type == GDK_KEY_PRESS) ? SALEVENT_KEYINPUT : SALEVENT_KEYUP, &aEvent );
+-
++        pThis->doKeyCallback( pEvent->state, pEvent->keyval, pEvent->hardware_keycode, pEvent->group, pEvent->time, (pEvent->type == GDK_KEY_PRESS), false );
+ 		if( ! aDel.isDeleted() )
+ 		{
+ 			pThis->m_bSendModChangeOnRelease = false;
+@@ -1916,16 +2081,17 @@
+ 
+     SalExtTextInputEvent aTextEvent;
+ 
++    GTK_YIELD_GRAB();
++
+     aTextEvent.mnTime 			= 0;
+     aTextEvent.mpTextAttr 		= 0;
++    if( ! pThis->m_bIgnoreCommit )
+     aTextEvent.maText 			= String( pText, RTL_TEXTENCODING_UTF8 );
+     aTextEvent.mnCursorPos 		= aTextEvent.maText.Len();
+     aTextEvent.mnCursorFlags 	= 0;
+     aTextEvent.mnDeltaStart 	= 0;
+     aTextEvent.mbOnlyCursor 	= False;
+ 
+-    GTK_YIELD_GRAB();
+-	
+ 	vcl::DeletionListener aDel( pThis );
+ 
+     /* necessary HACK: all keyboard input comes in here as soon as a IMContext is set
+@@ -1940,26 +2106,26 @@
+      *  SALEVENT_ENDEXTTEXTINPUT, either because of a regular commit
+      *  or because there never was a preedit.
+      */
+-    if( ! pThis->m_bWasPreedit && aTextEvent.maText.Len() == 1 )
++    if( ! pThis->m_bWasPreedit
++        && aTextEvent.maText.Len() == 1
++        && ! pThis->m_aPrevKeyPresses.empty()
++        )
+     {
+-       SalKeyEvent aEvent;
+-           
+-       aEvent.mnTime			= 0;
+-       aEvent.mnCode			= GetKeyCode( gdk_unicode_to_keyval( aTextEvent.maText.GetChar( 0 ) ) );
+-       aEvent.mnCharCode		= aTextEvent.maText.GetChar(0);
+-       aEvent.mnRepeat			= 0;
++        const PreviousKeyPress& rKP = pThis->m_aPrevKeyPresses.back();
+ 
+        pThis->m_bWasPreedit = false;
+-       pThis->CallCallback( SALEVENT_KEYINPUT, &aEvent );
+-	   if (!aDel.isDeleted())
+-       pThis->CallCallback( SALEVENT_KEYUP, &aEvent );
++        pThis->doKeyCallback( rKP.state, rKP.keyval, rKP.hardware_keycode, rKP.group, rKP.time, true, true );
+        return;
+     }
+ 
++    #if OSL_DEBUG_LEVEL > 1
++    fprintf( stderr, ":signalIMCommit '%s'\n", pText );
++    #endif
++
+     pThis->m_bWasPreedit = false;
+     pThis->CallCallback( SALEVENT_EXTTEXTINPUT, (void*)&aTextEvent);
+ 	if (!aDel.isDeleted())
+-    pThis->CallCallback( SALEVENT_ENDEXTTEXTINPUT, (void*)NULL );
++		pThis->CallCallback( SALEVENT_ENDEXTTEXTINPUT, NULL );
+ }
+ 
+ void GtkSalFrame::signalIMPreeditChanged( GtkIMContext* pContext, gpointer frame )
+@@ -1974,11 +2140,10 @@
+                                        &pText,
+                                        &pAttrs,
+                                        &nCursorPos );
+-
+ #if OSL_DEBUG_LEVEL > 1
+ 	fprintf( stderr, ":signalImPreeditChanged '%s'\n", pText );
+ #endif
+-	bool bEmptyText = !pText || !strlen( pText );
++	bool bEndPreedit = (!pText || !*pText) && pThis->m_bWasPreedit;
+ 
+     SalExtTextInputEvent aTextEvent;
+ 
+@@ -2038,56 +2203,51 @@
+         for (int i = start; i < end; i++)
+             pSalAttribs[i] |= sal_attr;
+     } while (pango_attr_iterator_next (iter));
++
+     aTextEvent.mpTextAttr 		= pSalAttribs;
+ 
+     g_free( pText );
+     pango_attr_list_unref( pAttrs );
+ 
++    GTK_YIELD_GRAB();
++    
+     vcl::DeletionListener aDel( pThis );
+ 
+-    GTK_YIELD_GRAB();
+     pThis->m_bWasPreedit = true;
+     pThis->CallCallback( SALEVENT_EXTTEXTINPUT, (void*)&aTextEvent);
+ 
+-	if( bEmptyText && !aDel.isDeleted() )
+-			signalIMPreeditEnd( pContext, frame );
+-
+     delete [] pSalAttribs;
++
++	if( bEndPreedit && ! aDel.isDeleted() )
++        pThis->CallCallback( SALEVENT_ENDEXTTEXTINPUT, NULL );
+ }
+ 
+ void GtkSalFrame::signalIMPreeditStart( GtkIMContext* pContext, gpointer frame )
+ {
+-    GtkSalFrame* pThis = (GtkSalFrame*)frame;
+-#if OSL_DEBUG_LEVEL > 1
+-	fprintf( stderr, "*** :signalImPreeditStart ***\n" );
+-#endif
++//    GtkSalFrame* pThis = (GtkSalFrame*)frame;
+ }
+ 
+ void GtkSalFrame::signalIMPreeditEnd( GtkIMContext* pContext, gpointer frame )
+ {
+     GtkSalFrame* pThis = (GtkSalFrame*)frame;
+ #if OSL_DEBUG_LEVEL > 1
+-	fprintf( stderr, "*** :signalImPreeditEnd ***\n" );
++	fprintf( stderr, ":signalImPreeditEnd\n" );
+ #endif
+-	pThis->m_bWasPreedit = false;
+-	pThis->CallCallback( SALEVENT_ENDEXTTEXTINPUT, (void*)NULL );
++    GTK_YIELD_GRAB();
++	pThis->CallCallback( SALEVENT_ENDEXTTEXTINPUT, NULL );
+ }
+ 
+ gboolean GtkSalFrame::signalIMRetrieveSurrounding( GtkIMContext* pContext, gpointer frame )
+ {
+-    GtkSalFrame* pThis = (GtkSalFrame*)frame;
+-#if OSL_DEBUG_LEVEL > 1
+-	fprintf( stderr, ":signalIMRetrieveSurrounding\n" );
+-#endif
++//    GtkSalFrame* pThis = (GtkSalFrame*)frame;
++
+     return FALSE;
+ }
+ 
+ gboolean GtkSalFrame::signalIMDeleteSurrounding( GtkIMContext* pContext, gint arg1, gint arg2, gpointer frame )
+ {
+-    GtkSalFrame* pThis = (GtkSalFrame*)frame;
+-#if OSL_DEBUG_LEVEL > 1
+-	fprintf( stderr, ":signalIMDeleteSurrounding\n" );
+-#endif
++//    GtkSalFrame* pThis = (GtkSalFrame*)frame;
++
+     return FALSE;
+ }
+  
