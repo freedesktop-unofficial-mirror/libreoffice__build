@@ -2,9 +2,9 @@ Index: sc/source/ui/dbgui/asciiopt.cxx
 ===================================================================
 RCS file: /cvs/sc/sc/source/ui/dbgui/asciiopt.cxx,v
 retrieving revision 1.18
-diff -u -r1.18 asciiopt.cxx
+diff -u -p -u -r1.18 asciiopt.cxx
 --- sc/source/ui/dbgui/asciiopt.cxx	28 Apr 2003 15:44:08 -0000	1.18
-+++ sc/source/ui/dbgui/asciiopt.cxx	20 Aug 2004 14:14:37 -0000
++++ sc/source/ui/dbgui/asciiopt.cxx	13 Jun 2005 16:43:17 -0000
 @@ -84,6 +84,8 @@
  
  // ============================================================================
@@ -14,7 +14,7 @@ diff -u -r1.18 asciiopt.cxx
  //! TODO make dynamic
  #ifdef WIN
  const sal_Int32 ASCIIDLG_MAXROWS                = 10000;
-@@ -101,7 +103,7 @@
+@@ -101,7 +103,7 @@ ScAsciiOptions::ScAsciiOptions() :
  	bFixedLen		( FALSE ),
  	aFieldSeps		( ';' ),
  	bMergeFieldSeps	( FALSE ),
@@ -23,79 +23,76 @@ diff -u -r1.18 asciiopt.cxx
  	eCharSet		( gsl_getSystemTextEncoding() ),
  	bCharSetSystem	( FALSE ),
  	nStartRow		( 1 ),
-@@ -522,13 +524,83 @@
+@@ -522,13 +524,80 @@ sal_Unicode lcl_CharFromCombo( ComboBox&
  	return c;
  }
  
 +// ----------------------------------------------------------------------------
 +
-+bool ScImportAsciiDlg::GetLine(ULONG nLine, String &rText)
++bool ScImportAsciiDlg::GetLine( ULONG nLine, String &rText )
 +{
-+	int i;
-+	bool bRet = true;
++    if (nLine >= ASCIIDLG_MAXROWS || !mpDatStream)
++        return false;
++
++    bool bRet = true;
 +    bool bFixed = aRbFixed.IsChecked();
 +
-+	if (nLine >= ASCIIDLG_MAXROWS || !mpDatStream)
-+		return false;
++    if (!mpRowPosArray)
++        mpRowPosArray = new ULONG[ASCIIDLG_MAXROWS + 2];
 +
-+	if (!mpRowPosArray)
-+		mpRowPosArray = new ULONG [ASCIIDLG_MAXROWS + 2];
++    if (!mnRowPosCount) // complete re-fresh
++    {
++        memset( mpRowPosArray, 0, sizeof(mpRowPosArray[0]) * (ASCIIDLG_MAXROWS+2));
 +
-+	if (!mnRowPosCount) // complete re-fresh
-+	{
-+		for (i = 0; i < ASCIIDLG_MAXROWS; i++)
-+			mpRowPosArray[i] = 0;
++        Seek(0);
++        if ( mpDatStream->GetStreamCharSet() == RTL_TEXTENCODING_UNICODE )
++            mpDatStream->StartReadingUnicodeText();
 +
-+		Seek (0);
-+		if ( mpDatStream->GetStreamCharSet() == RTL_TEXTENCODING_UNICODE )
-+			mpDatStream->StartReadingUnicodeText();
++        mnStreamPos = mpDatStream->Tell();
++        mpRowPosArray[mnRowPosCount] = mnStreamPos;
++    }
 +
-+		mnStreamPos = mpDatStream->Tell();
-+		mpRowPosArray[mnRowPosCount++] = mnStreamPos;
-+	}
-+
-+	if (nLine > mnRowPosCount - 1) {
-+		// need to work out some more line information
-+		while (nLine > mnRowPosCount - 1)
-+		{
-+			rText = String();
-+			if (!Seek (mpRowPosArray [mnRowPosCount - 1]))
-+			{
-+				bRet = false;
-+				break;
-+			}
++    if (nLine >= mnRowPosCount)
++    {
++        // need to work out some more line information
++        do
++        {
++            if (!Seek( mpRowPosArray[mnRowPosCount]) ||
++                    mpDatStream->GetError() != ERRCODE_NONE ||
++                    mpDatStream->IsEof())
++            {
++                bRet = false;
++                break;
++            }
 +			ScImportExport::ReadCSVLine (*mpDatStream, rText, mcTextSep, bFixed);
-+			if ( mpDatStream->GetError() != ERRCODE_NONE ||
-+				 mpDatStream->IsEof() )
-+			{
-+				bRet = false;
-+				break;
-+			}
-+			else
-+			{
-+				mnStreamPos = mpDatStream->Tell();
-+				mpRowPosArray [mnRowPosCount++] = mnStreamPos;
-+			}
-+		}
-+	}
-+	else
-+	{
-+		Seek (mpRowPosArray [nLine]);
++            mnStreamPos = mpDatStream->Tell();
++            mpRowPosArray[++mnRowPosCount] = mnStreamPos;
++        } while (nLine >= mnRowPosCount &&
++                mpDatStream->GetError() == ERRCODE_NONE &&
++                !mpDatStream->IsEof());
++        if (mpDatStream->IsEof() &&
++                mnStreamPos == mpRowPosArray[mnRowPosCount-1])
++        {
++            // the very end, not even an empty line read
++            bRet = false;
++            --mnRowPosCount;
++        }
++    }
++    else
++    {
++        Seek( mpRowPosArray[nLine]);
 +		ScImportExport::ReadCSVLine (*mpDatStream, rText, mcTextSep, bFixed);
-+		mnStreamPos = mpDatStream->Tell();
-+		mpRowPosArray [mnRowPosCount++] = mnStreamPos;
-+	}
++        mnStreamPos = mpDatStream->Tell();
++    }
 +
-+	rText.SearchAndReplace (String(_LF), String::CreateFromAscii("..."));
-+	
-+	//	#107455# If the file content isn't unicode, ReadUniStringLine
-+	//	may try to seek beyond the file's end and cause a CANTSEEK error
-+	//	(depending on the stream type). The error code has to be cleared,
-+	//	or further read operations (including non-unicode) will fail.
-+	if ( mpDatStream->GetError() == ERRCODE_IO_CANTSEEK )
-+		mpDatStream->ResetError();
++    //	#107455# If the file content isn't unicode, ReadUniStringLine
++    //	may try to seek beyond the file's end and cause a CANTSEEK error
++    //	(depending on the stream type). The error code has to be cleared,
++    //	or further read operations (including non-unicode) will fail.
++    if ( mpDatStream->GetError() == ERRCODE_IO_CANTSEEK )
++        mpDatStream->ResetError();
 +
-+	return bRet;
++    return bRet;
 +}
  
  // ----------------------------------------------------------------------------
@@ -108,7 +105,7 @@ diff -u -r1.18 asciiopt.cxx
  
  		aRbFixed	( this, ScResId( RB_FIXED ) ),
  		aRbSeparated( this, ScResId( RB_SEPARATED ) ),
-@@ -560,10 +632,11 @@
+@@ -560,10 +629,11 @@ ScImportAsciiDlg::ScImportAsciiDlg( Wind
  		aCharSetUser( ScResId( SCSTR_CHARSET_USER ) ),
  		aColumnUser	( ScResId( SCSTR_COLUMN_USER ) ),
  		aFldSepList	( ScResId( SCSTR_FIELDSEP ) ),
@@ -124,7 +121,7 @@ diff -u -r1.18 asciiopt.cxx
  {
  	FreeResource();
  
-@@ -584,45 +657,20 @@
+@@ -584,45 +654,20 @@ ScImportAsciiDlg::ScImportAsciiDlg( Wind
              aEdOther.SetText( cSep );
  	}
  
@@ -176,7 +173,7 @@ diff -u -r1.18 asciiopt.cxx
  			// Assume that normal ASCII/ANSI/ISO/etc. text doesn't start with
  			// control characters except CR,LF,TAB
  			if ( (n & 0xff00) < 0x2000 )
-@@ -637,33 +685,14 @@
+@@ -637,33 +682,14 @@ ScImportAsciiDlg::ScImportAsciiDlg( Wind
  						bPreselectUnicode = TRUE;
  				}
  			}
@@ -212,7 +209,7 @@ diff -u -r1.18 asciiopt.cxx
  
      Link aSeparatorHdl =LINK( this, ScImportAsciiDlg, SeparatorHdl );
      aCbTextSep.SetSelectHdl( aSeparatorHdl );
-@@ -701,24 +730,21 @@
+@@ -701,24 +727,21 @@ ScImportAsciiDlg::ScImportAsciiDlg( Wind
      maTableBox.InitTypes( aLbType );
      maTableBox.SetColTypeHdl( LINK( this, ScImportAsciiDlg, ColTypeHdl ) );
  
@@ -240,7 +237,7 @@ diff -u -r1.18 asciiopt.cxx
  }
  
  void ScImportAsciiDlg::GetOptions( ScAsciiOptions& rOpt )
-@@ -732,7 +758,7 @@
+@@ -732,7 +755,7 @@ void ScImportAsciiDlg::GetOptions( ScAsc
      {
          rOpt.SetFieldSeps( GetSeparators() );
          rOpt.SetMergeSeps( aCkbAsOnce.IsChecked() );
@@ -249,7 +246,7 @@ diff -u -r1.18 asciiopt.cxx
      }
  }
  
-@@ -774,112 +800,16 @@
+@@ -774,112 +797,16 @@ void ScImportAsciiDlg::SetupSeparatorCtr
      aCbTextSep.Enable( bEnable );
  }
  
@@ -283,7 +280,9 @@ diff -u -r1.18 asciiopt.cxx
 -				*pPtrRowPos++ = pDatStream->Tell();
 -			}
 -			nStreamPosUnicode = pDatStream->Tell();
--
++	mnRowPosCount = 0;
++	maTableBox.Execute( CSVCMD_SETLINECOUNT, ASCIIDLG_MAXROWS );
+ 
 -			if ( pDatStream->GetError() == ERRCODE_IO_CANTSEEK )	// #107455# reset seek error
 -				pDatStream->ResetError();
 -		}
@@ -332,9 +331,7 @@ diff -u -r1.18 asciiopt.cxx
 -			}
 -		}
 -		nStreamPosUnicode = pDatStream->Tell();
-+	mnRowPosCount = 0;
-+	maTableBox.Execute( CSVCMD_SETLINECOUNT, ASCIIDLG_MAXROWS );
- 
+-
 -		if ( pDatStream->GetError() == ERRCODE_IO_CANTSEEK )	// #107455# reset seek error
 -			pDatStream->ResetError();
 -	}
@@ -368,7 +365,7 @@ diff -u -r1.18 asciiopt.cxx
  // ----------------------------------------------------------------------------
  
  IMPL_LINK( ScImportAsciiDlg, RbSepFixHdl, RadioButton*, pButton )
-@@ -905,6 +835,11 @@
+@@ -905,6 +832,11 @@ IMPL_LINK( ScImportAsciiDlg, SeparatorHd
      DBG_ASSERT( pCtrl, "ScImportAsciiDlg::SeparatorHdl - missing sender" );
      DBG_ASSERT( !aRbFixed.IsChecked(), "ScImportAsciiDlg::SeparatorHdl - not allowed in fixed width" );
  
@@ -380,7 +377,7 @@ diff -u -r1.18 asciiopt.cxx
      if( (pCtrl == &aCkbOther) && aCkbOther.IsChecked() )
          aEdOther.GrabFocus();
      else if( pCtrl == &aEdOther )
-@@ -922,12 +857,10 @@
+@@ -922,12 +854,10 @@ IMPL_LINK( ScImportAsciiDlg, CharSetHdl,
          SetPointer( Pointer( POINTER_WAIT ) );
          CharSet eOldCharSet = meCharSet;
          SetSelectedCharSet();
@@ -397,7 +394,7 @@ diff -u -r1.18 asciiopt.cxx
          maTableBox.Execute( CSVCMD_NEWCELLTEXTS );
          SetPointer( Pointer( POINTER_ARROW ) );
      }
-@@ -953,19 +886,22 @@
+@@ -953,19 +883,22 @@ IMPL_LINK( ScImportAsciiDlg, UpdateTextH
  {
      DBG_ASSERT( pTableBox, "ScImportAsciiDlg::UpdateTextHdl - missing sender" );
  
@@ -431,79 +428,3 @@ diff -u -r1.18 asciiopt.cxx
  
      return 0;
  }
-Index: sc/source/ui/inc/asciiopt.hxx
-===================================================================
-RCS file: /cvs/sc/sc/source/ui/inc/asciiopt.hxx,v
-retrieving revision 1.7
-diff -u -r1.7 asciiopt.hxx
---- sc/source/ui/inc/asciiopt.hxx	15 Aug 2002 09:29:09 -0000	1.7
-+++ sc/source/ui/inc/asciiopt.hxx	20 Aug 2004 14:14:51 -0000
-@@ -155,14 +155,11 @@
- 
- class ScImportAsciiDlg : public ModalDialog
- {
--    SvStream*                   pDatStream;
--    ULONG*                      pRowPosArray;
--    ULONG*                      pRowPosArrayUnicode;
--    USHORT                      nArrayEndPos;
--    USHORT                      nArrayEndPosUnicode;
--    ULONG                       nStreamPos;
--    ULONG                       nStreamPosUnicode;
--    BOOL                        bVFlag;
-+    SvStream*                   mpDatStream;
-+    ULONG*                      mpRowPosArray;
-+    ULONG                       mnRowPosCount;
-+
-+    String                      maPreviewLine[ CSV_PREVIEW_LINES ];
- 
-     FixedLine                   aFlFieldOpt;
-     FixedText                   aFtCharSet;
-@@ -198,12 +195,8 @@
-     String                      aCharSetUser;
-     String                      aColumnUser;
-     String                      aFldSepList;
--    String                      aTextSepList;
--
--	// aPreviewLine contains the byte string as read from the file
--    ByteString                  aPreviewLine[ CSV_PREVIEW_LINES ];
--	// same for Unicode
--    String                      aPreviewLineUnicode[ CSV_PREVIEW_LINES ];
-+    String                      maTextSepList;
-+	sal_Unicode                 mcTextSep;
- 
-     CharSet                     meCharSet;          /// Selected char set.
-     bool                        mbCharSetSystem;    /// Is System char set selected?
-@@ -224,8 +217,12 @@
- 
-     /** Enables or disables all separator checkboxes and edit fields. */
-     void                        SetupSeparatorCtrls();
-+		
-+	bool						GetLine(ULONG nLing, String &rText);
-+	void                        UpdateVertical();
- 
--    void                        UpdateVertical( bool bSwitchToFromUnicode = false );
-+    ULONG                       mnStreamPos;
-+	inline bool                 Seek(ULONG nPos);
- 
-                                 DECL_LINK( CharSetHdl, SvxTextEncodingBox* );
-                                 DECL_LINK( FirstRowHdl, NumericField* );
-@@ -236,7 +233,18 @@
-                                 DECL_LINK( ColTypeHdl, ScCsvTableBox* );
- };
- 
--
-+inline bool ScImportAsciiDlg::Seek(ULONG nPos)
-+{
-+	bool bSuccess = true;
-+	if (nPos != mnStreamPos && mpDatStream)
-+	{
-+		if (!mpDatStream->Seek( nPos ))
-+			bSuccess = false;
-+		else
-+			mnStreamPos = nPos;
-+	}
-+	return bSuccess;
-+}
- // ============================================================================
- 
- #endif
