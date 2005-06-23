@@ -1,0 +1,56 @@
+--- vcl/source/gdi/outdev3.cxx.indic	2004-12-06 17:00:44.690937103 -0500
++++ vcl/source/gdi/outdev3.cxx	2004-12-06 17:02:10.472264483 -0500
+@@ -2757,6 +2757,7 @@
+         // TODO: implement dynamic lists or improve static lists
+         #define FALLBACKFONT_NAMELIST \
+             "arialunicodems;andalesansui;cyberbit;starsymbol;opensymbol;lucidatypewriter;"  \
++            "nimbussansl;nimbusromanno9l;luxisans;"                         \
+             "fzmingti;sunbatang;sundotum;baekmukdotum;"                     \
+             "hgmincholightj;msunglightsc;msunglighttc;hymyeongjolightk;"    \
+             "lucidasans;tahoma;"                                            \
+--- vcl/source/glyphs/gcach_layout.cxx.indic	2004-12-06 17:01:09.997200069 -0500
++++ vcl/source/glyphs/gcach_layout.cxx	2004-12-06 17:03:43.048572012 -0500
+@@ -546,6 +546,7 @@
+         // layout bidi/script runs and export them to a ServerFontLayout
+         // convert results to GlyphItems
+         const IcuPosition* pPos = pGlyphPositions;
++        int nLastCharPos = -1;
+         for( int i = 0; i < nRunGlyphCount; ++i, ++pPos )
+         {
+             int nCharPos = pCharIndices[i] + nMinRunPos;
+@@ -558,6 +559,15 @@
+                     continue;
+             }
+ 
++            // Otherwise, if ICU feeds us a character index sequence like [1,0,1] (which is
++            // completely valid), smooth out the sequence so that our cluster detection
++            // routines work (they are a bit dumb and do sequential detection of clusters
++            // based on character indexes, so [1,0,1] translates to 3 clusters when its
++            // really only 1).
++            if (nLastCharPos != -1)
++                if ((nCharPos < nLastCharPos) ^ bRightToLeft )
++                    nCharPos = nLastCharPos;
++
+             // apply vertical flags, etc.
+             sal_Unicode aChar = rArgs.mpStr[ nCharPos ];
+             nGlyphIndex = rFont.FixupGlyphIndex( nGlyphIndex, aChar );
+@@ -565,11 +575,18 @@
+             aNewPos = Point( (int)(pPos->fX+0.5), (int)(pPos->fY+0.5) );
+             const GlyphMetric& rGM = rFont.GetGlyphMetric( nGlyphIndex );
+             int nGlyphWidth = rGM.GetCharWidth();
+-            long nGlyphFlags = (nGlyphWidth > 0) ? 0 : GlyphItem::IS_IN_CLUSTER;
++            // If this glyph has the same character position as the previous glyph (as
++            // reported by ICU), its in the same cluster
++            long nGlyphFlags = 0;
++            if ((nLastCharPos != -1) && (nCharPos == nLastCharPos))
++                nGlyphFlags = GlyphItem::IS_IN_CLUSTER;
++            else
++                nGlyphFlags = (nGlyphWidth > 0) ? 0 : GlyphItem::IS_IN_CLUSTER;
+             if( bRightToLeft )
+                 nGlyphFlags |= GlyphItem::IS_RTL_GLYPH;
+             GlyphItem aGI( nCharPos, nGlyphIndex, aNewPos, nGlyphFlags, nGlyphWidth );
+             rLayout.AppendGlyph( aGI );
++            nLastCharPos = nCharPos;
+         }
+         aNewPos = Point( (int)(pPos->fX+0.5), (int)(pPos->fY+0.5) );
+         nGlyphCount += nRunGlyphCount;

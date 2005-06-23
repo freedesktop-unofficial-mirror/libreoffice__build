@@ -1,0 +1,145 @@
+--- vcl/unx/gtk/app/gtkdata.cxx
++++ vcl/unx/gtk/app/gtkdata.cxx
+@@ -387,7 +400,9 @@
+     std::list<GSource *> m_aSources;
+     GSource             *m_pTimeout;
+ 	GSource				*m_pUserEvent;
+ 	ULONG				 m_nTimeoutMs;
++    oslMutex             m_aDispatchMutex;
++    oslCondition         m_aDispatchCondition;
+ 
+ 	static gboolean      timeoutFn(gpointer data);
+ 	static gboolean      userEventFn(gpointer data);
+@@ -417,6 +431,8 @@
+ 	m_pTimeout = NULL;
+	m_nTimeoutMs = 0;
+     m_pUserEvent = NULL;
++    m_aDispatchCondition = osl_createCondition();
++    m_aDispatchMutex = osl_createMutex();
+ }
+ 
+ GtkXLib::~GtkXLib()
+@@ -427,6 +443,11 @@
+     fprintf( stderr, "GtkXLib::~GtkXLib()\n" );
+ #endif
+ 	StopTimer();
++     // sanity check: at this point nobody should be yielding, but wake them
++     // up anyway before the condition they're waiting on gets destroyed.
++    osl_setCondition( m_aDispatchCondition );
++    osl_destroyCondition( m_aDispatchCondition );
++    osl_destroyMutex( m_aDispatchMutex );
+ }
+ 
+ void GtkXLib::Init()
+@@ -573,20 +594,30 @@
+ 
+ void GtkXLib::StartTimer( ULONG nMS )
+ {
+-	StopTimer();
+ 	m_nTimeoutMs = nMS; // for restarting
+ 
+-//	fprintf (stderr, "Add timeout of '%d'ms\n", m_nTimeoutMs);
++	if (m_pTimeout)
++	{
++		g_source_destroy (m_pTimeout);
++		g_source_unref (m_pTimeout);
++	}
+ 
+	m_pTimeout = g_timeout_source_new (m_nTimeoutMs);
++    // #i36226# timers should be executed with lower priority
++    // than XEvents like in generic plugin
++    g_source_set_priority( m_pTimeout, G_PRIORITY_LOW );
+ 	g_source_set_can_recurse (m_pTimeout, TRUE);
+ 	g_source_set_callback (m_pTimeout, timeoutFn,
+ 						   (gpointer) this, NULL);
+ 	g_source_attach (m_pTimeout, g_main_context_default ());
++    
++    SalXLib::StartTimer( nMS );
+ }
+ 
+ void GtkXLib::StopTimer()
+ {
++    SalXLib::StopTimer();
++
+ 	if (m_pTimeout)
+ 	{
+ 		g_source_destroy (m_pTimeout);
+@@ -647,10 +678,45 @@
+ 
+ void GtkXLib::Yield( BOOL bWait )
+ {
+-	// release YieldMutex (and re-acquire at method end)
++    /* #i33212# only enter g_main_context_iteration in one thread at any one
++     * time, else one of them potentially will never end as long as there is
++     * another thread in in there. Having only one yieldin thread actually dispatch
++     * fits the vcl event model (see e.g. the generic plugin).
++     */
++    
++    bool bDispatchThread = false;
++    if( osl_tryToAcquireMutex( m_aDispatchMutex ) )
++    {
++        // we are the dispatch thread
++        osl_resetCondition( m_aDispatchCondition );
++        bDispatchThread = true;
++    }
++    else if( ! bWait )
++        return; // someone else is waiting already, return
++
++    {
++        // release YieldMutex (and re-acquire at block end)
+ 	YieldMutexReleaser aReleaser;
+ 
+-	g_main_context_iteration( NULL, bWait );
++        if( bDispatchThread )
++             g_main_context_iteration( NULL, bWait );
++        else {
++            /* #i41693# in case the dispatch thread hangs in join
++             * for this thread the condition will never be set
++             * workaround: timeout of 1 second a emergency exit
++             */
++            TimeValue aValue;
++            aValue.Seconds = 1;
++            aValue.Nanosec = 0;
++            osl_waitCondition( m_aDispatchCondition, &aValue );
++        }
++    }
++
++    if( bDispatchThread )
++    {
++        osl_releaseMutex( m_aDispatchMutex );
++        osl_setCondition( m_aDispatchCondition ); // trigger non dispatch thread yields
++    }
+ }
+ 
+ extern "C" {
+
+Index: sal/osl/unx/conditn.c
+===================================================================
+RCS file: /cvs/porting/sal/osl/unx/conditn.c,v
+retrieving revision 1.4
+diff -u -p -u -r1.4 conditn.c
+--- sal/osl/unx/conditn.c	16 Mar 2001 13:14:43 -0000	1.4
++++ sal/osl/unx/conditn.c	10 Mar 2005 10:11:43 -0000
+@@ -234,13 +234,6 @@ sal_Bool SAL_CALL osl_resetCondition(osl
+ 	}
+ 
+ 	pCond->m_State = sal_False;
+-    nRet = pthread_cond_broadcast(&pCond->m_Condition);
+-	if ( nRet != 0 )
+-	{
+-       OSL_TRACE("osl_resetCondition : condition broadcast failed. Errno: %d; %s\n",
+-                  nRet, strerror(nRet));
+-		return sal_False;
+-	}
+ 
+     nRet = pthread_mutex_unlock(&pCond->m_Lock);
+     if ( nRet != 0 )
+@@ -278,7 +271,7 @@ oslConditionResult SAL_CALL osl_waitCond
+ 		return osl_cond_result_error;
+ 	}
+ 
+-	while ( ! pCond->m_State )
++	if ( ! pCond->m_State )
+ 	{
+ 		if ( pTimeout )
+ 		{

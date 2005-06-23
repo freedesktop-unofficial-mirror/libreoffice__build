@@ -5,11 +5,13 @@ retrieving revision 1.26.46.1
 diff -u -p -r1.26.46.1 static.mk
 --- tools/bootstrp/static.mk	28 Jan 2004 10:54:08 -0000	1.26.46.1
 +++ tools/bootstrp/static.mk	26 Aug 2004 15:01:26 -0000
-@@ -141,6 +141,7 @@ STATIC_LIBS		+=	-lX11 -lXext 
+@@ -141,6 +141,9 @@ STATIC_LIBS		+=	-lX11 -lXext 
  .ELSE
  STATIC_LIBS		+=	-lsupc++ -lX11 -lXext 
  .ENDIF
++.IF "$(USE_GNOMEVFS)" == "TRUE"
 +STATIC_LIBS             += `pkg-config --libs gnome-vfs-2.0`
++.ENDIF
  .ENDIF
  
  # -----------------------------------------------------------
@@ -20,11 +22,14 @@ retrieving revision 1.7
 diff -u -p -r1.7 makefile.mk
 --- tools/source/fsys/makefile.mk	30 Apr 2003 08:25:46 -0000	1.7
 +++ tools/source/fsys/makefile.mk	26 Aug 2004 15:01:59 -0000
-@@ -101,6 +101,8 @@ OBJFILES=   $(OBJ)$/wldcrd.obj   \
+@@ -101,3 +101,6 @@ OBJFILES=   $(OBJ)$/wldcrd.obj   \
              $(OBJ)$/tdir.obj	\
              $(OBJ)$/urlobj.obj
  
-+CFLAGS+=`pkg-config --cflags gnome-vfs-2.0`
++.IF "$(USE_GNOMEVFS)" == "TRUE"
++CFLAGS+=`pkg-config --cflags gnome-vfs-2.0` -DUSE_GNOMEVFS
++.ENDIF
+
 +
  # --- Targets ------------------------------------------------------
  
@@ -37,12 +42,14 @@ retrieving revision 1.11.12.1
 diff -u -p -r1.11.12.1 makefile.mk
 --- tools/util/makefile.mk	15 Aug 2003 11:30:50 -0000	1.11.12.1
 +++ tools/util/makefile.mk	26 Aug 2004 15:02:41 -0000
-@@ -213,6 +213,10 @@ SHL1STDLIBS+=   shell32.lib     \
+@@ -213,6 +213,12 @@ SHL1STDLIBS+=   shell32.lib     \
                  uuid.lib        \
                  advapi32.lib
  .ENDIF
 +.IF "$(GUI)"=="UNX"
++.IF "$(USE_GNOMEVFS)" == "TRUE"
 +SHL1STDLIBS+=`pkg-config --libs gnome-vfs-2.0`
++.ENDIF
 +.ENDIF
 +
  
@@ -56,10 +63,11 @@ retrieving revision 1.40
 diff -u -w -r1.40 urlobj.cxx
 --- tools/source/fsys/urlobj.cxx	22 May 2003 08:45:17 -0000	1.40
 +++ tools/source/fsys/urlobj.cxx	27 Aug 2004 10:00:06 -0000
-@@ -107,6 +107,16 @@
+@@ -107,6 +107,17 @@
  #define INCLUDED_LIMITS
  #endif
  
++#ifdef USE_GNOMEVFS
 +#ifndef _VOS_MUTEX_HXX
 +#include <vos/mutex.hxx>
 +#endif
@@ -69,41 +77,47 @@ diff -u -w -r1.40 urlobj.cxx
 +
 +#include <libgnomevfs/gnome-vfs.h>
 +
-+
++#endif /* USE_GNOMEVFS */
  namespace unnamed_tools_urlobj {} using namespace unnamed_tools_urlobj;
  	// unnamed namespaces don't work well yet...
  
-@@ -393,6 +403,8 @@
+@@ -393,6 +403,10 @@
  };
  
  //============================================================================
++#ifdef USE_GNOMEVFS
 +static INetURLObject::SchemeInfo *vfs_schemeinfo_map = NULL;
++#endif /* USE_GNOMEVFS */
 +
  static INetURLObject::SchemeInfo const aSchemeInfoMap[INET_PROT_END]
  	= { { "", "", 0, false, false, false, false, false, false, false,
  		  false },
-@@ -459,6 +471,9 @@
+@@ -459,6 +471,11 @@
  inline INetURLObject::SchemeInfo const &
  INetURLObject::getSchemeInfo(INetProtocol eTheScheme)
  {
++#ifdef USE_GNOMEVFS
 +   if (eTheScheme >= INET_PROT_END)
 +     return vfs_schemeinfo_map [eTheScheme - INET_PROT_END];
 +   else
++#endif /* USE_GNOMEVFS */
  	return aSchemeInfoMap[eTheScheme];
  };
  
-@@ -720,6 +735,10 @@
+@@ -720,6 +735,12 @@
  	// Parse <scheme>:
  	sal_Unicode const * p = pPos;
  	PrefixInfo const * pPrefix = getPrefix(p, pEnd);
++#ifdef USE_GNOMEVFS
 +	::rtl::OString tmpStr (rTheAbsURIRef.GetBuffer (),
 +			       rTheAbsURIRef.Len (),
 +			       RTL_TEXTENCODING_UTF8);
 +       
++#endif /* USE_GNOMEVFS */
  	if (pPrefix)
  	{
  		pPos = p;
-@@ -1329,14 +1348,17 @@
+@@ -1329,14 +1348,21 @@
  				case INET_PROT_LDAP:
  					if (pHostPortBegin == pPort && pPort != pHostPortEnd)
  					{
@@ -114,27 +128,23 @@ diff -u -w -r1.40 urlobj.cxx
  					break;
  
  				default:
--					if (pHostPortBegin == pPort)
++#ifdef USE_GNOMEVFS
 +				        if (m_eScheme < INET_PROT_END && /* else might have a port */
 +					    pHostPortBegin == pPort)
++#else
+ 					if (pHostPortBegin == pPort)
++#endif /* USE_GNOMEVFS */
  					{
 +//			  fprintf (stderr, "bogus port\n");
  						setInvalid();
  						return false;
  					}
-@@ -2082,13 +2104,92 @@
+@@ -2082,8 +2104,93 @@
  			{ "vnd.sun.star.wfs:", 0, INET_PROT_VND_SUN_STAR_WFS,
  			  PrefixInfo::OFFICIAL },
  			{ "wfs:", "vnd.sun.star.wfs:", INET_PROT_VND_SUN_STAR_WFS,
--			  PrefixInfo::ALIAS } };
--	PrefixInfo const * pFirst = aMap + 1;
--	PrefixInfo const * pLast = aMap + sizeof aMap / sizeof (PrefixInfo) - 1;
--	PrefixInfo const * pMatch = 0;
--	sal_Unicode const * pMatched = rBegin;
--	sal_Unicode const * p = rBegin;
--	xub_StrLen i = 0;
-+			  PrefixInfo::ALIAS }
-+		};
+ 			  PrefixInfo::ALIAS } };
++#ifdef USE_GNOMEVFS
 +
 +static GHashTable *fast_lookup = NULL;
 +	int i;
@@ -218,44 +228,53 @@ diff -u -w -r1.40 urlobj.cxx
 +	return pi;
 +
 +
-+#ifdef OVER_COMPLICATED_CODE
- 	for (; pFirst < pLast; ++i)
- 	{
- 		if (pFirst->m_pPrefix[i] == '\0')
++#else  /* USE_GNOMEVFS */
+ 	PrefixInfo const * pFirst = aMap + 1;
+ 	PrefixInfo const * pLast = aMap + sizeof aMap / sizeof (PrefixInfo) - 1;
+ 	PrefixInfo const * pMatch = 0;
+ 	sal_Unicode const * pMatched = rBegin;
 @@ -2120,7 +2220,9 @@
  		}
  	}
  	rBegin = pMatched;
 +
  	return pMatch;
-+#endif
++#endif /* USE_GNOMEVFS */
  }
  
  //============================================================================
-@@ -2359,7 +2461,7 @@
+@@ -2359,7 +2461,11 @@
  			break;
  
  		default:
--			if (aSynHost.Len() == 0)
++#ifdef USE_GNOMEVFS
 +			if (aSynHost.Len() == 0 && m_eScheme < INET_PROT_END)
++#else
+ 			if (aSynHost.Len() == 0)
++#endif /* USE_GNOMEVFS */
  				return false;
  			break;
  	}
-@@ -2436,6 +2538,7 @@
+@@ -2436,6 +2538,9 @@
  				aTheSynPath = '/';
  			break;
  
++#ifdef USE_GNOMEVFS
 +		default: /* All INET_PROT_END+ drop through here */
++#endif /* USE_GNOMEVFS */
  		case INET_PROT_FILE:
  		case INET_PROT_VND_SUN_STAR_WFS:
  		{
-@@ -3618,7 +3721,8 @@
+@@ -3618,7 +3721,12 @@
  					break;
  
  				default:
--					if (aSynHost.Len() == 0)
++#ifdef USE_GNOMEVFS
 +					if (aSynHost.Len() == 0 &&
 +					    m_eScheme < INET_PROT_END) /* valid perhaps */
++#else
+ 					if (aSynHost.Len() == 0)
++#endif /* USE_GNOMEVFS */
  					{
  						setInvalid();
  						return false;
