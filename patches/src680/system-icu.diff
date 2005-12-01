@@ -86,13 +86,28 @@ diff -ru config_office.orig/set_soenv.in config_office/set_soenv.in
  ToFile( "SYSTEM_JPEG",       "@SYSTEM_JPEG@",      "e" );
  ToFile( "SYSTEM_FREETYPE",   "@SYSTEM_FREETYPE@",  "e" );
  ToFile( "FREETYPE_CFLAGS",   "@FREETYPE_CFLAGS@",  "e" );
+Index: inc/collator_unicode.hxx
+===================================================================
+RCS file: /cvs/l10n/i18npool/inc/collator_unicode.hxx,v
+retrieving revision 1.7
+diff -u -p -u -r1.7 collator_unicode.hxx
+--- i18npool/inc/collator_unicode.hxx	21 Jul 2005 14:26:51 -0000	1.7
++++ i18npool/inc/collator_unicode.hxx	13 Sep 2005 13:49:44 -0000
+@@ -110,6 +110,7 @@ protected:
+     const sal_uInt8 *rulesImage;
+ private:
+ 	RuleBasedCollator *collator;
++	RuleBasedCollator *ucacollator;
+ };
+ 
+ #define COLLATOR( algorithm ) \
 Index: prj/build.lst
 ===================================================================
 RCS file: /cvs/l10n/i18npool/prj/build.lst,v
 retrieving revision 1.17
 diff -u -p -u -r1.17 build.lst
 --- i18npool/prj/build.lst	24 Apr 2003 11:54:37 -0000	1.17
-+++ i18npool/prj/build.lst	11 Sep 2005 09:47:54 -0000
++++ i18npool/prj/build.lst	13 Sep 2005 13:49:44 -0000
 @@ -1,4 +1,4 @@
 -inp  i18npool    :   bridges sax stoc comphelper tools icu i18nutil regexp NULL
 +inp  i18npool    :   bridges sax stoc comphelper tools ICU:icu i18nutil regexp NULL
@@ -105,7 +120,7 @@ RCS file: /cvs/l10n/i18npool/source/breakiterator/breakiterator_unicode.cxx,v
 retrieving revision 1.18
 diff -u -p -u -r1.18 breakiterator_unicode.cxx
 --- i18npool/source/breakiterator/breakiterator_unicode.cxx	25 Feb 2005 10:08:13 -0000	1.18
-+++ i18npool/source/breakiterator/breakiterator_unicode.cxx	11 Sep 2005 09:47:54 -0000
++++ i18npool/source/breakiterator/breakiterator_unicode.cxx	13 Sep 2005 13:49:44 -0000
 @@ -68,7 +68,9 @@ U_CDECL_BEGIN
  extern const char OpenOffice_icu_dat[];
  U_CDECL_END
@@ -132,7 +147,7 @@ RCS file: /cvs/l10n/i18npool/source/breakiterator/makefile.mk,v
 retrieving revision 1.7
 diff -u -p -u -r1.7 makefile.mk
 --- i18npool/source/breakiterator/makefile.mk	23 Mar 2005 10:51:00 -0000	1.7
-+++ i18npool/source/breakiterator/makefile.mk	11 Sep 2005 09:47:54 -0000
++++ i18npool/source/breakiterator/makefile.mk	13 Sep 2005 13:49:44 -0000
 @@ -79,6 +79,8 @@ MY_BRK_TXTFILES:=$(shell ls data/*.txt)
  # insert "OpenOffice" as icu package name in front of the  name of each rule file for searching on application provided data
  MY_BRK_BRKFILES:=$(subst,data/,$(MISC)$/OpenOffice_ $(MY_BRK_TXTFILES:s/.txt/.brk/))
@@ -154,11 +169,11 @@ diff -u -p -u -r1.7 makefile.mk
  $(MISC)$/%_brk.c : $(MISC)$/%.brk
 -    +$(WRAPCMD) $(SOLARBINDIR)$/genccode -d $(MISC)$ $(MISC)$/$*.brk
 +    +$(WRAPCMD) genccode -e OpenOffice_icu -n OpenOffice_icu -d $(MISC)$ $(MISC)$/$*.brk
---- i18npool/source/collator/makefile.mk	2005-09-07 19:07:53.000000000 +0200
-+++ i18npool/source/collator/makefile.mk	2005-09-15 17:51:21.610808529 +0200
+--- i18npool/source/collator/makefile.mk       2005-09-07 19:07:53.000000000 +0200
++++ i18npool/source/collator/makefile.mk       2005-09-15 17:51:21.610808529 +0200
 @@ -78,6 +78,10 @@ APP1STDLIBS = $(SALLIB) \
- 		$(ICUINLIB) \
- 		$(ICUUCLIB)
+               $(ICUINLIB) \
+               $(ICUUCLIB)
  
 +.IF "$(SYSTEM_ICU)" == "YES"
 +CFLAGS += -DSYSTEM_ICU
@@ -166,22 +181,41 @@ diff -u -p -u -r1.7 makefile.mk
 +
  # --- Targets ------------------------------------------------------
  
- .INCLUDE :	target.mk
+ .INCLUDE :    target.mk
 Index: source/collator/collator_unicode.cxx
 ===================================================================
 RCS file: /cvs/l10n/i18npool/source/collator/collator_unicode.cxx,v
 retrieving revision 1.7
 diff -u -p -u -r1.7 collator_unicode.cxx
 --- i18npool/source/collator/collator_unicode.cxx	30 Jul 2004 14:39:21 -0000	1.7
-+++ i18npool/source/collator/collator_unicode.cxx	11 Sep 2005 09:47:54 -0000
-@@ -103,7 +103,11 @@ Collator_Unicode::loadCollatorAlgorithm(
++++ i18npool/source/collator/collator_unicode.cxx	13 Sep 2005 13:49:44 -0000
+@@ -74,12 +76,14 @@ Collator_Unicode::Collator_Unicode()
+ {
+ 	implementationName = "com.sun.star.i18n.Collator_Unicode";
+ 	collator = NULL;
++	ucacollator = NULL;
+     rulesImage = NULL;
+ }
+ 
+ Collator_Unicode::~Collator_Unicode()
+ {
+ 	if (collator) delete collator;
++	if (ucacollator) delete ucacollator;
+ }
+ 
+ sal_Int32 SAL_CALL
+@@ -103,7 +107,14 @@ Collator_Unicode::loadCollatorAlgorithm(
          // load ICU collator
          UErrorCode status = U_ZERO_ERROR;
          if (rulesImage) {
+-            collator = new RuleBasedCollator(rulesImage, status);
++            ucacollator = (RuleBasedCollator*) icu::Collator::createInstance("", status);
++         if (! U_SUCCESS(status))
++            	throw RuntimeException();
 +#ifdef SYSTEM_ICU
-+            collator = new RuleBasedCollator(rulesImage, -1, NULL, status);
++            collator = new RuleBasedCollator(rulesImage, -1, ucacollator, status);
 +#else
-             collator = new RuleBasedCollator(rulesImage, status);
++            collator = new RuleBasedCollator(rulesImage, status);
 +#endif
          } else {
             // load ICU collator
@@ -355,11 +389,11 @@ diff -ru scp2.orig/source/ooo/shortcut_ooo.scp scp2/source/ooo/shortcut_ooo.scp
  
  #ifdef UNX
  
---- vcl/prj/build.lst-old	2005-09-13 11:19:29.763057616 +0200
-+++ vcl/prj/build.lst	2005-09-13 11:19:42.736085416 +0200
+--- vcl/prj/build.lst	2005-09-13 08:51:51.000000000 +0100
++++ vcl/prj/build.lst	2005-09-09 08:37:54.000000000 +0100
 @@ -1,4 +1,4 @@
 -vc	vcl	:	BOOST:boost NAS:nas FREETYPE:freetype psprint rsc sot ucbhelper unotools rvpapi icu i18npool unoil ridljar X11_EXTENSIONS:x11_extensions offuh basegfx SNDFILE:sndfile PORTAUDIO:portaudio transex3 NULL
-+v	vcl	:	BOOST:boost NAS:nas FREETYPE:freetype psprint rsc sot ucbhelper unotools rvpapi ICU:icu i18npool unoil ridljar X11_EXTENSIONS:x11_extensions offuh basegfx SNDFILE:sndfile PORTAUDIO:portaudio transex3 NULL
++vc	vcl	:	BOOST:boost NAS:nas FREETYPE:freetype psprint rsc sot ucbhelper unotools rvpapi ICU:icu i18npool unoil ridljar X11_EXTENSIONS:x11_extensions offuh basegfx SNDFILE:sndfile PORTAUDIO:portaudio transex3 NULL
  vc	vcl										usr1	-	all	vc_mkout NULL
  vc	vcl\source\unotypes						nmake	-	all	vc_unot NULL
  vc	vcl\source\glyphs						nmake	-	all	vc_glyphs vc_unot NULL
