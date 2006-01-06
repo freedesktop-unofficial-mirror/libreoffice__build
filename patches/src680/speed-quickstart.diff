@@ -229,345 +229,13 @@ diff -u -p -u -r1.10 makefile.mk
  
  LAUNCHERFLAGFILE = $(COMMONMISC)/$(TARGET)/xdg.flag
 
-Index: sfx2/source/appl/shutdownicon.hxx
-===================================================================
-RCS file: /cvs/framework/sfx2/source/appl/shutdownicon.hxx,v
-retrieving revision 1.18
-diff -u -p -u -r1.18 shutdownicon.hxx
---- sfx2/source/appl/shutdownicon.hxx	30 Mar 2005 08:41:34 -0000	1.18
-+++ sfx2/source/appl/shutdownicon.hxx	14 Nov 2005 12:53:17 -0000
-@@ -35,12 +35,18 @@
- #ifndef _OSL_MUTEX_HXX_
- #include <osl/mutex.hxx>
- #endif
-+#ifndef _OSL_MODULE_HXX_
-+#include <osl/module.hxx>
-+#endif
- #ifndef _SFX_SFXUNO_HXX
- #include <sfxuno.hxx>
- #endif
- #ifndef _CPPUHELPER_COMPBASE3_HXX_
- #include <cppuhelper/compbase3.hxx>
- #endif
-+#ifndef INCLUDED_SFX2_DLLAPI_H
-+#include <sfx2/dllapi.h>
-+#endif
- 
- class ResMgr;
- 
-@@ -49,7 +55,17 @@ typedef ::cppu::WeakComponentImplHelper3
- 	::com::sun::star::frame::XTerminateListener,
- 	::com::sun::star::lang::XServiceInfo > ShutdownIconServiceBase;
- 
--class ShutdownIcon :	public ShutdownIconServiceBase
-+#if defined(USE_APP_SHORTCUTS)
-+#define WRITER_URL      "private:factory/swriter"
-+#define CALC_URL        "private:factory/scalc"
-+#define IMPRESS_URL     "private:factory/simpress"
-+#define IMPRESS_WIZARD_URL     "private:factory/simpress?slot=10425"
-+#define DRAW_URL        "private:factory/sdraw"
-+#define MATH_URL        "private:factory/smath"
-+#define BASE_URL        "private:factory/sdatabase?Interactive"
-+#endif
-+
-+class SFX2_DLLPUBLIC ShutdownIcon :	public ShutdownIconServiceBase
- {
- 		::osl::Mutex	m_aMutex;
-         bool            m_bVeto;
-@@ -58,16 +74,18 @@ class ShutdownIcon :	public ShutdownIcon
- 
-         static ShutdownIcon *pShutdownIcon; // one instance
- 
--#ifdef WNT
--        void initSystray();
--        void deInitSystray();
--        static void SetAutostartW32( const ::rtl::OUString& aShortcutName, bool bActivate );
--        static bool GetAutostartW32( const ::rtl::OUString& aShortcutName );
-+		void (*m_pInitSystray)   ();
-+		void (*m_pDeInitSystray) ();
-+		::osl::Module  *m_pPlugin;
-+
-+		void initSystray();
-+		void deInitSystray();
-+
- 		static void EnterModalMode();
- 		static void LeaveModalMode();
-+		static rtl::OUString getShortcutName();
- 
- 		friend class SfxNotificationListener_Impl;
--#endif
- 
- 	public:
- 		ShutdownIcon( ::com::sun::star::uno::Reference< ::com::sun::star::lang::XMultiServiceFactory > aSMgr );
-@@ -88,6 +106,7 @@ class ShutdownIcon :	public ShutdownIcon
- 
-         static void SetAutostart( bool bActivate );
-         static bool GetAutostart();
-+		static bool bModalMode;
- 
- 		static ::com::sun::star::uno::Reference< ::com::sun::star::lang::XSingleServiceFactory >
- 					GetWrapperFactory( ::com::sun::star::uno::Reference< ::com::sun::star::lang::XMultiServiceFactory > & xSMgr );
-@@ -99,9 +118,7 @@ class ShutdownIcon :	public ShutdownIcon
-         void SetVeto( bool bVeto )  { m_bVeto = bVeto;}
-         bool GetVeto()              { return m_bVeto; }
- 
--#ifdef WNT
-         static bool IsQuickstarterInstalled();
--#endif
- 
- 		// Component Helper - force override
- 		virtual void SAL_CALL disposing();
-@@ -123,4 +140,15 @@ class ShutdownIcon :	public ShutdownIcon
- 		::com::sun::star::uno::Reference< ::com::sun::star::frame::XDesktop > m_xDesktop;
- };
- 
-+extern "C" {
-+#  ifdef WNT
-+	// builtin win32 systray
-+	void win32_init_sys_tray();
-+	void win32_shutdown_sys_tray();
-+#  endif
-+	// external plugin systray impl.
-+	void plugin_init_sys_tray();
-+	void plugin_shutdown_sys_tray();
-+}
-+
- #endif
-Index: sfx2/source/appl/shutdowniconw32.cxx
-===================================================================
-RCS file: /cvs/framework/sfx2/source/appl/shutdowniconw32.cxx,v
-retrieving revision 1.33
-diff -u -p -u -r1.33 shutdowniconw32.cxx
---- sfx2/source/appl/shutdowniconw32.cxx	7 Sep 2005 17:48:58 -0000	1.33
-+++ sfx2/source/appl/shutdowniconw32.cxx	14 Nov 2005 12:53:17 -0000
-@@ -55,7 +55,6 @@
- #include <stdio.h>
- #include <io.h>
- #include <osl/thread.h>
--#include <osl/file.hxx>
- #include <setup_native/qswin32.h>
- 
- #ifndef _COMPHELPER_PROCESSFACTORY_HXX_
-@@ -102,16 +101,6 @@ using namespace ::osl;
- #define IDM_UNINSTALL               11
- 
- 
--#if defined(USE_APP_SHORTCUTS)
--#define WRITER_URL      "private:factory/swriter"
--#define CALC_URL        "private:factory/scalc"
--#define IMPRESS_URL     "private:factory/simpress"
--#define IMPRESS_WIZARD_URL     "private:factory/simpress?slot=10425"
--#define DRAW_URL        "private:factory/sdraw"
--#define MATH_URL        "private:factory/smath"
--#define BASE_URL        "private:factory/sdatabase?Interactive"
--#endif
--
- #define ICON_SO_DEFAULT 				1
- #define ICON_TEXT_DOCUMENT				2
- #define ICON_TEXT_TEMPLATE				3
-@@ -137,7 +126,6 @@ using namespace ::osl;
- 
- static HWND  aListenerWindow = NULL;
- static HWND  aExecuterWindow = NULL;
--static BOOL	 bModalMode = FALSE;
- static HMENU popupMenu = NULL;
- 
- static void OnMeasureItem(HWND hwnd, LPMEASUREITEMSTRUCT lpmis);
-@@ -419,10 +407,10 @@ LRESULT CALLBACK listenerWndProc( HWND h
-                     // update status before showing menu, could have been changed from option page
-                     CheckMenuItem( popupMenu, IDM_INSTALL, MF_BYCOMMAND| (ShutdownIcon::GetAutostart() ? MF_CHECKED : MF_UNCHECKED) );
- 
--					EnableMenuItem( popupMenu, IDM_EXIT, MF_BYCOMMAND | (bModalMode ? MF_GRAYED : MF_ENABLED) );
-+					EnableMenuItem( popupMenu, IDM_EXIT, MF_BYCOMMAND | (ShutdownIcon::bModalMode ? MF_GRAYED : MF_ENABLED) );
- #if defined(USE_APP_SHORTCUTS)
--					EnableMenuItem( popupMenu, IDM_OPEN, MF_BYCOMMAND | (bModalMode ? MF_GRAYED : MF_ENABLED) );
--					EnableMenuItem( popupMenu, IDM_TEMPLATE, MF_BYCOMMAND | (bModalMode ? MF_GRAYED : MF_ENABLED) );
-+					EnableMenuItem( popupMenu, IDM_OPEN, MF_BYCOMMAND | (ShutdownIcon::bModalMode ? MF_GRAYED : MF_ENABLED) );
-+					EnableMenuItem( popupMenu, IDM_TEMPLATE, MF_BYCOMMAND | (ShutdownIcon::bModalMode ? MF_GRAYED : MF_ENABLED) );
- #endif
-                     int m = TrackPopupMenuEx( popupMenu, TPM_RETURNCMD|TPM_LEFTALIGN|TPM_RIGHTBUTTON,
-                                               pt.x, pt.y, hWnd, NULL );
-@@ -517,7 +505,7 @@ LRESULT CALLBACK executerWndProc( HWND h
-             {
- #if defined(USE_APP_SHORTCUTS)
-                 case IDM_OPEN:
--					if ( !bModalMode && checkOEM() )
-+					if ( !ShutdownIcon::bModalMode && checkOEM() )
- 						ShutdownIcon::FileOpen();
-                 break;
-                 case IDM_WRITER:
-@@ -541,7 +529,7 @@ LRESULT CALLBACK executerWndProc( HWND h
-                     ShutdownIcon::OpenURL( OUString( RTL_CONSTASCII_USTRINGPARAM( BASE_URL ) ), OUString( RTL_CONSTASCII_USTRINGPARAM( "_default" ) ) );
-                 break;
-                 case IDM_TEMPLATE:
--					if ( !bModalMode && checkOEM())
-+					if ( !ShutdownIcon::bModalMode && checkOEM())
- 						ShutdownIcon::FromTemplate();
-                 break;
- #endif
-@@ -551,7 +539,7 @@ LRESULT CALLBACK executerWndProc( HWND h
-                 case IDM_EXIT:
-                     // remove listener and
-                     //  terminate office if running in background
--					if ( !bModalMode )
-+					if ( !ShutdownIcon::bModalMode )
- 						ShutdownIcon::terminateDesktop();
-                     break;
-             }
-@@ -595,9 +583,9 @@ DWORD WINAPI SystrayThread( LPVOID lpPar
- 
- // -------------------------------
- 
--void ShutdownIcon::initSystray()
-+void win32_init_sys_tray()
- {
--	if ( IsQuickstarterInstalled() )
-+	if ( ShutdownIcon::IsQuickstarterInstalled() )
- 	{
- 		WNDCLASSEXA listenerClass;
- 		listenerClass.cbSize		= sizeof(WNDCLASSEX);
-@@ -652,9 +640,9 @@ void ShutdownIcon::initSystray()
- 
- // -------------------------------
- 
--void ShutdownIcon::deInitSystray()
-+void win32_shutdown_sys_tray()
- {
--	if ( IsQuickstarterInstalled() )
-+	if ( ShutdownIcon::IsQuickstarterInstalled() )
- 	{
- 		if( IsWindow( aListenerWindow ) )
- 		{
-@@ -669,19 +657,6 @@ void ShutdownIcon::deInitSystray()
- }
- 
- 
--// -------------------------------
--
--void ShutdownIcon::EnterModalMode()
--{
--	bModalMode = TRUE;
--}
--
--// -------------------------------
--
--void ShutdownIcon::LeaveModalMode()
--{
--	bModalMode = FALSE;
--}
- 
- // -------------------------------
- 
-@@ -886,102 +861,6 @@ BOOL CreateShortcut( const OUString& rAb
- 	return TRUE;
- }
- 
--// ------------------
--// install/uninstall
--
--bool ShutdownIcon::IsQuickstarterInstalled()
--{
--	bool	bQuickstarterInstalled = false;
--	HKEY	hKey;
--
--	if ( ERROR_SUCCESS == RegOpenKeyEx( HKEY_CURRENT_USER, TEXT("Software\\OpenOffice.org"), 0, KEY_READ, &hKey ) )
--	{
--		if ( ERROR_SUCCESS == RegQueryValueEx( hKey, TEXT("QuickStarterInstalled"),  NULL, NULL, NULL, NULL ) )
--		{
--			bQuickstarterInstalled = true;
--		}
--
--		RegCloseKey( hKey );
--	}
--
--	if ( !bQuickstarterInstalled )
--	{
--		if ( ERROR_SUCCESS == RegOpenKeyEx( HKEY_LOCAL_MACHINE, TEXT("Software\\OpenOffice.org"), 0, KEY_READ, &hKey ) )
--		{
--			if ( ERROR_SUCCESS == RegQueryValueEx( hKey, TEXT("QuickStarterInstalled"),  NULL, NULL, NULL, NULL ) )
--			{
--				bQuickstarterInstalled = true;
--			}
--
--			RegCloseKey( hKey );
--		}
--	}
--
--	return bQuickstarterInstalled;
--}
--
--void ShutdownIcon::SetAutostartW32( const OUString& aShortcutName, bool bActivate )
--{
--    OUString aShortcut(SHGetAutostartFolderName());
--    aShortcut += OUString( RTL_CONSTASCII_USTRINGPARAM( "\\" ) );
--    aShortcut += aShortcutName;
--
--    if( bActivate && IsQuickstarterInstalled() )
--    {
--        wchar_t aPath[_MAX_PATH];
--        if( isNT() )
--        {
--            GetModuleFileNameW( NULL, aPath, _MAX_PATH-1);
--        }
--        else
--        {
--            char szPathA[_MAX_PATH];
--            int len = GetModuleFileNameA( NULL, szPathA, _MAX_PATH-1);
--
--		    // calc the string wcstr len
--		    int nNeededWStrBuffSize = MultiByteToWideChar( CP_ACP, 0, szPathA, -1, NULL, 0 );
--
--		    // copy the string if necessary
--		    if ( nNeededWStrBuffSize > 0 )
--			    MultiByteToWideChar( CP_ACP, 0, szPathA, -1, aPath, nNeededWStrBuffSize );
--	    }
--
--        OUString aOfficepath( aPath );
--        int i = aOfficepath.lastIndexOf((sal_Char) '\\');
--        if( i != -1 )
--            aOfficepath = aOfficepath.copy(0, i);
--
--        OUString quickstartExe(aOfficepath);
--        quickstartExe += OUString( RTL_CONSTASCII_USTRINGPARAM( "\\quickstart.exe" ) );
--
--        CreateShortcut( quickstartExe, aOfficepath, aShortcut, OUString(), OUString() );
--    }
--    else
--    {
--        OUString aShortcutUrl;
--        ::osl::File::getFileURLFromSystemPath( aShortcut, aShortcutUrl );
--        ::osl::File::remove( aShortcutUrl );
--    }
--}
--
--bool ShutdownIcon::GetAutostartW32( const OUString& aShortcutName )
--{
--	OUString aShortcut(SHGetAutostartFolderName());
--	aShortcut += OUString( RTL_CONSTASCII_USTRINGPARAM( "\\" ) );
--	aShortcut += aShortcutName;
--
--	OUString aShortcutUrl;
--	File::getFileURLFromSystemPath( aShortcut, aShortcutUrl );
--	File f( aShortcutUrl );
--	File::RC error = f.open( OpenFlag_Read );
--	if( error == File::E_None )
--	{
--		f.close();
--		return true;
--	}
--	else
--		return false;
--}
- #endif // WNT
- 
- 
-Index: sfx2/source/appl/shutdownicon.cxx
+Index: shutdownicon.cxx
 ===================================================================
 RCS file: /cvs/framework/sfx2/source/appl/shutdownicon.cxx,v
 retrieving revision 1.42
-diff -u -p -u -r1.42 shutdownicon.cxx
+diff -u -u -r1.42 shutdownicon.cxx
 --- sfx2/source/appl/shutdownicon.cxx	7 Sep 2005 17:48:37 -0000	1.42
-+++ sfx2/source/appl/shutdownicon.cxx	14 Nov 2005 16:10:07 -0000
++++ sfx2/source/appl/shutdownicon.cxx	6 Jan 2006 03:48:55 -0000
 @@ -102,7 +102,19 @@
  #ifndef _URLOBJ_HXX
  #include <tools/urlobj.hxx>
@@ -588,7 +256,7 @@ diff -u -p -u -r1.42 shutdownicon.cxx
  #include "sfxresid.hxx"
  
  using namespace ::com::sun::star::uno;
-@@ -126,9 +138,7 @@ public:
+@@ -126,9 +138,7 @@
  
  void SAL_CALL SfxNotificationListener_Impl::dispatchFinished( const DispatchResultEvent& aEvent ) throw( RuntimeException )
  {
@@ -598,7 +266,7 @@ diff -u -p -u -r1.42 shutdownicon.cxx
  }
  
  void SAL_CALL SfxNotificationListener_Impl::disposing( const EventObject& aEvent ) throw( RuntimeException )
-@@ -138,62 +148,85 @@ void SAL_CALL SfxNotificationListener_Im
+@@ -138,62 +148,85 @@
  SFX_IMPL_XSERVICEINFO( ShutdownIcon, "com.sun.star.office.Quickstart", "com.sun.star.comp.desktop.QuickstartWrapper" )	\
  SFX_IMPL_ONEINSTANCEFACTORY( ShutdownIcon );
  
@@ -726,7 +394,7 @@ diff -u -p -u -r1.42 shutdownicon.cxx
  
  // ---------------------------------------------------------------------------
  
-@@ -231,9 +263,7 @@ void ShutdownIcon::FileOpen()
+@@ -231,9 +264,7 @@
      if ( getInstance() && getInstance()->m_xDesktop.is() )
      {
          ::vos::OGuard aGuard( Application::GetSolarMutex() );
@@ -736,7 +404,7 @@ diff -u -p -u -r1.42 shutdownicon.cxx
  		// use ctor for filling up filters automatically! #89169#
  		FileDialogHelper dlg( WB_OPEN | SFXWB_MULTISELECTION, String() );
          if ( ERRCODE_NONE == dlg.Execute() )
-@@ -357,9 +387,7 @@ void ShutdownIcon::FileOpen()
+@@ -357,9 +388,7 @@
  			{
  			}
  		}
@@ -746,7 +414,7 @@ diff -u -p -u -r1.42 shutdownicon.cxx
      }
  }
  
-@@ -395,9 +423,7 @@ void ShutdownIcon::FromTemplate()
+@@ -395,9 +424,7 @@
              Reference< ::com::sun::star::frame::XNotifyingDispatch > xNotifyer( xDisp, UNO_QUERY );
              if ( xNotifyer.is() )
  			{
@@ -756,7 +424,7 @@ diff -u -p -u -r1.42 shutdownicon.cxx
                  xNotifyer->dispatchWithNotification( aTargetURL, aArgs, new SfxNotificationListener_Impl() );
  			}
              else
-@@ -544,10 +570,9 @@ void SAL_CALL ShutdownIcon::initialize( 
+@@ -544,10 +571,9 @@
  				if ( !m_xDesktop.is() )
  					return;
  
@@ -768,7 +436,7 @@ diff -u -p -u -r1.42 shutdownicon.cxx
  			}
  			catch(const ::com::sun::star::lang::IllegalArgumentException&)
  			{
-@@ -565,4 +590,191 @@ void SAL_CALL ShutdownIcon::initialize( 
+@@ -565,3 +591,190 @@
      }
  
  }
@@ -959,7 +627,6 @@ diff -u -p -u -r1.42 shutdownicon.cxx
 +#endif // ENABLE_QUICKSTART_APPLET
 +}
 +
-
 --- /dev/null	2004-08-25 18:34:59.000000000 +0100
 +++ sfx2/source/appl/shutdowniconunx.cxx	2006-01-05 16:44:19.819327488 +0000
 @@ -0,0 +1,373 @@
