@@ -34,6 +34,15 @@ if (! test -e $GAL_BIN); then
     exit 1;
 fi
 
+echo -n "checking whether find supports the option -L... "
+if find -L / -maxdepth 0 >/dev/null 2>&1 ; then
+    FIND_SUPPORT_SYMLINKS="-L"
+    echo "yes"
+else
+    FIND_SUPPORT_SYMLINKS=
+    echo "no"
+fi
+
 if test "z$OPENCLIPART_VER" != "z" ; then
 
     echo "Generating .png files..."
@@ -77,17 +86,41 @@ if test "z$OPENCLIPART_VER" != "z" ; then
 
 fi
 
-if test ! -e /tmp/.X0-lock && which Xvfb >/dev/null 2>&1 ; then
-    # X server probably is not available, try to use Xvfb
-    export DISPLAY=":98"
-    Xvfb -ac $DISPLAY &
-    trap "kill $! || true" EXIT
-    # let server to start
-    sleep 10
+XDISPLAY=98
+while /bin/true; do 
+	if [ ! -f /tmp/.X$XDISPLAY-lock ]; then
+		sleep 2s
+		/usr/X11R6/bin/Xvfb -ac :$XDISPLAY >& /dev/null &
+		trap "kill $! > /dev/null 2>&1 || true" EXIT
+		# let server to start
+		sleep 10s 
+		if [ -f /tmp/.X$XDISPLAY-lock ]; then
+			break;
+		fi
+	fi
+	XDISPLAY=$(($XDISPLAY+1))
+done
+export DISPLAY=":$XDISPLAY"
+echo "Using DISPLAY="$DISPLAY
+echo "Xvfb processes:"
+ps -ef | grep -i Xvfb
+
+# clean a previous gallery installation in DESTDIR
+if test "z$OODESTDIR" != "z" ; then
+    gal_idx=$GAL_NUMBER_FROM
+
+    while test -f $GAL_DIR/sg$gal_idx.thm -o \
+		-f $GAL_DIR/sg$gal_idx.sdg -o \
+		-f $GAL_DIR/sg$gal_idx.sdv; do
+			rm -f $GAL_DIR/sg$gal_idx.thm \
+			      $GAL_DIR/sg$gal_idx.sdg \
+			      $GAL_DIR/sg$gal_idx.sdv
+	gal_idx=$(($gal_idx + 1))
+    done
 fi
 
 mkdir -p "$GAL_DIR"
-for dir in `find $OPENCLIPART_DIR -mindepth 1 -maxdepth 1 -type d | LC_CTYPE=C sort` ; do
+for dir in `find $FIND_SUPPORT_SYMLINKS $OPENCLIPART_DIR -mindepth 1 -maxdepth 1 -type d | LC_CTYPE=C sort` ; do
     # get the gallery name from the directory name
     # and make the first character uppercase
     gal_name=${dir##*/}
@@ -99,19 +132,24 @@ for dir in `find $OPENCLIPART_DIR -mindepth 1 -maxdepth 1 -type d | LC_CTYPE=C s
 
     echo "Doing gallery $gal_name..."
     # xargs is necessary because I 
-    find $dir -name "*.png" | { xargs $GAL_BIN --name "$gal_name" --path "$GAL_DIR" --destdir "$OODESTDIR" --number-from "$GAL_NUMBER_FROM" || exit 1; }
+    find $dir -name "*.png" -print0 | { xargs -0 $GAL_BIN --name "$gal_name" --path "$GAL_DIR" --destdir "$OODESTDIR" --number-from "$GAL_NUMBER_FROM" || exit 1; }
 done
 
 # guess the filelist
 if test "z$OODESTDIR" != "z" ; then
     gal_num=$GAL_NUMBER_FROM
     rm -f $BUILDDIR/galleries.txt
-    while test -f $GAL_DIR/sg$gal_num.sdg -a \
-               -f $GAL_DIR/sg$gal_num.sdv -a \
-	       -f $GAL_DIR/sg$gal_num.thm ; do
-	echo ${GAL_DIR#$OODESTDIR}/sg$gal_num.sdg >>$BUILDDIR/galleries.txt
-	echo ${GAL_DIR#$OODESTDIR}/sg$gal_num.sdv >>$BUILDDIR/galleries.txt
-	echo ${GAL_DIR#$OODESTDIR}/sg$gal_num.thm >>$BUILDDIR/galleries.txt
+
+    while test -f $GAL_DIR/sg$gal_num.thm; do
+	if [ -e $GAL_DIR/sg$gal_num.sdg -a -e $GAL_DIR/sg$gal_num.sdv ]; then
+		echo ${GAL_DIR#$OODESTDIR}/sg$gal_num.sdg >>$BUILDDIR/galleries.txt
+		echo ${GAL_DIR#$OODESTDIR}/sg$gal_num.sdv >>$BUILDDIR/galleries.txt
+		echo ${GAL_DIR#$OODESTDIR}/sg$gal_num.thm >>$BUILDDIR/galleries.txt
+	else
+		# remove incomplete galleries (exists .thm but not .sdg)
+		rm -f $GAL_DIR/sg$gal_num.sdv \
+		      $GAL_DIR/sg$gal_num.thm
+	fi
 	gal_num=$(($gal_num + 1))
     done
 fi
