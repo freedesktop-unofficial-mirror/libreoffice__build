@@ -13,28 +13,35 @@ if test "z$BUILD_WIN32" = "z"; then
     fi
 fi
 
-# configure
+if test "z$BUILD_FROM" = "z"; then
+    # configure
 
-#  dmake security patch
-cd $OOBUILDDIR/dmake
-autoconf || exit 1;
+    #  dmake security patch
+    cd $OOBUILDDIR/dmake
+    autoconf || exit 1;
 
-#  main configure
-cd $OOBUILDDIR/config_office
-rm -f config.cache
-echo "configuring ...";
-autoconf || exit 1;
+    #  main configure
+    cd $OOBUILDDIR/config_office
+    rm -f config.cache
+    echo "configuring ...";
+    autoconf || exit 1;
 
-# If we are forcing gcc33, make sure configure knows
-if test "z$FORCE_GCC33" = "zYES"; then
-CONFIGURE_OPTIONS="$CONFIGURE_OPTIONS CFLAGS= CXXFLAGS= CC=gcc33 CXX=g++33"
+    # If we are forcing gcc33, make sure configure knows
+    if test "z$FORCE_GCC33" = "zYES"; then
+    CONFIGURE_OPTIONS="$CONFIGURE_OPTIONS CFLAGS= CXXFLAGS= CC=gcc33 CXX=g++33"
+    fi
+
+    echo "Env for configure:"
+    set
+    echo "Env for configure ends"
+
+    eval ./configure "$CONFIGURE_OPTIONS" "$PROPAGATED_ARGS" || exit 1;
+else
+    if ! test -d "$OOBUILDDIR/$BUILD_FROM"; then
+        echo "BUILD_FROM is set to non-existent directory: $BUILD_FROM"
+        exit 1;
+    fi
 fi
-
-echo "Env for configure:"
-set
-echo "Env for configure ends"
-
-eval ./configure "$CONFIGURE_OPTIONS" "$PROPAGATED_ARGS" || exit 1;
 
 # Unfortunately, on when forcing gcc33 on x86, RPM attempts to
 # inject its %{optflags} everywhere.  Since gcc33 doesn't support
@@ -54,8 +61,13 @@ fi
 
 # Final build preparation
 
+EXTRA_BUILD_FLAGS=
+EXTRA_DMAKE_FLAGS=
+
 # tcsh sucks great rocks, and refuses to re-direct it's output otherwise
 export TERM=
+# work around tcsh bug bugs.debian.org/339034: tcsh: Unknown colorls variable `su'
+unset LS_COLORS
 # Many Java files have 8bit char-set comments, javac barfs on them in utf8 locales
 export LANG="C";
 
@@ -99,18 +111,21 @@ if test "z$BUILD_WIN32" != "zyes"; then
 fi
 bison --version
 flex --version
-echo 'Bootstrapping'
-./bootstrap || ./bootstrap || ./bootstrap || exit 1;
+if test "z$BUILD_FROM" = "z"; then
+    echo 'Bootstrapping'
+    ./bootstrap || ./bootstrap || ./bootstrap || exit 1;
+    EXTRA_BUILD_FLAGS="--all"
+else
+    EXTRA_BUILD_FLAGS="--from $BUILD_FROM $EXTRA_BUILD_FLAGS"
+fi
 # parallel build setting
-EXTRA_BUILD_FLAGS=
 if test "$BUILD_NCPUS" -gt 1; then
-    EXTRA_BUILD_FLAGS="-P$BUILD_NCPUS"
+    EXTRA_BUILD_FLAGS="-P$BUILD_NCPUS $EXTRA_BUILD_FLAGS"
 fi
 if test "z$BUILD_WIN32" = "z"; then
     EXTRA_BUILD_FLAGS="--dlv_switch link $EXTRA_BUILD_FLAGS"
 fi
 
-EXTRA_DMAKE_FLAGS=
 if test "$ENABLE_ICECREAM" = "yes" -a "$ICECREAM_JOBS" -gt 1; then
     EXTRA_DMAKE_FLAGS="-- -P$ICECREAM_JOBS"
 fi
@@ -170,7 +185,8 @@ fi
 
 echo 'Commencing main build'
 cd $OOBUILDDIR/instsetoo_native || exit 1;
-perl $SOLARENV/bin/build.pl --all $EXTRA_BUILD_FLAGS $EXTRA_DMAKE_FLAGS || exit 1;
+echo "build.pl $EXTRA_BUILD_FLAGS $EXTRA_DMAKE_FLAGS"
+perl $SOLARENV/bin/build.pl $EXTRA_BUILD_FLAGS $EXTRA_DMAKE_FLAGS || exit 1;
 OOO_REBUILD_NEEDED="no"
     
 echo "Build succeeded ...!"
