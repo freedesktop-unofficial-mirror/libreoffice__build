@@ -1,0 +1,618 @@
+Index: psprint/inc/psprint/fontmanager.hxx
+===================================================================
+RCS file: /cvs/gsl/psprint/inc/psprint/fontmanager.hxx,v
+retrieving revision 1.28
+retrieving revision 1.28.4.1
+diff -u -p -r1.28 -r1.28.4.1
+--- psprint/inc/psprint/fontmanager.hxx	19 Jan 2006 17:36:34 -0000	1.28
++++ psprint/inc/psprint/fontmanager.hxx	16 Feb 2006 13:23:58 -0000	1.28.4.1
+@@ -143,6 +143,15 @@ enum type {
+ };
+ }
+ 
++namespace fcstatus 
++{
++enum type { 
++    istrue,
++    isunset,
++    isfalse 
++};
++}
++
+ /*
+  *  the difference between FastPrintFontInfo and PrintFontInfo
+  *  is that the information in FastPrintFontInfo can usually
+@@ -168,6 +177,8 @@ struct FastPrintFontInfo
+     weight::type            			m_eWeight;
+     pitch::type             			m_ePitch;
+     rtl_TextEncoding        			m_aEncoding;
++    fcstatus::type                      m_eEmbeddedbitmap;
++    fcstatus::type                      m_eAntialias;
+ 
+     FastPrintFontInfo() :
+             m_nID( 0 ),
+@@ -177,7 +188,9 @@ struct FastPrintFontInfo
+             m_eWidth( width::Unknown ),
+             m_eWeight( weight::Unknown ),
+             m_ePitch( pitch::Unknown ),
+-            m_aEncoding( RTL_TEXTENCODING_DONTKNOW )
++            m_aEncoding( RTL_TEXTENCODING_DONTKNOW ),
++            m_eEmbeddedbitmap( fcstatus::isunset ),
++            m_eAntialias( fcstatus::isunset )
+     {}
+ };
+ 
+@@ -291,6 +304,10 @@ class PrintFontManager
+         int											m_nYMax;
+         bool										m_bHaveVerticalSubstitutedGlyphs;
+         bool                                        m_bUserOverride;
++
++        fcstatus::type                              m_eEmbeddedbitmap;
++        fcstatus::type                              m_eAntialias;
++
+         std::map< sal_Unicode, sal_Int32 >			m_aEncodingVector;
+         std::map< sal_Unicode, rtl::OString >		m_aNonEncoded;
+ 
+cvs diff: Diffing psprint/prj
+cvs diff: Diffing psprint/source
+cvs diff: Diffing psprint/source/fontmanager
+Index: psprint/source/fontmanager/fontcache.cxx
+===================================================================
+RCS file: /cvs/gsl/psprint/source/fontmanager/fontcache.cxx,v
+retrieving revision 1.19
+retrieving revision 1.18.14.2
+diff -u -p -r1.19 -r1.18.14.2
+--- psprint/source/fontmanager/fontcache.cxx	9 Feb 2006 12:33:17 -0000	1.19
++++ psprint/source/fontmanager/fontcache.cxx	16 Feb 2006 13:23:32 -0000	1.18.14.2
+@@ -55,7 +55,7 @@
+ #endif
+ 
+ #define FONTCACHEFILE "/user/psprint/pspfontcache"
+-#define CACHE_MAGIC "PspFontCacheFile format 2"
++#define CACHE_MAGIC "PspFontCacheFile format 3"
+ 
+ using namespace std;
+ using namespace rtl;
+@@ -168,7 +168,7 @@ void FontCache::flush()
+                 /*
+                  *  for each font entry write:
+                  *  name[;name[;name]]
+-                 *  fontnr;PSName;italic;weight;width;pitch;encoding;ascend;descend;leading;vsubst;gxw;gxh;gyw;gyh;useroverrride[;{metricfile,typeflags}][;stylename]
++                 *  fontnr;PSName;italic;weight;width;pitch;encoding;ascend;descend;leading;vsubst;gxw;gxh;gyw;gyh;useroverrride;embed;antialias[;{metricfile,typeflags}][;stylename]
+                  */
+                 if( nEntrySize > 1 )
+                     nSubEntry = static_cast<const PrintFontManager::TrueTypeFontFile*>(*it)->m_nCollectionEntry;
+@@ -219,6 +219,10 @@ void FontCache::flush()
+                 aLine.Append( ByteString::CreateFromInt32( (*it)->m_aGlobalMetricY.height ) );
+                 aLine.Append( ';' );
+                 aLine.Append( (*it)->m_bUserOverride ? "1" : "0" );
++                aLine.Append( ';' );
++                aLine.Append( ByteString::CreateFromInt32( (*it)->m_eEmbeddedbitmap ) );
++                aLine.Append( ';' );
++                aLine.Append( ByteString::CreateFromInt32( (*it)->m_eAntialias ) );
+ 
+                 switch( (*it)->m_eType )
+                 {
+@@ -387,8 +391,8 @@ void FontCache::read()
+                 pLine = aLine.GetBuffer();
+                 nLen = aLine.Len();
+                 
+-                // get up to 18 token positions
+-                const int nMaxTokens = 18;
++                // get up to 20 token positions
++                const int nMaxTokens = 20;
+                 int nTokenPos[nMaxTokens];
+                 nTokenPos[0] = 0;
+                 int nTokens = 1;
+@@ -401,7 +405,7 @@ void FontCache::read()
+                             break;
+                     }
+                 }
+-                if( nTokens < 16 )
++                if( nTokens < 18 )
+                 {
+                     delete pFont;
+                     continue;
+@@ -428,11 +432,14 @@ void FontCache::read()
+                                     = atoi( pLine + nTokenPos[14] );
+                 pFont->m_bUserOverride
+                                     = (atoi( pLine + nTokenPos[15] ) != 0);
+-                int nStyleTokenNr = 16;
++                pFont->m_eEmbeddedbitmap
++                                    = (fcstatus::type)atoi(pLine+nTokenPos[16]);
++                pFont->m_eAntialias = (fcstatus::type)atoi(pLine+nTokenPos[17]);
++                int nStyleTokenNr = 18;
+                 switch( eType )
+                 {
+                     case fonttype::TrueType:
+-                        static_cast<PrintFontManager::TrueTypeFontFile*>(pFont)->m_nTypeFlags = atoi( pLine + nTokenPos[16] );
++                        static_cast<PrintFontManager::TrueTypeFontFile*>(pFont)->m_nTypeFlags = atoi( pLine + nTokenPos[18] );
+                         static_cast<PrintFontManager::TrueTypeFontFile*>(pFont)->m_nCollectionEntry = nCollEntry;
+                         static_cast<PrintFontManager::TrueTypeFontFile*>(pFont)->m_nDirectory = nDir;
+                         static_cast<PrintFontManager::TrueTypeFontFile*>(pFont)->m_aFontFile = aFile;
+@@ -440,7 +447,7 @@ void FontCache::read()
+                         break;
+                     case fonttype::Type1:
+                     {
+-                        int nTokLen = (nTokens > 17 ) ? nTokenPos[17]-nTokenPos[16]-1 : nLen - nTokenPos[16];
++                        int nTokLen = (nTokens > 19 ) ? nTokenPos[19]-nTokenPos[18]-1 : nLen - nTokenPos[18];
+                         static_cast<PrintFontManager::Type1FontFile*>(pFont)->m_aMetricFile = OString( pLine + nTokenPos[16], nTokLen );
+                         static_cast<PrintFontManager::Type1FontFile*>(pFont)->m_nDirectory = nDir;
+                         static_cast<PrintFontManager::Type1FontFile*>(pFont)->m_aFontFile = aFile;
+@@ -557,6 +564,8 @@ void FontCache::copyPrintFont( const Pri
+     pTo->m_nYMax			= pFrom->m_nYMax;
+     pTo->m_bHaveVerticalSubstitutedGlyphs = pFrom->m_bHaveVerticalSubstitutedGlyphs;
+     pTo->m_bUserOverride    = pFrom->m_bUserOverride;
++    pTo->m_eEmbeddedbitmap  = pFrom->m_eEmbeddedbitmap;
++    pTo->m_eAntialias       = pFrom->m_eAntialias;
+ }
+ 
+ /*
+@@ -618,7 +627,9 @@ bool FontCache::equalsPrintFont( const P
+         pRight->m_nXMax				!= pLeft->m_nXMax			||
+         pRight->m_nYMax				!= pLeft->m_nYMax			||
+         pRight->m_bHaveVerticalSubstitutedGlyphs != pLeft->m_bHaveVerticalSubstitutedGlyphs ||
+-        pRight->m_bUserOverride     != pLeft->m_bUserOverride
++        pRight->m_bUserOverride     != pLeft->m_bUserOverride   ||
++        pRight->m_eEmbeddedbitmap   != pLeft->m_eEmbeddedbitmap ||
++        pRight->m_eAntialias        != pLeft->m_eAntialias
+         )
+         return false;
+     std::list< int >::const_iterator lit, rit;
+Index: psprint/source/fontmanager/fontconfig.cxx
+===================================================================
+RCS file: /cvs/gsl/psprint/source/fontmanager/fontconfig.cxx,v
+retrieving revision 1.16
+retrieving revision 1.16.2.1
+diff -u -p -r1.16 -r1.16.2.1
+--- psprint/source/fontmanager/fontconfig.cxx	25 Jan 2006 11:35:42 -0000	1.16
++++ psprint/source/fontmanager/fontconfig.cxx	16 Feb 2006 13:23:32 -0000	1.16.2.1
+@@ -97,6 +97,7 @@ class FontCfgWrapper
+     FcResult		(*m_pFcPatternGetBool)(const FcPattern*,const char*,int,FcBool*);
+     void			(*m_pFcDefaultSubstitute)(FcPattern *);
+     FcPattern*		(*m_pFcFontMatch)(FcConfig*,FcPattern*,FcResult*);    
++    FcPattern*		(*m_pFcFontSetMatch)(FcConfig*,FcFontSet**, int, FcPattern*,FcResult*);    
+     FcBool			(*m_pFcConfigSubstitute)(FcConfig*,FcPattern*,FcMatchKind);
+     FcBool			(*m_pFcPatternAddInteger)(FcPattern*,const char*,int);
+     FcBool			(*m_pFcPatternAddString)(FcPattern*,const char*,const FcChar8*);
+@@ -166,6 +167,8 @@ public:
+     { m_pFcDefaultSubstitute( pPattern ); }
+     FcPattern* FcFontMatch( FcConfig* pConfig, FcPattern* pPattern, FcResult* pResult )
+     { return m_pFcFontMatch( pConfig, pPattern, pResult ); }
++    FcPattern* FcFontSetMatch( FcConfig* pConfig, FcFontSet **ppFontSet, int nset, FcPattern* pPattern, FcResult* pResult )
++    { return m_pFcFontSetMatch ? m_pFcFontSetMatch( pConfig, ppFontSet, nset, pPattern, pResult ) : 0; }
+     FcBool FcConfigSubstitute( FcConfig* pConfig, FcPattern* pPattern, FcMatchKind eKind )
+     { return m_pFcConfigSubstitute( pConfig, pPattern, eKind ); }
+     FcBool FcPatternAddInteger( FcPattern* pPattern, const char* pObject, int nValue )
+@@ -238,6 +241,8 @@ FontCfgWrapper::FontCfgWrapper()
+         loadSymbol( "FcDefaultSubstitute" );
+     m_pFcFontMatch = (FcPattern*(*)(FcConfig*,FcPattern*,FcResult*))
+         loadSymbol( "FcFontMatch" );
++    m_pFcFontSetMatch = (FcPattern*(*)(FcConfig*,FcFontSet**,int,FcPattern*,FcResult*))
++        loadSymbol( "FcFontSetMatch" );
+     m_pFcConfigSubstitute = (FcBool(*)(FcConfig*,FcPattern*,FcMatchKind))
+         loadSymbol( "FcConfigSubstitute" );
+     m_pFcPatternAddInteger = (FcBool(*)(FcPattern*,const char*,int))
+@@ -307,6 +312,10 @@ void FontCfgWrapper::release()
+     }
+ }
+ 
++#ifndef FC_EMBEDDED_BITMAP
++#define FC_EMBEDDED_BITMAP "embeddedbitmap"
++#endif
++
+ /*
+  * PrintFontManager::initFontconfig
+  */
+@@ -346,7 +355,7 @@ bool PrintFontManager::initFontconfig()
+             int weight = 0;
+             int spacing = 0;
+             int nCollectionEntry = -1;
+-            FcBool outline = false;
++            FcBool outline = false, embitmap = true, antialias = true;
+             
+             FcResult eFileRes	= rWrapper.FcPatternGetString( pFSet->fonts[i], FC_FILE, 0, &file );
+             FcResult eFamilyRes	= rWrapper.FcPatternGetString( pFSet->fonts[i], FC_FAMILY, 0, &family );
+@@ -356,6 +365,24 @@ bool PrintFontManager::initFontconfig()
+             FcResult eSpacRes	= rWrapper.FcPatternGetInteger( pFSet->fonts[i], FC_SPACING, 0, &spacing );
+             FcResult eOutRes	= rWrapper.FcPatternGetBool( pFSet->fonts[i], FC_OUTLINE, 0, &outline );
+             FcResult eIndexRes = rWrapper.FcPatternGetInteger( pFSet->fonts[i], FC_INDEX, 0, &nCollectionEntry );            
++
++            FcResult eEmbeddedBitmap = FcResultNoMatch;
++            FcResult eAntialias = FcResultNoMatch;
++
++			if (eFamilyRes == FcResultMatch)
++			{
++			    FcPattern *pMatch = rWrapper.FcPatternCreate();
++    			rWrapper.FcPatternAddString(pMatch, FC_FAMILY, family);
++    			rWrapper.FcConfigSubstitute( NULL, pMatch, FcMatchPattern );
++    			FcResult eResult;
++    			if (FcPattern* pResult = rWrapper.FcFontSetMatch( NULL, &pFSet, 1, pMatch, &eResult ))
++    			{
++                	eEmbeddedBitmap = rWrapper.FcPatternGetBool( pResult, FC_EMBEDDED_BITMAP, 0, &embitmap );
++    	            eAntialias = rWrapper.FcPatternGetBool( pResult, FC_ANTIALIAS, 0, &antialias );
++    				rWrapper.FcPatternDestroy(pResult);
++    			}
++    			rWrapper.FcPatternDestroy(pMatch);
++   			}
+             
+             if( eFileRes != FcResultMatch || eFamilyRes != FcResultMatch || eOutRes != FcResultMatch )
+                 continue;
+@@ -491,6 +518,15 @@ bool PrintFontManager::initFontconfig()
+                 {
+                     pUpdate->m_aStyleName = OStringToOUString( OString( (sal_Char*)style ), RTL_TEXTENCODING_UTF8 );
+                 }
++                if( eEmbeddedBitmap == FcResultMatch )
++                {
++                  pUpdate->m_eEmbeddedbitmap = embitmap ? fcstatus::istrue : fcstatus::isfalse;
++                }
++                if( eAntialias == FcResultMatch )
++                {
++                  pUpdate->m_eAntialias = antialias ? fcstatus::istrue : fcstatus::isfalse;
++                }
++
+                 
+                 // update font cache
+                 m_pFontCache->updateFontCacheEntry( pUpdate, false );
+Index: psprint/source/fontmanager/fontmanager.cxx
+===================================================================
+RCS file: /cvs/gsl/psprint/source/fontmanager/fontmanager.cxx,v
+retrieving revision 1.64
+retrieving revision 1.64.6.1
+diff -u -p -r1.64 -r1.64.6.1
+--- psprint/source/fontmanager/fontmanager.cxx	16 Jan 2006 12:54:13 -0000	1.64
++++ psprint/source/fontmanager/fontmanager.cxx	16 Feb 2006 13:23:33 -0000	1.64.6.1
+@@ -379,7 +379,9 @@ PrintFontManager::PrintFont::PrintFont( 
+         m_nXMax( 0 ),
+         m_nYMax( 0 ),
+         m_bHaveVerticalSubstitutedGlyphs( false ),
+-        m_bUserOverride( false )
++        m_bUserOverride( false ),
++        m_eEmbeddedbitmap( fcstatus::isunset ),
++        m_eAntialias( fcstatus::isunset )
+ {
+ }
+ 
+@@ -2591,6 +2593,8 @@ void PrintFontManager::fillPrintFontInfo
+     rInfo.m_eWeight         = pFont->m_eWeight;
+     rInfo.m_ePitch          = pFont->m_ePitch;
+     rInfo.m_aEncoding       = pFont->m_aEncoding;
++    rInfo.m_eEmbeddedbitmap = pFont->m_eEmbeddedbitmap;
++    rInfo.m_eAntialias      = pFont->m_eAntialias;
+     rInfo.m_aAliases.clear();
+     for( ::std::list< int >::iterator it = pFont->m_aAliases.begin(); it != pFont->m_aAliases.end(); ++it )
+         rInfo.m_aAliases.push_back( m_pAtoms->getString( ATOM_FAMILYNAME, *it ) );
+Index: vcl/inc/outfont.hxx
+===================================================================
+RCS file: /cvs/gsl/vcl/inc/outfont.hxx,v
+retrieving revision 1.19
+retrieving revision 1.19.108.1
+diff -u -p -r1.19 -r1.19.108.1
+--- vcl/inc/outfont.hxx	17 Oct 2005 14:49:15 -0000	1.19
++++ vcl/inc/outfont.hxx	16 Feb 2006 13:28:40 -0000	1.19.108.1
+@@ -112,20 +112,24 @@ public: // TODO: hide members behind acc
+ class ImplDevFontAttributes : public ImplFontAttributes
+ {
+ public: // TODO: create matching interface class
+-    const String&   GetAliasNames() const   { return maMapNames; }
+-    int             GetQuality() const      { return mnQuality; }
+-    bool            IsRotatable() const     { return mbOrientation; }
+-    bool            IsDeviceFont() const    { return mbDevice; }
+-    bool            IsEmbeddable() const    { return mbEmbeddable; }
+-    bool            IsSubsettable() const   { return mbSubsettable; }
++    const String&      GetAliasNames() const     { return maMapNames; }
++    int                GetQuality() const        { return mnQuality; }
++    bool               IsRotatable() const       { return mbOrientation; }
++    bool               IsDeviceFont() const      { return mbDevice; }
++    bool               IsEmbeddable() const      { return mbEmbeddable; }
++    bool               IsSubsettable() const     { return mbSubsettable; }
++    FontEmbeddedBitmap UseEmbeddedBitmap() const { return meEmbeddedBitmap; }
++    FontAntiAlias      UseAntiAlias() const      { return meAntiAlias; }
+ 
+ public: // TODO: hide members behind accessor methods
+-    String          maMapNames;     // List of family name aliass separated with ';'
+-    int             mnQuality;      // Quality (used when similar fonts compete)
+-    bool            mbOrientation;  // true: physical font can be rotated
+-    bool            mbDevice;       // true: built in font
+-    bool            mbSubsettable;  // true: a subset of the font can be created
+-    bool            mbEmbeddable;   // true: the font can be embedded
++    String             maMapNames;       // List of family name aliass separated with ';'
++    int                mnQuality;        // Quality (used when similar fonts compete)
++    bool               mbOrientation;    // true: physical font can be rotated
++    bool               mbDevice;         // true: built in font
++    bool               mbSubsettable;    // true: a subset of the font can be created
++    bool               mbEmbeddable;     // true: the font can be embedded
++    FontEmbeddedBitmap meEmbeddedBitmap; // whether the embedded bitmaps should be used
++    FontAntiAlias      meAntiAlias;      // whether the font should be antialiased
+ };
+ 
+ // ----------------
+Index: vcl/inc/vclenum.hxx
+===================================================================
+RCS file: /cvs/gsl/vcl/inc/vclenum.hxx,v
+retrieving revision 1.6
+retrieving revision 1.6.156.1
+diff -u -p -r1.6 -r1.6.156.1
+--- vcl/inc/vclenum.hxx	9 Sep 2005 11:34:53 -0000	1.6
++++ vcl/inc/vclenum.hxx	16 Feb 2006 13:28:41 -0000	1.6.156.1
+@@ -275,6 +275,20 @@ enum FontType { TYPE_DONTKNOW, TYPE_RAST
+ 
+ #endif
+ 
++#ifndef ENUM_FONTEMBEDDEDBITMAP_DECLARED
++#define ENUM_FONTEMBEDDEDBITMAP_DECLARED
++
++enum FontEmbeddedBitmap { EMBEDDEDBITMAP_DONTKNOW, EMBEDDEDBITMAP_FALSE, EMBEDDEDBITMAP_TRUE };
++
++#endif
++
++#ifndef ENUM_FONTANTIALIAS_DECLARED
++#define ENUM_FONTANTIALIAS_DECLARED
++
++enum FontAntiAlias { ANTIALIAS_DONTKNOW, ANTIALIAS_FALSE, ANTIALIAS_TRUE };
++
++#endif
++
+ // ------------------------------------------------------------
+ 
+ #ifndef ENUM_KEYFUNCTYPE_DECLARED
+
+
+Index: vcl/source/glyphs/gcach_ftyp.cxx
+===================================================================
+RCS file: /cvs/gsl/vcl/source/glyphs/gcach_ftyp.cxx,v
+retrieving revision 1.119
+retrieving revision 1.119.26.1
+diff -u -p -r1.119 -r1.119.26.1
+--- vcl/source/glyphs/gcach_ftyp.cxx	25 Jan 2006 11:39:36 -0000	1.119
++++ vcl/source/glyphs/gcach_ftyp.cxx	16 Feb 2006 13:28:41 -0000	1.119.26.1
+@@ -153,9 +153,9 @@ namespace { struct vclFontFileList : pub
+ // if (AA prio <= AH prio) => antialias + autohint
+ // if (AH<AA) => do not autohint when antialiasing
+ // if (EB<AH) => do not autohint for monochrome
+-static int nPrioEmbedded    = 2;
+-static int nPrioAutoHint    = 1;
+-static int nPrioAntiAlias   = 1;
++static int nDefaultPrioEmbedded    = 2;
++static int nDefaultPrioAutoHint    = 1;
++static int nDefaultPrioAntiAlias   = 1;
+ 
+ // =======================================================================
+ // FreetypeManager
+@@ -470,7 +470,7 @@ FreetypeManager::FreetypeManager()
+     // requested by env var below because it crashes StarOffice on RH9
+     // TODO: investigate
+     if( nFTVERSION == 2103 )
+-        nPrioEmbedded = 0;
++        nDefaultPrioEmbedded = 0;
+ 
+ #else // RTLD_DEFAULT
+     // assume systems where dlsym is not possible use supplied library
+@@ -481,13 +481,13 @@ FreetypeManager::FreetypeManager()
+     char* pEnv;
+     pEnv = ::getenv( "SAL_EMBEDDED_BITMAP_PRIORITY" );
+     if( pEnv )
+-        nPrioEmbedded  = pEnv[0] - '0';
++        nDefaultPrioEmbedded  = pEnv[0] - '0';
+     pEnv = ::getenv( "SAL_ANTIALIASED_TEXT_PRIORITY" );
+     if( pEnv )
+-        nPrioAntiAlias = pEnv[0] - '0';
++        nDefaultPrioAntiAlias = pEnv[0] - '0';
+     pEnv = ::getenv( "SAL_AUTOHINTING_PRIORITY" );
+     if( pEnv )
+-        nPrioAutoHint  = pEnv[0] - '0';
++        nDefaultPrioAutoHint  = pEnv[0] - '0';
+ 
+     InitGammaTable();
+ }
+@@ -593,6 +593,9 @@ long FreetypeManager::AddFontDir( const 
+             aDFA.mbSubsettable= false;
+             aDFA.mbEmbeddable = false;
+ 
++            aDFA.meEmbeddedBitmap = EMBEDDEDBITMAP_DONTKNOW;
++            aDFA.meAntiAlias = ANTIALIAS_DONTKNOW;
++
+             FT_Done_Face( aFaceFT );
+             AddFontFile( aCFileName, nFaceNum, ++mnNextFontId, aDFA, NULL );
+             ++nCount;
+@@ -687,6 +690,7 @@ ImplFontEntry* ImplFTSFontData::CreateFo
+ 
+ FreetypeServerFont::FreetypeServerFont( const ImplFontSelectData& rFSD, FtFontInfo* pFI )
+ :   ServerFont( rFSD ),
++    mnPrioEmbedded(nDefaultPrioEmbedded), mnPrioAntiAlias(nDefaultPrioAntiAlias),
+     mpFontInfo( pFI ),
+     maFaceFT( NULL ),
+     maSizeFT( NULL ),
+@@ -831,8 +835,13 @@ FreetypeServerFont::FreetypeServerFont( 
+         mnLoadFlags |= FT_LOAD_NO_HINTING;
+     mnLoadFlags |= FT_LOAD_IGNORE_GLOBAL_ADVANCE_WIDTH; //#88334#
+ 
++    if (mpFontInfo->DontUseAntiAlias())
++        mnPrioAntiAlias = 0;
++    if (mpFontInfo->DontUseEmbeddedBitmaps())
++        mnPrioEmbedded = 0;
++
+ #if (FTVERSION >= 2005) || defined(TT_CONFIG_OPTION_BYTECODE_INTERPRETER)
+-    if( nPrioAutoHint <= 0 )
++    if( nDefaultPrioAutoHint <= 0 )
+ #endif
+         mnLoadFlags |= FT_LOAD_NO_HINTING;
+ 
+@@ -842,7 +851,7 @@ FreetypeServerFont::FreetypeServerFont( 
+         mnLoadFlags |= FT_LOAD_TARGET_LIGHT;
+ #endif
+ 
+-    if( ((mnCos != 0) && (mnSin != 0)) || (nPrioEmbedded <= 0) )
++    if( ((mnCos != 0) && (mnSin != 0)) || (mnPrioEmbedded <= 0) )
+         mnLoadFlags |= FT_LOAD_NO_BITMAP;
+ }
+ 
+@@ -1273,7 +1282,7 @@ void FreetypeServerFont::InitGlyphData( 
+ 
+ bool FreetypeServerFont::GetAntialiasAdvice( void ) const
+ {
+-    if( GetFontSelData().mbNonAntialiased || (nPrioAntiAlias<=0) )
++    if( GetFontSelData().mbNonAntialiased || (mnPrioAntiAlias<=0) )
+         return false;
+     bool bAdviseAA = true;
+     // TODO: also use GASP info
+@@ -1298,11 +1307,11 @@ bool FreetypeServerFont::GetGlyphBitmap1
+ #if (FTVERSION >= 2002)
+     // for 0/90/180/270 degree fonts enable autohinting even if not advisable
+     // non-hinted and non-antialiased bitmaps just look too ugly
+-    if( (mnCos==0 || mnSin==0) && (nPrioAutoHint > 0) )
++    if( (mnCos==0 || mnSin==0) && (nDefaultPrioAutoHint > 0) )
+         nLoadFlags &= ~FT_LOAD_NO_HINTING;
+ #endif
+ 
+-    if( nPrioEmbedded <= nPrioAutoHint )
++    if( mnPrioEmbedded <= nDefaultPrioAutoHint )
+         nLoadFlags |= FT_LOAD_NO_BITMAP;
+ 
+     FT_Error rc = -1;
+@@ -1449,11 +1458,11 @@ bool FreetypeServerFont::GetGlyphBitmap8
+     // autohinting in FT<=2.0.4 makes antialiased glyphs look worse
+     nLoadFlags |= FT_LOAD_NO_HINTING;
+ #else
+-    if( (nGlyphFlags & GF_UNHINTED) || (nPrioAutoHint < nPrioAntiAlias) )
++    if( (nGlyphFlags & GF_UNHINTED) || (nDefaultPrioAutoHint < mnPrioAntiAlias) )
+         nLoadFlags |= FT_LOAD_NO_HINTING;
+ #endif
+ 
+-    if( nPrioEmbedded <= nPrioAntiAlias )
++    if( mnPrioEmbedded <= mnPrioAntiAlias )
+         nLoadFlags |= FT_LOAD_NO_BITMAP;
+ 
+     FT_Error rc = -1;
+Index: vcl/source/glyphs/gcach_ftyp.hxx
+===================================================================
+RCS file: /cvs/gsl/vcl/source/glyphs/gcach_ftyp.hxx,v
+retrieving revision 1.33
+retrieving revision 1.33.38.1
+diff -u -p -r1.33 -r1.33.38.1
+--- vcl/source/glyphs/gcach_ftyp.hxx	14 Dec 2005 09:12:02 -0000	1.33
++++ vcl/source/glyphs/gcach_ftyp.hxx	16 Feb 2006 13:28:42 -0000	1.33.38.1
+@@ -93,7 +93,10 @@ public:
+     int                   GetFaceNum() const        { return mnFaceNum; }
+     int                   GetSynthetic() const      { return mnSynthetic; }
+     int                   GetFontId() const         { return mnFontId; }
+-
++    bool                  DontUseAntiAlias() const  
++        { return maDevFontAttributes.UseAntiAlias() == ANTIALIAS_FALSE; }
++    bool                  DontUseEmbeddedBitmaps() const 
++        { return maDevFontAttributes.UseEmbeddedBitmap() == EMBEDDEDBITMAP_FALSE; }
+     bool                  IsSymbolFont() const      { return maDevFontAttributes.IsSymbolFont(); }
+     const ImplFontAttributes& GetFontAttributes() const { return maDevFontAttributes; }
+ 
+@@ -207,6 +210,8 @@ protected:
+ 
+ private:
+     int                         mnWidth;
++    int                         mnPrioEmbedded;
++    int                         mnPrioAntiAlias;
+     FtFontInfo*                 mpFontInfo;
+     FT_Int                      mnLoadFlags;
+     double                      mfStretch;
+
+Index: vcl/unx/source/gdi/pspgraphics.cxx
+===================================================================
+RCS file: /cvs/gsl/vcl/unx/source/gdi/pspgraphics.cxx,v
+retrieving revision 1.13
+retrieving revision 1.13.88.1
+diff -u -p -r1.13 -r1.13.88.1
+--- vcl/unx/source/gdi/pspgraphics.cxx	2 Nov 2005 13:34:27 -0000	1.13
++++ vcl/unx/source/gdi/pspgraphics.cxx	16 Feb 2006 13:28:43 -0000	1.13.88.1
+@@ -1226,6 +1226,32 @@ ImplDevFontAttributes PspGraphics::Info2
+     aDFA.mePitch        = ToFontPitch (rInfo.m_ePitch);
+     aDFA.mbSymbolFlag   = (rInfo.m_aEncoding == RTL_TEXTENCODING_SYMBOL);
+ 
++    switch (rInfo.m_eEmbeddedbitmap)
++    {
++        default:
++            aDFA.meEmbeddedBitmap = EMBEDDEDBITMAP_DONTKNOW;
++            break;
++        case psp::fcstatus::istrue:
++            aDFA.meEmbeddedBitmap = EMBEDDEDBITMAP_TRUE;
++            break;
++        case psp::fcstatus::isfalse:
++            aDFA.meEmbeddedBitmap = EMBEDDEDBITMAP_FALSE;
++            break;
++    }
++
++    switch (rInfo.m_eAntialias)
++    {
++        default:
++            aDFA.meAntiAlias = ANTIALIAS_DONTKNOW;
++            break;
++        case psp::fcstatus::istrue:
++            aDFA.meAntiAlias = ANTIALIAS_TRUE;
++            break;
++        case psp::fcstatus::isfalse:
++            aDFA.meAntiAlias = ANTIALIAS_FALSE;
++            break;
++    }
++
+     // special case for the ghostscript fonts
+     if( aDFA.maName.CompareIgnoreCaseToAscii( "itc ", 4 ) == COMPARE_EQUAL )
+         aDFA.maName = aDFA.maName.Copy( 4 );
+
+
+
+Index: vcl/unx/source/gdi/xlfd_extd.cxx
+===================================================================
+RCS file: /cvs/gsl/vcl/unx/source/gdi/xlfd_extd.cxx,v
+retrieving revision 1.25
+retrieving revision 1.25.90.1
+diff -u -p -r1.25 -r1.25.90.1
+--- vcl/unx/source/gdi/xlfd_extd.cxx	1 Nov 2005 10:40:06 -0000	1.25
++++ vcl/unx/source/gdi/xlfd_extd.cxx	16 Feb 2006 13:28:44 -0000	1.25.90.1
+@@ -113,6 +113,10 @@ ExtendedXlfd::ExtendedXlfd( bool bScalab
+     mbDevice       = false;
+     mbSubsettable  = false;
+     mbEmbeddable   = false;
++
++    meEmbeddedBitmap = EMBEDDEDBITMAP_DONTKNOW;
++    meAntiAlias = ANTIALIAS_DONTKNOW;
++
+     mnQuality      = -1;
+ }
+ 
+Index: vcl/win/source/gdi/salgdi3.cxx
+===================================================================
+RCS file: /cvs/gsl/vcl/win/source/gdi/salgdi3.cxx,v
+retrieving revision 1.75
+retrieving revision 1.75.10.1
+diff -u -p -r1.75 -r1.75.10.1
+--- vcl/win/source/gdi/salgdi3.cxx	27 Jan 2006 13:50:33 -0000	1.75
++++ vcl/win/source/gdi/salgdi3.cxx	16 Feb 2006 13:28:45 -0000	1.75.10.1
+@@ -407,7 +407,10 @@ static ImplDevFontAttributes WinFont2Dev
+         ||  aDFA.maName.EqualsAscii( "ZapfChancery" )
+         ||  aDFA.maName.EqualsAscii( "ZapfDingbats" ) )
+             aDFA.mnQuality += 500;
+-    }        
++    }    
++
++    aDFA.meEmbeddedBitmap = EMBEDDEDBITMAP_DONTKNOW;
++    aDFA.meAntiAlias = ANTIALIAS_DONTKNOW;
+     
+     // TODO: add alias names
+ 
+@@ -488,6 +491,9 @@ static ImplDevFontAttributes WinFont2Dev
+             aDFA.mnQuality += 500;
+     }
+ 
++    aDFA.meEmbeddedBitmap = EMBEDDEDBITMAP_DONTKNOW;
++    aDFA.meAntiAlias = ANTIALIAS_DONTKNOW;
++
+     // TODO: add alias names
+     return aDFA;
+ }
+@@ -1870,6 +1876,8 @@ bool WinSalGraphics::AddTempDevFont( Imp
+     aDFA.mePitch      = PITCH_DONTKNOW;;
+     aDFA.mbSubsettable= false;
+     aDFA.mbEmbeddable = false;
++    aDFA.meEmbeddedBitmap = EMBEDDEDBITMAP_DONTKNOW;
++    aDFA.meAntiAlias = ANTIALIAS_DONTKNOW;
+ 
+     /*
+ 	// TODO: improve ImplDevFontAttributes using "FONTRES:" from *.fot file
