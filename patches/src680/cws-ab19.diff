@@ -1,0 +1,420 @@
+Index: basic/source/classes/sb.cxx
+===================================================================
+RCS file: /cvs/script/basic/source/classes/sb.cxx,v
+retrieving revision 1.26
+retrieving revision 1.23.40.3
+diff -u -p -r1.26 -r1.23.40.3
+--- basic/source/classes/sb.cxx	29 Sep 2005 16:10:50 -0000	1.26
++++ basic/source/classes/sb.cxx	21 Mar 2006 12:55:13 -0000	1.23.40.3
+@@ -1243,13 +1243,15 @@ void StarBASIC::MakeErrorText( SbError n
+ 		}
+ 		GetSbData()->aErrMsg = aMsg1;
+ 	}
+-	else
++	else if( nOldID != 0 )
+ 	{
+ 		String aStdMsg( RTL_CONSTASCII_USTRINGPARAM("Fehler ") );
+ 		aStdMsg += String::CreateFromInt32( nOldID);
+ 		aStdMsg += String( RTL_CONSTASCII_USTRINGPARAM(": Kein Fehlertext verfuegbar!") );
+ 		GetSbData()->aErrMsg = aStdMsg;
+ 	}
++	else
++		GetSbData()->aErrMsg = String::EmptyString();
+ }
+ 
+ BOOL StarBASIC::CError
+Index: basic/source/classes/sbxmod.cxx
+===================================================================
+RCS file: /cvs/script/basic/source/classes/sbxmod.cxx,v
+retrieving revision 1.27
+retrieving revision 1.22.40.3
+diff -u -p -r1.27 -r1.22.40.3
+--- basic/source/classes/sbxmod.cxx	29 Sep 2005 18:38:55 -0000	1.27
++++ basic/source/classes/sbxmod.cxx	3 Mar 2006 10:37:39 -0000	1.22.40.3
+@@ -1441,6 +1441,8 @@ BOOL SimpleTokenizer_Impl::getNextToken(
+ 	// Zahl?
+ 	else if( testCharFlags( c, CHAR_START_NUMBER ) == TRUE )
+ 	{
++		reType = TT_NUMBER;
++
+ 		// Buffer-Position initialisieren
+ 		int nPos = 0;
+ 
+@@ -1448,22 +1450,21 @@ BOOL SimpleTokenizer_Impl::getNextToken(
+ 		int nRadix = 10;
+ 
+ 		// Ist es eine Hex- oder Oct-Zahl?
+-		if( c == '0' )
++		if( c == '&' )
+ 		{
+ 			// Octal?
+-			// Java-Script geht von einem Octal-Wert aus, wenn nach 0 eine
+-			// Ziffer im oktalen Ziffernbereich folgt
+-			if( testCharFlags( peekChar(), CHAR_IN_OCT_NUMBER ) )
++			if( peekChar() == 'o' || peekChar() == 'O' )
+ 			{
++				// o entfernen
++				getChar();
+ 				nRadix = 8; 	// Octal-Basis
+ 
+ 				// Alle Ziffern einlesen
+ 				while( testCharFlags( peekChar(), CHAR_IN_OCT_NUMBER ) )
+ 					c = getChar();
+ 			}
+-
+-			// Dementsprechend wird bei 0x Hex geparsed
+-			else if( peekChar() == 'x' || peekChar() == 'X' )
++			// Hex?
++			else if( peekChar() == 'h' || peekChar() == 'H' )
+ 			{
+ 				// x entfernen
+ 				getChar();
+@@ -1473,10 +1474,14 @@ BOOL SimpleTokenizer_Impl::getNextToken(
+ 				while( testCharFlags( peekChar(), CHAR_IN_HEX_NUMBER ) )
+ 					c = getChar();
+ 			}
++			else
++			{
++				reType = TT_OPERATOR;
++			}
+ 		}
+ 
+ 		// Wenn nicht Oct oder Hex als double ansehen
+-		if( nRadix == 10 )
++		if( reType == TT_NUMBER && nRadix == 10 )
+ 		{
+ 			// Flag, ob das letzte Zeichen ein Exponent war
+ 			BOOL bAfterExpChar = FALSE;
+@@ -1492,7 +1497,7 @@ BOOL SimpleTokenizer_Impl::getNextToken(
+ 			}
+ 		}
+ 
+-		reType = TT_NUMBER;
++		// reType = TT_NUMBER;
+ 	}
+ 
+ 	// String?
+@@ -1500,6 +1505,8 @@ BOOL SimpleTokenizer_Impl::getNextToken(
+ 	{
+ 		// Merken, welches Zeichen den String eroeffnet hat
+ 		sal_Unicode cEndString = c;
++		if( c == '[' )
++			cEndString = ']';
+ 
+ 		// Alle Ziffern einlesen und puffern
+ 		while( peekChar() != cEndString )
+@@ -1524,7 +1531,10 @@ BOOL SimpleTokenizer_Impl::getNextToken(
+ 		if( reType != TT_ERROR )
+ 		{
+ 			getChar();
+-			reType = TT_STRING;
++			if( cEndString == ']' )
++				reType = TT_IDENTIFIER;
++			else
++				reType = TT_STRING;
+ 		}
+ 	}
+ 
+@@ -1610,9 +1620,10 @@ SimpleTokenizer_Impl::SimpleTokenizer_Im
+ 		aCharTypeTab[i] |= nHelpMask;
+ 
+ 	// e und E sowie . von Hand ergaenzen
+-	aCharTypeTab['e'] |=	CHAR_IN_NUMBER;
+-	aCharTypeTab['E'] |=	CHAR_IN_NUMBER;
+-	aCharTypeTab['.'] |=  (USHORT)( CHAR_IN_NUMBER | CHAR_START_NUMBER );
++	aCharTypeTab['e'] |= CHAR_IN_NUMBER;
++	aCharTypeTab['E'] |= CHAR_IN_NUMBER;
++	aCharTypeTab['.'] |= (USHORT)( CHAR_IN_NUMBER | CHAR_START_NUMBER );
++	aCharTypeTab['&'] |= CHAR_START_NUMBER;
+ 
+ 	// Hex-Ziffern
+ 	for( i = 'a' ; i <= 'f' ; i++ )
+@@ -1627,11 +1638,12 @@ SimpleTokenizer_Impl::SimpleTokenizer_Im
+ 	// String-Beginn/End-Zeichen
+ 	aCharTypeTab['\''] |= CHAR_START_STRING;
+ 	aCharTypeTab['\"'] |= CHAR_START_STRING;
++	aCharTypeTab['[']  |= CHAR_START_STRING;
+ 
+ 	// Operator-Zeichen
+ 	aCharTypeTab['!'] |= CHAR_OPERATOR;
+ 	aCharTypeTab['%'] |= CHAR_OPERATOR;
+-	aCharTypeTab['&'] |= CHAR_OPERATOR;
++	// aCharTypeTab['&'] |= CHAR_OPERATOR;		Removed because of #i14140
+ 	aCharTypeTab['('] |= CHAR_OPERATOR;
+ 	aCharTypeTab[')'] |= CHAR_OPERATOR;
+ 	aCharTypeTab['*'] |= CHAR_OPERATOR;
+@@ -1649,7 +1661,7 @@ SimpleTokenizer_Impl::SimpleTokenizer_Im
+ 	aCharTypeTab['~'] |= CHAR_OPERATOR;
+ 	aCharTypeTab['{'] |= CHAR_OPERATOR;
+ 	aCharTypeTab['}'] |= CHAR_OPERATOR;
+-	aCharTypeTab['['] |= CHAR_OPERATOR;
++	// aCharTypeTab['['] |= CHAR_OPERATOR;		Removed because of #i17826
+ 	aCharTypeTab[']'] |= CHAR_OPERATOR;
+ 	aCharTypeTab[';'] |= CHAR_OPERATOR;
+ 
+cvs diff: Diffing basic/source/comp
+Index: basic/source/comp/exprtree.cxx
+===================================================================
+RCS file: /cvs/script/basic/source/comp/exprtree.cxx,v
+retrieving revision 1.12
+retrieving revision 1.7.40.2
+diff -u -p -r1.12 -r1.7.40.2
+--- basic/source/comp/exprtree.cxx	9 Feb 2006 12:47:18 -0000	1.12
++++ basic/source/comp/exprtree.cxx	3 Mar 2006 10:38:37 -0000	1.7.40.2
+@@ -284,8 +284,7 @@ SbiExprNode* SbiExpression::Term()
+ 		// (Wobei 0 Parameter () entsprechen)
+ 		if( pDef->GetDims() )
+ 		{
+-			if( !pPar
+-			|| ( pPar->GetSize() && pPar->GetSize() != pDef->GetDims() ) )
++			if( pPar && pPar->GetSize() && pPar->GetSize() != pDef->GetDims() )
+ 				pParser->Error( SbERR_WRONG_DIMS );
+ 		}
+ 		if( pDef->IsDefinedAs() )
+Index: basic/source/comp/loops.cxx
+===================================================================
+RCS file: /cvs/script/basic/source/comp/loops.cxx,v
+retrieving revision 1.7
+retrieving revision 1.3.48.3
+diff -u -p -r1.7 -r1.3.48.3
+--- basic/source/comp/loops.cxx	29 Sep 2005 18:40:22 -0000	1.7
++++ basic/source/comp/loops.cxx	3 Mar 2006 10:38:53 -0000	1.3.48.3
+@@ -57,11 +57,11 @@ void SbiParser::If()
+ 
+ 		// multiline IF
+ 		nEndLbl = aGen.Gen( _JUMPF, 0 );
+-		while( !bAbort && Parse() )
++		eTok = Peek();
++		while( !( eTok == ELSEIF || eTok == ELSE || eTok == ENDIF ) &&
++				!bAbort && Parse() )
+ 		{
+ 			eTok = Peek();
+-			if( eTok == ELSEIF || eTok == ELSE || eTok == ENDIF )
+-				break;
+ 			if( IsEof() )
+ 			{
+ 				Error( SbERR_BAD_BLOCK, IF ); bAbort = TRUE; return;
+@@ -79,16 +79,18 @@ void SbiParser::If()
+ 
+ 			Next();
+ 			aGen.BackChain( nEndLbl );
++
++			aGen.Statement();
+ 			SbiExpression* pCond = new SbiExpression( this );
+ 			pCond->Gen();
+ 			nEndLbl = aGen.Gen( _JUMPF, 0 );
+ 			delete pCond;
+ 			TestToken( THEN );
+-			while( !bAbort && Parse() )
++			eTok = Peek();
++			while( !( eTok == ELSEIF || eTok == ELSE || eTok == ENDIF ) &&
++					!bAbort && Parse() )
+ 			{
+ 				eTok = Peek();
+-				if( eTok == ELSEIF || eTok == ELSE || eTok == ENDIF )
+-					break;
+ 				if( IsEof() )
+ 				{
+ 					Error( SbERR_BAD_BLOCK, ELSEIF );  bAbort = TRUE; return;
+@@ -101,6 +103,8 @@ void SbiParser::If()
+ 			USHORT nElseLbl = nEndLbl;
+ 			nEndLbl = aGen.Gen( _JUMP, 0 );
+ 			aGen.BackChain( nElseLbl );
++
++			aGen.Statement();
+ 			StmntBlock( ENDIF );
+ 		}
+ 		else if( eTok == ENDIF )
+Index: basic/source/comp/scanner.cxx
+===================================================================
+RCS file: /cvs/script/basic/source/comp/scanner.cxx,v
+retrieving revision 1.17
+retrieving revision 1.11.82.2
+diff -u -p -r1.17 -r1.11.82.2
+--- basic/source/comp/scanner.cxx	31 Jan 2006 18:30:17 -0000	1.17
++++ basic/source/comp/scanner.cxx	3 Mar 2006 10:39:30 -0000	1.11.82.2
+@@ -238,7 +238,10 @@ BOOL SbiScanner::NextSym()
+ 		// Abschliessendes '_' durch Space ersetzen, wenn Zeilenende folgt
+ 		// (sonst falsche Zeilenfortsetzung)
+ 		if(	!bUsedForHilite && !*pLine && *(pLine-1) == '_' )
++		{
++			aSym.GetBufferAccess();		// #109693 force copy if necessary
+ 			*((sal_Unicode*)(pLine-1)) = ' ';		// cast wegen const
++		}
+ 		// Typkennung?
+ 		// Das Ausrufezeichen bitte nicht testen, wenn
+ 		// danach noch ein Symbol anschliesst
+Index: basic/source/runtime/inputbox.cxx
+===================================================================
+RCS file: /cvs/script/basic/source/runtime/inputbox.cxx,v
+retrieving revision 1.6
+retrieving revision 1.5.40.2
+diff -u -p -r1.6 -r1.5.40.2
+--- basic/source/runtime/inputbox.cxx	7 Sep 2005 21:39:07 -0000	1.6
++++ basic/source/runtime/inputbox.cxx	3 Mar 2006 10:45:10 -0000	1.5.40.2
+@@ -179,9 +179,9 @@ RTLFUNC(InputBox)
+ 		String aDefault;
+ 		INT32 nX = -1, nY = -1;  // zentrieren
+ 		const String& rPrompt = rPar.Get(1)->GetString();
+-		if ( nArgCount > 2 )
++		if ( nArgCount > 2 && !rPar.Get(2)->IsErr() )
+ 			aTitle = rPar.Get(2)->GetString();
+-		if ( nArgCount > 3 )
++		if ( nArgCount > 3 && !rPar.Get(3)->IsErr() )
+ 			aDefault = rPar.Get(3)->GetString();
+ 		if ( nArgCount > 4 )
+ 		{
+Index: basic/source/runtime/methods.cxx
+===================================================================
+RCS file: /cvs/script/basic/source/runtime/methods.cxx,v
+retrieving revision 1.64
+retrieving revision 1.61.38.2
+diff -u -p -r1.64 -r1.61.38.2
+--- basic/source/runtime/methods.cxx	14 Dec 2005 14:35:50 -0000	1.64
++++ basic/source/runtime/methods.cxx	3 Mar 2006 10:45:40 -0000	1.61.38.2
+@@ -3548,18 +3548,39 @@ RTLFUNC(RGB)
+ 
+ RTLFUNC(QBColor)
+ {
++	static const INT32 pRGB[] =
++	{
++		0x000000,
++		0x800000,
++		0x008000,
++		0x808000,
++		0x000080,
++		0x800080,
++		0x008080,
++		0xC0C0C0,
++		0x808080,
++		0xFF0000,
++		0x00FF00,
++		0xFFFF00,
++		0x0000FF,
++		0xFF00FF,
++		0x00FFFF,
++		0xFFFFFF,
++	};
++
+ 	if ( rPar.Count() != 2 )
+ 	{
+ 		StarBASIC::Error( SbERR_BAD_ARGUMENT );
+ 		return;
+ 	}
+-
+-	Color aCol( (ColorData)rPar.Get(1)->GetInteger() );
+-
+-	ULONG nRed	 = aCol.GetRed() >> 8;
+-	ULONG nGreen = aCol.GetGreen() >> 8;
+-	ULONG nBlue  = aCol.GetBlue() >> 8;
+-	ULONG nRGB   = (nRed << 16) | (nGreen << 8) | nBlue;
++	
++	INT16 nCol = rPar.Get(1)->GetInteger();
++	if( nCol < 0 || nCol > 15 )
++	{
++		StarBASIC::Error( SbERR_BAD_ARGUMENT );
++		return;
++	}
++	INT32 nRGB = pRGB[ nCol ];
+ 	rPar.Get(0)->PutLong( nRGB );
+ }
+ 
+Index: basic/source/runtime/methods1.cxx
+===================================================================
+RCS file: /cvs/script/basic/source/runtime/methods1.cxx,v
+retrieving revision 1.24
+retrieving revision 1.22.40.3
+diff -u -p -r1.24 -r1.22.40.3
+--- basic/source/runtime/methods1.cxx	14 Dec 2005 14:36:04 -0000	1.24
++++ basic/source/runtime/methods1.cxx	3 Mar 2006 10:45:48 -0000	1.22.40.3
+@@ -604,15 +604,17 @@ RTLFUNC(Array)
+ 
+ 	// Parameter ins Array uebernehmen
+ 	for( short i = 0 ; i < nArraySize ; i++ )
+ 	{
+ 		SbxVariable* pVar = rPar.Get(i+1);
+ 		short index = i;
+-#ifdef ENABLE_VBA
+-		if ( IsBaseIndexOne() && SbiRuntime::isVBAEnabled() )
+-			++index; 
+-#endif //ENABLE_VBA
+-		pArray->Put( pVar, &index );
++		SbxVariable* pNew = new SbxVariable( *pVar );
++		pNew->SetFlag( SBX_WRITE );
++#ifdef ENABLE_VBA
++		if ( IsBaseIndexOne() && SbiRuntime::isVBAEnabled() )
++			++index; 
++#endif //ENABLE_VBA
++		pArray->Put( pNew, &index );
+ 	}
+ 
+ 	// Array zurueckliefern
+ 	SbxVariableRef refVar = rPar.Get(0);
+@@ -1473,6 +1478,7 @@ RTLFUNC(Split)
+ 		else
+ 		{
+ 			vRet.push_back( aExpression );
++			nArraySize = 1;
+ 		}
+ 	}
+ 
+Index: basic/source/runtime/step2.cxx
+===================================================================
+RCS file: /cvs/script/basic/source/runtime/step2.cxx,v
+retrieving revision 1.18
+retrieving revision 1.17.40.2
+diff -u -p -r1.18 -r1.17.40.2
+--- basic/source/runtime/step2.cxx	7 Sep 2005 21:42:41 -0000	1.18
++++ basic/source/runtime/step2.cxx	3 Mar 2006 10:47:14 -0000	1.17.40.2
+@@ -579,17 +579,19 @@ void SbiRuntime::StepPARAM( USHORT nOp1,
+ 
+ 	// #57915 Missing sauberer loesen
+ 	USHORT nParamCount = refParams->Count();
+-	// Wurden ueberhaupt genug Parameter uebergeben
+ 	if( i >= nParamCount )
+ 	{
+-		p = new SbxVariable();
+-		p->PutErr( 448 );		// Wie in VB: Error-Code 448 (SbERR_NAMED_NOT_FOUND)
+-		refParams->Put( p, i );
+-	}
+-	else
+-	{
+-		p = refParams->Get( i );
++		INT16 iLoop = i;
++		while( iLoop >= nParamCount )
++		{
++			p = new SbxVariable();
++			p->PutErr( 448 );		// Wie in VB: Error-Code 448 (SbERR_NAMED_NOT_FOUND)
++			refParams->Put( p, iLoop );
++			iLoop--;
++		}
+ 	}
++	p = refParams->Get( i );
++
+ 	if( p->GetType() == SbxERROR && ( i ) )
+ 	//if( p->GetType() == SbxEMPTY && ( i ) )
+ 	{
+Index: basctl/source/basicide/baside2b.cxx
+===================================================================
+RCS file: /cvs/script/basctl/source/basicide/baside2b.cxx,v
+retrieving revision 1.51
+retrieving revision 1.48.30.2
+diff -u -p -r1.51 -r1.48.30.2
+--- basctl/source/basicide/baside2b.cxx	31 Jan 2006 18:32:49 -0000	1.51
++++ basctl/source/basicide/baside2b.cxx	3 Mar 2006 10:58:52 -0000	1.48.30.2
+@@ -1861,7 +1861,6 @@ void WatchTreeListBox::RequestingChilds(
+             WatchItem* pChildItem = new WatchItem();
+ 			pChildItem->maName = aName;
+ 	        pChildEntry->SetUserData( pChildItem );
+-	        MakeVisible( pChildEntry );
+ 	    }
+ 		if( nPropCount > 0 )
+ 		{
+@@ -1914,7 +1913,6 @@ void WatchTreeListBox::RequestingChilds(
+             SvLBoxEntry* pChildEntry = SvTreeListBox::InsertEntry( aDisplayName, pEntry );
+ 			nElementCount++;
+ 			pChildEntry->SetUserData( pChildItem );
+-	        MakeVisible( pChildEntry );
+ 		}
+ 		if( nElementCount > 0 )
+ 		{
