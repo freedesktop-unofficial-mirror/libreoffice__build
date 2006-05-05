@@ -52,6 +52,7 @@ SLOFILES= \
 		$(SLO)$/vbapivotcache.obj \
 		$(SLO)$/vbapivottables.obj \
 		$(SLO)$/vbawindows.obj \
+		$(SLO)$/vbapalette.obj \
 		$(SLO)$/vbacharacters.obj
  
 
