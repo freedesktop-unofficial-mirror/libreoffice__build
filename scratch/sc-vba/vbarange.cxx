@@ -1,6 +1,7 @@
 #include <comphelper/processfactory.hxx>
 #include <sfx2/objsh.hxx>
 
+#include <com/sun/star/script/ArrayWrapper.hpp>
 #include <com/sun/star/sheet/XSheetOperation.hpp>
 #include <com/sun/star/sheet/CellFlags.hpp>
 #include <com/sun/star/table/XColumnRowRange.hpp>
@@ -70,7 +71,6 @@
 #include "vbafont.hxx"
 #include "vbacomment.hxx"
 #include "vbainterior.hxx"
-#include "vbaarraywrapper.hxx"
 #include "vbacharacters.hxx"
 
 #include <comphelper/anytostring.hxx>
@@ -517,7 +517,7 @@ ScVbaRange::getValue() throw (uno::RuntimeException)
 	// multi cell range ( return array )
 	Dim2ArrayValueGetter getter( nRowCount, nColCount );
 	visitArray( getter );
-	return makeAny( uno::Reference< vba::XArrayWrapper >( new ScArrayWrapper( getter.getValue(), sal_False ) ) );
+	return uno::makeAny( script::ArrayWrapper( sal_False, getter.getValue() ) );
 
 }
 
@@ -812,7 +812,12 @@ uno::Reference < vba::XFont >
 ScVbaRange::Font() throw (uno::RuntimeException)
 {
 	uno::Reference< beans::XPropertySet > xProps(mxRange, ::uno::UNO_QUERY );
-	return uno::Reference< vba::XFont >( new ScVbaFont( xProps ) );
+	ScDocument* pDoc = getDocumentFromRange(mxRange);
+	if ( !pDoc )
+		throw uno::RuntimeException( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( "Failed to access document from shell" ) ), uno::Reference< uno::XInterface >() );
+
+	ScVbaPalette aPalette( pDoc->GetDocumentShell() );	
+	return uno::Reference< vba::XFont >( new ScVbaFont( aPalette, xProps ) );
 }
                                                                                                                              
 uno::Reference< vba::XRange >
@@ -1163,12 +1168,26 @@ getPasteFormulaBits( sal_Int16 Operation)
 return nFormulaBits;
 }
 void SAL_CALL 
-ScVbaRange::PasteSpecial(sal_Int16 Paste, sal_Int16 Operation, ::sal_Bool SkipBlanks, ::sal_Bool Transpose ) throw (::com::sun::star::uno::RuntimeException) 
+ScVbaRange::PasteSpecial( const uno::Any& Paste, const uno::Any& Operation, const uno::Any& SkipBlanks, const uno::Any& Transpose ) throw (::com::sun::star::uno::RuntimeException) 
 {
-	USHORT nFlags = getPasteFlags(Paste);
-	USHORT nFormulaBits = getPasteFormulaBits(Operation);
-	implnPasteSpecial(nFlags,nFormulaBits,SkipBlanks,Transpose);
+	// set up defaults	
+	sal_Int32 nPaste = vba::xlPasteType::xlPasteAll;
+	sal_Int32 nOperation = vba::xlPasteSpecialOperation::xlPasteSpecialOperationNone;
+	sal_Bool bTranspose = sal_False;
+	sal_Bool bSkipBlanks = sal_False;
 
+	if ( Paste.hasValue() )
+		Paste >>= nPaste;
+	if ( Operation.hasValue() )
+		Operation >>= nOperation;
+	if ( SkipBlanks.hasValue() )
+		SkipBlanks >>= bSkipBlanks;
+	if ( Transpose.hasValue() )
+		Transpose >>= bTranspose;
+
+	USHORT nFlags = getPasteFlags(nPaste);
+	USHORT nFormulaBits = getPasteFormulaBits(nOperation);
+	implnPasteSpecial(nFlags,nFormulaBits,bSkipBlanks,bTranspose);
 }
 
 uno::Reference< vba::XRange > 
@@ -1685,7 +1704,12 @@ ScVbaRange::characters( const uno::Any& Start, const css::uno::Any& Length ) thr
 	if ( !isSingleCellRange() )
 		throw uno::RuntimeException( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM("Can't create Characters property for multicell range ") ), uno::Reference< uno::XInterface >() );
 	uno::Reference< text::XSimpleText > xSimple(mxRange->getCellByPosition(0,0) , uno::UNO_QUERY_THROW );
-	return uno::Reference< vba::XCharacters >( new ScVbaCharacters( m_xContext, xSimple, Start, Length ) );
+	ScDocument* pDoc = getDocumentFromRange(mxRange);
+	if ( !pDoc )
+		throw uno::RuntimeException( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( "Failed to access document from shell" ) ), uno::Reference< uno::XInterface >() );
+
+	ScVbaPalette aPalette( pDoc->GetDocumentShell() );
+	return uno::Reference< vba::XCharacters >( new ScVbaCharacters( m_xContext, aPalette, xSimple, Start, Length ) );
 }
 
  void SAL_CALL 
@@ -1772,4 +1796,11 @@ ScVbaRange::getPropertySetInfo(  ) throw (uno::RuntimeException)
 {
     uno::Reference< beans::XPropertySetInfo > xInfo( createPropertySetInfo( getInfoHelper() ) );
     return xInfo;
+}
+
+::rtl::OUString SAL_CALL 
+ScVbaRange::getName(  ) throw (css::uno::RuntimeException)
+{
+	const static rtl::OUString sName( RTL_CONSTASCII_USTRINGPARAM("Cells") );
+	return sName;
 }
