@@ -45,13 +45,13 @@ SLOFILES= \
 		$(SLO)$/vbachartobjects.obj\
 		$(SLO)$/vbaseriescollection.obj\
 		$(SLO)$/vbacollectionimpl.obj\
-		$(SLO)$/vbaarraywrapper.obj\
 		$(SLO)$/vbadialogs.obj \
 		$(SLO)$/vbadialog.obj	\
 		$(SLO)$/vbapivottable.obj \
 		$(SLO)$/vbapivotcache.obj \
 		$(SLO)$/vbapivottables.obj \
 		$(SLO)$/vbawindows.obj \
+		$(SLO)$/vbapalette.obj \
 		$(SLO)$/vbacharacters.obj
  
 
