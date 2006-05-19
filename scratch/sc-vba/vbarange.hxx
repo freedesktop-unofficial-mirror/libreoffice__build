@@ -3,6 +3,7 @@
 
 #include <cppuhelper/implbase1.hxx>
 #include <cppuhelper/implbase2.hxx>
+#include <cppuhelper/implbase3.hxx>
 #include <com/sun/star/container/XEnumerationAccess.hpp>
 
 #include <org/openoffice/vba/XRange.hpp>
@@ -17,6 +18,7 @@
 #include <com/sun/star/beans/XPropertySet.hpp>
 #include <com/sun/star/beans/PropertyAttribute.hpp>
 #include <com/sun/star/script/XTypeConverter.hpp>
+#include <com/sun/star/script/XDefaultMethod.hpp>
 #include <com/sun/star/sheet/FillDateMode.hpp>
 #include <com/sun/star/sheet/FillMode.hpp>
 #include <com/sun/star/sheet/FillDirection.hpp>
@@ -26,7 +28,7 @@
 
 class ScTableSheetsObj;
 
-typedef ::cppu::WeakImplHelper2< oo::vba::XRange, css::container::XEnumerationAccess > ScVbaRange_BASE;
+typedef ::cppu::WeakImplHelper3< oo::vba::XRange, css::container::XEnumerationAccess, css::script::XDefaultMethod > ScVbaRange_BASE;
 class ArrayVisitor
 {
 public:
@@ -42,6 +44,7 @@ class ScVbaRange : public ScVbaRange_BASE
 	sal_Bool mbIsRows;
 	sal_Bool mbIsColumns;
 	rtl::OUString msDftPropName;
+	double getCalcColWidth() throw (css::uno::RuntimeException);
 	void visitArray( ArrayVisitor& vistor );
 	css::uno::Reference< css::script::XTypeConverter > getTypeConverter() throw (css::uno::RuntimeException);
 
@@ -83,6 +86,11 @@ public:
 	virtual css::uno::Reference< oo::vba::XComment > SAL_CALL getComment() throw (css::uno::RuntimeException);
 	virtual css::uno::Any SAL_CALL getHidden() throw (css::uno::RuntimeException);
 	virtual void SAL_CALL setHidden( const css::uno::Any& _hidden ) throw (css::uno::RuntimeException);
+	virtual css::uno::Any SAL_CALL getColumnWidth() throw (css::uno::RuntimeException);
+	virtual void SAL_CALL setColumnWidth( const css::uno::Any& _columnwidth ) throw (css::uno::RuntimeException);
+	virtual css::uno::Any SAL_CALL getWidth() throw (css::uno::RuntimeException);
+	virtual void SAL_CALL setWidth( const css::uno::Any& _width ) throw (css::uno::RuntimeException);
+
 	// Methods
 	sal_Bool IsRows() { return mbIsRows; }
 	sal_Bool IsColumns() { return mbIsColumns; }
@@ -116,7 +124,7 @@ public:
 	virtual css::uno::Reference< oo::vba::XRange > SAL_CALL Range( const css::uno::Any &Cell1, const css::uno::Any &Cell2 )
 															throw (css::uno::RuntimeException);
 	virtual css::uno::Any SAL_CALL getCellRange(  ) throw (css::uno::RuntimeException);
-	virtual void SAL_CALL PasteSpecial( sal_Int16 Paste, sal_Int16 Operation, ::sal_Bool SkipBlanks, ::sal_Bool Transpose ) throw (css::uno::RuntimeException);
+	virtual void SAL_CALL PasteSpecial( const css::uno::Any& Paste, const css::uno::Any& Operation, const css::uno::Any& SkipBlanks, const css::uno::Any& Transpose ) throw (css::uno::RuntimeException);
 	virtual ::sal_Bool SAL_CALL Replace( const ::rtl::OUString& What, const ::rtl::OUString& Replacement, const css::uno::Any& LookAt, const css::uno::Any& SearchOrder, const css::uno::Any& MatchCase, const css::uno::Any& MatchByte, const css::uno::Any& SearchFormat, const css::uno::Any& ReplaceFormat ) throw (css::uno::RuntimeException);
 	virtual void SAL_CALL Sort( const css::uno::Any& Key1, const css::uno::Any& Order1, const css::uno::Any& Key2, const css::uno::Any& Type, const css::uno::Any& Order2, const css::uno::Any& Key3, const css::uno::Any& Order3, const css::uno::Any& Header, const css::uno::Any& OrderCustom, const css::uno::Any& MatchCase, const css::uno::Any& Orientation, const css::uno::Any& SortMethod,  const css::uno::Any& DataOption1, const css::uno::Any& DataOption2, const css::uno::Any& DataOption3 ) throw (css::uno::RuntimeException);
 	virtual css::uno::Reference< oo::vba::XRange > SAL_CALL End( ::sal_Int32 Direction )  throw (css::uno::RuntimeException);
@@ -143,6 +151,9 @@ public:
 
 	}
 	virtual sal_Bool SAL_CALL hasElements() throw (css::uno::RuntimeException);
+	// XDefaultMethod
+	::rtl::OUString SAL_CALL getName(  ) throw (css::uno::RuntimeException);
+
 protected:
 	// OPropertySetHelper
 	virtual ::cppu::IPropertyArrayHelper& SAL_CALL getInfoHelper();
