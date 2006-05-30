@@ -1,0 +1,838 @@
+Index: xmlsecurity/source/xmlsec/mscrypt/securityenvironment_mscryptimpl.cxx
+===================================================================
+RCS file: /cvs/xml/xmlsecurity/source/xmlsec/mscrypt/securityenvironment_mscryptimpl.cxx,v
+retrieving revision 1.11
+retrieving revision 1.11.34.1
+diff -u -p -u -p -r1.11 -r1.11.34.1
+--- xmlsecurity/source/xmlsec/mscrypt/securityenvironment_mscryptimpl.cxx	11 Nov 2005 09:19:51 -0000	1.11
++++ xmlsecurity/source/xmlsec/mscrypt/securityenvironment_mscryptimpl.cxx	9 May 2006 13:59:36 -0000	1.11.34.1
+@@ -1090,77 +1090,6 @@ sal_Int32 SecurityEnvironment_MSCryptImp
+ 			characters &= ~ ::com::sun::star::security::CertificateCharacters::HAS_PRIVATE_KEY ;
+ 		}
+ 	}
+-
+-	//Thirdly, make sentence whether or not the cert is trusted.
+-	{
+-		HCERTSTORE hCollectionStore ;
+-		PCCERT_CONTEXT pTempCert ;
+-
+-		hCollectionStore = CertOpenStore(
+-				CERT_STORE_PROV_COLLECTION ,
+-				0 ,
+-				NULL ,
+-				0 ,
+-				NULL
+-			) ;
+-
+-		if( hCollectionStore != NULL ) {
+-			HCERTSTORE hSystemStore ;
+-
+-			//Add system key store to the collection.
+-			hSystemStore = CertOpenSystemStore( 0, "MY" ) ;
+-			if( hSystemStore != NULL ) {
+-				CertAddStoreToCollection (
+-					hCollectionStore ,
+-					hSystemStore ,
+-					CERT_PHYSICAL_STORE_ADD_ENABLE_FLAG ,
+-					1
+-				) ;
+-				CertCloseStore( hSystemStore, CERT_CLOSE_STORE_CHECK_FLAG ) ;
+-			}
+-
+-			//Add system root store to the collection.
+-			hSystemStore = CertOpenSystemStore( 0, "Root" ) ;
+-			if( hSystemStore != NULL ) {
+-				CertAddStoreToCollection (
+-					hCollectionStore ,
+-					hSystemStore ,
+-					CERT_PHYSICAL_STORE_ADD_ENABLE_FLAG ,
+-					2
+-				) ;
+-				CertCloseStore( hSystemStore, CERT_CLOSE_STORE_CHECK_FLAG ) ;
+-			}
+-
+-			//Add system trust store to the collection.
+-			hSystemStore = CertOpenSystemStore( 0, "Trust" ) ;
+-			if( hSystemStore != NULL ) {
+-				CertAddStoreToCollection (
+-					hCollectionStore ,
+-					hSystemStore ,
+-					CERT_PHYSICAL_STORE_ADD_ENABLE_FLAG ,
+-					3
+-				) ;
+-				CertCloseStore( hSystemStore, CERT_CLOSE_STORE_CHECK_FLAG ) ;
+-			}
+-
+-			//Find the cert in the collection store.
+-			pTempCert = CertFindCertificateInStore(
+-				hCollectionStore ,
+-				X509_ASN_ENCODING | PKCS_7_ASN_ENCODING ,
+-				0 ,
+-				CERT_FIND_SUBJECT_NAME,
+-				&( pCertContext->pCertInfo->Subject ) ,
+-				NULL
+-			) ;
+-
+-			if( pTempCert != NULL && CertCompareCertificate( X509_ASN_ENCODING | PKCS_7_ASN_ENCODING, pCertContext->pCertInfo, pTempCert->pCertInfo ) ) {
+-				characters |=  ::com::sun::star::security::CertificateCharacters::TRUSTED ;
+-			} else {
+-				characters &= ~ ::com::sun::star::security::CertificateCharacters::TRUSTED ;
+-			}
+-		}
+-	}
+-
+ 	return characters ;
+ }
+ 
+Index: xmlsecurity/source/xmlsec/nss/securityenvironment_nssimpl.cxx
+===================================================================
+RCS file: /cvs/xml/xmlsecurity/source/xmlsec/nss/securityenvironment_nssimpl.cxx,v
+retrieving revision 1.14
+retrieving revision 1.14.34.5
+diff -u -p -u -p -r1.14 -r1.14.34.5
+--- xmlsecurity/source/xmlsec/nss/securityenvironment_nssimpl.cxx	11 Nov 2005 09:20:54 -0000	1.14
++++ xmlsecurity/source/xmlsec/nss/securityenvironment_nssimpl.cxx	12 May 2006 13:22:21 -0000	1.14.34.5
+@@ -64,16 +64,19 @@
+ #include <xmlsec/strings.h>
+ 
+ #include <tools/string.hxx>
+-
++#include <rtl/ustrbuf.hxx>
+ #include <comphelper/processfactory.hxx>
+ #include <cppuhelper/servicefactory.hxx>
+ #include <svtools/docpasswdrequest.hxx>
+ #include <xmlsecurity/biginteger.hxx>
++#include <rtl/logfile.h>
+ 
+ #ifndef _COM_SUN_STAR_TASK_XINTERACTIONHANDLER_HPP_
+ #include <com/sun/star/task/XInteractionHandler.hpp>
+ #endif
+ 
++#include "boost/scoped_array.hpp"
++
+ // MM : added for password exception
+ #include <com/sun/star/security/NoPasswordException.hpp>
+ namespace csss = ::com::sun::star::security;
+@@ -121,7 +124,8 @@ char* GetPasswordFunction( PK11SlotInfo*
+     return NULL;
+ }
+ 
+-SecurityEnvironment_NssImpl :: SecurityEnvironment_NssImpl( const Reference< XMultiServiceFactory >& aFactory ) : m_pSlot( NULL ) , m_pHandler( NULL ) , m_tSymKeyList() , m_tPubKeyList() , m_tPriKeyList() {
++SecurityEnvironment_NssImpl :: SecurityEnvironment_NssImpl( const Reference< XMultiServiceFactory >& aFactory ) :
++m_pHandler( NULL ) , m_tSymKeyList() , m_tPubKeyList() , m_tPriKeyList() {
+ 	
+ 	PK11_SetPasswordFunc( GetPasswordFunction ) ;
+ }
+@@ -130,9 +134,9 @@ SecurityEnvironment_NssImpl :: ~Security
+ 	
+ 	PK11_SetPasswordFunc( NULL ) ;
+ 
+-	if( m_pSlot != NULL ) {
+-		PK11_FreeSlot( m_pSlot ) ;
+-		m_pSlot = NULL ;
++	for (CIT_SLOTS i = m_Slots.begin(); i != m_Slots.end(); i++)
++	{
++		PK11_FreeSlot(*i);
+ 	}
+ 
+ 	if( !m_tSymKeyList.empty()  ) {
+@@ -240,40 +244,30 @@ SecurityEnvironment_NssImpl* SecurityEnv
+ 		return NULL ;
+ }
+ 
+-/* Native methods */
+-PK11SlotInfo* SecurityEnvironment_NssImpl :: getCryptoSlot() throw( Exception , RuntimeException ) {
+-	return m_pSlot ;
+-}
+ 
+ ::rtl::OUString SecurityEnvironment_NssImpl::getSecurityEnvironmentInformation() throw( ::com::sun::star::uno::RuntimeException )
+ {
+ 	rtl::OUString result;
+-	
+-	if( m_pSlot != NULL ) {
+-		result = rtl::OUString::createFromAscii(PK11_GetTokenName(m_pSlot));
+-	}
+-	else{
+-		result = rtl::OUString::createFromAscii( "Unknown Token" );
++	::rtl::OUStringBuffer buff;
++	for (CIT_SLOTS is = m_Slots.begin(); is != m_Slots.end(); is++)
++	{
++		buff.append(rtl::OUString::createFromAscii(PK11_GetTokenName(*is)));
++		buff.appendAscii("\n");
+ 	}
+-
+-	return result;
++	return buff.makeStringAndClear();
+ }
+ 
+-void SecurityEnvironment_NssImpl :: setCryptoSlot( PK11SlotInfo* aSlot) throw( Exception , RuntimeException ) {
+-	if( m_pSlot != NULL ) {
+-		PK11_FreeSlot( m_pSlot ) ;
+-		m_pSlot = NULL ;
+-	}
+-
+-	if( aSlot != NULL ) {
+-		m_pSlot = PK11_ReferenceSlot( aSlot ) ;
+-	}
++void SecurityEnvironment_NssImpl::addCryptoSlot( PK11SlotInfo* aSlot) throw( Exception , RuntimeException ) 
++{
++	PK11_ReferenceSlot(aSlot);
++	m_Slots.push_back(aSlot);
+ }
+ 
+ CERTCertDBHandle* SecurityEnvironment_NssImpl :: getCertDb() throw( Exception , RuntimeException ) {
+ 	return m_pHandler ;
+ }
+ 
++//Could we have multiple cert dbs?
+ void SecurityEnvironment_NssImpl :: setCertDb( CERTCertDBHandle* aCertDb ) throw( Exception , RuntimeException ) {
+ 	m_pHandler = aCertDb ;
+ }
+@@ -440,27 +434,82 @@ SECKEYPrivateKey* SecurityEnvironment_Ns
+ 	return prikey ;
+ }
+ 
+-Sequence< Reference < XCertificate > > SecurityEnvironment_NssImpl :: getPersonalCertificates() throw( SecurityException , RuntimeException ) 
++void SecurityEnvironment_NssImpl::updateSlots()
++{
++    //In case new tokens are present then we can obtain the corresponding slot
++	PK11SlotList * soltList = NULL;
++	PK11SlotListElement * soltEle = NULL;
++    PK11SlotInfo * pSlot = NULL;
++   	PK11SymKey * pSymKey = NULL;
++
++    osl::MutexGuard guard(m_mutex);
++    
++    m_Slots.clear();
++    m_tSymKeyList.clear();
++
++	soltList = PK11_GetAllTokens( CKM_INVALID_MECHANISM, PR_FALSE, PR_FALSE, NULL ) ;
++	if( soltList != NULL ) 
++	{
++		for( soltEle = soltList->head ; soltEle != NULL; soltEle = soltEle->next ) 
++		{
++			pSlot = soltEle->slot ;
++			
++			if(pSlot != NULL)
++			{
++				RTL_LOGFILE_TRACE2( "XMLSEC: Found a slot: SlotName=%s, TokenName=%s", PK11_GetSlotName(pSlot), PK11_GetTokenName(pSlot) );
++				pSymKey = PK11_KeyGen( pSlot , CKM_DES3_CBC, NULL, 128, NULL ) ;
++				if( pSymKey == NULL ) 
++				{
++					PK11_FreeSlot( pSlot ) ;
++					RTL_LOGFILE_TRACE( "XMLSEC: Error - pSymKey is NULL" );
++					continue;
++				}
++				
++				addCryptoSlot(pSlot);
++				PK11_FreeSlot( pSlot ) ;
++				pSlot = NULL;
++
++				adoptSymKey( pSymKey ) ;
++				PK11_FreeSymKey( pSymKey ) ;
++				pSymKey = NULL;
++
++			}// end of if(pSlot != NULL)
++		}// end of for
++	}// end of if( soltList != NULL ) 
++
++}
++
++
++Sequence< Reference < XCertificate > > 
++SecurityEnvironment_NssImpl::getPersonalCertificates() throw( SecurityException , RuntimeException ) 
+ {
+ 	sal_Int32 length ;
+ 	X509Certificate_NssImpl* xcert ;
+ 	std::list< X509Certificate_NssImpl* > certsList ;
+-
++	
++    updateSlots();
+ 	//firstly, we try to find private keys in slot
+-	if( m_pSlot != NULL ) {
++	for (CIT_SLOTS is = m_Slots.begin(); is != m_Slots.end(); is++)
++	{
++		PK11SlotInfo *slot = *is;
+ 		SECKEYPrivateKeyList* priKeyList ;
+ 		SECKEYPrivateKeyListNode* curPri ;
+ 
+-		if( PK11_NeedLogin( m_pSlot ) ) {
+-            SECStatus nRet = PK11_Authenticate( m_pSlot, PR_TRUE, NULL );
+-			if( nRet != SECSuccess ) {
++		if( PK11_NeedLogin(slot ) ) {
++			SECStatus nRet = PK11_Authenticate(slot, PR_TRUE, NULL);
++			//PK11_Authenticate may fail in case the a slot has not been initialized.
++			//this is the case if the user has a new profile, so that they have never
++			//added a personal certificate. 
++			if( nRet != SECSuccess && PORT_GetError() != SEC_ERROR_IO) {
+ 				throw NoPasswordException();
+ 			}
+ 		} 
+ 		
+-		priKeyList = PK11_ListPrivateKeysInSlot( m_pSlot ) ;
++		priKeyList = PK11_ListPrivateKeysInSlot(slot) ;
+ 		if( priKeyList != NULL ) {
+-			for( curPri = PRIVKEY_LIST_HEAD( priKeyList ); !PRIVKEY_LIST_END( curPri, priKeyList ) && curPri != NULL ; curPri = PRIVKEY_LIST_NEXT( curPri ) ) {
++			for( curPri = PRIVKEY_LIST_HEAD( priKeyList ); 
++				!PRIVKEY_LIST_END( curPri, priKeyList ) && curPri != NULL ; 
++				curPri = PRIVKEY_LIST_NEXT( curPri ) ) {
+ 				xcert = NssPrivKeyToXCert( curPri->key ) ;
+ 				if( xcert != NULL )
+ 					certsList.push_back( xcert ) ;
+@@ -470,39 +519,6 @@ Sequence< Reference < XCertificate > > S
+ 		SECKEY_DestroyPrivateKeyList( priKeyList ) ;
+ 	}
+ 
+-	//Deprecated
+-	/*-------
+-	{
+-		PK11SlotList* soltList ;
+-		PK11SlotListElement* soltEle ;
+-
+-		SECKEYPrivateKeyList* priKeyList ;
+-		SECKEYPrivateKeyListNode* curPri ;
+-
+-		soltList = PK11_GetAllTokens( CKM_INVALID_MECHANISM, PR_FALSE, PR_FALSE, NULL ) ;
+-		if( soltList != NULL ) {
+-			for( soltEle = soltList->head; soltEle != NULL; soltEle = soltEle->next ) {
+-				if( PK11_NeedLogin( soltEle->slot ) ) {
+-					if( PK11_Authenticate( soltEle->slot, PR_TRUE, NULL ) != SECSuccess ) {
+-						return NULL ;
+-					}
+-				}
+-
+-				priKeyList = PK11_ListPrivateKeysInSlot( soltEle->slot ) ;
+-				if( priKeyList != NULL ) {
+-					for( curPri = PRIVKEY_LIST_HEAD( priKeyList ); !PRIVKEY_LIST_END( curPri, priKeyList ) && curPri != NULL ; curPri = PRIVKEY_LIST_NEXT( curPri ) ) {
+-						xcert = NssPrivKeyToXCert( curPri->key ) ;
+-						if( xcert != NULL )
+-							certsList.push_back( xcert ) ;
+-					}
+-				}
+-
+-				SECKEY_DestroyPrivateKeyList( priKeyList ) ;
+-			}
+-		}
+-	}
+-	----------*/
+-
+ 	//secondly, we try to find certificate from registered private keys.
+ 	if( !m_tPriKeyList.empty()  ) {
+ 		std::list< SECKEYPrivateKey* >::iterator priKeyIt ;
+@@ -794,7 +810,8 @@ sal_Int32 SecurityEnvironment_NssImpl ::
+ 	return validity ;
+ }
+ 
+-sal_Int32 SecurityEnvironment_NssImpl :: getCertificateCharacters( const ::com::sun::star::uno::Reference< ::com::sun::star::security::XCertificate >& aCert ) throw( ::com::sun::star::uno::SecurityException, ::com::sun::star::uno::RuntimeException ) {
++sal_Int32 SecurityEnvironment_NssImpl::getCertificateCharacters( 
++	const ::com::sun::star::uno::Reference< ::com::sun::star::security::XCertificate >& aCert ) throw( ::com::sun::star::uno::SecurityException, ::com::sun::star::uno::RuntimeException ) {
+ 	sal_Int32 characters ;
+ 	const X509Certificate_NssImpl* xcert ;
+ 	const CERTCertificate* cert ;
+@@ -813,82 +830,41 @@ sal_Int32 SecurityEnvironment_NssImpl ::
+ 
+ 	characters = 0x00000000 ;
+ 
+-	//Firstly, make sentence whether or not the cert is self-signed.
++	//Firstly, find out whether or not the cert is self-signed.
+ 	if( SECITEM_CompareItem( &(cert->derIssuer), &(cert->derSubject) ) == SECEqual ) {
+ 		characters |= ::com::sun::star::security::CertificateCharacters::SELF_SIGNED ;
+ 	} else {
+ 		characters &= ~ ::com::sun::star::security::CertificateCharacters::SELF_SIGNED ;
+ 	}
+ 
+-	//Secondly, make sentence whether or not the cert has a private key.
++	//Secondly, find out whether or not the cert has a private key.
+ 	
+ 	/*
+ 	 * i40394
+ 	 *
+ 	 * mmi : need to check whether the cert's slot is valid first
+ 	 */
+-	{
+-		SECKEYPrivateKey* priKey = NULL;
++	SECKEYPrivateKey* priKey = NULL;
+ 
+-		if (cert->slot != NULL)
+-		{
+-			priKey = PK11_FindPrivateKeyFromCert( cert->slot, ( CERTCertificate* )cert, NULL ) ;
+-		}
+-		
+-		if( priKey == NULL && m_pSlot != NULL && m_pSlot != cert->slot )
+-			priKey = PK11_FindPrivateKeyFromCert( m_pSlot, ( CERTCertificate* )cert, NULL ) ;
+-
+-		if( priKey != NULL ) {
+-			characters |=  ::com::sun::star::security::CertificateCharacters::HAS_PRIVATE_KEY ;
+-
+-			SECKEY_DestroyPrivateKey( priKey ) ;
+-		} else {
+-			characters &= ~ ::com::sun::star::security::CertificateCharacters::HAS_PRIVATE_KEY ;
+-		}
++	if (cert->slot != NULL)
++	{
++		priKey = PK11_FindPrivateKeyFromCert( cert->slot, ( CERTCertificate* )cert, NULL ) ;
+ 	}
+-
+-	//Thirdly, make sentence whether or not the cert is trusted.
+-	/*
++	if(priKey == NULL)
+ 	{
+-		CERTCertificate* tempCert ;
+-		CERTIssuerAndSN issuerAndSN ;
+-
+-		memset( &issuerAndSN, 0, sizeof( issuerAndSN ) ) ;
+-
+-		issuerAndSN.derIssuer.data = cert->derIssuer.data;
+-        issuerAndSN.derIssuer.len = cert->derIssuer.len;
+-
+-		issuerAndSN.serialNumber.data = cert->serialNumber.data;
+-        issuerAndSN.serialNumber.len = cert->serialNumber.len;
+-
+-		if( m_pSlot != NULL )
+-			tempCert = PK11_FindCertByIssuerAndSN( NULL, &issuerAndSN, NULL ) ;
+-		else 
+-			tempCert = NULL ;
+-
+-		if( tempCert != NULL ) {
+-			characters |=  ::com::sun::star::security::CertificateCharacters::TRUSTED ;
+-			CERT_DestroyCertificate( tempCert ) ;
+-		} else {
+-			characters &= ~ ::com::sun::star::security::CertificateCharacters::TRUSTED ;
++		for (CIT_SLOTS is = m_Slots.begin(); is != m_Slots.end(); is++)
++		{
++			priKey = PK11_FindPrivateKeyFromCert(*is, (CERTCertificate*)cert, NULL);
++			if (priKey)
++				break;
+ 		}
+ 	}
+-	*/
+-
+-	{
+-		CERTCertificate* tempCert ;
++	if( priKey != NULL ) {
++		characters |=  ::com::sun::star::security::CertificateCharacters::HAS_PRIVATE_KEY ;
+ 
+-		if( m_pSlot != NULL )
+-			tempCert = PK11_FindCertFromDERCert( m_pSlot, (  CERTCertificate* )cert, NULL ) ;
+-		else 
+-			tempCert = NULL ;
+-
+-		if( tempCert != NULL ) {
+-			characters |=  ::com::sun::star::security::CertificateCharacters::TRUSTED ;
+-			CERT_DestroyCertificate( tempCert ) ;
+-		} else {
+-			characters &= ~ ::com::sun::star::security::CertificateCharacters::TRUSTED ;
+-		}
++		SECKEY_DestroyPrivateKey( priKey ) ;
++	} else {
++		characters &= ~ ::com::sun::star::security::CertificateCharacters::HAS_PRIVATE_KEY ;
+ 	}
+ 
+ 	return characters ;
+@@ -946,14 +922,20 @@ xmlSecKeysMngrPtr SecurityEnvironment_Ns
+ 	SECKEYPrivateKey* priKey = NULL ;
+ 	xmlSecKeysMngrPtr pKeysMngr = NULL ;
+ 
+-	slot = this->getCryptoSlot() ;
+ 	handler = this->getCertDb() ;
+ 
+ 	/*-
+ 	 * The following lines is based on the private version of xmlSec-NSS
+ 	 * crypto engine
+ 	 */
+-	pKeysMngr = xmlSecNssAppliedKeysMngrCreate( slot , handler ) ;
++	int cSlots = m_Slots.size();
++	boost::scoped_array<PK11SlotInfo*> sarSlots(new PK11SlotInfo*[cSlots]);
++	PK11SlotInfo**  slots = sarSlots.get();
++	int count = 0;
++	for (CIT_SLOTS islots = m_Slots.begin();islots != m_Slots.end(); islots++, count++)
++		slots[count] = *islots;
++
++	pKeysMngr = xmlSecNssAppliedKeysMngrCreate(slots, cSlots, handler ) ;
+ 	if( pKeysMngr == NULL )
+ 		throw RuntimeException() ;
+ 
+Index: xmlsecurity/source/xmlsec/nss/securityenvironment_nssimpl.hxx
+===================================================================
+RCS file: /cvs/xml/xmlsecurity/source/xmlsec/nss/securityenvironment_nssimpl.hxx,v
+retrieving revision 1.6
+retrieving revision 1.6.54.2
+diff -u -p -u -p -r1.6 -r1.6.54.2
+--- xmlsecurity/source/xmlsec/nss/securityenvironment_nssimpl.hxx	9 Sep 2005 17:33:57 -0000	1.6
++++ xmlsecurity/source/xmlsec/nss/securityenvironment_nssimpl.hxx	12 May 2006 13:22:22 -0000	1.6.54.2
+@@ -92,6 +92,8 @@
+ #include <com/sun/star/lang/XUnoTunnel.hpp>
+ #endif
+ 
++#include "osl/mutex.hxx"
++
+ #include "pk11func.h"
+ #include "keyhi.h"
+ #include "certdb.h"
+@@ -105,9 +107,13 @@ class SecurityEnvironment_NssImpl : publ
+ 	::com::sun::star::lang::XServiceInfo ,
+ 	::com::sun::star::lang::XUnoTunnel >
+ {
+-	private :
+-	
+-		PK11SlotInfo*						m_pSlot ;
++private :
++		
++    std::list< PK11SlotInfo* > m_Slots;
++    typedef std::list< PK11SlotInfo* >::const_iterator CIT_SLOTS;
++
++    osl::Mutex m_mutex;
++    
+ 		CERTCertDBHandle*					m_pHandler ;
+ 		std::list< PK11SymKey* >			m_tSymKeyList ;
+ 		std::list< SECKEYPublicKey* >		m_tPubKeyList ;
+@@ -158,10 +164,6 @@ class SecurityEnvironment_NssImpl : publ
+ 		static SecurityEnvironment_NssImpl* getImplementation( const ::com::sun::star::uno::Reference< ::com::sun::star::uno::XInterface > xObj ) ;
+ 
+ 		//Native mehtods
+-		virtual PK11SlotInfo* getCryptoSlot() throw( ::com::sun::star::uno::Exception , ::com::sun::star::uno::RuntimeException ) ;
+-
+-		virtual void setCryptoSlot( PK11SlotInfo* aSlot ) throw( ::com::sun::star::uno::Exception , ::com::sun::star::uno::RuntimeException ) ;
+-
+ 		virtual CERTCertDBHandle* getCertDb() throw( ::com::sun::star::uno::Exception , ::com::sun::star::uno::RuntimeException ) ;
+ 
+ 		virtual void setCertDb( CERTCertDBHandle* aCertDb ) throw( ::com::sun::star::uno::Exception , ::com::sun::star::uno::RuntimeException ) ;
+@@ -200,6 +202,13 @@ class SecurityEnvironment_NssImpl : publ
+ 		//Native mehtods
+ 		virtual xmlSecKeysMngrPtr createKeysManager() throw( ::com::sun::star::uno::Exception , ::com::sun::star::uno::RuntimeException ) ;
+ 		virtual void destroyKeysManager(xmlSecKeysMngrPtr pKeysMngr) throw( ::com::sun::star::uno::Exception , ::com::sun::star::uno::RuntimeException ) ;
++
++private:
++        void updateSlots();
++
++  		virtual void addCryptoSlot( PK11SlotInfo* aSlot ) throw( ::com::sun::star::uno::Exception , ::com::sun::star::uno::RuntimeException ) ;
++
++
+ } ;
+ 
+ #endif	// _XSECURITYENVIRONMENT_NSSIMPL_HXX_
+Index: xmlsecurity/source/xmlsec/nss/seinitializer_nssimpl.cxx
+===================================================================
+RCS file: /cvs/xml/xmlsecurity/source/xmlsec/nss/seinitializer_nssimpl.cxx,v
+retrieving revision 1.15
+retrieving revision 1.15.54.3
+diff -u -p -u -p -r1.15 -r1.15.54.3
+--- xmlsecurity/source/xmlsec/nss/seinitializer_nssimpl.cxx	9 Sep 2005 17:34:13 -0000	1.15
++++ xmlsecurity/source/xmlsec/nss/seinitializer_nssimpl.cxx	12 May 2006 13:31:16 -0000	1.15.54.3
+@@ -182,9 +182,6 @@ cssu::Reference< cssxc::XXMLSecurityCont
+ 	throw (cssu::RuntimeException)
+ {
+ 	CERTCertDBHandle	*pCertHandle = NULL ;
+-	PK11SlotInfo		*pSlot = NULL , *pInternalSlot = NULL ;
+-	PK11SymKey 			*pSymKey = NULL ;
+-	PRBool				found;
+ 
+ 	rtl::OString sCertDir;
+ 	if( sCertDB.getLength() ) 
+@@ -244,144 +241,30 @@ cssu::Reference< cssxc::XXMLSecurityCont
+ 
+ 	pCertHandle = CERT_GetDefaultCertDB() ;
+ 
+-	/*- i39448 - we will get all slots defined in the profile 
+-	* ---------- and alloc them in each SecurityEnviroment .
+-	* ---------- By CP/20050105 
+-	--------------------------*/
+-	pInternalSlot = PK11_GetInternalKeySlot() ;
+-	if (pInternalSlot == NULL)
+-	{
+-	//	PK11_LogoutAll();
+-	//	NSS_Shutdown();
+-		RTL_LOGFILE_TRACE( "XMLSEC: Error - pInternalSlot is NULL!" );
+-		return NULL;
+-	}
+ 	try 
+ 	{
+-		PK11SlotList* soltList ;
+-		PK11SlotListElement* soltEle ;
+-
+ 		/* Build XML Security Context */
+ 		const rtl::OUString sSecyrutyContext ( RTL_CONSTASCII_USTRINGPARAM( SECURITY_CONTEXT ) );	
+ 		cssu::Reference< cssxc::XXMLSecurityContext > xSecCtx( mxMSF->createInstance ( sSecyrutyContext ), cssu::UNO_QUERY );
+ 		if( !xSecCtx.is() ) 
+-		{
+-		//	PK11_LogoutAll();
+-		//	NSS_Shutdown();
+ 			return NULL;
+-		}
+-
+-		soltList = PK11_GetAllTokens( CKM_INVALID_MECHANISM, PR_FALSE, PR_FALSE, NULL ) ;
+-		if( soltList != NULL ) {
+-			for( soltEle = soltList->head ; soltEle != NULL; soltEle = soltEle->next ) 
+-			{
+-				RTL_LOGFILE_TRACE( "XMLSEC: Trying token..." );
+-				found = PR_FALSE;
+-
+-				pSlot = soltEle->slot ;
+-				
+-				if(pSlot != NULL){
+-					RTL_LOGFILE_TRACE2( "XMLSEC: Found a slot: SlotName=%s, TokenName=%s", PK11_GetSlotName(pSlot), PK11_GetTokenName(pSlot) );
+-					pSymKey = PK11_KeyGen( pSlot , CKM_DES3_CBC, NULL, 128, NULL ) ;
+-					if( pSymKey == NULL ) 
+-					{
+-						PK11_FreeSlot( pSlot ) ;
+-					//	PK11_LogoutAll();
+-					//	NSS_Shutdown();
+-						RTL_LOGFILE_TRACE( "XMLSEC: Error - pSymKey is NULL" );
+-						return NULL;
+-					}
+-
+-					/* Build Security Environment */
+-					const rtl::OUString sSecyrutyEnvironment ( RTL_CONSTASCII_USTRINGPARAM( SECURITY_ENVIRONMENT ) );	
+-					cssu::Reference< cssxc::XSecurityEnvironment > xSecEnv( mxMSF->createInstance ( sSecyrutyEnvironment ), cssu::UNO_QUERY );
+-					if( !xSecEnv.is() ) 
+-					{
+-						PK11_FreeSymKey( pSymKey ) ;
+-						PK11_FreeSlot( pSlot ) ;
+-					//	PK11_LogoutAll();
+-					//	NSS_Shutdown();
+-						return NULL;
+-					}
+-
+-					/* Setup key slot and certDb */
+-					cssu::Reference< cssl::XUnoTunnel > xEnvTunnel( xSecEnv , cssu::UNO_QUERY ) ;
+-					if( !xEnvTunnel.is() ) 
+-					{
+-						PK11_FreeSymKey( pSymKey ) ;
+-						PK11_FreeSlot( pSlot ) ;
+-					//	PK11_LogoutAll();
+-					//	NSS_Shutdown();
+-						return NULL;
+-					}
+-
+-					SecurityEnvironment_NssImpl* pSecEnv = ( SecurityEnvironment_NssImpl* )xEnvTunnel->getSomething( SecurityEnvironment_NssImpl::getUnoTunnelId() ) ;
+-					if( pSecEnv == NULL ) 
+-					{
+-						PK11_FreeSymKey( pSymKey ) ;
+-						PK11_FreeSlot( pSlot ) ;
+-					//	PK11_LogoutAll();
+-					//	NSS_Shutdown();
+-						return NULL;
+-					}
+-					
+-					// search the internal slot.
+-					//PR_fprintf(PR_STDOUT, "Token:%s\n",PK11_GetSlotName(pSlot));
+-					//found = PK11_IsInternal(pSlot) ; //This method will return two true result.
+-					if((!strcmp(PK11_GetSlotName(pInternalSlot),PK11_GetSlotName(pSlot))&&(!strcmp(PK11_GetTokenName(pInternalSlot),PK11_GetTokenName(pSlot)))))
+-					{
+-						found = PR_TRUE;
+-					}
+-
+-					pSecEnv->setCryptoSlot( pSlot ) ;
+-					PK11_FreeSlot( pSlot ) ;
+-					pSlot = NULL;
+-
+-					pSecEnv->setCertDb( pCertHandle ) ;
+-
+-					pSecEnv->adoptSymKey( pSymKey ) ;
+-					PK11_FreeSymKey( pSymKey ) ;
+-					pSymKey = NULL;
+-
+-					sal_Int32 n = xSecCtx->addSecurityEnvironment( xSecEnv ) ;
+-
+-					if(found != PR_FALSE)
+-					{
+-						RTL_LOGFILE_TRACE( "XMLSEC: Using this slot as the Default Security Environment." );
+-						xSecCtx->setDefaultSecurityEnvironmentIndex( n ) ;
+-					}
+-
+-
+-				}// end of if(pSlot != NULL)
+-			}// end of for
+-		}// end of if( soltList != NULL ) 
+-
+-		if(pInternalSlot != NULL)
+-		{
+-			PK11_FreeSlot(pInternalSlot) ;
+-			pInternalSlot = NULL ;
+-		}
+ 
++		const rtl::OUString sSecyrutyEnvironment ( RTL_CONSTASCII_USTRINGPARAM( SECURITY_ENVIRONMENT ) );	
++		cssu::Reference< cssxc::XSecurityEnvironment > xSecEnv( mxMSF->createInstance ( sSecyrutyEnvironment ), cssu::UNO_QUERY );
++		cssu::Reference< cssl::XUnoTunnel > xEnvTunnel( xSecEnv , cssu::UNO_QUERY ) ;
++		if( !xEnvTunnel.is() ) 
++			return NULL;
++		SecurityEnvironment_NssImpl* pSecEnv = ( SecurityEnvironment_NssImpl* )xEnvTunnel->getSomething( 
++			SecurityEnvironment_NssImpl::getUnoTunnelId() ) ;
++		pSecEnv->setCertDb(pCertHandle);
++	
++		sal_Int32 n = xSecCtx->addSecurityEnvironment(xSecEnv);
++		//originally the SecurityEnvironment with the internal slot was set as default
++		xSecCtx->setDefaultSecurityEnvironmentIndex( n );
+ 		return xSecCtx;
+ 	}
+ 	catch( cssu::Exception& )
+ 	{
+-		if (pSymKey != NULL)
+-		{
+-			PK11_FreeSymKey( pSymKey ) ;
+-		}
+-		
+-		if (pSlot != NULL)
+-		{
+-			PK11_FreeSlot( pSlot ) ;
+-		}
+-		
+-		if(pInternalSlot != NULL)
+-		{
+-			PK11_FreeSlot(pInternalSlot) ;
+-			pInternalSlot = NULL ;
+-		}
+-
+ 		//PK11_LogoutAll();
+ 		//NSS_Shutdown();
+ 		return NULL;
+@@ -403,6 +286,7 @@ void SAL_CALL SEInitializer_NssImpl::fre
+ rtl::OUString SEInitializer_NssImpl_getImplementationName ()
+ 	throw (cssu::RuntimeException)
+ {
++
+ 	return rtl::OUString ( RTL_CONSTASCII_USTRINGPARAM ( IMPLEMENTATION_NAME ) );
+ }
+ 
+Index: xmlsecurity/source/xmlsec/nss/xmlsecuritycontext_nssimpl.cxx
+===================================================================
+RCS file: /cvs/xml/xmlsecurity/source/xmlsec/nss/xmlsecuritycontext_nssimpl.cxx,v
+retrieving revision 1.3
+retrieving revision 1.3.54.1
+diff -u -p -u -p -r1.3 -r1.3.54.1
+--- xmlsecurity/source/xmlsec/nss/xmlsecuritycontext_nssimpl.cxx	9 Sep 2005 17:35:50 -0000	1.3
++++ xmlsecurity/source/xmlsec/nss/xmlsecuritycontext_nssimpl.cxx	5 May 2006 14:29:32 -0000	1.3.54.1
+@@ -189,14 +189,15 @@ void SAL_CALL XMLSecurityContext_NssImpl
+ 	//Create key manager
+ 	Reference< XUnoTunnel > xEnvTunnel( m_xSecurityEnvironment , UNO_QUERY ) ;
+ 	if( !xEnvTunnel.is() ) {
+-		throw RuntimeException() ;
++		throw RuntimeException() ;^1
+ 	}
+ 
+ 	SecurityEnvironment_NssImpl* pSecEnv = ( SecurityEnvironment_NssImpl* )xEnvTunnel->getSomething( SecurityEnvironment_NssImpl::getUnoTunnelId() ) ;
+ 	if( pSecEnv == NULL )
+ 		throw RuntimeException() ;
+ 
+-	slot = pSecEnv->getCryptoSlot() ;
++	//todo
++//	slot = pSecEnv->getCryptoSlot() ;
+ 	handler = pSecEnv->getCertDb() ;
+ 
+ 	/*-
+Index: libxmlsec/xmlsec1-1.2.6.patch
+===================================================================
+RCS file: /cvs/external/libxmlsec/xmlsec1-1.2.6.patch,v
+retrieving revision 1.13
+retrieving revision 1.13.4.2
+diff -u -p -u -p -r1.13 -r1.13.4.2
+--- libxmlsec/xmlsec1-1.2.6.patch	9 Mar 2006 10:18:52 -0000	1.13
++++ libxmlsec/xmlsec1-1.2.6.patch	8 May 2006 10:27:01 -0000	1.13.4.2
+@@ -298,12 +298,12 @@
+   
+   #endif /* XMLSEC_NO_X509 */
+   
+-*** misc/xmlsec1-1.2.6/include/xmlsec/nss/akmngr.h	2005-10-25 16:18:25.229244000 +0200
+---- misc/build/xmlsec1-1.2.6/include/xmlsec/nss/akmngr.h	2005-10-25 16:17:20.875018000 +0200
++*** misc/xmlsec1-1.2.6/include/xmlsec/nss/akmngr.h	2006-05-08 12:20:35.464923000 +0200
++--- misc/build/xmlsec1-1.2.6/include/xmlsec/nss/akmngr.h	2006-05-08 12:19:38.888548000 +0200
+ ***************
+ *** 1 ****
+ ! dummy
+---- 1,55 ----
++--- 1,56 ----
+ ! /** 
+ !  * XMLSec library
+ !  *
+@@ -330,7 +330,8 @@
+ ! 
+ ! XMLSEC_CRYPTO_EXPORT xmlSecKeysMngrPtr
+ ! xmlSecNssAppliedKeysMngrCreate(
+-!     PK11SlotInfo* slot ,
++!     PK11SlotInfo** slots,
++! 	int cSlots,
+ !     CERTCertDBHandle* handler
+ ! ) ;
+ ! 
+@@ -3282,12 +3283,12 @@
+   	    }
+   	}
+   	xmlFree(cName);
+-*** misc/xmlsec1-1.2.6/src/nss/akmngr.c	2005-10-25 16:18:25.389481000 +0200
+---- misc/build/xmlsec1-1.2.6/src/nss/akmngr.c	2005-10-25 16:17:21.304210000 +0200
++*** misc/xmlsec1-1.2.6/src/nss/akmngr.c	2006-05-08 12:20:35.581067000 +0200
++--- misc/build/xmlsec1-1.2.6/src/nss/akmngr.c	2006-05-08 12:20:20.572545000 +0200
+ ***************
+ *** 1 ****
+ ! dummy
+---- 1,381 ----
++--- 1,384 ----
+ ! /** 
+ !  * XMLSec library
+ !  *
+@@ -3318,7 +3319,8 @@
+ ! 
+ ! /**
+ !  * xmlSecNssAppliedKeysMngrCreate:
+-!  * @slot:			the pointer to NSS PKCS#11 slot infomation.
++!  * @slot:			array of pointers to NSS PKCS#11 slot infomation.
++!  * @cSlots:			number of slots in the array
+ !  * @handler:		the pointer to NSS certificate database.
+ !  *
+ !  * Create and load NSS crypto slot and certificate database into keys manager
+@@ -3327,13 +3329,14 @@
+ !  */
+ ! xmlSecKeysMngrPtr
+ ! xmlSecNssAppliedKeysMngrCreate(
+-! 	PK11SlotInfo* slot ,
++! 	PK11SlotInfo** slots, 
++! 	int cSlots,
+ ! 	CERTCertDBHandle* handler
+ ! ) {
+ ! 	xmlSecKeyDataStorePtr	certStore = NULL ;
+ ! 	xmlSecKeysMngrPtr		keyMngr = NULL ;
+ ! 	xmlSecKeyStorePtr		keyStore = NULL ;
+-! 
++! 	int islot = 0;
+ ! 	keyStore = xmlSecKeyStoreCreate( xmlSecNssKeysStoreId ) ;
+ ! 	if( keyStore == NULL ) {
+ ! 		xmlSecError( XMLSEC_ERRORS_HERE ,
+@@ -3344,7 +3347,8 @@
+ ! 		return NULL ;
+ ! 	}
+ ! 
+-! 	if( slot != NULL ) {
++! 	for (islot = 0; islot < cSlots; islot++)
++! 	{
+ ! 		xmlSecNssKeySlotPtr		keySlot ;
+ ! 
+ ! 		/* Create a key slot */
+@@ -3361,7 +3365,7 @@
+ ! 		}
+ ! 
+ ! 		/* Set slot */
+-! 		if( xmlSecNssKeySlotSetSlot( keySlot , slot ) < 0 ) {
++! 		if( xmlSecNssKeySlotSetSlot( keySlot , slots[islot] ) < 0 ) {
+ ! 			xmlSecError( XMLSEC_ERRORS_HERE ,
+ ! 				xmlSecErrorsSafeString( xmlSecKeyStoreGetName( keyStore ) ) ,
+ ! 				"xmlSecNssKeySlotSetSlot" ,
+Index: offapi/com/sun/star/security/CertificateCharacters.idl
+===================================================================
+RCS file: /cvs/api/offapi/com/sun/star/security/CertificateCharacters.idl,v
+retrieving revision 1.4
+retrieving revision 1.4.110.1
+diff -u -p -u -p -r1.4 -r1.4.110.1
+--- offapi/com/sun/star/security/CertificateCharacters.idl	8 Sep 2005 04:09:19 -0000	1.4
++++ offapi/com/sun/star/security/CertificateCharacters.idl	9 May 2006 14:15:53 -0000	1.4.110.1
+@@ -58,11 +58,6 @@ constants CertificateCharacters
+ 	const long SELF_SIGNED = 0x00000001 ;
+ 
+ 	/**
+-	 * It is a trusted certificate.
+-	 */
+-	const long TRUSTED = 0x00000002 ;
+-
+-	/**
+ 	 * A private key binding with the certificate is in user's profile.
+ 	 */
+ 	const long HAS_PRIVATE_KEY = 0x00000004 ;
