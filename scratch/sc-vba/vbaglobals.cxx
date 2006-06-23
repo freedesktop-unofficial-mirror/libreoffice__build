@@ -9,7 +9,7 @@
 #include "vbaapplication.hxx"
 #include "vbaworksheet.hxx"
 #include "vbarange.hxx"
-
+#include <cppuhelper/bootstrap.hxx>
 using namespace ::com::sun::star;
 using namespace ::com::sun::star::uno;
 using namespace ::org::openoffice;
@@ -33,11 +33,32 @@ namespace vbaobj
 		return *pImplName;
     }
 
+	uno::Reference< XComponentContext > getComponentContextFromMSF( uno::Reference< lang::XMultiServiceFactory > const& xFactory )  
+	{
+		uno::Reference< XComponentContext > xContext;
+
+	        uno::Reference< beans::XPropertySet > xProps( xFactory, UNO_QUERY );
+		if (xProps.is())
+		{
+			xProps->getPropertyValue(
+			rtl::OUString( RTL_CONSTASCII_USTRINGPARAM("DefaultContext") ) ) >>= xContext;
+		}
+		return xContext;
+	}
+
+
     uno::Reference< XInterface > SAL_CALL create(
-        Reference< XComponentContext > const & xContext )
+//        Reference< XComponentContext > const & xContext )
+        Reference< lang::XMultiServiceFactory > const & xMultiContext )
         SAL_THROW( () )
     {
-		OSL_TRACE("In create component for vbaglobals");
+	uno::Reference< XComponentContext > xContext = getComponentContextFromMSF( xMultiContext );
+	if ( !xContext.is() )
+	{
+		OSL_TRACE("Failed to obtain context" );	
+		throw uno::RuntimeException( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM("BARRRRRRF no context")), uno::Reference< uno::XInterface >() );
+	}
+	OSL_TRACE("In create component for vbaglobals");
         return static_cast< lang::XTypeProvider * >( new ScVbaGlobals( xContext ) );
     }
 
