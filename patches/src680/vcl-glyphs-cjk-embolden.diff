@@ -1,0 +1,170 @@
+--- vcl.orig/source/glyphs/makefile.mk	2005-09-09 13:15:13.000000000 +0100
++++ vcl/source/glyphs/makefile.mk	2006-06-28 10:13:45.000000000 +0100
+@@ -48,6 +48,10 @@ TARGET=glyphs
+ CFLAGS+=-DSYSTEM_FREETYPE $(FREETYPE_CFLAGS)
+ .ENDIF
+ 
++.IF "$(USE_FT_EMBOLDEN)" == "YES"
++CFLAGS+=-DUSE_FT_EMBOLDEN
++.ENDIF
++
+ # --- Files --------------------------------------------------------
+ 
+ .IF "$(USE_BUILTIN_RASTERIZER)" != ""
+--- vcl.orig/source/glyphs/gcach_ftyp.cxx	2006-06-28 09:40:26.000000000 +0100
++++ vcl/source/glyphs/gcach_ftyp.cxx	2006-06-28 10:16:36.000000000 +0100
+@@ -60,6 +60,8 @@
+ #include FT_TRUETYPE_TABLES_H
+ #include FT_TRUETYPE_TAGS_H
+ #include FT_TRUETYPE_IDS_H
++#include FT_SYNTHESIS_H
++
+ 
+ #ifndef INCLUDED_RTL_INSTANCE_HXX
+ #include <rtl/instance.hxx>
+@@ -488,8 +490,9 @@ FreetypeManager::FreetypeManager()
+     pEnv = ::getenv( "SAL_AUTOHINTING_PRIORITY" );
+     if( pEnv )
+         nPrioAutoHint  = pEnv[0] - '0';
+-
++#ifndef USE_FT_EMBOLDEN 
+     InitGammaTable();
++#endif
+ }
+ 
+ // -----------------------------------------------------------------------
+@@ -818,6 +821,7 @@ FreetypeServerFont::FreetypeServerFont( 
+     static const int TT_CODEPAGE_RANGE_1361 = (1L << 21); // Korean Johab
+     static const int TT_CODEPAGE_RANGES1_CJKT = 0x3F0000; // all of the above
+     const TT_OS2* pOs2 = (const TT_OS2*)FT_Get_Sfnt_Table( maFaceFT, ft_sfnt_os2 );
++#ifndef USE_FT_EMBOLDEN 
+     if ((pOs2) && (pOs2->ulCodePageRange1 & TT_CODEPAGE_RANGES1_CJKT )
+ 	      && rFSD.mnHeight < 20)
+ 	mbUseGamma = true;
+@@ -826,7 +830,12 @@ FreetypeServerFont::FreetypeServerFont( 
+ 
+     if (mbUseGamma)
+ 	mnLoadFlags |= FT_LOAD_FORCE_AUTOHINT;
+-
++#else
++// ----------------------------------------------------------------------------------
++    if ((pOs2) && (pOs2->ulCodePageRange1 & TT_CODEPAGE_RANGES1_CJKT ))
++        mnLoadFlags |= FT_LOAD_FORCE_AUTOHINT;
++#endif 
++ 
+     if( (mnSin != 0) && (mnCos != 0) ) // hinting for 0/90/180/270 degrees only
+         mnLoadFlags |= FT_LOAD_NO_HINTING;
+     mnLoadFlags |= FT_LOAD_IGNORE_GLOBAL_ADVANCE_WIDTH; //#88334#
+@@ -1324,7 +1333,18 @@ bool FreetypeServerFont::GetGlyphBitmap1
+         return false;
+ 
+     FT_Glyph pGlyphFT;
++#ifndef USE_FT_EMBOLDEN
+     rc = FT_Get_Glyph( maFaceFT->glyph, &pGlyphFT );
++#else
++    if( mbArtBold )
++    {
++        FT_GlyphSlot slot = maFaceFT->glyph;
++        FT_GlyphSlot_Embolden( slot );
++        rc = FT_Get_Glyph( slot, &pGlyphFT );
++    }
++    else
++        rc = FT_Get_Glyph( maFaceFT->glyph, &pGlyphFT );
++#endif
+     if( rc != FT_Err_Ok )
+         return false;
+ 
+@@ -1363,6 +1383,7 @@ bool FreetypeServerFont::GetGlyphBitmap1
+     const FT_Bitmap& rBitmapFT  = rBmpGlyphFT->bitmap;
+     rRawBitmap.mnHeight         = rBitmapFT.rows;
+     rRawBitmap.mnBitCount       = 1;
++#ifndef USE_FT_EMBOLDEN
+     if( mbArtBold )
+     {
+ 	rRawBitmap.mnWidth = rBitmapFT.width + 1;
+@@ -1371,9 +1392,12 @@ bool FreetypeServerFont::GetGlyphBitmap1
+     }
+     else
+     {
++#endif
+ 	rRawBitmap.mnWidth          = rBitmapFT.width;
+ 	rRawBitmap.mnScanlineSize   = rBitmapFT.pitch;
++#ifndef USE_FT_EMBOLDEN
+     }
++#endif
+ 
+     const ULONG nNeededSize = rRawBitmap.mnScanlineSize * rRawBitmap.mnHeight;
+ 
+@@ -1384,9 +1408,12 @@ bool FreetypeServerFont::GetGlyphBitmap1
+         rRawBitmap.mpBits = new unsigned char[ rRawBitmap.mnAllocated ];
+     }
+ 
++#ifndef USE_FT_EMBOLDEN
+     if( !mbArtBold )
+     {
++#endif
+ 	memcpy( rRawBitmap.mpBits, rBitmapFT.buffer, nNeededSize );
++#ifndef USE_FT_EMBOLDEN
+     }
+     else
+     {
+@@ -1413,6 +1440,7 @@ bool FreetypeServerFont::GetGlyphBitmap1
+ 	    p += rRawBitmap.mnScanlineSize;
+ 	}
+     }
++#endif
+ 
+     FT_Done_Glyph( pGlyphFT );
+ 
+@@ -1476,7 +1504,21 @@ bool FreetypeServerFont::GetGlyphBitmap8
+         return false;
+ 
+     FT_Glyph pGlyphFT;
++#ifndef USE_FT_EMBOLDEN
+     rc = FT_Get_Glyph( maFaceFT->glyph, &pGlyphFT );
++#else
++    
++    //if mbArtBold true, using freetype API FT_GlyphSlot_Embolden embolden font to generate fake bold font.
++    //but, this method still have to be improve for big cjk font. but I think this should be improve by freetype
++    if( mbArtBold )
++    {
++        FT_GlyphSlot slot = maFaceFT->glyph;
++        FT_GlyphSlot_Embolden( slot );
++        rc = FT_Get_Glyph( slot, &pGlyphFT );
++    }
++    else
++        rc = FT_Get_Glyph( maFaceFT->glyph, &pGlyphFT );
++#endif
+     if( rc != FT_Err_Ok )
+         return false;
+ 
+@@ -1513,11 +1555,13 @@ bool FreetypeServerFont::GetGlyphBitmap8
+     rRawBitmap.mnWidth          = rBitmapFT.width;
+     rRawBitmap.mnBitCount       = 8;
+     rRawBitmap.mnScanlineSize   = bEmbedded ? rBitmapFT.width : rBitmapFT.pitch;
++#ifndef USE_FT_EMBOLDEN 
+     if( mbArtBold )
+     {
+ 	++rRawBitmap.mnWidth;
+         ++rRawBitmap.mnScanlineSize;
+     }
++#endif
+     rRawBitmap.mnScanlineSize = (rRawBitmap.mnScanlineSize + 3) & -4;
+ 
+     const ULONG nNeededSize = rRawBitmap.mnScanlineSize * rRawBitmap.mnHeight;
+@@ -1556,6 +1600,7 @@ bool FreetypeServerFont::GetGlyphBitmap8
+         }
+     }
+ 
++#ifndef USE_FT_EMBOLDEN 
+     if( mbArtBold )
+     {
+ 	// overlay with glyph image shifted by one left pixel
+@@ -1585,6 +1630,7 @@ bool FreetypeServerFont::GetGlyphBitmap8
+ 	    p += rRawBitmap.mnScanlineSize;
+ 	}
+     }
++#endif
+ 
+     FT_Done_Glyph( pGlyphFT );
+ 
