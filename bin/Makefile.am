@@ -28,6 +28,7 @@ script_files = \
 	pyunorc-update64.in \
 	re-root \
 	scale-icons \
+	stat-localizations \
 	strace-rewrite \
 	unpack \
 	setup.in \
