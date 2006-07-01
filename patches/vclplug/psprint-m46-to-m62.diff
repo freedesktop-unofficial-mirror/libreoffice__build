@@ -1,11 +1,6 @@
-Index: inc/cupsmgr.hxx
-===================================================================
-RCS file: /cvs/gsl/psprint/inc/cupsmgr.hxx,v
-retrieving revision 1.2
-retrieving revision 1.3
-diff -w -u -r1.2 -r1.3
---- psprint/inc/cupsmgr.hxx	17 Mar 2004 10:47:45 -0000	1.2
-+++ psprint/inc/cupsmgr.hxx	23 Jul 2004 10:07:09 -0000	1.3
+diff -Nurd -x CVS -x '*.orig' -x unxlngi4.pro psprint.m48/inc/cupsmgr.hxx psprint/inc/cupsmgr.hxx
+--- psprint.m48/inc/cupsmgr.hxx	2004-11-24 21:19:29.000000000 +0000
++++ psprint/inc/cupsmgr.hxx	2004-11-09 16:35:33.000000000 +0000
 @@ -64,6 +64,8 @@
  
  #include <psprint/printerinfomanager.hxx>
@@ -15,7 +10,7 @@ diff -w -u -r1.2 -r1.3
  
  namespace psp
  {
-@@ -83,7 +85,7 @@
+@@ -83,19 +85,27 @@
      std::hash_map< FILE*, rtl::OString, FPtrHash >				m_aSpoolFiles;
      int															m_nDests;
      void*														m_pDests;
@@ -23,8 +18,11 @@ diff -w -u -r1.2 -r1.3
 +    bool														m_bNewDests;
      std::hash_map< rtl::OUString, int, rtl::OUStringHash >		m_aCUPSDestMap;
  
++    std::hash_map< rtl::OUString, PPDContext, rtl::OUStringHash > m_aDefaultContexts;
++
      rtl::OString												m_aUser;
-@@ -92,10 +94,16 @@
+     // this is a security risk, but the CUPS API demands
+     // to deliver a pointer to a static buffer containing
      // the password, so this cannot be helped
      rtl::OString												m_aPassword;
  
@@ -42,14 +40,18 @@ diff -w -u -r1.2 -r1.3
  public:
  
      static CUPSManager* tryLoadCUPS();
-Index: inc/psprint/fontcache.hxx
-===================================================================
-RCS file: /cvs/gsl/psprint/inc/psprint/fontcache.hxx,v
-retrieving revision 1.3
-retrieving revision 1.4
-diff -w -u -r1.3 -r1.4
---- psprint/inc/psprint/fontcache.hxx	2 Feb 2004 18:52:33 -0000	1.3
-+++ psprint/inc/psprint/fontcache.hxx	5 Jul 2004 09:21:57 -0000	1.4
+@@ -121,6 +131,8 @@
+     virtual bool removePrinter( const rtl::OUString& rPrinterName, bool bCheckOnly = false );
+     virtual bool writePrinterConfig();
+     virtual bool setDefaultPrinter( const rtl::OUString& rPrinterName );
++    
++    virtual bool addOrRemovePossible() const;
+ };
+ 
+ } // namespace psp
+diff -Nurd -x CVS -x '*.orig' -x unxlngi4.pro psprint.m48/inc/psprint/fontcache.hxx psprint/inc/psprint/fontcache.hxx
+--- psprint.m48/inc/psprint/fontcache.hxx	2004-11-24 21:18:29.000000000 +0000
++++ psprint/inc/psprint/fontcache.hxx	2004-07-05 10:21:57.000000000 +0100
 @@ -108,6 +108,7 @@
      void clearCache();
  
@@ -58,18 +60,54 @@ diff -w -u -r1.3 -r1.4
      PrintFontManager::PrintFont* clonePrintFont( const PrintFontManager::PrintFont* pFont ) const;
  
      void createCacheDir( int nDirID );
-Index: inc/psprint/fontmanager.hxx
-===================================================================
-RCS file: /cvs/gsl/psprint/inc/psprint/fontmanager.hxx,v
-retrieving revision 1.18
-retrieving revision 1.19
-diff -w -u -r1.18 -r1.19
---- psprint/inc/psprint/fontmanager.hxx	17 Jun 2004 13:50:47 -0000	1.18
-+++ psprint/inc/psprint/fontmanager.hxx	5 Jul 2004 09:22:12 -0000	1.19
-@@ -191,6 +191,17 @@
-     weight::type            				m_eWeight;
-     pitch::type             				m_ePitch;
-     rtl_TextEncoding        				m_aEncoding;
+diff -Nurd -x CVS -x '*.orig' -x unxlngi4.pro psprint.m48/inc/psprint/fontmanager.hxx psprint/inc/psprint/fontmanager.hxx
+--- psprint.m48/inc/psprint/fontmanager.hxx	2004-11-24 21:19:29.000000000 +0000
++++ psprint/inc/psprint/fontmanager.hxx	2004-10-13 09:21:47.000000000 +0100
+@@ -62,9 +62,7 @@
+ #ifndef _PSPRINT_FONTMANAGER_HXX_
+ #define _PSPRINT_FONTMANAGER_HXX_
+ 
+-#ifndef __SGI_STL_HASH_MAP
+ #include <hash_map>
+-#endif
+ #ifndef __SGI_STL_MAP
+ #include <map>
+ #endif
+@@ -78,6 +76,10 @@
+ #include <psprint/helper.hxx>
+ #endif
+ 
++#ifndef _COM_SUN_STAR_LANG_LOCALE_HPP_
++#include <com/sun/star/lang/Locale.hpp>
++#endif
++
+ #define ATOM_FAMILYNAME                     2
+ #define ATOM_PSNAME                         3
+ 
+@@ -179,18 +181,29 @@
+ 
+ struct FastPrintFontInfo
+ {
+-    fontID                  				m_nID; // FontID
+-    fonttype::type          				m_eType;
++    fontID                  			m_nID; // FontID
++    fonttype::type          			m_eType;
+         
+     // font attributes
+     rtl::OUString         				m_aFamilyName;
+     std::list< rtl::OUString >			m_aAliases;
+-    family::type            				m_eFamilyStyle;
+-    italic::type            				m_eItalic;
+-    width::type             				m_eWidth;
+-    weight::type            				m_eWeight;
+-    pitch::type             				m_ePitch;
+-    rtl_TextEncoding        				m_aEncoding;
++    family::type            			m_eFamilyStyle;
++    italic::type            			m_eItalic;
++    width::type             			m_eWidth;
++    weight::type            			m_eWeight;
++    pitch::type             			m_ePitch;
++    rtl_TextEncoding        			m_aEncoding;
 +
 +    FastPrintFontInfo() :
 +            m_nID( 0 ),
@@ -84,7 +122,7 @@ diff -w -u -r1.18 -r1.19
  };
  
  struct PrintFontInfo : public FastPrintFontInfo
-@@ -199,6 +210,14 @@
+@@ -199,6 +212,14 @@
      int                     				m_nDescend;
      int                     				m_nLeading;
      int                     				m_nWidth;
@@ -99,7 +137,7 @@ diff -w -u -r1.18 -r1.19
  };
  
  // the values are per thousand of the font size
-@@ -208,6 +227,10 @@
+@@ -208,6 +229,10 @@
      short int width, height;
  
      CharacterMetric() : width( 0 ), height( 0 ) {}
@@ -110,7 +148,16 @@ diff -w -u -r1.18 -r1.19
  };
  
  struct KernPair
-@@ -421,11 +444,18 @@
+@@ -412,7 +437,7 @@
+         it = m_aFonts.find( nID );
+         return it == m_aFonts.end() ? NULL : it->second;
+     }
+-    ByteString getXLFD( PrintFont* pFont ) const;
++    rtl::OString getXLFD( PrintFont* pFont ) const;
+     void fillPrintFontInfo( PrintFont* pFont, FastPrintFontInfo& rInfo ) const;
+     void fillPrintFontInfo( PrintFont* pFont, PrintFontInfo& rInfo ) const;
+ 
+@@ -421,11 +446,18 @@
  
      void getServerDirectories(); // get font server directories on e.g. redhat
  
@@ -133,7 +180,7 @@ diff -w -u -r1.18 -r1.19
  
      static bool parseXLFD( const rtl::OString& rXLFD, XLFDEntry& rEntry );
      void parseXLFD_appendAliases( const std::list< rtl::OString >& rXLFDs, std::list< XLFDEntry >& rEntries ) const;
-@@ -657,6 +687,36 @@
+@@ -657,6 +689,41 @@
  
      // returns false if there were not any
      bool getAlternativeFamilyNames( fontID nFont, std::list< rtl::OUString >& rNames ) const;
@@ -162,23 +209,55 @@ diff -w -u -r1.18 -r1.19
 +    <li>pitch</li>
 +    </ul>
 +
++    @param rLocale
++    if <code>rLocal</code> contains non empty strings the corresponding
++    locale will be used for font matching also; e.g. "Sans" can result
++    in different fonts in e.g. english and japanese
++
 +    @returns
 +    true if a match was found
 +    false else
 +     */
-+    bool matchFont( FastPrintFontInfo& rInfo );
++    bool matchFont( FastPrintFontInfo& rInfo, const com::sun::star::lang::Locale& rLocale );
  };
  
  } // namespace
-Index: inc/psprint/ppdparser.hxx
-===================================================================
-RCS file: /cvs/gsl/psprint/inc/psprint/ppdparser.hxx,v
-retrieving revision 1.5
-retrieving revision 1.6
-diff -w -u -r1.5 -r1.6
---- psprint/inc/psprint/ppdparser.hxx	17 Mar 2004 10:48:09 -0000	1.5
-+++ psprint/inc/psprint/ppdparser.hxx	23 Jul 2004 10:07:44 -0000	1.6
-@@ -223,7 +223,7 @@
+diff -Nurd -x CVS -x '*.orig' -x unxlngi4.pro psprint.m48/inc/psprint/helper.hxx psprint/inc/psprint/helper.hxx
+--- psprint.m48/inc/psprint/helper.hxx	2004-11-24 21:19:29.000000000 +0000
++++ psprint/inc/psprint/helper.hxx	2004-09-08 14:59:35.000000000 +0100
+@@ -62,10 +62,8 @@
+ #ifndef _PSPRINT_HELPER_HXX_
+ #define _PSPRINT_HELPER_HXX_
+ 
+-#ifndef __SGI_STL_HASH_MAP
+-#include <hash_map>
+-#endif
+ #include <list>
++#include <hash_map>
+ #ifndef _RTL_USTRING_HXX_
+ #include <rtl/ustring.hxx>
+ #endif
+diff -Nurd -x CVS -x '*.orig' -x unxlngi4.pro psprint.m48/inc/psprint/jobdata.hxx psprint/inc/psprint/jobdata.hxx
+--- psprint.m48/inc/psprint/jobdata.hxx	2004-11-24 21:19:29.000000000 +0000
++++ psprint/inc/psprint/jobdata.hxx	2004-03-17 10:47:57.000000000 +0000
+diff -Nurd -x CVS -x '*.orig' -x unxlngi4.pro psprint.m48/inc/psprint/ppdparser.hxx psprint/inc/psprint/ppdparser.hxx
+--- psprint.m48/inc/psprint/ppdparser.hxx	2004-11-24 21:19:29.000000000 +0000
++++ psprint/inc/psprint/ppdparser.hxx	2004-09-08 14:59:50.000000000 +0100
+@@ -142,6 +142,13 @@
+     int                 getOrderDependency() const { return m_nOrderDependency; }
+ };
+ 
++// define a hash for PPDKey
++struct PPDKeyhash
++{
++    size_t operator()( const PPDKey * pKey) const
++        { return (size_t)pKey; }
++};
++
+ // ----------------------------------------------------------------------
+ 
+ /*
+@@ -223,7 +230,7 @@
      static void initPPDFiles();
      static String getPPDFile( const String& rFile );
  public:
@@ -187,15 +266,43 @@ diff -w -u -r1.5 -r1.6
      static String getPPDPrinterName( const String& rFile );
      static void freeAll();
  
-Index: inc/psprint/printerinfomanager.hxx
-===================================================================
-RCS file: /cvs/gsl/psprint/inc/psprint/printerinfomanager.hxx,v
-retrieving revision 1.6
-retrieving revision 1.7
-diff -w -u -r1.6 -r1.7
---- psprint/inc/psprint/printerinfomanager.hxx	17 Mar 2004 10:48:31 -0000	1.6
-+++ psprint/inc/psprint/printerinfomanager.hxx	23 Jul 2004 09:58:25 -0000	1.7
-@@ -143,6 +143,11 @@
+@@ -311,7 +318,8 @@
+ 
+ class PPDContext
+ {
+-    ::std::hash_map< const PPDKey*, const PPDValue* >   m_aCurrentValues;
++    typedef ::std::hash_map< const PPDKey*, const PPDValue*, PPDKeyhash > hash_type;
++    hash_type m_aCurrentValues;
+     const PPDParser*                                    m_pParser;
+ 
+     // returns false: check failed, new value is constrained
+diff -Nurd -x CVS -x '*.orig' -x unxlngi4.pro psprint.m48/inc/psprint/printergfx.hxx psprint/inc/psprint/printergfx.hxx
+--- psprint.m48/inc/psprint/printergfx.hxx	2004-11-24 21:19:29.000000000 +0000
++++ psprint/inc/psprint/printergfx.hxx	2004-09-08 15:00:04.000000000 +0100
+@@ -74,9 +74,7 @@
+ #ifndef __SGI_STL_LIST
+ #include <list>
+ #endif
+-#ifndef __SGI_STL_HASH_MAP
+ #include <hash_map>
+-#endif
+ 
+ namespace psp {
+ 
+diff -Nurd -x CVS -x '*.orig' -x unxlngi4.pro psprint.m48/inc/psprint/printerinfomanager.hxx psprint/inc/psprint/printerinfomanager.hxx
+--- psprint.m48/inc/psprint/printerinfomanager.hxx	2004-11-24 21:19:29.000000000 +0000
++++ psprint/inc/psprint/printerinfomanager.hxx	2004-11-09 16:37:13.000000000 +0000
+@@ -62,9 +62,7 @@
+ #ifndef _PSPRINT_PRINTERINFOMANAGER_HXX_
+ #define _PSPRINT_PRINTERINFOMANAGER_HXX_
+ 
+-#ifndef __SGI_STL_HASH_MAP
+ #include <hash_map>
+-#endif
+ #ifndef __SGI_STL_LIST
+ #include <list>
+ #endif
+@@ -143,6 +141,11 @@
      m_aFontSubstitutes;
      std::hash_map< fontID, fontID >
      m_aFontSubstitutions;
@@ -207,14 +314,43 @@ diff -w -u -r1.6 -r1.7
  };
  
  class PrinterInfoManager
-Index: source/fontmanager/fontcache.cxx
-===================================================================
-RCS file: /cvs/gsl/psprint/source/fontmanager/fontcache.cxx,v
-retrieving revision 1.10
-retrieving revision 1.11
-diff -w -u -r1.10 -r1.11
---- psprint/source/fontmanager/fontcache.cxx	17 Mar 2004 10:48:54 -0000	1.10
-+++ psprint/source/fontmanager/fontcache.cxx	5 Jul 2004 09:22:24 -0000	1.11
+@@ -199,6 +202,11 @@
+     // fill in font substitutions
+     // the resulting hash_map maps from source to target font ids
+     void fillFontSubstitutions( PrinterInfo& rInfo ) const;
++    
++    // fill default paper if not configured in config file
++    // default paper is e.g. locale dependent
++    // if a paper is already set it will not be overwritten
++    void setDefaultPaper( PrinterInfo& rInfo ) const;
+ public:
+ 
+     // there can only be one
+@@ -263,6 +271,9 @@
+     // close the FILE* returned by startSpool and does the actual spooling
+     // returns a numerical job id
+     virtual int endSpool( const rtl::OUString& rPrinterName, const rtl::OUString& rJobTitle, FILE* pFile );
++    
++    // for spadmin: whether adding or removing a printer is possible
++    virtual bool addOrRemovePossible() const;
+ };
+     
+ } // namespace
+diff -Nurd -x CVS -x '*.orig' -x unxlngi4.pro psprint.m48/inc/psprint/printerjob.hxx psprint/inc/psprint/printerjob.hxx
+--- psprint.m48/inc/psprint/printerjob.hxx	2004-11-24 21:19:29.000000000 +0000
++++ psprint/inc/psprint/printerjob.hxx	2004-03-30 14:47:13.000000000 +0100
+diff -Nurd -x CVS -x '*.orig' -x unxlngi4.pro psprint.m48/prj/build.lst psprint/prj/build.lst
+--- psprint.m48/prj/build.lst	2004-11-24 21:19:29.000000000 +0000
++++ psprint/prj/build.lst	2004-09-09 11:01:09.000000000 +0100
+@@ -1,4 +1,4 @@
+-pp	psprint	:	tools unotools cpputools jvmaccess print_header jvmfwk NULL
++pp	psprint	:	tools unotools cpputools jvmaccess SO:print_header jvmfwk NULL
+ pp	psprint									usr1	-	all	pp_mkout NULL
+ pp	psprint\source\fontsubset				nmake	-	all	pp_fontsset NULL
+ pp	psprint\source\printer					nmake	-	u	pp_printer NULL
+diff -Nurd -x CVS -x '*.orig' -x unxlngi4.pro psprint.m48/source/fontmanager/fontcache.cxx psprint/source/fontmanager/fontcache.cxx
+--- psprint.m48/source/fontmanager/fontcache.cxx	2004-11-24 21:19:29.000000000 +0000
++++ psprint/source/fontmanager/fontcache.cxx	2004-07-05 10:22:24.000000000 +0100
 @@ -549,6 +549,73 @@
  }
  
@@ -293,10 +429,11 @@ diff -w -u -r1.10 -r1.11
          createCacheDir( nDirID );
  
      if( pCacheFont )
+-        copyPrintFont( pFont, pCacheFont );
 +    {
 +        if( ! equalsPrintFont( pFont, pCacheFont ) )
 +        {
-         copyPrintFont( pFont, pCacheFont );
++            copyPrintFont( pFont, pCacheFont );
 +            m_bDoFlush = true;
 +        }
 +    }
@@ -307,20 +444,15 @@ diff -w -u -r1.10 -r1.11
          struct stat aStat;
          if( ! stat( aPath.GetBuffer(), &aStat ) )
              m_aCache[nDirID].m_aEntries[aFile].m_nTimestamp = (sal_Int64)aStat.st_mtime;
--    }
-     m_bDoFlush = true;
-+    }
++        m_bDoFlush = true;
+     }
+-    m_bDoFlush = true;
      if( bFlush )
          flush();
  }
-Index: source/fontmanager/fontconfig.cxx
-===================================================================
-RCS file: /cvs/gsl/psprint/source/fontmanager/fontconfig.cxx,v
-retrieving revision 1.4
-retrieving revision 1.6
-diff -w -u -r1.4 -r1.6
---- psprint/source/fontmanager/fontconfig.cxx	1 Jun 2004 09:35:26 -0000	1.4
-+++ psprint/source/fontmanager/fontconfig.cxx	23 Jul 2004 10:08:07 -0000	1.6
+diff -Nurd -x CVS -x '*.orig' -x unxlngi4.pro psprint.m48/source/fontmanager/fontconfig.cxx psprint/source/fontmanager/fontconfig.cxx
+--- psprint.m48/source/fontmanager/fontconfig.cxx	2004-11-24 21:19:29.000000000 +0000
++++ psprint/source/fontmanager/fontconfig.cxx	2004-10-13 09:22:03.000000000 +0100
 @@ -61,6 +61,10 @@
  
  #ifdef ENABLE_FONTCONFIG
@@ -342,7 +474,17 @@ diff -w -u -r1.4 -r1.6
  #endif
  
  #include <cstdio>
-@@ -98,6 +102,7 @@
+@@ -90,6 +94,9 @@
+ #ifndef _OSL_THREAD_H
+ #include <osl/thread.h>
+ #endif
++#ifndef _RTL_USTRBUF_HXX
++#include <rtl/ustrbuf.hxx>
++#endif
+ 
+ using namespace psp;
+ using namespace osl;
+@@ -98,6 +105,7 @@
  class FontCfgWrapper
  {
      void*			m_pLib;
@@ -350,7 +492,7 @@ diff -w -u -r1.4 -r1.6
  
      FcConfig*		(*m_pFcInitLoadConfigAndFonts)();
      FcObjectSet*	(*m_pFcObjectSetVaBuild)(const char*,va_list);
-@@ -105,20 +110,34 @@
+@@ -105,20 +113,34 @@
      FcPattern*		(*m_pFcPatternCreate)();
      void			(*m_pFcPatternDestroy)(FcPattern*);
      FcFontSet*		(*m_pFcFontList)(FcConfig*,FcPattern*,FcObjectSet*);
@@ -361,12 +503,13 @@ diff -w -u -r1.4 -r1.6
      FcResult		(*m_pFcPatternGetInteger)(const FcPattern*,const char*,int,int*);
      FcResult		(*m_pFcPatternGetDouble)(const FcPattern*,const char*,int,double*);
      FcResult		(*m_pFcPatternGetBool)(const FcPattern*,const char*,int,FcBool*);
+-    
 +    void			(*m_pFcDefaultSubstitute)(FcPattern *);
 +    FcPattern*		(*m_pFcFontMatch)(FcConfig*,FcPattern*,FcResult*);    
 +    FcBool			(*m_pFcConfigSubstitute)(FcConfig*,FcPattern*,FcMatchKind);
 +    FcBool			(*m_pFcPatternAddInteger)(FcPattern*,const char*,int);
 +    FcBool			(*m_pFcPatternAddString)(FcPattern*,const char*,const FcChar8*);
-     
++
      void* loadSymbol( const char* );
 -public:
 +
@@ -386,7 +529,7 @@ diff -w -u -r1.4 -r1.6
      FcConfig* FcInitLoadConfigAndFonts()
      { return m_pFcInitLoadConfigAndFonts(); }
  
-@@ -143,8 +162,12 @@
+@@ -143,8 +165,12 @@
      FcFontSet* FcFontList( FcConfig* pConfig, FcPattern* pPattern, FcObjectSet* pSet )
      { return m_pFcFontList( pConfig, pPattern, pSet ); }
      
@@ -399,7 +542,7 @@ diff -w -u -r1.4 -r1.6
  
      FcResult FcPatternGetString( const FcPattern* pPattern, const char* object, int n, FcChar8** s )
      { return m_pFcPatternGetString( pPattern, object, n, s ); }
-@@ -157,6 +180,16 @@
+@@ -157,6 +183,16 @@
  
      FcResult FcPatternGetBool( const FcPattern* pPattern, const char* object, int n, FcBool* s )
      { return m_pFcPatternGetBool( pPattern, object, n, s ); }
@@ -416,7 +559,7 @@ diff -w -u -r1.4 -r1.6
  };
  
  void* FontCfgWrapper::loadSymbol( const char* pSymbol )
-@@ -170,7 +203,8 @@
+@@ -170,7 +206,8 @@
  }
  
  FontCfgWrapper::FontCfgWrapper()
@@ -426,7 +569,7 @@ diff -w -u -r1.4 -r1.6
  {
  #ifdef ENABLE_FONTCONFIG
      OUString aLib( RTL_CONSTASCII_USTRINGPARAM( "libfontconfig.so.1" ) );
-@@ -202,8 +236,12 @@
+@@ -202,8 +239,12 @@
          loadSymbol( "FcPatternDestroy" );
      m_pFcFontList = (FcFontSet*(*)(FcConfig*,FcPattern*,FcObjectSet*))
          loadSymbol( "FcFontList" );
@@ -439,7 +582,7 @@ diff -w -u -r1.4 -r1.6
      m_pFcPatternGetString = (FcResult(*)(const FcPattern*,const char*,int,FcChar8**))
          loadSymbol( "FcPatternGetString" );
      m_pFcPatternGetInteger = (FcResult(*)(const FcPattern*,const char*,int,int*))
-@@ -212,6 +250,16 @@
+@@ -212,6 +253,16 @@
          loadSymbol( "FcPatternGetDouble" );
      m_pFcPatternGetBool = (FcResult(*)(const FcPattern*,const char*,int,FcBool*))
          loadSymbol( "FcPatternGetBool" );
@@ -456,7 +599,7 @@ diff -w -u -r1.4 -r1.6
  
      if( ! (
              m_pFcInitLoadConfigAndFonts		&&
-@@ -220,11 +268,18 @@
+@@ -220,11 +271,18 @@
              m_pFcPatternCreate				&&
              m_pFcPatternDestroy				&&
              m_pFcFontList					&&
@@ -476,7 +619,7 @@ diff -w -u -r1.4 -r1.6
              ) )
       {
           osl_unloadModule( m_pLib );
-@@ -233,6 +288,13 @@
+@@ -233,6 +291,13 @@
           fprintf( stderr, "not all needed symbols were found in libfontconfig\n" );
  #endif
       }
@@ -490,7 +633,7 @@ diff -w -u -r1.4 -r1.6
  }
  
  FontCfgWrapper::~FontCfgWrapper()
-@@ -241,6 +303,24 @@
+@@ -241,6 +306,24 @@
          osl_unloadModule( m_pLib );
  }
  
@@ -515,20 +658,20 @@ diff -w -u -r1.4 -r1.6
  /*
   * PrintFontManager::initFontconfig
   */
-@@ -249,24 +329,22 @@
+@@ -249,24 +332,22 @@
      int nFonts = 0;
  
  #ifdef ENABLE_FONTCONFIG    
 -    FontCfgWrapper aWrapper;
 -    if( ! aWrapper.isValid() )
+-        return false;
+-
+-    FcConfig* pConfig = aWrapper.FcInitLoadConfigAndFonts();
+-    if( ! pConfig )
 +    FontCfgWrapper& rWrapper = FontCfgWrapper::get();
 +    if( ! rWrapper.isValid() )
          return false;
  
--    FcConfig* pConfig = aWrapper.FcInitLoadConfigAndFonts();
--    if( ! pConfig )
--        return false;
--
 -    FcObjectSet* pOSet = aWrapper.FcObjectSetBuild( FC_FAMILY,
 +    FcConfig* pConfig = rWrapper.getDefConfig();
 +    FcObjectSet* pOSet = rWrapper.FcObjectSetBuild( FC_FAMILY,
@@ -547,7 +690,7 @@ diff -w -u -r1.4 -r1.6
  
      if( pFSet )
      {
-@@ -281,16 +359,17 @@
+@@ -281,16 +362,17 @@
              int slant = 0;
              int weight = 0;
              int spacing = 0;
@@ -573,7 +716,7 @@ diff -w -u -r1.4 -r1.6
              
              if( eFileRes != FcResultMatch || eFamilyRes != FcResultMatch || eOutRes != FcResultMatch )
                  continue;
-@@ -327,81 +406,132 @@
+@@ -327,81 +409,132 @@
                  // not described by fontconfig (e.g. alias names, PSName)
                  std::list< OString > aDummy;
                  analyzeFontFile( nDirID, aBase, true, aDummy, aFonts );
@@ -582,8 +725,9 @@ diff -w -u -r1.4 -r1.6
 -            if( aFonts.size() > 1 )
 -                fprintf( stderr, "Warning: file contains more than one font, updating all to fontconfig data\n" );
 -            else if( aFonts.empty() )
+-                fprintf( stderr, "Warning: file is unusable to psprint\n" );
 +                if( aFonts.empty() )
-                 fprintf( stderr, "Warning: file is unusable to psprint\n" );
++                    fprintf( stderr, "Warning: file is unusable to psprint\n" );
  #endif
 +            }
 +            if( aFonts.empty() )
@@ -723,8 +867,8 @@ diff -w -u -r1.4 -r1.6
 +            }
          }
      }
--    
      
+-    
      // cleanup
      if( pPattern )
 -        aWrapper.FcPatternDestroy( pPattern );
@@ -738,18 +882,17 @@ diff -w -u -r1.4 -r1.6
      
      // how does one get rid of the config ?
  #if OSL_DEBUG_LEVEL > 1
-@@ -409,4 +539,125 @@
- #endif
+@@ -410,3 +543,139 @@
  #endif // ENABLE_FONTCONFIG
      return nFonts != 0;
-+}
+ }
 +
 +void PrintFontManager::deinitFontconfig()
 +{
 +    FontCfgWrapper::release();
 +}
 +
-+bool PrintFontManager::matchFont( FastPrintFontInfo& rInfo )
++bool PrintFontManager::matchFont( FastPrintFontInfo& rInfo, const com::sun::star::lang::Locale& rLocale )
 +{
 +#ifdef ENABLE_FONTCONFIG
 +    FontCfgWrapper& rWrapper = FontCfgWrapper::get();
@@ -759,7 +902,22 @@ diff -w -u -r1.4 -r1.6
 +    FcConfig* pConfig = rWrapper.getDefConfig();
 +    FcPattern* pPattern = rWrapper.FcPatternCreate();
 +
++    OString aLangAttrib;
 +    // populate pattern with font characteristics
++    if( rLocale.Language.getLength() )
++    {
++        OUStringBuffer aLang(6);
++        aLang.append( rLocale.Language );
++        if( rLocale.Country.getLength() )
++        {
++            aLang.append( sal_Unicode('-') );
++            aLang.append( rLocale.Country );
++        }
++        aLangAttrib = OUStringToOString( aLang.makeStringAndClear(), RTL_TEXTENCODING_UTF8 );
++    }
++    if( aLangAttrib.getLength() )
++        rWrapper.FcPatternAddString( pPattern, FC_LANG, (FcChar8*)aLangAttrib.getStr() );
++
 +    OString aFamily = OUStringToOString( rInfo.m_aFamilyName, RTL_TEXTENCODING_UTF8 );
 +    if( aFamily.getLength() )
 +        rWrapper.FcPatternAddString( pPattern, FC_FAMILY, (FcChar8*)aFamily.getStr() );
@@ -863,15 +1021,10 @@ diff -w -u -r1.4 -r1.6
 +#else
 +    return false;
 +#endif
- }
-Index: source/fontmanager/fontmanager.cxx
-===================================================================
-RCS file: /cvs/gsl/psprint/source/fontmanager/fontmanager.cxx,v
-retrieving revision 1.50
-retrieving revision 1.51
-diff -w -u -r1.50 -r1.51
---- psprint/source/fontmanager/fontmanager.cxx	17 Jun 2004 13:51:09 -0000	1.50
-+++ psprint/source/fontmanager/fontmanager.cxx	5 Jul 2004 09:22:51 -0000	1.51
++}
+diff -Nurd -x CVS -x '*.orig' -x unxlngi4.pro psprint.m48/source/fontmanager/fontmanager.cxx psprint/source/fontmanager/fontmanager.cxx
+--- psprint.m48/source/fontmanager/fontmanager.cxx	2004-11-24 21:19:29.000000000 +0000
++++ psprint/source/fontmanager/fontmanager.cxx	2004-10-13 09:22:36.000000000 +0100
 @@ -581,10 +581,10 @@
                          case 2:
                          {
@@ -919,6 +1072,19 @@ diff -w -u -r1.50 -r1.51
  
                      // Kerning sub-table format, 0 through 3
                      sal_uInt8 nSubTableFormat  = nCoverage & 0x00FF;
+@@ -829,10 +829,10 @@
+ 
+         if( m_aEncoding == RTL_TEXTENCODING_DONTKNOW )
+             m_aEncoding = nAdobeEncoding == 1 ?
+-                RTL_TEXTENCODING_MS_1252 : RTL_TEXTENCODING_SYMBOL;
++                RTL_TEXTENCODING_ADOBE_STANDARD : RTL_TEXTENCODING_SYMBOL;
+     }
+     else if( m_aEncoding == RTL_TEXTENCODING_DONTKNOW )
+-        m_aEncoding = RTL_TEXTENCODING_MS_1252;
++        m_aEncoding = RTL_TEXTENCODING_ADOBE_STANDARD;
+ 
+     // try to parse the font name and decide wether it might be a
+     // japanese font. Who invented this PITA ?
 @@ -1154,6 +1154,7 @@
  
  PrintFontManager::~PrintFontManager()
@@ -936,33 +1102,312 @@ diff -w -u -r1.50 -r1.51
          {
              ByteString aName( rFontFile );
              aName.Erase( aName.Len()-4 );
-@@ -1549,6 +1550,8 @@
-                     break;
+@@ -1300,6 +1301,7 @@
+             delete pFont;
+     }
+     else if( aExt.EqualsIgnoreCaseAscii( "ttf" )
++         ||  aExt.EqualsIgnoreCaseAscii( "tte" )   // #i33947# for Gaiji support
+          ||  aExt.EqualsIgnoreCaseAscii( "otf" ) ) // #112957# allow GLYF-OTF
+     {
+         TrueTypeFontFile* pFont     = new TrueTypeFontFile();
+@@ -1550,6 +1552,8 @@
                  case fonttype::TrueType:
                      static_cast<TrueTypeFontFile*>(pFont)->m_aXLFD = rXLFDs.front();
-+                    break;
-+                default:
                      break;
++                default:
++                    break;
              }
          }
-Index: source/helper/ppdparser.cxx
-===================================================================
-RCS file: /cvs/gsl/psprint/source/helper/ppdparser.cxx,v
-retrieving revision 1.14
-retrieving revision 1.16
-diff -w -u -r1.14 -r1.16
---- psprint/source/helper/ppdparser.cxx	18 May 2004 10:45:57 -0000	1.14
-+++ psprint/source/helper/ppdparser.cxx	30 Jul 2004 15:14:16 -0000	1.16
-@@ -68,7 +68,7 @@
- namespace psp { class PPDKey; }
+         else
+@@ -1601,7 +1605,7 @@
  
- namespace  _STL {
--struct hash< const psp::PPDKey* >
-+template<> struct hash< const psp::PPDKey* >
+ // -------------------------------------------------------------------------
+ 
+-ByteString PrintFontManager::getXLFD( PrintFont* pFont ) const
++OString PrintFontManager::getXLFD( PrintFont* pFont ) const
  {
-     size_t operator()( const psp::PPDKey * pKey) const
-     { return (size_t)pKey; }
-@@ -268,16 +268,19 @@
+     if( pFont->m_eType == fonttype::Type1 )
+     {
+@@ -1614,55 +1618,65 @@
+             return static_cast<TrueTypeFontFile*>(pFont)->m_aXLFD;
+     }
+ 
+-    ByteString aXLFD( "-misc-" );
++    OStringBuffer aXLFD( 128 );
++
++    aXLFD.append( "-misc-" );
+     ByteString aFamily( String( m_pAtoms->getString( ATOM_FAMILYNAME, pFont->m_nFamilyName ) ), RTL_TEXTENCODING_UTF8 );
+     aFamily.SearchAndReplaceAll( '-',' ' );
+     aFamily.SearchAndReplaceAll( '?',' ' );
+     aFamily.SearchAndReplaceAll( '*',' ' );
+-    aXLFD += aFamily;
+-    aXLFD += '-';
++    aXLFD.append( OString( aFamily ) );
++    aXLFD.append( '-' );
+     switch( pFont->m_eWeight )
+     {
+-        case weight::Thin:              aXLFD += "thin";break;
+-        case weight::UltraLight:        aXLFD += "ultralight";break;
+-        case weight::Light:         aXLFD += "light";break;
+-        case weight::SemiLight:     aXLFD += "semilight";break;
+-        case weight::Normal:            aXLFD += "normal";break;
+-        case weight::Medium:            aXLFD += "medium";break;
+-        case weight::SemiBold:          aXLFD += "semibold";break;
+-        case weight::Bold:              aXLFD += "bold";break;
+-        case weight::UltraBold:     aXLFD += "ultrabold";break;
+-        case weight::Black:         aXLFD += "black";break;
++        case weight::Thin:          aXLFD.append("thin");break;
++        case weight::UltraLight:    aXLFD.append("ultralight");break;
++        case weight::Light:         aXLFD.append("light");break;
++        case weight::SemiLight:     aXLFD.append("semilight");break;
++        case weight::Normal:        aXLFD.append("normal");break;
++        case weight::Medium:        aXLFD.append("medium");break;
++        case weight::SemiBold:      aXLFD.append("semibold");break;
++        case weight::Bold:          aXLFD.append("bold");break;
++        case weight::UltraBold:     aXLFD.append("ultrabold");break;
++        case weight::Black:         aXLFD.append("black");break;
+         default: break;
+     }
+-    aXLFD += '-';
++    aXLFD.append('-');
+     switch( pFont->m_eItalic )
+     {
+-        case italic::Upright:           aXLFD += 'r';break;
+-        case italic::Oblique:           aXLFD += 'o';break;
+-        case italic::Italic:            aXLFD += 'i';break;
++        case italic::Upright:       aXLFD.append('r');break;
++        case italic::Oblique:       aXLFD.append('o');break;
++        case italic::Italic:        aXLFD.append('i');break;
+         default: break;
+     }
+-    aXLFD += '-';
++    aXLFD.append('-');
+     switch( pFont->m_eWidth )
+     {
+-        case width::UltraCondensed: aXLFD += "ultracondensed";break;
+-        case width::ExtraCondensed: aXLFD += "extracondensed";break;
+-        case width::Condensed:          aXLFD += "condensed";break;
+-        case width::SemiCondensed:      aXLFD += "semicondensed";break;
+-        case width::Normal:         aXLFD += "normal";break;
+-        case width::SemiExpanded:       aXLFD += "semiexpanded";break;
+-        case width::Expanded:           aXLFD += "expanded";break;
+-        case width::ExtraExpanded:      aXLFD += "extraexpanded";break;
+-        case width::UltraExpanded:      aXLFD += "ultraexpanded";break;
++        case width::UltraCondensed: aXLFD.append("ultracondensed");break;
++        case width::ExtraCondensed: aXLFD.append("extracondensed");break;
++        case width::Condensed:      aXLFD.append("condensed");break;
++        case width::SemiCondensed:  aXLFD.append("semicondensed");break;
++        case width::Normal:         aXLFD.append("normal");break;
++        case width::SemiExpanded:   aXLFD.append("semiexpanded");break;
++        case width::Expanded:       aXLFD.append("expanded");break;
++        case width::ExtraExpanded:  aXLFD.append("extraexpanded");break;
++        case width::UltraExpanded:  aXLFD.append("ultraexpanded");break;
+         default: break;
+     }
+-    aXLFD += "-utf8-0-0-0-0-";
+-    aXLFD += pFont->m_ePitch == pitch::Fixed ? "m" : "p";
+-    aXLFD += "-0-";
+-    aXLFD += rtl_getBestUnixCharsetFromTextEncoding( pFont->m_aEncoding );
++    aXLFD.append("-utf8-0-0-0-0-");
++    aXLFD.append( pFont->m_ePitch == pitch::Fixed ? "m" : "p" );
++    aXLFD.append("-0-");
++    const char* pEnc = rtl_getBestUnixCharsetFromTextEncoding( pFont->m_aEncoding );
++    if( ! pEnc )
++    {
++        if( pFont->m_aEncoding == RTL_TEXTENCODING_ADOBE_STANDARD )
++            pEnc = "adobe-standard";
++        else
++            pEnc = "iso8859-1";
++    }
++    aXLFD .append( pEnc );
+ 
+-    return aXLFD;
++    return aXLFD.makeStringAndClear();
+ }
+ 
+ // -------------------------------------------------------------------------
+@@ -2167,10 +2181,8 @@
+ #endif /* SOLARIS */
+     } // ! bFontconfigSuccess
+ 
+-    // use XLFD aliases from fonts.alias files if requested
+-    const char* pEnableAliases = getenv( "PARSE_X11_FONT_ALIAS_FILES" );
+-    if( pEnableAliases )
+-        initFontsAlias();
++    // fill XLFD aliases from fonts.alias files
++    initFontsAlias();
+ 
+     // search for font files in each path
+     std::list< OString >::iterator dir_it;
+@@ -3248,7 +3260,7 @@
+ 
+                     aLine = ByteString( aTo.GetName(), aEncoding );
+                     aLine += ' ';
+-                    aLine += getXLFD( *it );
++                    aLine += ByteString( getXLFD( *it ) );
+ 
+                     int nTTCnumber = -1;
+                     if( (*it)->m_eType == fonttype::TrueType )
+diff -Nurd -x CVS -x '*.orig' -x unxlngi4.pro psprint.m48/source/fontmanager/makefile.mk psprint/source/fontmanager/makefile.mk
+--- psprint.m48/source/fontmanager/makefile.mk	2004-11-24 21:19:29.000000000 +0000
++++ psprint/source/fontmanager/makefile.mk	2004-03-15 12:03:52.000000000 +0000
+@@ -72,7 +72,7 @@
+ 
+ CFLAGS+= -I..$/fontsubset
+ 
+-.IF "$(FONTCONFIG_FONTS)" != ""
++.IF "$(ENABLE_FONTCONFIG)" != ""
+ CDEFS += -DENABLE_FONTCONFIG
+ .ENDIF
+ 
+diff -Nurd -x CVS -x '*.orig' -x unxlngi4.pro psprint.m48/source/helper/helper.cxx psprint/source/helper/helper.cxx
+--- psprint.m48/source/helper/helper.cxx	2004-11-24 21:19:29.000000000 +0000
++++ psprint/source/helper/helper.cxx	2004-06-01 09:58:42.000000000 +0100
+@@ -73,7 +73,7 @@
+ #include <rtl/bootstrap.hxx>
+ #include <sal/config.h>
+ #ifdef SOLAR_JAVA
+-#include "jvmaccess/javainfo.hxx"
++#include <jvmfwk/framework.h>
+ #endif // SOLAR_JAVA
+ 
+ #ifdef MACOSX
+@@ -247,87 +247,36 @@
+ 
+         // append jre/jdk fonts if possible
+         OString aJREpath;
+-        if( aUserPath.getLength() )
++
++#ifdef SOLAR_JAVA        
++        JavaInfo * pInfo = NULL;
++        javaFrameworkError jerr = jfw_getSelectedJRE( & pInfo);
++        if (jerr == JFW_E_NONE && pInfo != NULL)
+         {
+-            OUString aJavaRc( aUserPath );
+-            aJavaRc += OUString( RTL_CONSTASCII_USTRINGPARAM( "/user/config/" SAL_CONFIGFILE( "java" ) ) );
+-            Config aConfig( aJavaRc );
+-            aConfig.SetGroup( "Java" );
+-            aJREpath = aConfig.ReadKey( "Home" );
+-            if( ! aJREpath.getLength() )
+-            {
+-                aJavaRc = aNetPath;
+-                aJavaRc += OUString( RTL_CONSTASCII_USTRINGPARAM( "/share/config/" SAL_CONFIGFILE("java") ) );
+-                Config aShareConfig( aJavaRc );
+-                aShareConfig.SetGroup( "Java" );
+-                aJREpath = aShareConfig.ReadKey( "Home" );
+-            }
+-                
+-            if( aJREpath.compareTo( "file:", 5 ) == 0 )
+-            {
+-                OUString aURL( OStringToOUString( aJREpath, osl_getThreadTextEncoding() ) );
+-                OUString aSys;
+-                if( osl_getSystemPathFromFileURL( aURL.pData, &aSys.pData ) == osl_File_E_None )
+-                    aJREpath = OUStringToOString( aSys, osl_getThreadTextEncoding() );
+-            }
++            OUString aSys;
++            if( osl_getSystemPathFromFileURL( pInfo->sLocation, &aSys.pData ) == osl_File_E_None )
++                aJREpath = OUStringToOString( aSys, osl_getThreadTextEncoding() );
++        }
++        jfw_freeJavaInfo(pInfo);
++#endif
+             
+-            if( aJREpath.getLength() > 0 )
++        if( aJREpath.getLength() > 0 )
++        {
++            OString aTestPath( aJREpath );
++            aTestPath += "/jre/lib/fonts";
++            if( access( aTestPath.getStr(), R_OK ) )
+             {
+-                OString aTestPath( aJREpath );
+-                aTestPath += "/jre/lib/fonts";
++                aTestPath = aJREpath;
++                aTestPath += "/lib/fonts";
+                 if( access( aTestPath.getStr(), R_OK ) )
+-                {
+-                    aTestPath = aJREpath;
+-                    aTestPath += "/lib/fonts";
+-                    if( access( aTestPath.getStr(), R_OK ) )
+-                        aJREpath = OString();
+-                    else
+-                        aJREpath = aTestPath;
+-                }
++                    aJREpath = OString();
+                 else
+                     aJREpath = aTestPath;
+             }
++            else
++                aJREpath = aTestPath;
+         }
+ 
+-#ifdef SOLAR_JAVA
+-        // if no javarc (e.g. in setup) exists or it failed try the UDK method
+-        if( ! aJREpath.getLength() )
+-        {
+-            OString aJavaLib;
+-            try
+-            {
+-                OUString aLib;
+-                if (osl::FileBase::getSystemPathFromFileURL(
+-                            jvmaccess::JavaInfo::createBestInfo(true).
+-                                getRuntimeLibLocation(),
+-                            aLib)
+-                        == osl::FileBase::E_None)
+-                    aLib.convertToString(
+-                        &aJavaLib, osl_getThreadTextEncoding(),
+-                        RTL_UNICODETOTEXT_FLAGS_UNDEFINED_ERROR
+-                            | RTL_UNICODETOTEXT_FLAGS_INVALID_ERROR);
+-            }
+-            catch (jvmaccess::JavaInfo::InitException &)
+-            {}
+-
+-            if (aJavaLib.getLength() != 0)
+-            {
+-                sal_Int32 nIndex;
+-                while( ( nIndex = aJavaLib.lastIndexOf( '/' ) ) != -1 )
+-                {
+-                    aJavaLib = aJavaLib.copy( 0, nIndex );
+-                    OString aTmpPath = aJavaLib;
+-                    aTmpPath += "/lib/fonts";
+-                    if( access( aTmpPath.getStr(), R_OK ) == 0 )
+-                    {
+-                        aJREpath = aTmpPath;
+-                        break;
+-                    }
+-                }
+-            }
+-        }
+-#endif // SOLAR_JAVA
+-
+         if( aJREpath.getLength() )
+         {
+             aPath += OUString( RTL_CONSTASCII_USTRINGPARAM( ";" ) );
+diff -Nurd -x CVS -x '*.orig' -x unxlngi4.pro psprint.m48/source/helper/makefile.mk psprint/source/helper/makefile.mk
+--- psprint.m48/source/helper/makefile.mk	2004-01-28 11:23:54.000000000 +0000
++++ psprint/source/helper/makefile.mk	2004-02-02 18:55:19.000000000 +0000
+diff -Nurd -x CVS -x '*.orig' -x unxlngi4.pro psprint.m48/source/helper/ppdparser.cxx psprint/source/helper/ppdparser.cxx
+--- psprint.m48/source/helper/ppdparser.cxx	2004-11-24 21:19:29.000000000 +0000
++++ psprint/source/helper/ppdparser.cxx	2004-09-08 15:08:39.000000000 +0100
+@@ -61,19 +61,7 @@
+ #include <stdlib.h>
+ #include <stdio.h>
+ 
+-#ifndef __SGI_STL_HASH_MAP
+ #include <hash_map>
+-#endif
+-// define a hash for PPDKey
+-namespace psp { class PPDKey; }
+-
+-namespace  _STL {
+-struct hash< const psp::PPDKey* >
+-{
+-    size_t operator()( const psp::PPDKey * pKey) const
+-    { return (size_t)pKey; }
+-};
+-}
+ 
+ #include <psprint/ppdparser.hxx>
+ #include <tools/debug.hxx>
+@@ -268,16 +256,19 @@
      return aName;
  }
  
@@ -986,7 +1431,7 @@ diff -w -u -r1.14 -r1.16
          return NULL;
      }
  
-@@ -294,12 +297,16 @@
+@@ -294,12 +285,16 @@
          if( rMgr.getType() == PrinterInfoManager::CUPS )
          {
              pNewParser = const_cast<PPDParser*>(static_cast<CUPSManager&>(rMgr).createCUPSParser( aFile ));
@@ -1006,150 +1451,84 @@ diff -w -u -r1.14 -r1.16
      return pNewParser;
  }
  
-
-
-Index: source/printer/printerinfomanager.cxx
-===================================================================
-RCS file: /cvs/gsl/psprint/source/printer/printerinfomanager.cxx,v
-retrieving revision 1.23
-retrieving revision 1.25
-diff -w -u -r1.23 -r1.25
---- psprint/source/printer/printerinfomanager.cxx	17 Mar 2004 10:51:45 -0000	1.23
-+++ psprint/source/printer/printerinfomanager.cxx	23 Jul 2004 10:09:11 -0000	1.25
-@@ -133,6 +133,9 @@
+@@ -1299,7 +1294,7 @@
  
-         if( pManager )
-             pManager->initialize();
-+#if OSL_DEBUG_LEVEL > 1
-+        fprintf( stderr, "PrinterInfoManager::get create Manager of type %d\n", pManager->getType() );
-+#endif
-     }
- 
-     return *pManager;
-@@ -1161,7 +1164,7 @@
-                 if( nSubstitute != -1 )
-                 {
-                     rInfo.m_aFontSubstitutions[ it->m_nID ] = nSubstitute;
--#if OSL_DEBUG_LEVEL > 1
-+#if OSL_DEBUG_LEVEL > 2
-                     FastPrintFontInfo aInfo;
-                     rFontManager.getFontFastInfo( nSubstitute, aInfo );
-                     fprintf( stderr,
-@@ -1220,7 +1223,8 @@
+ const PPDKey* PPDContext::getModifiedKey( int n ) const
  {
-     const PrinterInfo&   rPrinterInfo	= getPrinterInfo (rPrintername);
-     const rtl::OUString& rCommand		= rPrinterInfo.m_aCommand;
--    const rtl::OString aShellCommand	= OUStringToOString (rCommand, RTL_TEXTENCODING_ISO_8859_1);
-+    rtl::OString aShellCommand	= OUStringToOString (rCommand, RTL_TEXTENCODING_ISO_8859_1);
-+    aShellCommand += rtl::OString( " 2>/dev/null" );
- 													  
-     return popen (aShellCommand.getStr(), "w");
- }
-@@ -1282,7 +1286,7 @@
-     const char*		pPrintCommand;
-     const char*		pForeToken;
-     const char*		pAftToken;
--    int					nForeTokenCount;
-+    unsigned int	nForeTokenCount;
- };
+-    ::std::hash_map< const PPDKey*, const PPDValue* >::const_iterator it;
++    hash_type::const_iterator it;
+     for( it = m_aCurrentValues.begin(); it != m_aCurrentValues.end() && n--; ++it )
+         ;
+     return it != m_aCurrentValues.end() ? it->first : NULL;
+@@ -1323,7 +1318,7 @@
+     if( ! m_pParser )
+         return NULL;
  
- static const struct SystemCommandParameters aParms[] =
-@@ -1312,7 +1316,7 @@
- {
-     char pBuffer[1024];
-     ByteString aPrtQueueCmd, aForeToken, aAftToken, aString;
--    int nForeTokenCount = 0, i;
-+    unsigned int nForeTokenCount = 0, i;
-     FILE *pPipe;
-     bool bSuccess = false;
-     std::list< ByteString > aLines;
-@@ -1355,6 +1359,7 @@
-         else
- #endif
-         {
-+			aPrtQueueCmd += ByteString( " 2>/dev/null" );	
-             if( pPipe = popen( aPrtQueueCmd.GetBuffer(), "r" ) )
+-    ::std::hash_map< const PPDKey*, const PPDValue* >::const_iterator it;
++    hash_type::const_iterator it;
+     it = m_aCurrentValues.find( pKey );
+     if( it != m_aCurrentValues.end() )
+         return it->second;
+@@ -1362,7 +1357,7 @@
+             m_aCurrentValues[ pKey ] = pValue;
+ 
+             // after setting this value, check all constraints !
+-            ::std::hash_map< const PPDKey*, const PPDValue* >::iterator it = m_aCurrentValues.begin();
++            hash_type::iterator it = m_aCurrentValues.begin();
+             while(  it != m_aCurrentValues.end() )
              {
-                 while( fgets( pBuffer, 1024, pPipe ) )
-@@ -1403,7 +1408,7 @@
-                 ByteString aOutLine( aLines.front() );
-                 aLines.pop_front();
-             
--                for( int i = 0; i < nForeTokenCount && nPos != STRING_NOTFOUND; i++ )
-+                for( i = 0; i < nForeTokenCount && nPos != STRING_NOTFOUND; i++ )
-                 {
-                     nPos = aOutLine.Search( aForeToken, nPos );
-                     if( nPos != STRING_NOTFOUND && aOutLine.Len() >= nPos+aForeToken.Len() )
-@@ -1496,6 +1501,7 @@
-      return( applePrintSysType );
- }
+                 if( it->first != pKey &&
+@@ -1554,7 +1549,7 @@
+     rBytes = 0;
+     if( ! m_aCurrentValues.size() )
+         return NULL;
+-    ::std::hash_map< const PPDKey*, const PPDValue* >::const_iterator it;
++    hash_type::const_iterator it;
+     for( it = m_aCurrentValues.begin(); it != m_aCurrentValues.end(); ++it )
+     {
+         ByteString aCopy( it->first->getKey(), RTL_TEXTENCODING_MS_1252 );
+diff -Nurd -x CVS -x '*.orig' -x unxlngi4.pro psprint.m48/source/helper/strhelper.cxx psprint/source/helper/strhelper.cxx
+--- psprint.m48/source/helper/strhelper.cxx	2004-11-24 21:19:29.000000000 +0000
++++ psprint/source/helper/strhelper.cxx	2004-07-23 10:58:39.000000000 +0100
+@@ -64,9 +64,18 @@
+ #include <alloca.h>
+ #endif
+ #include <cstdlib>
+-#include <cmath> // for isnan
++#include <math.h> // for isnan
+ #include <cstring>
  
-+#if 0
- /*
-  * macxp_GetSystemPrintFormat()
-  *
-@@ -1509,7 +1515,7 @@
-  * therefore the environment variable OOO_PRINT_PS_DIRECTLY, if set,
-  * forces OOo to NOT undergo the PS -> PDF translation by default.
-  */
--/*sal_Int32 macxp_GetSystemPrintFormat( void )
-+sal_Int32 macxp_GetSystemPrintFormat( void )
- {
-      int			printFormat;
-      int			err;
-@@ -1520,15 +1526,15 @@
- 	
-      /* Check for presence of OSAScript executable, which is
-       * believed to be MacOS X only (ie not present on Darwin).
--      *
-+      */
-      err = stat( "/usr/bin/osascript", &status );
-      if ( err == 0 )
-      {
--          /* Check to see if the user wants to print PS anyway *
-+         /* Check to see if the user wants to print PS anyway */
-           pPDFOverride = getenv( "OOO_PRINT_PS_DIRECTLY" );
-           if ( pPDFOverride == NULL )
-           {
--               /* Now we have to check for ps2pdf to make sure we can do the conversion *
-+          /* Now we have to check for ps2pdf to make sure we can do the conversion */
-                err = stat( kApplePS2PDFLocation, &status );
-                if ( err == 0 )
-                {
-@@ -1541,6 +1547,7 @@
-      }
- 	
-      return( printFormat );
--}*/
-+}
++// isnan needs special support on MACOSX
++#if defined(MACOSX)
++#define      isnan( x )         ( ( sizeof ( x ) == sizeof(double) ) ?    \
++                              __isnand ( x ) :                            \
++                                ( sizeof ( x ) == sizeof( float) ) ?      \
++                              __isnanf ( x ) :                            \
++                              __isnan  ( x ) )
 +#endif
++
+ namespace psp {
+ 
+ inline int isSpace( char cChar )
+diff -Nurd -x CVS -x '*.orig' -x unxlngi4.pro psprint.m48/source/printer/cupsmgr.cxx psprint/source/printer/cupsmgr.cxx
+--- psprint.m48/source/printer/cupsmgr.cxx	2004-11-24 21:19:29.000000000 +0000
++++ psprint/source/printer/cupsmgr.cxx	2004-11-09 16:37:51.000000000 +0000
+@@ -68,30 +68,36 @@
+ typedef void cups_option_t;
  #endif
  
---- ../OOO_1_1_3_fix2/psprint/source/printer/cupsmgr.cxx	2004-08-30 16:46:55.000000000 +0100
-+++ psprint/source/printer/cupsmgr.cxx	2004-09-07 11:18:11.200669640 +0100
-@@ -1,10 +1,10 @@
- /*************************************************************************
-  *
-- *  
-+ *  $RCSfile$
-  *
-- *  
-+ *  $Revision$
-  *
-- *  
-+ *  last change: $Author$ $Date$
-  *
-  *  The Contents of this file are made available subject to the terms of
-  *  either of the following licenses
-@@ -70,6 +70,7 @@
- 
++#include <unistd.h>
++
  #include <osl/thread.h>
  #include <osl/diagnose.h>
 +#include <osl/conditn.hxx>
  #include <rtl/ustrbuf.hxx>
  #include <cupsmgr.hxx>
  
-@@ -78,20 +79,21 @@
++#include <unistd.h>
++
+ namespace psp
+ {
  class CUPSWrapper
  {
      oslModule		m_pLib;
@@ -1174,7 +1553,7 @@ diff -w -u -r1.23 -r1.25
      void			(*m_pcupsSetUser)(const char*);
  
      void* loadSymbol( const char* );
-@@ -117,8 +119,7 @@
+@@ -117,8 +123,7 @@
                     cups_option_t* pOptions )
      { return m_pcupsPrintFile( pPrinter, pFileName, pTitle, nOptions, pOptions ); }
  
@@ -1184,7 +1563,7 @@ diff -w -u -r1.23 -r1.25
  
      int cupsMarkOptions(ppd_file_t* pPPD, int nOptions, cups_option_t* pOptions )
      { return m_pcupsMarkOptions(pPPD, nOptions, pOptions); }
-@@ -251,6 +252,70 @@
+@@ -251,6 +256,70 @@
      return m_pLib != NULL;
  }
  
@@ -1255,7 +1634,7 @@ diff -w -u -r1.23 -r1.25
  static const char* setPasswordCallback( const char* pIn )
  {
      const char* pRet = NULL;
-@@ -276,66 +341,91 @@
+@@ -276,66 +345,90 @@
          // try to load CUPS
          CUPSWrapper* pWrapper = new CUPSWrapper();
          if( pWrapper->isValid() )
@@ -1321,9 +1700,13 @@ diff -w -u -r1.23 -r1.25
 +#if OSL_DEBUG_LEVEL > 1
 +    fprintf( stderr, "starting cupsGetDests\n" );
 +#endif
-+    osl::MutexGuard aGuard( m_aCUPSMutex );
++    int nDests = 0;
++    cups_dest_t* pDests = NULL;
++    nDests = m_pCUPSWrapper->cupsGetDests( &pDests );
 +
-+    m_nDests = m_pCUPSWrapper->cupsGetDests( (cups_dest_t**)&m_pDests );
++    osl::MutexGuard aGuard( m_aCUPSMutex );
++    m_nDests = nDests;
++    m_pDests = pDests;
 +    m_bNewDests = true;
 +#if OSL_DEBUG_LEVEL > 1
 +    fprintf( stderr, "finished cupsGetDests\n" );
@@ -1360,11 +1743,6 @@ diff -w -u -r1.23 -r1.25
  
 -    // get normal printers
 -    PrinterInfoManager::initialize();
-+#if 0
-+    // update dests
-+    m_pCUPSWrapper->cupsFreeDests( m_nDests, (cups_dest_t*)m_pDests );
-+    m_nDests = m_pCUPSWrapper->cupsGetDests( (cups_dest_t**)&m_pDests );
-+#endif
 +    m_bNewDests = false;
  
      rtl_TextEncoding aEncoding = osl_getThreadTextEncoding();
@@ -1382,7 +1760,56 @@ diff -w -u -r1.23 -r1.25
  
      // add CUPS printers, should there be a printer
      // with the same name as a CUPS printer, overwrite it
-@@ -464,53 +554,60 @@
+@@ -371,6 +464,12 @@
+         // behaviour
+         aPrinter.m_aInfo.m_pParser = NULL;
+         aPrinter.m_aInfo.m_aContext.setParser( NULL );
++        std::hash_map< OUString, PPDContext, OUStringHash >::const_iterator c_it = m_aDefaultContexts.find( aPrinterName );
++        if( c_it != m_aDefaultContexts.end() )
++        {
++            aPrinter.m_aInfo.m_pParser = c_it->second.getParser();
++            aPrinter.m_aInfo.m_aContext = c_it->second;
++        }
+         aPrinter.m_aInfo.m_aDriverName = aBuf.makeStringAndClear();
+         aPrinter.m_bModified = false;
+ 
+@@ -402,7 +501,7 @@
+ }
+ 
+ #ifdef ENABLE_CUPS
+-static void updatePrinterContextInfo( ppd_group_t* pPPDGroup, PrinterInfo& rInfo )
++static void updatePrinterContextInfo( ppd_group_t* pPPDGroup, PPDContext& rContext )
+ {
+     rtl_TextEncoding aEncoding = osl_getThreadTextEncoding();
+     for( int i = 0; i < pPPDGroup->num_options; i++ )
+@@ -413,7 +512,7 @@
+             ppd_choice_t* pChoice = pOption->choices + n;
+             if( pChoice->marked )
+             {
+-                const PPDKey* pKey = rInfo.m_pParser->getKey( OStringToOUString( pOption->keyword, aEncoding ) );
++                const PPDKey* pKey = rContext.getParser()->getKey( OStringToOUString( pOption->keyword, aEncoding ) );
+                 if( pKey )
+                 {
+                     const PPDValue* pValue = pKey->getValue( OStringToOUString( pChoice->choice, aEncoding ) );
+@@ -421,7 +520,7 @@
+                     {
+                         if( pValue != pKey->getDefaultValue() )
+                         {
+-                            rInfo.m_aContext.setValue( pKey, pValue, true );
++                            rContext.setValue( pKey, pValue, true );
+ #if OSL_DEBUG_LEVEL > 1
+                             fprintf( stderr, "key %s is set to %s\n", pOption->keyword, pChoice->choice );
+ #endif
+@@ -448,7 +547,7 @@
+     // recurse through subgroups
+     for( int g = 0; g < pPPDGroup->num_subgroups; g++ )
+     {
+-        updatePrinterContextInfo( pPPDGroup->subgroups + g, rInfo );
++        updatePrinterContextInfo( pPPDGroup->subgroups + g, rContext );
+     }
+ }
+ #endif // ENABLE_CUPS
+@@ -464,53 +563,71 @@
          aPrinter = rPrinter;
  
  #ifdef ENABLE_CUPS
@@ -1413,51 +1840,61 @@ diff -w -u -r1.23 -r1.25
 -            // update the printer info with context information
 -            ppd_file_t* pPPD = m_pCUPSWrapper->ppdOpenFile( pPPDFile );
 -            /*int nConflicts =*/ m_pCUPSWrapper->cupsMarkOptions( pPPD, pDest->num_options, pDest->options );
--#if OSL_DEBUG_LEVEL > 1
++            if( pPPDFile )
++            {
++                rtl_TextEncoding aEncoding = osl_getThreadTextEncoding();
++                OUString aFileName( OStringToOUString( pPPDFile, aEncoding ) );
++                // update the printer info with context information
++                ppd_file_t* pPPD = m_pCUPSWrapper->ppdOpenFile( pPPDFile );
++                if( pPPD )
++                {
++                    // create the new parser
++                    PPDParser* pCUPSParser =  new PPDParser( aFileName );
++                    pCUPSParser->m_aFile = rPrinter;
++                    pNewParser = pCUPSParser;
++                    
++                    /*int nConflicts =*/ m_pCUPSWrapper->cupsMarkOptions( pPPD, pDest->num_options, pDest->options );
+ #if OSL_DEBUG_LEVEL > 1
 -            fprintf( stderr, "processing the following options for printer %s (instance %s):\n",
 -                     pDest->name, pDest->instance );
 -            for( int k = 0; k < pDest->num_options; k++ )
 -                fprintf( stderr, "   \"%s\" = \"%s\"\n",
 -                         pDest->options[k].name,
 -                         pDest->options[k].value );
--#endif
++                    fprintf( stderr, "processing the following options for printer %s (instance %s):\n",
++                    pDest->name, pDest->instance );
++                    for( int k = 0; k < pDest->num_options; k++ )
++                        fprintf( stderr, "   \"%s\" = \"%s\"\n",
++                    pDest->options[k].name,
++                    pDest->options[k].value );
++#endif
++                    PrinterInfo& rInfo = m_aPrinters[ aPrinter ].m_aInfo;
++                    
++                    // remember the default context for later use
++                    PPDContext& rContext = m_aDefaultContexts[ aPrinter ];
++                    rContext.setParser( pNewParser );
++                    for( int i = 0; i < pPPD->num_groups; i++ )
++                        updatePrinterContextInfo( pPPD->groups + i, rContext );
++                    
++                    rInfo.m_pParser = pNewParser;
++                    rInfo.m_aContext = rContext;
++                    
++                    // clean up the mess
++                    m_pCUPSWrapper->ppdClose( pPPD );
++                }
++#if OSL_DEBUG_LEVEL > 1
++                else
++                    fprintf( stderr, "ppdOpenFile failed, fallinmg back to generic driver\n" );
+ #endif
 -            PrinterInfo& rInfo = m_aPrinters[ aPrinter ].m_aInfo;
 -
 -            rInfo.m_pParser = pNewParser;
 -            rInfo.m_aContext.setParser( pNewParser );
 -            for( int i = 0; i < pPPD->num_groups; i++ )
 -                updatePrinterContextInfo( pPPD->groups + i, rInfo );
-+            if( pPPDFile )
-+            {
-+                rtl_TextEncoding aEncoding = osl_getThreadTextEncoding();
-+                OUString aFileName( OStringToOUString( pPPDFile, aEncoding ) );
-+                // create the new parser
-+                PPDParser* pCUPSParser =  new PPDParser( aFileName );
-+                pCUPSParser->m_aFile = rPrinter;
-+                pNewParser = pCUPSParser;
-+
-+                // update the printer info with context information
-+                ppd_file_t* pPPD = m_pCUPSWrapper->ppdOpenFile( pPPDFile );
-+                /*int nConflicts =*/ m_pCUPSWrapper->cupsMarkOptions( pPPD, pDest->num_options, pDest->options );
-+#if OSL_DEBUG_LEVEL > 1
-+                fprintf( stderr, "processing the following options for printer %s (instance %s):\n",
-+                         pDest->name, pDest->instance );
-+                for( int k = 0; k < pDest->num_options; k++ )
-+                    fprintf( stderr, "   \"%s\" = \"%s\"\n",
-+                             pDest->options[k].name,
-+                             pDest->options[k].value );
-+#endif
-+                PrinterInfo& rInfo = m_aPrinters[ aPrinter ].m_aInfo;
-+
-+                rInfo.m_pParser = pNewParser;
-+                rInfo.m_aContext.setParser( pNewParser );
-+                for( int i = 0; i < pPPD->num_groups; i++ )
-+                    updatePrinterContextInfo( pPPD->groups + i, rInfo );
- 
+-
 -            // clean up the mess
 -            m_pCUPSWrapper->ppdClose( pPPD );
-+                // clean up the mess
-+                m_pCUPSWrapper->ppdClose( pPPD );
  
 -            // remove temporary PPD file
 -            unlink( pPPDFile );
@@ -1481,16 +1918,97 @@ diff -w -u -r1.23 -r1.25
      {
          // get the default PPD
          pNewParser = PPDParser::getParser( String( RTL_CONSTASCII_USTRINGPARAM( "SGENPRT" ) ) );
-@@ -583,6 +680,8 @@
+@@ -549,6 +666,16 @@
+         // which updates the printer info
+         p_it->second.m_aInfo.m_pParser = PPDParser::getParser( p_it->second.m_aInfo.m_aDriverName );
+     }
++    if( p_it->second.m_aInfo.m_aContext.getParser() == NULL )
++    {
++        OUString aPrinter;
++        if( p_it->second.m_aInfo.m_aDriverName.compareToAscii( "CUPS:", 5 ) == 0 )
++            aPrinter = p_it->second.m_aInfo.m_aDriverName.copy( 5 );
++        else
++            aPrinter = p_it->second.m_aInfo.m_aDriverName;
++
++        p_it->second.m_aInfo.m_aContext = m_aDefaultContexts[ aPrinter ];
++    }
+ 
+     rData.m_pParser		= p_it->second.m_aInfo.m_pParser;
+     rData.m_aContext	= p_it->second.m_aInfo.m_aContext;
+@@ -557,6 +684,9 @@
+ 
+ FILE* CUPSManager::startSpool( const OUString& rPrintername )
+ {
++    if( m_aCUPSDestMap.find( rPrintername ) == m_aCUPSDestMap.end() )
++        return PrinterInfoManager::startSpool( rPrintername );
++    
+ #ifdef ENABLE_CUPS
+     OUString aTmpURL, aTmpFile;
+     osl_createTempFile( NULL, NULL, &aTmpURL.pData );
+@@ -576,39 +706,37 @@
+ {
+     int nJobID = 0;
+ 
+-#ifdef ENABLE_CUPS
++    osl::MutexGuard aGuard( m_aCUPSMutex );
++    
++    std::hash_map< OUString, int, OUStringHash >::iterator dest_it =
++        m_aCUPSDestMap.find( rPrintername );
++    if( dest_it == m_aCUPSDestMap.end() )
++        return PrinterInfoManager::endSpool( rPrintername, rJobTitle, pFile );
++
++    #ifdef ENABLE_CUPS
+     std::hash_map< FILE*, OString, FPtrHash >::const_iterator it = m_aSpoolFiles.find( pFile );
+     if( it != m_aSpoolFiles.end() )
+     {
          fclose( pFile );
          rtl_TextEncoding aEnc = osl_getThreadTextEncoding();
  
-+        osl::MutexGuard aGuard( m_aCUPSMutex );
-+
-         std::hash_map< OUString, int, OUStringHash >::iterator dest_it =
-             m_aCUPSDestMap.find( rPrintername );
-         if( dest_it != m_aCUPSDestMap.end() )
-@@ -625,7 +724,18 @@
+-        std::hash_map< OUString, int, OUStringHash >::iterator dest_it =
+-            m_aCUPSDestMap.find( rPrintername );
+-        if( dest_it != m_aCUPSDestMap.end() )
+-        {
+-            cups_dest_t* pDest = ((cups_dest_t*)m_pDests) + dest_it->second;
+-            nJobID = m_pCUPSWrapper->cupsPrintFile( pDest->name,
+-                                                    it->second.getStr(),
+-                                                    OUStringToOString( rJobTitle, aEnc ).getStr(),
+-                                                    0, NULL );
+-#if OSL_DEBUG_LEVEL > 1
+-            fprintf( stderr, "cupsPrintFile( %s, %s, %s, 0, 0 ) returns %d\n",
+-                     pDest->name,
+-                     it->second.getStr(),
+-                     OUStringToOString( rJobTitle, aEnc ).getStr(),
+-                     nJobID );
+-            OString aCmd( "cp " );
+-            aCmd = aCmd + it->second;
+-            aCmd = aCmd + OString( " $HOME/cupsprint.ps" );
+-            system( aCmd.getStr() );
+-#endif
+-        }
++        cups_dest_t* pDest = ((cups_dest_t*)m_pDests) + dest_it->second;
++        nJobID = m_pCUPSWrapper->cupsPrintFile( pDest->name,
++        it->second.getStr(),
++        OUStringToOString( rJobTitle, aEnc ).getStr(),
++        0, NULL );
+ #if OSL_DEBUG_LEVEL > 1
+-        else
+-            fprintf( stderr, "Error: no CUPS dest for %s found, discarding job\n", OUStringToOString( rPrintername, aEnc ).getStr() );
++        fprintf( stderr, "cupsPrintFile( %s, %s, %s, 0, 0 ) returns %d\n",
++        pDest->name,
++        it->second.getStr(),
++        OUStringToOString( rJobTitle, aEnc ).getStr(),
++        nJobID );
++        OString aCmd( "cp " );
++        aCmd = aCmd + it->second;
++        aCmd = aCmd + OString( " $HOME/cupsprint.ps" );
++        system( aCmd.getStr() );
+ #endif
+-
++        
+         unlink( it->second.getStr() );
+         m_aSpoolFiles.erase( pFile );
+     }
+@@ -625,7 +753,20 @@
  
  bool CUPSManager::checkPrintersChanged()
  {
@@ -1500,17 +2018,19 @@ diff -w -u -r1.23 -r1.25
 +    {
 +        bChanged = m_bNewDests;
 +        m_aCUPSMutex.release();
-+        initialize();
 +    }
 +
 +    if( ! bChanged )
 +        bChanged = PrinterInfoManager::checkPrintersChanged();
++    
++    if( bChanged )
++        initialize();
 +
 +    return bChanged;
  }
  
  bool CUPSManager::addPrinter( const OUString& rName, const OUString& rDriver )
-@@ -648,23 +758,23 @@
+@@ -648,23 +789,26 @@
  
  bool CUPSManager::setDefaultPrinter( const OUString& rName )
  {
@@ -1542,12 +2062,15 @@ diff -w -u -r1.23 -r1.25
 +        m_aCUPSMutex.release();
 +        bSuccess = true;
 +    }
++    else
  #endif
++        PrinterInfoManager::setDefaultPrinter( rName );
++        
 +    return bSuccess;
  }
  
  bool CUPSManager::writePrinterConfig()
-@@ -684,32 +794,39 @@
+@@ -684,37 +828,49 @@
          if( ! prt->second.m_bModified )
              continue;
  
@@ -1607,7 +2130,17 @@ diff -w -u -r1.23 -r1.25
  #endif // ENABLE_CUPS
  
      return PrinterInfoManager::writePrinterConfig();
-@@ -731,6 +848,8 @@
+ }
+ 
++bool CUPSManager::addOrRemovePossible() const
++{
++    return (m_nDests && m_pDests) ? false : PrinterInfoManager::addOrRemovePossible();
++}
++
+ #include <rtsname.hxx>
+ 
+ const char* CUPSManager::authenticateUser( const char* pIn )
+@@ -731,6 +887,8 @@
              (bool(*)(const OString&,OString&,OString&))osl_getSymbol( pLib, aSym.pData );
          if( getpw )
          {
@@ -1616,3 +2149,322 @@ diff -w -u -r1.23 -r1.25
              OString aUser = m_pCUPSWrapper->cupsUser();
              OString aServer = m_pCUPSWrapper->cupsServer();
              OString aPassword;
+diff -Nurd -x CVS -x '*.orig' -x unxlngi4.pro psprint.m48/source/printer/jobdata.cxx psprint/source/printer/jobdata.cxx
+--- psprint.m48/source/printer/jobdata.cxx	2004-11-24 21:19:29.000000000 +0000
++++ psprint/source/printer/jobdata.cxx	2004-03-17 10:51:16.000000000 +0000
+diff -Nurd -x CVS -x '*.orig' -x unxlngi4.pro psprint.m48/source/printer/makefile.mk psprint/source/printer/makefile.mk
+--- psprint.m48/source/printer/makefile.mk	2004-11-24 21:19:29.000000000 +0000
++++ psprint/source/printer/makefile.mk	2004-03-17 10:51:30.000000000 +0000
+diff -Nurd -x CVS -x '*.orig' -x unxlngi4.pro psprint.m48/source/printer/printerinfomanager.cxx psprint/source/printer/printerinfomanager.cxx
+--- psprint.m48/source/printer/printerinfomanager.cxx	2004-11-24 21:19:29.000000000 +0000
++++ psprint/source/printer/printerinfomanager.cxx	2004-11-09 16:38:07.000000000 +0000
+@@ -72,6 +72,7 @@
+ 
+ #include <osl/thread.hxx>
+ #include <osl/mutex.hxx>
++#include <osl/process.h>
+ 
+ #ifdef MACOSX
+ #include <sys/stat.h>
+@@ -133,6 +134,9 @@
+ 
+         if( pManager )
+             pManager->initialize();
++#if OSL_DEBUG_LEVEL > 1
++        fprintf( stderr, "PrinterInfoManager::get create Manager of type %d\n", pManager->getType() );
++#endif
+     }
+ 
+     return *pManager;
+@@ -316,6 +320,7 @@
+                     m_aGlobalDefaults.m_aFontSubstitutes[ OStringToOUString( aKey.Copy( 10 ), RTL_TEXTENCODING_ISO_8859_1 ) ] = OStringToOUString( aValue, RTL_TEXTENCODING_ISO_8859_1 );
+                 }
+             }
++            setDefaultPaper( m_aGlobalDefaults );
+ #if OSL_DEBUG_LEVEL > 1
+             fprintf( stderr, "global settings: fontsubst = %s, %d substitutes\n", m_aGlobalDefaults.m_bPerformFontSubstitution ? "true" : "false", m_aGlobalDefaults.m_aFontSubstitutes.size() );
+ #endif
+@@ -579,6 +584,7 @@
+                     }
+                 }
+ 
++                setDefaultPaper( aPrinter.m_aInfo );
+                 fillFontSubstitutions( aPrinter.m_aInfo );
+ 
+                 // finally insert printer
+@@ -597,9 +603,6 @@
+         }
+     }
+ 
+-    if( m_eType != Default )
+-        return;
+-
+     // set default printer
+     if( m_aPrinters.size() )
+     {
+@@ -610,6 +613,9 @@
+         aDefaultPrinter = OUString();
+     m_aDefaultPrinter = aDefaultPrinter;
+ 
++    if( m_eType != Default )
++        return;
++
+     // add a default printer for every available print queue
+     // merge paper and font substitution from default printer,
+     // all else from global defaults
+@@ -1088,6 +1094,12 @@
+ }
+ 
+ // -----------------------------------------------------------------
++bool PrinterInfoManager::addOrRemovePossible() const
++{
++    return true;
++}
++
++// -----------------------------------------------------------------
+ 
+ void PrinterInfoManager::fillFontSubstitutions( PrinterInfo& rInfo ) const
+ {
+@@ -1161,7 +1173,7 @@
+                 if( nSubstitute != -1 )
+                 {
+                     rInfo.m_aFontSubstitutions[ it->m_nID ] = nSubstitute;
+-#if OSL_DEBUG_LEVEL > 1
++#if OSL_DEBUG_LEVEL > 2
+                     FastPrintFontInfo aInfo;
+                     rFontManager.getFontFastInfo( nSubstitute, aInfo );
+                     fprintf( stderr,
+@@ -1220,8 +1232,9 @@
+ {
+     const PrinterInfo&   rPrinterInfo	= getPrinterInfo (rPrintername);
+     const rtl::OUString& rCommand		= rPrinterInfo.m_aCommand;
+-    const rtl::OString aShellCommand	= OUStringToOString (rCommand, RTL_TEXTENCODING_ISO_8859_1);
+-													  
++    rtl::OString aShellCommand	= OUStringToOString (rCommand, RTL_TEXTENCODING_ISO_8859_1);
++    aShellCommand += rtl::OString( " 2>/dev/null" );
++
+     return popen (aShellCommand.getStr(), "w");
+ }
+ 
+@@ -1242,6 +1255,90 @@
+     }
+ }
+ 
++void PrinterInfoManager::setDefaultPaper( PrinterInfo& rInfo ) const
++{
++    if( ! rInfo.m_pParser || ! rInfo.m_aContext.getParser() )
++        return;
++ 
++    const PPDKey* pPageSizeKey = rInfo.m_pParser->getKey( String( RTL_CONSTASCII_USTRINGPARAM( "PageSize" ) ) );
++    if( ! pPageSizeKey )
++        return;
++    
++    int nModified = rInfo.m_aContext.countValuesModified();
++    while( nModified-- &&
++        rInfo.m_aContext.getModifiedKey( nModified ) != pPageSizeKey )
++    ;
++    
++    if( nModified >= 0 ) // paper was set already, do not modify
++    {
++        #if OSL_DEBUG_LEVEL > 1
++        fprintf( stderr, "not setting default paper, already set %s\n",
++            OUStringToOString( rInfo.m_aContext.getValue( pPageSizeKey )->m_aOption, RTL_TEXTENCODING_ISO_8859_1 ).getStr() );
++        #endif
++        return;
++    }
++    
++    // paper not set, fill in default value
++    // default value is Letter for US (en_US), Cannada (en_CA, fr_CA); else A4
++    // en will be interpreted as en_US
++    const PPDValue* pPaperVal = NULL;
++
++    // check for LC_PAPER
++    const char* pPaperLang = getenv( "LC_PAPER" );
++    if( pPaperLang && *pPaperLang )
++    {
++        OString aLang( pPaperLang );
++        if( aLang.getLength() > 5 )
++            aLang = aLang.copy( 0, 5 );
++        if( aLang.getLength() == 5 )
++        {
++            if(    aLang.equalsIgnoreAsciiCase( "en_us" )
++                || aLang.equalsIgnoreAsciiCase( "en_ca" )
++                || aLang.equalsIgnoreAsciiCase( "fr_ca" )
++                )
++                pPaperVal = pPageSizeKey->getValue( String( RTL_CONSTASCII_USTRINGPARAM( "Letter" ) ) );
++            else
++                pPaperVal = pPageSizeKey->getValue( String( RTL_CONSTASCII_USTRINGPARAM( "A4" ) ) );
++        }
++        else if( aLang.getLength() == 2 && aLang.equalsIgnoreAsciiCase( "en" ) )
++            pPaperVal = pPageSizeKey->getValue( String( RTL_CONSTASCII_USTRINGPARAM( "Letter" ) ) );
++        else
++            pPaperVal = pPageSizeKey->getValue( String( RTL_CONSTASCII_USTRINGPARAM( "A4" ) ) );
++    }
++    
++    // use process locale to determine paper
++    if( !pPaperVal )
++    {
++        rtl_Locale* pLoc = NULL;
++        osl_getProcessLocale( &pLoc );
++        if( pLoc )
++        {
++            pPaperVal = pPageSizeKey->getValue( String( RTL_CONSTASCII_USTRINGPARAM( "A4" ) ) );
++            if( 0 == rtl_ustr_ascii_compareIgnoreAsciiCase_WithLength( pLoc->Language->buffer, pLoc->Language->length, "en") )
++            {
++                if(    0 == rtl_ustr_ascii_compareIgnoreAsciiCase_WithLength( pLoc->Country->buffer, pLoc->Country->length, "us")
++                    || 0 == rtl_ustr_ascii_compareIgnoreAsciiCase_WithLength( pLoc->Country->buffer, pLoc->Country->length, "ca")
++                    || pLoc->Country->length == 0
++                    )
++                    pPaperVal = pPageSizeKey->getValue( String( RTL_CONSTASCII_USTRINGPARAM( "Letter" ) ) );
++            }
++            else if( 0 == rtl_ustr_ascii_compareIgnoreAsciiCase_WithLength( pLoc->Language->buffer, pLoc->Language->length, "fr") )
++            {
++                if( 0 == rtl_ustr_ascii_compareIgnoreAsciiCase_WithLength( pLoc->Country->buffer, pLoc->Country->length, "ca") )
++                    pPaperVal = pPageSizeKey->getValue( String( RTL_CONSTASCII_USTRINGPARAM( "Letter" ) ) );
++            }
++        }
++    }
++    
++    if( pPaperVal )
++    {
++        #if OSL_DEBUG_LEVEL > 1
++        fprintf( stderr, "setting default paper %s\n", OUStringToOString( pPaperVal->m_aOption, RTL_TEXTENCODING_ISO_8859_1 ).getStr() );
++        #endif
++        rInfo.m_aContext.setValue( pPageSizeKey, pPaperVal );
++    }
++}
++
+ // -----------------------------------------------------------------
+ 
+ SystemQueueInfo::SystemQueueInfo() :
+@@ -1282,7 +1379,7 @@
+     const char*		pPrintCommand;
+     const char*		pForeToken;
+     const char*		pAftToken;
+-    int					nForeTokenCount;
++    unsigned int	nForeTokenCount;
+ };
+ 
+ static const struct SystemCommandParameters aParms[] =
+@@ -1312,7 +1409,7 @@
+ {
+     char pBuffer[1024];
+     ByteString aPrtQueueCmd, aForeToken, aAftToken, aString;
+-    int nForeTokenCount = 0, i;
++    unsigned int nForeTokenCount = 0, i;
+     FILE *pPipe;
+     bool bSuccess = false;
+     std::list< ByteString > aLines;
+@@ -1355,7 +1452,8 @@
+         else
+ #endif
+         {
+-            if( pPipe = popen( aPrtQueueCmd.GetBuffer(), "r" ) )
++			aPrtQueueCmd += ByteString( " 2>/dev/null" );	
++            if( (pPipe = popen( aPrtQueueCmd.GetBuffer(), "r" )) )
+             {
+                 while( fgets( pBuffer, 1024, pPipe ) )
+                     aLines.push_back( ByteString( pBuffer ) );
+@@ -1403,7 +1501,7 @@
+                 ByteString aOutLine( aLines.front() );
+                 aLines.pop_front();
+             
+-                for( int i = 0; i < nForeTokenCount && nPos != STRING_NOTFOUND; i++ )
++                for( i = 0; i < nForeTokenCount && nPos != STRING_NOTFOUND; i++ )
+                 {
+                     nPos = aOutLine.Search( aForeToken, nPos );
+                     if( nPos != STRING_NOTFOUND && aOutLine.Len() >= nPos+aForeToken.Len() )
+@@ -1496,6 +1594,7 @@
+      return( applePrintSysType );
+ }
+ 
++#if 0
+ /*
+  * macxp_GetSystemPrintFormat()
+  *
+@@ -1509,7 +1608,7 @@
+  * therefore the environment variable OOO_PRINT_PS_DIRECTLY, if set,
+  * forces OOo to NOT undergo the PS -> PDF translation by default.
+  */
+-/*sal_Int32 macxp_GetSystemPrintFormat( void )
++sal_Int32 macxp_GetSystemPrintFormat( void )
+ {
+      int			printFormat;
+      int			err;
+@@ -1520,15 +1619,15 @@
+ 	
+      /* Check for presence of OSAScript executable, which is
+       * believed to be MacOS X only (ie not present on Darwin).
+-      *
++      */
+      err = stat( "/usr/bin/osascript", &status );
+      if ( err == 0 )
+      {
+-          /* Check to see if the user wants to print PS anyway *
++         /* Check to see if the user wants to print PS anyway */
+           pPDFOverride = getenv( "OOO_PRINT_PS_DIRECTLY" );
+           if ( pPDFOverride == NULL )
+           {
+-               /* Now we have to check for ps2pdf to make sure we can do the conversion *
++          /* Now we have to check for ps2pdf to make sure we can do the conversion */
+                err = stat( kApplePS2PDFLocation, &status );
+                if ( err == 0 )
+                {
+@@ -1541,6 +1640,7 @@
+      }
+ 	
+      return( printFormat );
+-}*/
++}
++#endif
+ #endif
+ 
+diff -Nurd -x CVS -x '*.orig' -x unxlngi4.pro psprint.m48/source/printergfx/bitmap_gfx.cxx psprint/source/printergfx/bitmap_gfx.cxx
+--- psprint.m48/source/printergfx/bitmap_gfx.cxx	2004-11-24 21:19:29.000000000 +0000
++++ psprint/source/printergfx/bitmap_gfx.cxx	2004-03-17 10:51:59.000000000 +0000
+diff -Nurd -x CVS -x '*.orig' -x unxlngi4.pro psprint.m48/source/printergfx/common_gfx.cxx psprint/source/printergfx/common_gfx.cxx
+--- psprint.m48/source/printergfx/common_gfx.cxx	2004-11-24 21:19:29.000000000 +0000
++++ psprint/source/printergfx/common_gfx.cxx	2004-05-18 11:46:21.000000000 +0100
+diff -Nurd -x CVS -x '*.orig' -x unxlngi4.pro psprint.m48/source/printergfx/glyphset.cxx psprint/source/printergfx/glyphset.cxx
+--- psprint.m48/source/printergfx/glyphset.cxx	2004-01-09 18:21:27.000000000 +0000
++++ psprint/source/printergfx/glyphset.cxx	2003-12-17 20:22:31.000000000 +0000
+diff -Nurd -x CVS -x '*.orig' -x unxlngi4.pro psprint.m48/source/printergfx/glyphset.hxx psprint/source/printergfx/glyphset.hxx
+--- psprint.m48/source/printergfx/glyphset.hxx	2004-11-24 21:18:29.000000000 +0000
++++ psprint/source/printergfx/glyphset.hxx	2004-09-08 15:01:23.000000000 +0100
+@@ -77,9 +77,7 @@
+ #ifndef __SGI_STL_LIST
+ #include <list>
+ #endif
+-#ifndef __SGI_STL_HASH_MAP
+ #include <hash_map>
+-#endif
+ 
+ namespace psp {
+ 
+diff -Nurd -x CVS -x '*.orig' -x unxlngi4.pro psprint.m48/source/printergfx/makefile.mk psprint/source/printergfx/makefile.mk
+--- psprint.m48/source/printergfx/makefile.mk	2004-01-28 11:25:32.000000000 +0000
++++ psprint/source/printergfx/makefile.mk	2004-02-02 18:56:54.000000000 +0000
+diff -Nurd -x CVS -x '*.orig' -x unxlngi4.pro psprint.m48/source/printergfx/printerjob.cxx psprint/source/printergfx/printerjob.cxx
+--- psprint.m48/source/printergfx/printerjob.cxx	2004-11-24 21:19:29.000000000 +0000
++++ psprint/source/printergfx/printerjob.cxx	2004-05-18 11:46:35.000000000 +0100
+diff -Nurd -x CVS -x '*.orig' -x unxlngi4.pro psprint.m48/source/printergfx/psheader.ps psprint/source/printergfx/psheader.ps
+--- psprint.m48/source/printergfx/psheader.ps	2004-11-24 21:19:29.000000000 +0000
++++ psprint/source/printergfx/psheader.ps	2003-08-25 14:59:25.000000000 +0100
+diff -Nurd -x CVS -x '*.orig' -x unxlngi4.pro psprint.m48/source/printergfx/psputil.cxx psprint/source/printergfx/psputil.cxx
+--- psprint.m48/source/printergfx/psputil.cxx	2004-11-24 21:19:29.000000000 +0000
++++ psprint/source/printergfx/psputil.cxx	2003-08-25 14:59:34.000000000 +0100
+diff -Nurd -x CVS -x '*.orig' -x unxlngi4.pro psprint.m48/source/printergfx/text_gfx.cxx psprint/source/printergfx/text_gfx.cxx
+--- psprint.m48/source/printergfx/text_gfx.cxx	2004-11-24 21:19:29.000000000 +0000
++++ psprint/source/printergfx/text_gfx.cxx	2004-03-17 10:52:41.000000000 +0000
+diff -Nurd -x CVS -x '*.orig' -x unxlngi4.pro psprint.m48/util/makefile.mk psprint/util/makefile.mk
+--- psprint.m48/util/makefile.mk	2004-11-24 21:18:29.000000000 +0000
++++ psprint/util/makefile.mk	2004-06-01 09:58:57.000000000 +0100
+@@ -105,7 +105,7 @@
+ 			$(SALLIB)			\
+ 			-lX11
+ .IF "$(SOLAR_JAVA)"!=""
+-SHL1STDLIBS+=$(JVMACCESSLIB)
++SHL1STDLIBS+=$(JVMFWKLIB)
+ .ENDIF
+ 
+ SHL1DEF=	$(MISC)$/$(SHL1TARGET).def

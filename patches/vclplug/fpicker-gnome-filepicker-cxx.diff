@@ -1,6 +1,6 @@
 --- /dev/null	2004-08-25 23:04:59.000000000 +0530
-+++ fpicker/source/unx/gnome/SalGtkFilePicker.cxx	2004-09-15 15:18:06.698817448 +0530
-@@ -0,0 +1,1846 @@
++++ fpicker/source/unx/gnome/SalGtkFilePicker.cxx	2004-12-14 12:11:46.449782856 +0530
+@@ -0,0 +1,1870 @@
 +/*************************************************************************
 + *
 + *  $RCSfile$
@@ -727,19 +727,43 @@
 +
 +	GSList* pPathList = gtk_file_chooser_get_uris( GTK_FILE_CHOOSER(m_pDialog) );
 +	
-+	int nCount = g_slist_length( pPathList );
-+	uno::Sequence< rtl::OUString > aSelectedFiles( nCount );
-+
-+	OSL_TRACE( "GETFILES called %d files\n", nCount );
++	int nFromCount = g_slist_length( pPathList );
++	OSL_TRACE( "GETFILES called %d files\n", nFromCount );
 +
 +	// get the current action setting
-+	GtkFileChooserAction eAction = gtk_file_chooser_get_action( GTK_FILE_CHOOSER( m_pDialog ) );
++	GtkFileChooserAction eAction = gtk_file_chooser_get_action(
++        GTK_FILE_CHOOSER( m_pDialog ));
 +	
++    /*
++    This is insane, if its one file then return the URL, 
++    If its its more return the URL of the dir as the first entry, 
++    and then list each seperate entry (relative to the base URL) after it
++    */
++    bool bMultiple = nFromCount > 1;
++    int nToCount = bMultiple ? nFromCount + 1 : nFromCount;
++    int nURLOffset = 0;
++	uno::Sequence< rtl::OUString > aSelectedFiles(nToCount);
++
++    if (bMultiple)
++    {
++		gchar *path = gtk_file_chooser_get_current_folder_uri( 
++            GTK_FILE_CHOOSER( m_pDialog ));
++        nURLOffset = strlen( path );
++        aSelectedFiles[0] = OUString( reinterpret_cast<const sal_Char*>(path),
++            nURLOffset, RTL_TEXTENCODING_UTF8 );
++        ++nURLOffset;
++        g_free(path);
++    }
++
 +	// Convert to OOo
-+	for( int nIndex = 0; ((nIndex < nCount) && pPathList); ++nIndex, pPathList = g_slist_next( pPathList ) )
++	for( int nToIndex = bMultiple ? 1 : 0;
++        ((nToIndex < nToCount) && pPathList); 
++        ++nToIndex, pPathList = g_slist_next(pPathList) 
++       )
 +	{
-+		const gchar *path = reinterpret_cast<gchar*>( pPathList->data );
-+		aSelectedFiles[ nIndex ] = 
++		const gchar *path = reinterpret_cast<gchar*>(pPathList->data) 
++            + nURLOffset;
++		aSelectedFiles[ nToIndex ] = 
 +			OUString( reinterpret_cast<const sal_Char*>( path ), 
 +				strlen( path ), RTL_TEXTENCODING_UTF8 );
 +
@@ -791,7 +815,7 @@
 +			{
 +				//if the filename does not already have the auto extension, stick it on
 +				OUString sExtension = OUString::createFromAscii( "." ) + sToken;
-+				OUString &rBase = aSelectedFiles[nIndex];
++				OUString &rBase = aSelectedFiles[nToIndex];
 +				sal_Int32 nExtensionIdx = rBase.getLength() - sExtension.getLength();
 +				OSL_TRACE( "idx are %d %d\n", rBase.lastIndexOf( sExtension ), nExtensionIdx );
 +
