@@ -1,0 +1,147 @@
+--- vcl/unx/inc/plugins/gtk/gtkframe.hxx
++++ vcl/unx/inc/plugins/gtk/gtkframe.hxx
+@@ -206,6 +206,7 @@
+     void			SetDefaultSize();
+ 	void			setAutoLock( bool bLock );
+ 	void			setScreenSaverTimeout( int nTimeout );
++	void            hardIMReset();
+ 
+     GdkNativeWindow findTopLevelSystemWindow( GdkNativeWindow aWindow );
+ 
+
+--- vcl/unx/gtk/window/gtkframe.cxx
++++ vcl/unx/gtk/window/gtkframe.cxx
+@@ -190,12 +192,44 @@
+     Init( pSysData );
+ }
+ 
++void GtkSalFrame::hardIMReset()
++{
++	if( !m_pIMContext )
++		return;
++
++#if OSL_DEBUG_LEVEL > 1
++	fprintf( stderr, "IMReset - this should flush the IM's pre-edit buffer\n" );
++#endif
++
++	vcl::DeletionListener aDel( this );
++
++	gtk_im_context_reset( m_pIMContext );
++
++	// a correctly implemented _reset method will
++	// emit a 'commit' signal if pending pre-edit
++	// and also, a predit_changed to '' which will
++	// end input.
++
++	// Since few IM's are correctly implemented,
++	// this will end the ext text input at least
++	// from OO.o's perspective if it is still active.
++	if( !aDel.isDeleted() )
++	{
++#if OSL_DEBUG_LEVEL > 1
++		if( m_bWasPreedit )
++			fprintf( stderr, "Error: ** Your IM ('%s') is broken wrt. reset **\n",
++					 g_getenv ("GTK_IM_MODULE") );
++#endif
++		signalIMPreeditEnd( m_pIMContext, this );
++	}
++}
++
+ GtkSalFrame::~GtkSalFrame()
+ {
+ 	getDisplay()->deregisterFrame( this );
+     if( m_pIMContext )
+     {
+-        gtk_im_context_reset( m_pIMContext );
++		hardIMReset();
+         gtk_im_context_set_client_window( m_pIMContext, NULL );
+         g_object_unref( m_pIMContext );
+     }
+@@ -586,7 +620,7 @@
+             if( m_pIMContext )
+             {
+                 gtk_im_context_focus_out( m_pIMContext );
+-                gtk_im_context_reset( m_pIMContext );
++				hardIMReset();
+             }
+         }
+     }
+@@ -998,13 +1034,7 @@
+ }
+ void GtkSalFrame::EndExtTextInput( USHORT nFlags )
+ {
+-#if OSL_DEBUG_LEVEL > 1
+-	fprintf( stderr, "EndExtTextInput: ContextReset\n" );
+-#endif
+-    if( m_pIMContext )
+-        gtk_im_context_reset( m_pIMContext );
+-    m_bWasPreedit = false;
+-	CallCallback( SALEVENT_ENDEXTTEXTINPUT, NULL );
++	hardIMReset();
+ }
+ 
+ void GtkSalFrame::UpdateIMSpotLocation()
+@@ -1515,25 +1561,27 @@
+ 		pThis->m_nKeyModifiers = 0;
+ 		pThis->m_bSingleAltPress = false;
+ 		pThis->m_bSendModChangeOnRelease = false;
+-        pThis->m_bWasPreedit = false;
+ 	}
+ 
+ 	::vcl::DeletionListener aDel( pThis );
+ 
+     if( pThis->m_pIMContext )
+     {
++#if OSL_DEBUG_LEVEL > 1
++		fprintf( stderr, "signalFocus [reset]: %s\n", pEvent->in ? "in" : "out" );
++#endif
+         if( pEvent->in )
+-        {
++		{
++			pThis->hardIMReset();
+             gtk_im_context_focus_in( pThis->m_pIMContext );
+-            gtk_im_context_reset( pThis->m_pIMContext );
+-        }
++		}
+         else
+         {
+-            gtk_im_context_focus_out( pThis->m_pIMContext );
+-            pThis->CallCallback( SALEVENT_ENDEXTTEXTINPUT, NULL );
++			pThis->hardIMReset();
+ 			if (! aDel.isDeleted() )
+-	            gtk_im_context_reset( pThis->m_pIMContext );
++				gtk_im_context_focus_out( pThis->m_pIMContext );
+         }
++        pThis->m_bWasPreedit = false;
+     }
+ 
+     // FIXME: find out who the hell steals the focus from our frame
+@@ -1903,7 +1951,6 @@
+        aEvent.mnCharCode		= aTextEvent.maText.GetChar(0);
+        aEvent.mnRepeat			= 0;
+ 
+-       pThis->m_bWasPreedit = false;
+        pThis->CallCallback( SALEVENT_KEYINPUT, &aEvent );
+ 	   if (!aDel.isDeleted())
+        pThis->CallCallback( SALEVENT_KEYUP, &aEvent );
+@@ -2024,10 +2069,17 @@
+ {
+     GtkSalFrame* pThis = (GtkSalFrame*)frame;
+ #if OSL_DEBUG_LEVEL > 1
+-	fprintf( stderr, "*** :signalImPreeditEnd ***\n" );
++	fprintf( stderr, "*** :signalImPreeditEnd *** '%s'\n", pThis->m_bWasPreedit ? "commit" : "nop" );
++#endif
++	if( pThis->m_bWasPreedit )
++	{
++		pThis->m_bWasPreedit = false;
++		pThis->CallCallback( SALEVENT_ENDEXTTEXTINPUT, NULL );
++	}
++#if OSL_DEBUG_LEVEL > 1
++	else
++		fprintf (stderr, "Avoid double commit\n");
+ #endif
+-	pThis->m_bWasPreedit = false;
+-	pThis->CallCallback( SALEVENT_ENDEXTTEXTINPUT, (void*)NULL );
+ }
+ 
+ gboolean GtkSalFrame::signalIMRetrieveSurrounding( GtkIMContext* pContext, gpointer frame )

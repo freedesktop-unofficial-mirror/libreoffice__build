@@ -1,0 +1,505 @@
+--- sfx2/source/inc/mailmodel.hxx	2002-08-26 13:30:37.000000000 +0530
++++ sfx2/source/inc/mailmodel.hxx	2004-11-30 17:05:01.000000000 +0530
+@@ -90,6 +90,9 @@
+ 	enum MailDocType
+ 	{
+ 		TYPE_SELF,
++		TYPE_ASMSDOC,
++		TYPE_ASMSEXCEL,
++		TYPE_ASMSPOWERPOINT,
+ 		TYPE_ASPDF
+ 	};
+ 
+@@ -114,7 +117,7 @@
+ 	void				ClearList( AddressList_Impl* pList );
+ 	void				MakeValueList( AddressList_Impl* pList, String& rValueList );
+ 	SaveResult			SaveDocument( String& rFileName, String& rType );
+-	SaveResult			SaveDocAsPDF( String& rFileName, String& rType );
++	SaveResult			SaveDocAs( String& rFileName, String& rType,MailDocType mailDocType );
+ 
+ 	DECL_LINK( DoneHdl, void* );
+ 
+
+--- sfx2/source/dialog/mailmodel.cxx	2004-11-26 21:41:16.000000000 +0530
++++ sfx2/source/dialog/mailmodel.cxx	2004-11-30 17:09:23.000000000 +0530
+@@ -402,7 +402,7 @@
+ 	return eRet;
+ }
+ 
+-SfxMailModel_Impl::SaveResult SfxMailModel_Impl::SaveDocAsPDF( String& rFileName, String& rType )
++SfxMailModel_Impl::SaveResult SfxMailModel_Impl::SaveDocAs( String& rFileName, String& rType,MailDocType mailDocType )
+ {
+ 	SaveResult eRet = SAVE_CANCELLED;
+ 	SfxViewFrame* pTopViewFrm = mpBindings->GetDispatcher_Impl()->GetFrame()->GetTopViewFrame();
+@@ -422,9 +422,15 @@
+ 		SfxFactoryFilterContainer* pFilterContainer = xDocShell->GetFactory().GetFilterContainer();
+ 		if ( pFilterContainer )
+ 		{
+-			String aPDFExtension = String::CreateFromAscii( ".pdf" );
++			String aExtension ;
++			switch (mailDocType){
++			case TYPE_ASPDF   : aExtension = String::CreateFromAscii( ".pdf" );break;
++			case TYPE_ASMSDOC : aExtension = String::CreateFromAscii( ".doc" );break;
++			case TYPE_ASMSEXCEL : aExtension = String::CreateFromAscii( ".xls" );break;
++			case TYPE_ASMSPOWERPOINT : aExtension = String::CreateFromAscii( ".ppt" );break;
++			}
+ 
+-			const SfxFilter*	pFilter		= pFilterContainer->GetFilter4Extension( aPDFExtension, SFX_FILTER_EXPORT );
++			const SfxFilter*	pFilter		= pFilterContainer->GetFilter4Extension( aExtension, SFX_FILTER_EXPORT );
+ 			sal_Bool			bHasFilter	= pFilter ? sal_True : sal_False;
+ 
+ 			// create temp file name with leading chars and extension
+@@ -440,7 +446,7 @@
+ 				String aName;
+ 				if ( aFileObj.hasExtension() )
+ 				{
+-					pExt = new String( aPDFExtension );
++					pExt = new String( aExtension );
+ 					aFileObj.removeExtension();
+ 					aLeadingStr = aFileObj.getName( INetURLObject::LAST_SEGMENT, true, INetURLObject::DECODE_WITH_CHARSET );
+ 				//	aLeadingStr += String::CreateFromAscii( "_" );
+@@ -463,11 +469,25 @@
+ 			delete pExt;
+ 
+ 			rFileName = aTempFile.GetURL();
++		SfxBoolItem aPicklist( SID_PICKLIST, FALSE );
++		SfxBoolItem aSaveTo( SID_SAVETO, TRUE );
++		SfxStringItem* pFilterName = NULL;
++		if ( pFilter && bHasFilter )
++            pFilterName = new SfxStringItem( SID_FILTER_NAME, pFilter->GetFilterName() );
++		
++		SfxStringItem* pPassItem = NULL;
++		String aPasswd;
++		if ( GetPasswd_Impl( xDocShell->GetMedium()->GetItemSet(), aPasswd ) )
++			pPassItem = new SfxStringItem( SID_PASSWORD, aPasswd );
+ 
+ 			// save document to temp file
+ 			SfxStringItem aFileName( SID_FILE_NAME, rFileName );
+-			const SfxBoolItem *pRet = (const SfxBoolItem*)pDisp->Execute( SID_EXPORTDOCASPDF, SFX_CALLMODE_SYNCHRON, &aFileName, 0L );
+-			BOOL bRet = pRet ? pRet->GetValue() : FALSE;
++  const SfxBoolItem *pRet = (const SfxBoolItem*)pDisp->Execute( SID_SAVEASDOC, SFX_CALLMODE_SYNCHRON, &aFileName, &aPicklist, &aSaveTo,
++                                                                                                                                                 pFilterName ? pFilterName : pPassItem,
++                                                                                                                                                 pFilterName ? pPassItem : 0L, 0L );
++
++/*			const SfxBoolItem *pRet = (const SfxBoolItem*)pDisp->Execute( SID_EXPORTDOCASPDF, SFX_CALLMODE_SYNCHRON, &aFileName, 0L );
++*/			BOOL bRet = pRet ? pRet->GetValue() : FALSE;
+ 			eRet = bRet ? SAVE_SUCCESSFULL : SAVE_CANCELLED;
+ 			
+ 			if ( pFilter )
+@@ -568,11 +590,16 @@
+ 	String aFileName, aContentType;
+ 
+ 	sal_Bool bSuccessfull = sal_False;
+-	if ( eMailDocType == TYPE_SELF )
+-		eSaveResult = SaveDocument( aFileName, aContentType );
+-	else
+-		eSaveResult = SaveDocAsPDF( aFileName, aContentType );
+-
++	switch (eMailDocType){
++	    case TYPE_ASMSDOC:
++	    case TYPE_ASMSPOWERPOINT:
++	    case TYPE_ASPDF:
++	    case TYPE_ASMSEXCEL:
++			 	eSaveResult = SaveDocAs( aFileName, aContentType,eMailDocType );
++				break;
++	    default:
++				eSaveResult = SaveDocument( aFileName, aContentType);
++	} 
+     if ( eSaveResult == SAVE_SUCCESSFULL )
+ 	{
+     	SfxFrame* pViewFrm = mpBindings->GetDispatcher_Impl()->GetFrame()->GetFrame();
+
+--- sfx2/sdi/sfx.sdi	2004-03-30 18:26:27.000000000 +0530
++++ sfx2/sdi/sfx.sdi	2004-11-30 16:36:40.000000000 +0530
+@@ -6982,7 +6982,6 @@
+ 	ToolBoxConfig = TRUE,
+ 	GroupId = GID_DOCUMENT;
+ ]
+-
+ //--------------------------------------------------------------------------
+ SfxBoolItem SendMail SID_MAIL_SENDDOC
+ (SfxStringItem Recipient SID_MAIL_RECIPIENT,SfxStringItem Subject SID_MAIL_SUBJECT,SfxStringItem MailText SID_MAIL_TEXT,SfxUInt16Item Priority SID_MAIL_PRIORITY,SfxBoolItem AttachedDoc SID_MAIL_ATTACH,SfxStringItem AttachFiles SID_MAIL_ATTACH_FILE)
+@@ -7010,7 +7009,88 @@
+ 	ToolBoxConfig = TRUE,
+ 	GroupId = GID_DOCUMENT;
+ ]
++SfxBoolItem SendMailDocAsMSDoc SID_MAIL_SENDDOCASMSDOC
++(SfxStringItem Recipient SID_MAIL_RECIPIENT,SfxStringItem Subject SID_MAIL_SUBJECT,SfxStringItem MailText SID_MAIL_TEXT,SfxUInt16Item Priority SID_MAIL_PRIORITY,SfxBoolItem AttachedDoc SID_MAIL_ATTACH,SfxStringItem AttachFiles SID_MAIL_ATTACH_FILE)
++[
++	/* flags: */
++	AutoUpdate = FALSE,
++	Cachable = Cachable,
++	FastCall = FALSE,
++	HasCoreId = FALSE,
++	HasDialog = TRUE,
++	ReadOnlyDoc = TRUE,
++	Toggle = FALSE,
++	Container = FALSE,
++	RecordAbsolute = FALSE,
++	RecordPerSet;
++	Asynchron;
++
++	/* status: */
++	SlotType = SfxStringItem
+ 
++	/* config: */
++	AccelConfig = TRUE,
++	MenuConfig = TRUE,
++	StatusBarConfig = FALSE,
++	ToolBoxConfig = TRUE,
++	GroupId = GID_DOCUMENT;
++]
++//--------------------------------------------------------------------------
++SfxBoolItem SendMailDocAsMSExcel SID_MAIL_SENDDOCASMSEXCEL
++(SfxStringItem Recipient SID_MAIL_RECIPIENT,SfxStringItem Subject SID_MAIL_SUBJECT,SfxStringItem MailText SID_MAIL_TEXT,SfxUInt16Item Priority SID_MAIL_PRIORITY,SfxBoolItem AttachedDoc SID_MAIL_ATTACH,SfxStringItem AttachFiles SID_MAIL_ATTACH_FILE)
++[
++        /* flags: */
++        AutoUpdate = FALSE,
++        Cachable = Cachable,
++        FastCall = FALSE,
++        HasCoreId = FALSE,
++        HasDialog = TRUE,
++        ReadOnlyDoc = TRUE,
++        Toggle = FALSE,
++        Container = FALSE,
++        RecordAbsolute = FALSE,
++        RecordPerSet;
++        Asynchron;
++                                                                                                    
++        /* status: */
++        SlotType = SfxStringItem
++                                                                                                    
++        /* config: */
++        AccelConfig = TRUE,
++        MenuConfig = TRUE,
++        StatusBarConfig = FALSE,
++        ToolBoxConfig = TRUE,
++        GroupId = GID_DOCUMENT;
++]
++
++//--------------------------------------------------------------------------
++SfxBoolItem SendMailDocAsMSPowerPoint SID_MAIL_SENDDOCASMSPOWERPOINT
++(SfxStringItem Recipient SID_MAIL_RECIPIENT,SfxStringItem Subject SID_MAIL_SUBJECT,SfxStringItem MailText SID_MAIL_TEXT,SfxUInt16Item Priority SID_MAIL_PRIORITY,SfxBoolItem AttachedDoc SID_MAIL_ATTACH,SfxStringItem AttachFiles SID_MAIL_ATTACH_FILE)
++[
++        /* flags: */
++        AutoUpdate = FALSE,
++        Cachable = Cachable,
++        FastCall = FALSE,
++        HasCoreId = FALSE,
++        HasDialog = TRUE,
++        ReadOnlyDoc = TRUE,
++        Toggle = FALSE,
++        Container = FALSE,
++        RecordAbsolute = FALSE,
++        RecordPerSet;
++        Asynchron;
++                                                                                                    
++        /* status: */
++        SlotType = SfxStringItem
++                                                                                                    
++        /* config: */
++        AccelConfig = TRUE,
++        MenuConfig = TRUE,
++        StatusBarConfig = FALSE,
++        ToolBoxConfig = TRUE,
++        GroupId = GID_DOCUMENT;
++]
++//--------------------------------------------------------------------------
+ SfxBoolItem SendMailDocAsPDF SID_MAIL_SENDDOCASPDF
+ (SfxStringItem Recipient SID_MAIL_RECIPIENT,SfxStringItem Subject SID_MAIL_SUBJECT,SfxStringItem MailText SID_MAIL_TEXT,SfxUInt16Item Priority SID_MAIL_PRIORITY,SfxBoolItem AttachedDoc SID_MAIL_ATTACH,SfxStringItem AttachFiles SID_MAIL_ATTACH_FILE)
+ [
+
+--- sfx2/sdi/sfxslots.src	2004-11-26 21:41:10.000000000 +0530
++++ sfx2/sdi/sfxslots.src	2004-11-30 16:56:29.000000000 +0530
+@@ -4756,6 +4756,24 @@
+ 	SlotName[ kannada ] = "ದಸ್ತಾವೇಜನ್ನು ಕಳಿಸು";
+ 	SlotName[ galician ] = "Enviar o documento";
+ };
++SfxSlotInfo SID_MAIL_SENDDOCASMSDOC
++{
++        SlotName  =  "Send document as MS-DOC Attachment";
++        SlotName [ english ] =  "Send document as MS-DOC Attachment";
++        SlotName [ english_us ] =  "Send document as MS-DOC Attachment";
++};
++SfxSlotInfo SID_MAIL_SENDDOCASMSEXCEL
++{
++        SlotName  =  "Send document as MS-EXCEL Attachment";
++        SlotName [ english ] =  "Send document as MS-EXCEL Attachment";
++        SlotName [ english_us ] =  "Send document as MS-EXCEL Attachment";
++};
++SfxSlotInfo SID_MAIL_SENDDOCASMSPOWERPOINT
++{
++        SlotName  =  "Send document as MS-POWERPOINT Attachment";
++        SlotName [ english ] =  "Send document as MS-POWERPOINT Attachment";
++        SlotName [ english_us ] =  "Send document as MS-POWERPOINT Attachment";
++};
+ SfxSlotInfo SID_MAIL_SENDDOCASPDF
+ {
+ 	SlotName = "Dokument als PDF-Anhang versenden";
+
+--- sfx2/inc/sfxsids.hrc	2004-11-26 21:41:02.000000000 +0530
++++ sfx2/inc/sfxsids.hrc	2004-11-30 16:30:43.000000000 +0530
+@@ -147,7 +147,10 @@
+ #define SID_MAIL_OPEN                       (SID_SFX_START + 329)
+ #define SID_MAIL_NOTIFY                     (SID_SFX_START + 330)
+ #define SID_MAIL_SENDDOC                    (SID_SFX_START + 331)
+-#define	SID_MAIL_SENDDOCASPDF				(SID_SFX_START + 1672)
++#define	SID_MAIL_SENDDOCASPDF			(SID_SFX_START + 1672)
++#define	SID_MAIL_SENDDOCASMSDOC			(SID_SFX_START + 1686)
++#define	SID_MAIL_SENDDOCASMSEXCEL		(SID_SFX_START + 1687)
++#define	SID_MAIL_SENDDOCASMSPOWERPOINT		(SID_SFX_START + 1688)
+ #define SID_MAIL_INBOX                      (SID_SFX_START + 332)
+ 
+ #define SID_MAIL_RECIPIENT					(SID_SFX_START + 334)
+@@ -554,7 +557,7 @@
+ #define SID_REPAIRPACKAGE          			(SID_SFX_START + 1683)
+ #define SID_ADDONHELP						(SID_SFX_START + 1684)
+ #define SID_OBJECTSHELL                     (SID_SFX_START + 1685)
+-#define SID_SFX_free_START                  (SID_SFX_START + 1686)
++#define SID_SFX_free_START                  (SID_SFX_START + 1689)
+ #define SID_SFX_free_END  					(SID_SFX_START + 3999)
+ 
+ #define SID_OPEN_NEW_VIEW                   (SID_SFX_START + 520)
+
+--- sfx2/sdi/viwslots.sdi	2002-08-26 13:02:06.000000000 +0530
++++ sfx2/sdi/viwslots.sdi	2004-11-30 22:05:45.000000000 +0530
+@@ -22,6 +22,21 @@
+ 		ExecMethod = ExecMisc_Impl ;
+ 		StateMethod = GetState_Impl ;
+ 	]
++	SID_MAIL_SENDDOCASMSDOC // ole(no) api(todo)
++	[
++		ExecMethod = ExecMisc_Impl ;
++		StateMethod = GetState_Impl ;
++	]
++	SID_MAIL_SENDDOCASMSEXCEL // ole(no) api(todo)
++	[
++		ExecMethod = ExecMisc_Impl ;
++		StateMethod = GetState_Impl ;
++	]
++	SID_MAIL_SENDDOCASMSPOWERPOINT // ole(no) api(todo)
++	[
++		ExecMethod = ExecMisc_Impl ;
++		StateMethod = GetState_Impl ;
++	]
+ 	 //---------------------------------------------------------------------
+ 	SID_PRINTDOC // ole(no) api(play/rec)
+ 	[
+
+--- sfx2/source/view/viewsh.cxx	2003-11-07 15:42:06.000000000 +0530
++++ sfx2/source/view/viewsh.cxx	2004-12-01 17:46:28.075380424 +0530
+@@ -185,6 +185,9 @@
+ 
+ 		case SID_MAIL_SENDDOCASPDF:
+ 		case SID_MAIL_SENDDOC:
++		case SID_MAIL_SENDDOCASMSDOC:
++		case SID_MAIL_SENDDOCASMSEXCEL:
++		case SID_MAIL_SENDDOCASMSPOWERPOINT:
+             if ( SvtInternalOptions().MailUIEnabled() )
+             {
+                 GetViewFrame()->SetChildWindow( SID_MAIL_CHILDWIN, TRUE );
+@@ -209,10 +212,18 @@
+ 				}
+ 
+ 				SfxMailModel_Impl::SendMailResult eResult = SfxMailModel_Impl::SEND_MAIL_ERROR;
+-				if ( nId == SID_MAIL_SENDDOCASPDF )
+-					eResult = aModel.Send( SfxMailModel_Impl::TYPE_ASPDF );
+-				else
+-					eResult = aModel.Send( SfxMailModel_Impl::TYPE_SELF );
++				switch (nId) {
++					case SID_MAIL_SENDDOCASPDF: 
++						 eResult = aModel.Send( SfxMailModel_Impl::TYPE_ASPDF );break;
++					case SID_MAIL_SENDDOCASMSDOC:
++						 eResult = aModel.Send( SfxMailModel_Impl::TYPE_ASMSDOC );break;
++					case SID_MAIL_SENDDOCASMSEXCEL:  
++						eResult = aModel.Send( SfxMailModel_Impl::TYPE_ASMSEXCEL );break;
++					case SID_MAIL_SENDDOCASMSPOWERPOINT: 
++						 eResult = aModel.Send( SfxMailModel_Impl::TYPE_ASMSPOWERPOINT );break;
++					default:
++						eResult = aModel.Send( SfxMailModel_Impl::TYPE_SELF );
++				}
+ 
+ 				if ( eResult == SfxMailModel_Impl::SEND_MAIL_ERROR )
+ 				{
+@@ -325,6 +336,9 @@
+ 			// Mail-Funktionen
+ 			case SID_MAIL_SENDDOCASPDF:
+ 			case SID_MAIL_SENDDOC:
++			case SID_MAIL_SENDDOCASMSDOC:
++			case SID_MAIL_SENDDOCASMSEXCEL:
++			case SID_MAIL_SENDDOCASMSPOWERPOINT:
+ 			{
+                 BOOL bEnable = !GetViewFrame()->HasChildWindow( SID_MAIL_CHILDWIN );
+ 				if ( !bEnable )
+@@ -348,6 +362,60 @@
+ 					rSet.DisableItem( nSID );
+ 				}
+ 
++				else if ( nSID == SID_MAIL_SENDDOCASMSDOC )
++				{
++					SfxObjectShellRef xDocShell = GetViewFrame()->GetObjectShell();
++					if ( xDocShell.Is() )
++					{
++						// Get PDF Filter from container
++						SfxFactoryFilterContainer* pFilterContainer = xDocShell->GetFactory().GetFilterContainer();
++						if ( pFilterContainer )
++						{
++							String aPDFExtension = String::CreateFromAscii( ".doc" );
++							const SfxFilter* pFilter = pFilterContainer->GetFilter4Extension( aPDFExtension, SFX_FILTER_EXPORT );
++							if ( pFilter != NULL )
++								break;
++						}
++					}
++
++					rSet.DisableItem( nSID );
++				}
++				else if ( nSID == SID_MAIL_SENDDOCASMSEXCEL )
++				{
++					SfxObjectShellRef xDocShell = GetViewFrame()->GetObjectShell();
++					if ( xDocShell.Is() )
++					{
++						// Get PDF Filter from container
++						SfxFactoryFilterContainer* pFilterContainer = xDocShell->GetFactory().GetFilterContainer();
++						if ( pFilterContainer )
++						{
++							String aPDFExtension = String::CreateFromAscii( ".xls" );
++							const SfxFilter* pFilter = pFilterContainer->GetFilter4Extension( aPDFExtension, SFX_FILTER_EXPORT );
++							if ( pFilter != NULL )
++								break;
++						}
++					}
++
++					rSet.DisableItem( nSID );
++				}
++				else if ( nSID == SID_MAIL_SENDDOCASMSPOWERPOINT )
++				{
++					SfxObjectShellRef xDocShell = GetViewFrame()->GetObjectShell();
++					if ( xDocShell.Is() )
++					{
++						// Get PDF Filter from container
++						SfxFactoryFilterContainer* pFilterContainer = xDocShell->GetFactory().GetFilterContainer();
++						if ( pFilterContainer )
++						{
++							String aPDFExtension = String::CreateFromAscii( ".ppt" );
++							const SfxFilter* pFilter = pFilterContainer->GetFilter4Extension( aPDFExtension, SFX_FILTER_EXPORT );
++							if ( pFilter != NULL )
++								break;
++						}
++					}
++
++					rSet.DisableItem( nSID );
++				}
+ 				break;
+ 			}
+ 
+
+--- svx/inc/globlmn.hrc	2004-11-26 21:40:58.000000000 +0530
++++ svx/inc/globlmn.hrc	2004-12-01 17:33:01.865942888 +0530
+@@ -3251,6 +3251,30 @@
+ 	Text[ kannada ] = "ಸ್ವಯಂಚಾಲಿತ ಅಂಚೆ"; \
+ 	Text[ galician ] = "~Correo autom�tico"; \
+ 
++#define ITEM_FILE_MAIL_SENDDOCASMSDOC \
++    Identifier = SID_MAIL_SENDDOCASMSDOC ; \
++	Command = ".uno:SendMailDocAsMSDoc" ; \
++    HelpID = SID_MAIL_SENDDOCASMSDOC ; \
++    Text = "Dokument als E-~Mail..." ; \
++    Text [ english ] = "Document as MS-~Doc Attachment..." ; \
++    Text [ english_us ] = "Document as MS-~Doc Attachment..." ; \
++
++#define ITEM_FILE_MAIL_SENDDOCASMSEXCEL \
++    Identifier = SID_MAIL_SENDDOCASMSEXCEL ; \
++	Command = ".uno:SendMailDocAsMSExcel" ; \
++    HelpID = SID_MAIL_SENDDOCASMSEXCEL ; \
++    Text = "Dokument als ~E-Mail..." ; \
++    Text [ english ] = "Document as MS-~Excel Attachment..." ; \
++    Text [ english_us ] = "Document as MS-~Excel Attachment..." ; \
++
++#define ITEM_FILE_MAIL_SENDDOCASMSPOWERPOINT \
++    Identifier = SID_MAIL_SENDDOCASMSPOWERPOINT ; \
++	Command = ".uno:SendMailDocAsMSPowerPoint" ; \
++    HelpID = SID_MAIL_SENDDOCASMSPOWERPOINT ; \
++    Text = "Dokument als E-Mail..." ; \
++    Text [ english ] = "Document as MS-~PPT Attachment..." ; \
++    Text [ english_us ] = "Document as MS-~PPT Attachment..." ; \
++
+ #define ITEM_FILE_MAIL_SENDDOC \
+     Identifier = SID_MAIL_SENDDOC ; \
+ 	Command = ".uno:SendMail" ; \
+
+--- sw/sdi/wviewsh.sdi	2003-03-27 21:09:12.000000000 +0530
++++ sw/sdi/wviewsh.sdi	2004-11-29 20:58:45.000000000 +0530
+@@ -223,6 +223,11 @@
+     [
+         StateMethod = GetState ;
+     ]
++    SID_MAIL_SENDDOCASMSDOC
++    [
++        ExecMethod = Execute ;
++        StateMethod = GetState ;
++    ]
+ }
+ 
+ shell SwSrcView : SfxViewShell
+
+--- sw/source/ui/inc/swmn.hrc	2004-11-26 21:41:10.000000000 +0530
++++ sw/source/ui/inc/swmn.hrc	2004-11-29 21:04:08.000000000 +0530
+@@ -5121,6 +5121,10 @@
+                                                 {
+                                                         ITEM_FILE_MAIL_SENDDOCASPDF
+                                                 };
++                                                MenuItem
++                                                {
++                                                        ITEM_FILE_MAIL_SENDDOCASMSDOC
++                                                };
+                                         };
+                                 };
+                         	Text[ english_us ] = "Send";
+@@ -5182,6 +5186,11 @@
+                                                 {
+                                                         ITEM_FILE_MAIL_SENDDOCASPDF
+                                                 };
++                                                MenuItem
++                                                {
++                                                        ITEM_FILE_MAIL_SENDDOCASMSDOC
++                                                };
++
+ 						SEPARATOR ;
+ 						MenuItem
+ 						{
+
+--- /home/mjayant/OOO_113_backup/ooo-build/build/OOO_1_1_3/sd/source/ui/app/menuids2.src	2004-11-26 21:41:10.000000000 +0530
++++ sd/source/ui/app/menuids2.src	2004-11-30 21:47:12.000000000 +0530
+@@ -249,6 +249,7 @@
+             {\
+                 MI ( ITEM_FILE_MAIL_SENDDOC ) \
+ 				MI ( ITEM_FILE_MAIL_SENDDOCASPDF ) \
++				MI ( ITEM_FILE_MAIL_SENDDOCASMSPOWERPOINT ) \
+             };\
+         };\
+         Text [ portuguese_brazilian ] = "~Enviar" ; \
+
+--- sc/source/ui/src/menue.src	2004-11-26 21:41:10.000000000 +0530
++++ sc/source/ui/src/menue.src	2004-12-01 18:05:15.435995560 +0530
+@@ -342,6 +342,10 @@
+ 								{
+ 									ITEM_FILE_MAIL_SENDDOCASPDF
+ 								};
++								MenuItem
++								{
++									ITEM_FILE_MAIL_SENDDOCASMSEXCEL
++								};
+ 							};
+ 						};
+ 						Text [ portuguese ] = "~Enviar" ;
+@@ -6397,6 +6401,10 @@
+ 								{
+ 									ITEM_FILE_MAIL_SENDDOCASPDF
+ 								};
++								MenuItem
++								{
++									ITEM_FILE_MAIL_SENDDOCASMSEXCEL
++								};
+ 							};
+ 						};
+ 						Text [ portuguese ] = "~Enviar" ;
