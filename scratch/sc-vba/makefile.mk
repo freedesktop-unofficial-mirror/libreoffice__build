@@ -24,7 +24,6 @@ DLLPRE =
 #.INCLUDE :  ..$/cppumaker.mk
 
 SLOFILES= \
-		$(SLO)$/service.obj \
 		$(SLO)$/vbaglobals.obj \
 		$(SLO)$/vbaworkbook.obj \
 		$(SLO)$/vbaworksheets.obj \
@@ -52,6 +51,7 @@ SLOFILES= \
 		$(SLO)$/vbapivottables.obj \
 		$(SLO)$/vbawindows.obj \
 		$(SLO)$/vbapalette.obj \
+		$(SLO)$/vbaborders.obj \
 		$(SLO)$/vbacharacters.obj
  
 
