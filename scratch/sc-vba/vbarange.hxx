@@ -10,6 +10,7 @@
 #include <com/sun/star/table/XCellRange.hpp>
 #include <org/openoffice/vba/XFont.hpp>
 #include <org/openoffice/vba/XComment.hpp>
+#include <org/openoffice/vba/XCollection.hpp>
 #include <org/openoffice/vba/xlPasteType.hdl>
 #include <org/openoffice/vba/xlPasteSpecialOperation.hdl>
 
@@ -23,6 +24,7 @@
 #include <com/sun/star/sheet/FillMode.hpp>
 #include <com/sun/star/sheet/FillDirection.hpp>
 #include <com/sun/star/sheet/XSpreadsheet.hpp>
+#include <com/sun/star/sheet/XSheetCellRangeContainer.hpp>
 
 #include "vbahelper.hxx"
 
@@ -58,12 +60,16 @@ class ScVbaRange : public ScVbaRange_BASE
     ,public ::comphelper::OPropertyContainer
 
 {
+	css::uno::Reference< oo::vba::XCollection > m_Areas;
+	css::uno::Reference< oo::vba::XCollection > m_Borders;
 	css::uno::Reference< css::table::XCellRange > mxRange;
 	css::uno::Reference< css::uno::XComponentContext > m_xContext;
+	css::uno::Reference< css::sheet::XSheetCellRangeContainer > mxRanges;
 	sal_Bool mbIsRows;
 	sal_Bool mbIsColumns;
 	rtl::OUString msDftPropName;
-	double getCalcColWidth() throw (css::uno::RuntimeException);
+	double getCalcColWidth( const css::table::CellRangeAddress& ) throw (css::uno::RuntimeException);
+	double getCalcRowHeight( const css::table::CellRangeAddress& ) throw (css::uno::RuntimeException);
 	void visitArray( ArrayVisitor& vistor );
 	css::uno::Reference< css::script::XTypeConverter > getTypeConverter() throw (css::uno::RuntimeException);
 
@@ -74,15 +80,18 @@ class ScVbaRange : public ScVbaRange_BASE
 	void ClearContents( sal_Int32 nFlags ) throw (css::uno::RuntimeException);
 	virtual void   setValue( const css::uno::Any& aValue, ValueSetter& setter) throw ( css::uno::RuntimeException);
 	virtual css::uno::Any getValue( ValueGetter& rValueGetter ) throw (css::uno::RuntimeException);
+	css::uno::Reference< oo::vba::XRange > getArea( sal_Int32 nIndex  ) throw( css::uno::RuntimeException );
+	void setDfltPropHandler();
 	
 public:
 	ScVbaRange( const css::uno::Reference< css::uno::XComponentContext >& xContext, const css::uno::Reference< css::table::XCellRange >& xRange, sal_Bool bIsRows = false, sal_Bool bIsColumns = false ) throw ( css::lang::IllegalArgumentException );
+	ScVbaRange( const css::uno::Reference< css::uno::XComponentContext >& xContext, const css::uno::Reference< css::sheet::XSheetCellRangeContainer >& xRanges ) throw ( css::lang::IllegalArgumentException );
 
 	virtual ~ScVbaRange();
 
 	bool isSingleCellRange(); 
 
-	static css::uno::Reference< css::table::XCellRange > getCellRangeForName( const rtl::OUString& sRangeName, const css::uno::Reference< css::sheet::XSpreadsheet >& xDoc );
+        static css::uno::Reference< css::table::XCellRange > getCellRangeForName( const rtl::OUString& sRangeName, const css::uno::Reference< css::sheet::XSpreadsheet >& xDoc );
     // Attributes
 	virtual css::uno::Any SAL_CALL getValue() throw (css::uno::RuntimeException);
 	virtual void   SAL_CALL setValue( const css::uno::Any& aValue ) throw ( css::uno::RuntimeException);
@@ -109,9 +118,10 @@ public:
 	virtual void SAL_CALL setHidden( const css::uno::Any& _hidden ) throw (css::uno::RuntimeException);
 	virtual css::uno::Any SAL_CALL getColumnWidth() throw (css::uno::RuntimeException);
 	virtual void SAL_CALL setColumnWidth( const css::uno::Any& _columnwidth ) throw (css::uno::RuntimeException);
+	virtual css::uno::Any SAL_CALL getRowHeight() throw (css::uno::RuntimeException);
+	virtual void SAL_CALL setRowHeight( const css::uno::Any& _rowheight ) throw (css::uno::RuntimeException);
 	virtual css::uno::Any SAL_CALL getWidth() throw (css::uno::RuntimeException);
-	virtual void SAL_CALL setWidth( const css::uno::Any& _width ) throw (css::uno::RuntimeException);
-
+	virtual css::uno::Any SAL_CALL getHeight() throw (css::uno::RuntimeException);
 	// Methods
 	sal_Bool IsRows() { return mbIsRows; }
 	sal_Bool IsColumns() { return mbIsColumns; }
@@ -136,6 +146,7 @@ public:
 	virtual css::uno::Reference< oo::vba::XRange > SAL_CALL Cells( const css::uno::Any &nRow, const css::uno::Any &nCol ) 
 														  throw (css::uno::RuntimeException);
 	virtual void SAL_CALL Select() throw (css::uno::RuntimeException);
+	virtual void SAL_CALL Activate() throw (css::uno::RuntimeException);
 	virtual css::uno::Reference< oo::vba::XRange >  SAL_CALL Rows( const css::uno::Any& nIndex ) throw (css::uno::RuntimeException);
 	virtual css::uno::Reference< oo::vba::XRange >  SAL_CALL Columns( const css::uno::Any &nIndex ) throw (css::uno::RuntimeException);
 	virtual void SAL_CALL Copy( const css::uno::Any& Destination ) throw (css::uno::RuntimeException);
@@ -153,6 +164,8 @@ public:
 	virtual css::uno::Reference< oo::vba::XRange > SAL_CALL End( ::sal_Int32 Direction )  throw (css::uno::RuntimeException);
 	virtual css::uno::Reference< oo::vba::XCharacters > SAL_CALL characters( const css::uno::Any& Start, const css::uno::Any& Length ) throw (css::uno::RuntimeException);
 	virtual void SAL_CALL Delete( const css::uno::Any& Shift ) throw (css::uno::RuntimeException);
+	virtual css::uno::Any SAL_CALL Areas( const css::uno::Any& ) throw (css::uno::RuntimeException);
+	virtual css::uno::Any SAL_CALL Borders( const css::uno::Any& ) throw (css::uno::RuntimeException);
 
 	// XPropertySet
 

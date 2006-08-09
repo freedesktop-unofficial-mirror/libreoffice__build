@@ -42,12 +42,13 @@ IDLFILES=\
 	XSeriesCollection.idl\
 	XSeries.idl\
 	XDialog.idl \
-	XArrayWrapper.idl \
 	XPivotTables.idl \
 	XPivotTable.idl \
 	XPivotCache.idl \
 	XDialogs.idl \
 	XWindows.idl \
+	XBorder.idl \
+	XBorders.idl \
 	XCharacters.idl
 # ------------------------------------------------------------------
 
