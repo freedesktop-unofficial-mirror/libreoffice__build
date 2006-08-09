@@ -1,0 +1,4048 @@
+Index: bridges/inc/bridges/cpp_uno/type_misc.hxx
+===================================================================
+RCS file: /cvs/udk/bridges/inc/bridges/cpp_uno/type_misc.hxx,v
+retrieving revision 1.4
+diff -u -r1.4 type_misc.hxx
+--- bridges/inc/bridges/cpp_uno/type_misc.hxx	7 Sep 2005 22:08:35 -0000	1.4
++++ bridges/inc/bridges/cpp_uno/type_misc.hxx	25 Jun 2006 08:58:53 -0000
+@@ -71,8 +71,9 @@
+ 			TYPELIB_DANGER_RELEASE( pTD );
+ 			return bRel;
+ 		}
++        default:
++            return false;
+ 		}
+-		return false;
+ 	}
+ 	case typelib_TypeClass_STRUCT:
+ 	case typelib_TypeClass_EXCEPTION:
+@@ -100,18 +101,21 @@
+ 				if (bRel)
+ 					return true;
+ 			}
++            default:
++                break;
+ 			}
+ 		}
+ 		if (pComp->pBaseTypeDescription)
+ 			return cppu_relatesToInterface( (typelib_TypeDescription *)pComp->pBaseTypeDescription );
+-		break;
++		return false;
+ 	}
+ 	case typelib_TypeClass_UNION: // might relate to interface
+ 	case typelib_TypeClass_ANY: // might relate to interface
+ 	case typelib_TypeClass_INTERFACE:
+ 		return true;
++    default:
++        return false;
+ 	}
+-	return false;
+ }
+ 
+ /** Determines whether given type is a cpp simple type, e.g. int, enum.<br>
+Index: bridges/inc/bridges/cpp_uno/shared/bridge.hxx
+===================================================================
+RCS file: /cvs/udk/bridges/inc/bridges/cpp_uno/shared/bridge.hxx,v
+retrieving revision 1.3
+diff -u -r1.3 bridge.hxx
+--- bridges/inc/bridges/cpp_uno/shared/bridge.hxx	7 Sep 2005 22:09:18 -0000	1.3
++++ bridges/inc/bridges/cpp_uno/shared/bridge.hxx	25 Jun 2006 08:58:54 -0000
+@@ -44,6 +44,30 @@
+ 
+ namespace bridges { namespace cpp_uno { namespace shared {
+ 
++// private:
++extern "C" typedef void SAL_CALL FreeMapping(uno_Mapping *);
++FreeMapping freeMapping;
++
++// private:
++extern "C"
++typedef void SAL_CALL AcquireMapping(uno_Mapping *);
++AcquireMapping acquireMapping;
++
++// private:
++extern "C"
++typedef void SAL_CALL ReleaseMapping(uno_Mapping *);
++ReleaseMapping releaseMapping;
++
++// private:
++extern "C" typedef void SAL_CALL Cpp2unoMapping(
++    uno_Mapping *, void **, void *, typelib_InterfaceTypeDescription *);
++Cpp2unoMapping cpp2unoMapping;
++
++// private:
++extern "C" typedef void SAL_CALL Uno2cppMapping(
++    uno_Mapping *, void **, void *, typelib_InterfaceTypeDescription *);
++Uno2cppMapping uno2cppMapping;
++
+ /**
+  * Holding environments and mappings.
+  */
+@@ -55,8 +79,6 @@
+         uno_ExtEnvironment * pCppEnv, uno_ExtEnvironment * pUnoEnv,
+         bool bExportCpp2Uno) SAL_THROW(());
+ 
+-    static void SAL_CALL freeMapping(uno_Mapping * pMapping) SAL_THROW(());
+-
+     // Interface for Cpp/UnoInterfaceProxy:
+ 
+     void acquire() SAL_THROW(());
+@@ -84,15 +106,6 @@
+         Bridge * pBridge;
+     };
+ 
+-    static void SAL_CALL acquireMapping(uno_Mapping * pMapping) SAL_THROW(());
+-    static void SAL_CALL releaseMapping(uno_Mapping * pMapping) SAL_THROW(());
+-    static void SAL_CALL cpp2unoMapping(
+-        uno_Mapping * pMapping, void ** ppUnoI, void * pCppI,
+-        typelib_InterfaceTypeDescription * pTypeDescr) SAL_THROW(());
+-    static void SAL_CALL uno2cppMapping(
+-        uno_Mapping * pMapping, void ** ppCppI, void * pUnoI,
+-        typelib_InterfaceTypeDescription * pTypeDescr) SAL_THROW(());
+-
+     oslInterlockedCount nRef;
+ 
+     uno_ExtEnvironment * pCppEnv;
+@@ -102,6 +115,20 @@
+     Mapping aUno2Cpp;
+ 
+     bool bExportCpp2Uno;
++
++    friend void SAL_CALL freeMapping(uno_Mapping * pMapping);
++
++    friend void SAL_CALL acquireMapping(uno_Mapping * pMapping);
++
++    friend void SAL_CALL releaseMapping(uno_Mapping * pMapping);
++
++    friend void SAL_CALL cpp2unoMapping(
++        uno_Mapping * pMapping, void ** ppUnoI, void * pCppI,
++        typelib_InterfaceTypeDescription * pTypeDescr);
++
++    friend void SAL_CALL uno2cppMapping(
++        uno_Mapping * pMapping, void ** ppCppI, void * pUnoI,
++        typelib_InterfaceTypeDescription * pTypeDescr);
+ };
+ 
+ } } }
+Index: bridges/inc/bridges/cpp_uno/shared/cppinterfaceproxy.hxx
+===================================================================
+RCS file: /cvs/udk/bridges/inc/bridges/cpp_uno/shared/cppinterfaceproxy.hxx,v
+retrieving revision 1.3
+diff -u -r1.3 cppinterfaceproxy.hxx
+--- bridges/inc/bridges/cpp_uno/shared/cppinterfaceproxy.hxx	7 Sep 2005 22:09:33 -0000	1.3
++++ bridges/inc/bridges/cpp_uno/shared/cppinterfaceproxy.hxx	25 Jun 2006 08:58:54 -0000
+@@ -51,6 +51,10 @@
+ 
+ class Bridge;
+ 
++extern "C" typedef void SAL_CALL FreeCppInterfaceProxy(
++    uno_ExtEnvironment * pEnv, void * pInterface);
++FreeCppInterfaceProxy freeCppInterfaceProxy;
++
+ /**
+  * A cpp proxy wrapping a uno interface.
+  */
+@@ -63,9 +67,6 @@
+         typelib_InterfaceTypeDescription * pTypeDescr,
+         rtl::OUString const & rOId) SAL_THROW(());
+ 
+-    static void SAL_CALL free(uno_ExtEnvironment * pEnv, void * pInterface)
+-        SAL_THROW(());
+-
+     // Interface for individual CPP--UNO bridges:
+ 
+     Bridge * getBridge() { return pBridge; }
+@@ -102,6 +103,9 @@
+     rtl::OUString oid;
+ 
+     void ** vtables[1];
++
++    friend void SAL_CALL freeCppInterfaceProxy(
++        uno_ExtEnvironment * pEnv, void * pInterface);
+ };
+ 
+ } } }
+Index: bridges/inc/bridges/cpp_uno/shared/unointerfaceproxy.hxx
+===================================================================
+RCS file: /cvs/udk/bridges/inc/bridges/cpp_uno/shared/unointerfaceproxy.hxx,v
+retrieving revision 1.3
+diff -u -r1.3 unointerfaceproxy.hxx
+--- bridges/inc/bridges/cpp_uno/shared/unointerfaceproxy.hxx	7 Sep 2005 22:10:07 -0000	1.3
++++ bridges/inc/bridges/cpp_uno/shared/unointerfaceproxy.hxx	25 Jun 2006 08:58:54 -0000
+@@ -51,6 +51,26 @@
+ 
+ class Bridge;
+ 
++extern "C" typedef void SAL_CALL FreeUnoInterfaceProxy(
++    uno_ExtEnvironment * pEnv, void * pProxy);
++FreeUnoInterfaceProxy freeUnoInterfaceProxy;
++
++// private:
++extern "C" typedef void SAL_CALL UnoInterfaceProxyDispatch(
++    uno_Interface * pUnoI, typelib_TypeDescription const * pMemberDescr,
++    void * pReturn, void * pArgs[], uno_Any ** ppException);
++UnoInterfaceProxyDispatch unoInterfaceProxyDispatch;
++    // this function is not defined in the generic part, but instead has to be
++    // defined individually for each CPP--UNO bridge
++
++// private:
++extern "C" typedef void SAL_CALL AcquireProxy(uno_Interface *);
++AcquireProxy acquireProxy;
++
++// private:
++extern "C" typedef void SAL_CALL ReleaseProxy(uno_Interface *);
++ReleaseProxy releaseProxy;
++
+ /**
+  * A uno proxy wrapping a cpp interface.
+  */
+@@ -63,9 +83,6 @@
+         typelib_InterfaceTypeDescription * pTypeDescr,
+         rtl::OUString const & rOId) SAL_THROW(());
+ 
+-    static void SAL_CALL free(uno_ExtEnvironment * pEnv, void * pProxy)
+-        SAL_THROW(());
+-
+     // Interface for individual CPP--UNO bridges:
+ 
+     Bridge * getBridge() { return pBridge; }
+@@ -82,15 +99,6 @@
+ 
+     ~UnoInterfaceProxy();
+ 
+-    static void SAL_CALL acquireProxy(uno_Interface * pUnoI) SAL_THROW(());
+-    static void SAL_CALL releaseProxy(uno_Interface * pUnoI) SAL_THROW(());
+-
+-    // This function is not defined in the generic part, but instead has to be
+-    // defined individually for each CPP--UNO bridge:
+-    static void SAL_CALL dispatch(
+-        uno_Interface * pUnoI, typelib_TypeDescription const * pMemberDescr,
+-        void * pReturn, void * pArgs[], uno_Any ** ppException) SAL_THROW(());
+-
+     oslInterlockedCount nRef;
+     Bridge * pBridge;
+ 
+@@ -98,6 +106,17 @@
+     com::sun::star::uno::XInterface * pCppI; // wrapped interface
+     typelib_InterfaceTypeDescription * pTypeDescr;
+     rtl::OUString oid;
++
++    friend void SAL_CALL freeUnoInterfaceProxy(
++        uno_ExtEnvironment * pEnv, void * pProxy);
++
++    friend void SAL_CALL unoInterfaceProxyDispatch(
++        uno_Interface * pUnoI, typelib_TypeDescription const * pMemberDescr,
++        void * pReturn, void * pArgs[], uno_Any ** ppException);
++
++    friend void SAL_CALL acquireProxy(uno_Interface * pUnoI);
++
++    friend void SAL_CALL releaseProxy(uno_Interface * pUnoI);
+ };
+ 
+ } } }
+Index: bridges/inc/bridges/remote/bridgeimpl.hxx
+===================================================================
+RCS file: /cvs/udk/bridges/inc/bridges/remote/bridgeimpl.hxx,v
+retrieving revision 1.3
+diff -u -r1.3 bridgeimpl.hxx
+--- bridges/inc/bridges/remote/bridgeimpl.hxx	7 Sep 2005 22:11:02 -0000	1.3
++++ bridges/inc/bridges/remote/bridgeimpl.hxx	25 Jun 2006 08:58:54 -0000
+@@ -63,7 +63,7 @@
+ 	public:
+ 		// performance optimization. In some cases, it is not necessary to acquire the
+ 		// environment.
+-		RemoteThreadCounter( uno_Environment *pEnvRemote, RemoteThreadCounter_HoldEnvWeak value )
++		RemoteThreadCounter( uno_Environment *pEnvRemote, RemoteThreadCounter_HoldEnvWeak )
+ 			: m_bReleaseEnvironment( sal_False )
+ 			, m_pEnvRemote( pEnvRemote )
+ 		{
+Index: bridges/inc/bridges/remote/mapping.hxx
+===================================================================
+RCS file: /cvs/udk/bridges/inc/bridges/remote/mapping.hxx,v
+retrieving revision 1.2
+diff -u -r1.2 mapping.hxx
+--- bridges/inc/bridges/remote/mapping.hxx	7 Sep 2005 22:12:25 -0000	1.2
++++ bridges/inc/bridges/remote/mapping.hxx	25 Jun 2006 08:58:54 -0000
+@@ -46,6 +46,19 @@
+ 
+ namespace bridges_remote
+ {
++    extern "C" typedef void SAL_CALL RemoteToUno(
++        uno_Mapping *pMapping, void **ppOut, void *pInterface,
++        typelib_InterfaceTypeDescription *pInterfaceTypeDescr );
++    RemoteToUno remoteToUno;
++	
++    extern "C" typedef void SAL_CALL UnoToRemote(
++        uno_Mapping *pMapping, void **ppOut, void *pInterface,
++        typelib_InterfaceTypeDescription *pInterfaceTypeDescr );
++    UnoToRemote unoToRemote;
++		
++    extern "C" typedef void SAL_CALL FreeRemoteMapping(uno_Mapping * mapping);
++    FreeRemoteMapping freeRemoteMapping;
++
+ 	class RemoteMapping :
+ 		public remote_Mapping
+ 	{
+@@ -55,22 +68,6 @@
+ 					   uno_MapInterfaceFunc func ,
+ 					   const ::rtl::OUString sPurpose);
+ 		~RemoteMapping();
+-		
+-		static void SAL_CALL thisFree( uno_Mapping * pMapping );
+-		static void SAL_CALL remoteToUno(
+-			uno_Mapping *pMapping,
+-			void **ppOut,
+-			void *pInterface,
+-			typelib_InterfaceTypeDescription *pInterfaceTypeDescr );
+-	
+-		static void SAL_CALL unoToRemote(
+-			uno_Mapping *pMapping,
+-			void **ppOut,
+-			void *pInterface,
+-			typelib_InterfaceTypeDescription *pInterfaceTypeDescr );
+-		
+-		static void SAL_CALL thisAcquire( uno_Mapping *pMapping );
+-		static void SAL_CALL thisRelease( uno_Mapping *pMapping );
+ 		
+ 		oslInterlockedCount	m_nRef;
+ 		::rtl::OUString m_sPurpose;
+Index: bridges/inc/bridges/remote/proxy.hxx
+===================================================================
+RCS file: /cvs/udk/bridges/inc/bridges/remote/proxy.hxx,v
+retrieving revision 1.2
+diff -u -r1.2 proxy.hxx
+--- bridges/inc/bridges/remote/proxy.hxx	7 Sep 2005 22:12:55 -0000	1.2
++++ bridges/inc/bridges/remote/proxy.hxx	25 Jun 2006 08:58:54 -0000
+@@ -42,7 +42,26 @@
+ 
+ namespace bridges_remote {
+ 
+-void SAL_CALL remote_release( void * );
++extern "C" typedef void SAL_CALL FreeRemote2UnoProxy(
++    uno_ExtEnvironment * environment, void * proxy);
++FreeRemote2UnoProxy freeRemote2UnoProxy;
++
++// private:
++extern "C" typedef void SAL_CALL AcquireRemote2UnoProxy(uno_Interface *);
++AcquireRemote2UnoProxy acquireRemote2UnoProxy;
++
++// private:
++extern "C" typedef void SAL_CALL ReleaseRemote2UnoProxy(uno_Interface *);
++ReleaseRemote2UnoProxy releaseRemote2UnoProxy;
++
++// private:	
++extern "C" typedef void SAL_CALL DispatchRemote2UnoProxy(
++	uno_Interface *, typelib_TypeDescription const *, void *, void **,
++    uno_Any **);
++DispatchRemote2UnoProxy dispatchRemote2UnoProxy;
++
++extern "C" void SAL_CALL remote_release( void * );
++
+ class Remote2UnoProxy :
+ 	public uno_Interface
+ {
+@@ -57,15 +76,6 @@
+ 	
+ 	~Remote2UnoProxy();
+ 	
+-	static void SAL_CALL thisAcquire( uno_Interface * );
+-	static void SAL_CALL thisRelease( uno_Interface * );
+-	static void SAL_CALL thisDispatch( uno_Interface * pUnoI, 
+-									   typelib_TypeDescription * pMemberType,
+-									   void * pReturn,
+-									   void * pArgs[],
+-									   uno_Any ** ppException );
+-	static void SAL_CALL thisFree( uno_ExtEnvironment *pEnvUno, void *pProxy );
+-	
+ private:
+ 	::rtl::OUString m_sOid;
+ 	typelib_InterfaceTypeDescription *m_pType;
+@@ -76,6 +86,14 @@
+ 	::com::sun::star::uno::Mapping m_mapUno2Remote;
+ 	
+ 	oslInterlockedCount	m_nRef;
++
++    friend void SAL_CALL acquireRemote2UnoProxy(uno_Interface *);
++
++    friend void SAL_CALL releaseRemote2UnoProxy(uno_Interface *);
++
++    friend void SAL_CALL dispatchRemote2UnoProxy(
++        uno_Interface *, typelib_TypeDescription const *, void *, void **,
++        uno_Any **);
+ };
+ 
+ }
+Index: bridges/inc/bridges/remote/remote.h
+===================================================================
+RCS file: /cvs/udk/bridges/inc/bridges/remote/remote.h,v
+retrieving revision 1.5
+diff -u -r1.5 remote.h
+--- bridges/inc/bridges/remote/remote.h	7 Sep 2005 22:13:13 -0000	1.5
++++ bridges/inc/bridges/remote/remote.h	25 Jun 2006 08:58:54 -0000
+@@ -56,22 +56,22 @@
+ #define CURRENT_IIOP_PROTOCOL_MAJOR 1
+ #define CURRENT_IIOP_PROTOCOL_MINOR 2
+ 
++extern "C" {
++
+ struct remote_Interface;
+ 
+ /** @internal
+  */
+-typedef void (SAL_CALL * remote_DispatchMethod)( remote_Interface * pRemoteI, 
+-												 typelib_TypeDescription * pMemberType,
+-												 void * pReturn,
+-												 void * pArgs[],
+-												 uno_Any ** ppException );
++typedef void (SAL_CALL * remote_DispatchMethod)(
++    remote_Interface * pRemoteI, typelib_TypeDescription const * pMemberType,
++    void * pReturn, void * pArgs[], uno_Any ** ppException );
+ 
+ /** 
+    @internal
+  */
+ typedef void ( SAL_CALL * requestClientSideDispatcher ) (
+ 	uno_Environment *pEnvRemote,
+-	typelib_TypeDescription * pMemberType,
++	typelib_TypeDescription const * pMemberType,
+ 	rtl_uString *pOid,
+ 	typelib_InterfaceTypeDescription *pInterfaceType,
+ 	void *pReturn,
+@@ -98,5 +98,7 @@
+ 	uno_Environment *pEnvRemote;
+ 	uno_Environment *pEnvUno;
+ };
++
++}
+ 
+ #endif
+Index: bridges/inc/bridges/remote/remote.hxx
+===================================================================
+RCS file: /cvs/udk/bridges/inc/bridges/remote/remote.hxx,v
+retrieving revision 1.5
+diff -u -r1.5 remote.hxx
+--- bridges/inc/bridges/remote/remote.hxx	7 Sep 2005 22:13:28 -0000	1.5
++++ bridges/inc/bridges/remote/remote.hxx	25 Jun 2006 08:58:56 -0000
+@@ -49,6 +49,14 @@
+ 
+ namespace bridges_remote {
+ 
++extern "C" typedef void SAL_CALL AcquireRemote2RemoteStub(
++    remote_Interface * pThis);
++AcquireRemote2RemoteStub acquireRemote2RemoteStub;
++
++extern "C" typedef void SAL_CALL FreeRemote2RemoteStub(
++    uno_ExtEnvironment * environment, void * stub);
++FreeRemote2RemoteStub freeRemote2RemoteStub;
++
+ class Remote2RemoteStub :
+ 	public remote_Interface
+ {
+@@ -59,15 +67,6 @@
+ 					  requestClientSideDispatcher dispatch );
+ 	~Remote2RemoteStub();
+ 
+-	static void SAL_CALL thisAcquire( remote_Interface *pThis );
+-	static void SAL_CALL thisRelease( remote_Interface *pThis );
+-	static void SAL_CALL thisDispatch( remote_Interface * pUnoI, 
+-									   typelib_TypeDescription * pMemberType,
+-									   void * pReturn,
+-									   void * pArgs[],
+-									   uno_Any ** ppException );
+-	static void SAL_CALL thisFree( uno_ExtEnvironment *pEnvRemote , void * );
+-	
+ 	void releaseRemote();
+ public:
+ 	::rtl::OUString                   m_sOid;
+Index: bridges/inc/bridges/remote/stub.hxx
+===================================================================
+RCS file: /cvs/udk/bridges/inc/bridges/remote/stub.hxx,v
+retrieving revision 1.2
+diff -u -r1.2 stub.hxx
+--- bridges/inc/bridges/remote/stub.hxx	7 Sep 2005 22:13:41 -0000	1.2
++++ bridges/inc/bridges/remote/stub.hxx	25 Jun 2006 08:58:56 -0000
+@@ -38,7 +38,14 @@
+ #include <uno/mapping.hxx>
+ 
+ namespace bridges_remote {
+-	
++
++extern "C" typedef void SAL_CALL AcquireUno2RemoteStub( remote_Interface *pThis );
++AcquireUno2RemoteStub acquireUno2RemoteStub;
++
++extern "C" typedef void SAL_CALL FreeUno2RemoteStub(
++    uno_ExtEnvironment * environment, void * stub);
++FreeUno2RemoteStub freeUno2RemoteStub;
++
+ class Uno2RemoteStub :
+ 	public remote_Interface
+ {
+@@ -49,15 +56,6 @@
+ 					uno_Environment *pEnvUno,
+ 					uno_Environment *pEnvRemote );
+ 	~Uno2RemoteStub();
+-
+-	static void SAL_CALL thisAcquire( remote_Interface *pThis );
+-	static void SAL_CALL thisRelease( remote_Interface *pThis );
+-	static void SAL_CALL thisDispatch( remote_Interface * pUnoI,
+-							  typelib_TypeDescription * pMemberType,
+-							  void * pReturn,
+-							  void * pArgs[],
+-							  uno_Any ** ppException );
+-	static void SAL_CALL thisFree( uno_ExtEnvironment * pEnvRemote, void *pThis );
+ 
+ public:
+ 	::rtl::OUString m_sOid;
+Index: bridges/prj/build.lst
+===================================================================
+RCS file: /cvs/udk/bridges/prj/build.lst,v
+retrieving revision 1.34
+diff -u -r1.34 build.lst
+--- bridges/prj/build.lst	8 Mar 2006 08:49:22 -0000	1.34
++++ bridges/prj/build.lst	25 Jun 2006 08:58:56 -0000
+@@ -3,7 +3,6 @@
+ br	bridges\unotypes						nmake	-	all	br_unotypes NULL
+ br	bridges\source\remote\static			nmake	-	all	br_rem_static br_unotypes NULL
+ br	bridges\source\remote\urp				nmake	-	all	br_rem_urp br_rem_static NULL
+-br	bridges\source\remote\iiop				nmake	-	all	br_iiop br_rem_static NULL
+ br	bridges\source\remote\context			nmake	-	all	br_rcon br_unotypes NULL
+ br	bridges\source\cpp_uno\msvc_win32_intel	nmake	-	w	br_msci br_cppuno_shared br_unotypes NULL
+ br	bridges\source\cpp_uno\gcc3_linux_intel	nmake	-	u	br_gcc3li br_cppuno_shared br_unotypes NULL
+Index: bridges/prj/d.lst
+===================================================================
+RCS file: /cvs/udk/bridges/prj/d.lst,v
+retrieving revision 1.24
+diff -u -r1.24 d.lst
+--- bridges/prj/d.lst	21 Feb 2005 12:09:27 -0000	1.24
++++ bridges/prj/d.lst	25 Jun 2006 08:58:56 -0000
+@@ -1,6 +1,5 @@
+ mkdir: %_DEST%\inc%_EXT%\bridges
+ mkdir: %_DEST%\inc%_EXT%\bridges\remote
+-mkdir: %_DEST%\inc%_EXT%\bridges\java
+ 
+ ..\inc\bridges\remote\connection.h %_DEST%\inc%_EXT%\bridges\remote\connection.h
+ ..\inc\bridges\remote\context.h %_DEST%\inc%_EXT%\bridges\remote\context.h
+@@ -10,8 +9,6 @@
+ ..\%__SRC%\lib\librmcxt.*.* %_DEST%\lib%_EXT%\*
+ ..\%__SRC%\bin\rmcxt*.dll %_DEST%\bin%_EXT%\*
+ 
+-..\%__SRC%\lib\libiiop_uno* %_DEST%\lib%_EXT%\libiiop_uno*
+-..\%__SRC%\bin\iiop_uno* %_DEST%\bin%_EXT%\iiop_uno*
+ ..\%__SRC%\lib\liburp_uno* %_DEST%\lib%_EXT%\liburp_uno*
+ ..\%__SRC%\bin\urp_uno* %_DEST%\bin%_EXT%\urp_uno*
+ ..\%__SRC%\lib\libjava_uno* %_DEST%\lib%_EXT%\libjava_uno*
+Index: bridges/source/cli_uno/cli_bridge.cxx
+===================================================================
+RCS file: /cvs/udk/bridges/source/cli_uno/cli_bridge.cxx,v
+retrieving revision 1.4
+diff -u -r1.4 cli_bridge.cxx
+--- bridges/source/cli_uno/cli_bridge.cxx	7 Sep 2005 22:14:25 -0000	1.4
++++ bridges/source/cli_uno/cli_bridge.cxx	25 Jun 2006 08:58:56 -0000
+@@ -107,6 +107,8 @@
+             OUStringToOString(
+                 OUSTR("[cli_uno bridge error] ") + err.m_message, RTL_TEXTENCODING_ASCII_US ) );
+         OSL_ENSURE( 0, cstr_msg.getStr() );
++#else
++        (void) err; // unused
+ #endif
+     }
+ }
+@@ -164,6 +166,8 @@
+             rtl::OUStringToOString(
+                 OUSTR("[cli_uno bridge error] ") + err.m_message, RTL_TEXTENCODING_ASCII_US ) );
+         OSL_ENSURE( 0, cstr_msg.getStr() );
++#else
++        (void) err; // unused
+ #endif
+     }
+ }
+@@ -330,6 +334,8 @@
+             OUStringToOString(
+                 OUSTR("[cli_uno bridge error] ") + err.m_message, RTL_TEXTENCODING_ASCII_US ) );
+         OSL_ENSURE( 0, cstr_msg.getStr() );
++#else
++        (void) err; // unused
+ #endif
+     }
+     *ppMapping = mapping;    
+@@ -337,7 +343,7 @@
+ 
+ 
+ //##################################################################################################
+-sal_Bool SAL_CALL component_canUnload( TimeValue * pTime )
++sal_Bool SAL_CALL component_canUnload( TimeValue * )
+     SAL_THROW_EXTERN_C()
+ {
+     return true;
+Index: bridges/source/cli_uno/cli_bridge.h
+===================================================================
+RCS file: /cvs/udk/bridges/source/cli_uno/cli_bridge.h,v
+retrieving revision 1.4
+diff -u -r1.4 cli_bridge.h
+--- bridges/source/cli_uno/cli_bridge.h	7 Sep 2005 22:14:39 -0000	1.4
++++ bridges/source/cli_uno/cli_bridge.h	25 Jun 2006 08:58:56 -0000
+@@ -108,7 +108,7 @@
+ 
+ 
+     void call_cli(
+-        System::Object* cliI, System::Type* ifaceType, sr::MethodInfo* method,
++        System::Object* cliI, sr::MethodInfo* method,
+         typelib_TypeDescriptionReference * return_type,
+         typelib_MethodParameter * params, int nParams,
+         void * uno_ret, void * uno_args [], uno_Any ** uno_exc ) const;
+Index: bridges/source/cli_uno/cli_data.cxx
+===================================================================
+RCS file: /cvs/udk/bridges/source/cli_uno/cli_data.cxx,v
+retrieving revision 1.7
+diff -u -r1.7 cli_data.cxx
+--- bridges/source/cli_uno/cli_data.cxx	9 Mar 2006 10:47:41 -0000	1.7
++++ bridges/source/cli_uno/cli_data.cxx	25 Jun 2006 08:58:58 -0000
+@@ -32,7 +32,11 @@
+  *    MA  02111-1307  USA
+  *
+  ************************************************************************/
++
++#pragma warning(push, 1)
+ #include "windows.h"
++#pragma warning(pop)
++
+ #include <memory>
+ 
+ 
+@@ -81,7 +85,6 @@
+     System::Object* retVal= NULL;
+ // get oid
+     rtl_uString * pOid = 0;
+-    uno_ExtEnvironment* env = NULL;
+     (*m_uno_env->getObjectIdentifier)( m_uno_env, &pOid, pUnoI );
+     OSL_ASSERT( 0 != pOid );
+     OUString oid(pOid, SAL_NO_ACQUIRE);
+@@ -208,7 +211,7 @@
+ 
+ System::Type* mapUnoType(typelib_TypeDescriptionReference const * pTD)
+ {
+-    System::Type * retVal;
++    System::Type * retVal = 0;
+     switch (pTD->eTypeClass)
+     {
+     case typelib_TypeClass_VOID:
+@@ -317,7 +320,9 @@
+         }
+         break;
+     }
+-
++    default:
++        OSL_ASSERT(false);
++        break;
+     }
+     return retVal;
+ }
+@@ -407,6 +412,8 @@
+                 typelib_TypeClass_STRING );
+             typelib_typedescriptionreference_acquire( retVal );
+             break;
++        default:
++            break;
+         }
+     }
+     if (retVal == NULL)
+@@ -636,7 +643,6 @@
+ OUString mapCliTypeName(System::String* typeName)
+ {
+     int dims= 0;
+-    int index= 0;
+     // Array? determine the "rank" (number of "[]")
+     // move from the rightmost end to the left, for example
+     // unoidl.PolymorphicStruct<System.Char[]>[]
+@@ -839,7 +845,6 @@
+             {
+                 System::String *s= __try_cast<System::String*>(cli_data);
+                 wchar_t const __pin * pdata= PtrToStringChars(s);
+-                int len= s->get_Length();
+                 rtl_uString_newFromStr_WithLength( (rtl_uString**) uno_data,
+                                                   pdata, s->get_Length() );
+             }
+@@ -1242,7 +1247,6 @@
+                     // cleanup the members which we have converted so far
+                     for ( sal_Int32 nCleanup = 0; nCleanup < nPos; ++nCleanup )
+                     {
+-                        void * p = (char *)uno_data + comp_td->pMemberOffsets[ nCleanup ];
+                         uno_type_destructData(
+                             uno_data, comp_td->ppTypeRefs[ nCleanup ], 0 );
+                     }
+@@ -1264,7 +1268,6 @@
+             auto_ptr< rtl_mem > seq;
+             
+             System::Array* ar = NULL;
+-            sal_Int32 nElements = 0;
+             if (cli_data != NULL)
+             {
+                 ar = __try_cast<System::Array*>(cli_data);
+@@ -1575,7 +1578,6 @@
+                 &objCli, pAny->pData, pAny->pType, 0,
+                 false);
+             
+-            System::Type* cliType= NULL;
+             uno::Any anyVal(mapUnoType(pAny->pType), objCli);
+             *cli_data= __box(anyVal);
+         }
+@@ -1677,7 +1679,6 @@
+             else
+                 cliObj = System::Activator::CreateInstance(cliType);
+         }
+-        typelib_TypeDescriptionReference ** ppMemberTypeRefs = comp_td->ppTypeRefs;
+         sal_Int32 * pMemberOffsets = comp_td->pMemberOffsets;
+         
+         if (comp_td->pBaseTypeDescription)
+Index: bridges/source/cli_uno/cli_proxy.cxx
+===================================================================
+RCS file: /cvs/udk/bridges/source/cli_uno/cli_proxy.cxx,v
+retrieving revision 1.4
+diff -u -r1.4 cli_proxy.cxx
+--- bridges/source/cli_uno/cli_proxy.cxx	7 Sep 2005 22:15:37 -0000	1.4
++++ bridges/source/cli_uno/cli_proxy.cxx	25 Jun 2006 08:59:00 -0000
+@@ -233,7 +233,7 @@
+ 
+ // IRemotingTypeInfo
+ bool UnoInterfaceProxy::CanCastTo(System::Type* fromType,
+-                                  System::Object* o)
++                                  System::Object*)
+ {
+     if (fromType == __typeof(System::Object)) // trivial case
+         return true;
+@@ -306,6 +306,7 @@
+     }
+     catch (BridgeRuntimeError& e)
+     {
++        (void) e; // avoid warning
+         OSL_ENSURE(
+             0, OUStringToOString(
+                 e.m_message, RTL_TEXTENCODING_UTF8 ).getStr() );
+@@ -423,7 +424,6 @@
+ {
+     try
+     {
+-        srrm::IMessage* retVal= NULL;
+         sc::IDictionary* props= callmsg->Properties;
+         srrm::LogicalCallContext* context=
+             static_cast<srrm::LogicalCallContext*>(
+@@ -547,7 +547,7 @@
+                                 static_cast<System::Object*[]>(
+                                     props->get_Item(m_ArgsString));
+                             System::Object* pExc = NULL;
+-                            System::Object* cli_ret = m_bridge->call_uno(
++                            m_bridge->call_uno(
+                                 info->m_unoI, member_td.get(),
+                                 ::getCppuVoidType().getTypeLibType(),
+                                 1, &param, args, NULL, &pExc);
+@@ -696,7 +696,6 @@
+     System::Type* type = m_type;
+ #endif    
+ 
+-    System::Type* basetype = NULL;
+     if (m_type->get_IsInterface() == false)
+         return;
+ 	sr::MethodInfo* arThisMethods[] = m_type->GetMethods();
+@@ -902,11 +901,11 @@
+ 
+ 
+ void SAL_CALL CliProxy::uno_DispatchMethod(
+-        struct _uno_Interface * pUnoI, 
+-        const struct _typelib_TypeDescription * pMemberType,
+-        void * pReturn,
+-        void * pArgs[],
+-        uno_Any ** ppException )
++        struct _uno_Interface *, 
++        const struct _typelib_TypeDescription *,
++        void *,
++        void **,
++        uno_Any ** )
+ {
+ }
+ inline void CliProxy::acquire() const
+@@ -945,7 +944,7 @@
+ 
+ 
+ extern "C"
+-void SAL_CALL cli_proxy_free( uno_ExtEnvironment * env, void * proxy )
++void SAL_CALL cli_proxy_free( uno_ExtEnvironment *, void * proxy )
+     SAL_THROW_EXTERN_C()
+ {
+     cli_uno::CliProxy * cliProxy = reinterpret_cast<
+@@ -1009,7 +1008,7 @@
+                sr::MethodInfo* info = proxy->getMethodInfo(function_pos,
+                                              usAttrName, CliProxy::MK_GET);
+                bridge->call_cli( 
+-                    proxy->m_cliI, proxy->m_type,
++                    proxy->m_cliI,
+                     info,
+                     ((typelib_InterfaceAttributeTypeDescription *)member_td)
+                     ->pAttributeTypeRef,
+@@ -1031,7 +1030,7 @@
+                 param.bOut = sal_False;
+                 
+                 bridge->call_cli(
+-                    proxy->m_cliI, proxy->m_type,
++                    proxy->m_cliI,
+                     // set follows get method
+                     info,
+                     0 /* indicates void return */, &param, 1,
+@@ -1130,7 +1129,7 @@
+                sr::MethodInfo* info = proxy->getMethodInfo(function_pos,
+                                              usMethodName, CliProxy::MK_METHOD); 
+                bridge->call_cli(
+-                    proxy->m_cliI, proxy->m_type,
++                    proxy->m_cliI,
+                     info,
+                     method_td->pReturnTypeRef, method_td->pParams,
+                     method_td->nParams,
+Index: bridges/source/cli_uno/cli_uno.cxx
+===================================================================
+RCS file: /cvs/udk/bridges/source/cli_uno/cli_uno.cxx,v
+retrieving revision 1.4
+diff -u -r1.4 cli_uno.cxx
+--- bridges/source/cli_uno/cli_uno.cxx	16 Jan 2006 13:21:01 -0000	1.4
++++ bridges/source/cli_uno/cli_uno.cxx	25 Jun 2006 08:59:01 -0000
+@@ -213,7 +213,7 @@
+ }
+ 
+ void Bridge::call_cli(
+-    System::Object* cliI, System::Type* ifaceType,
++    System::Object* cliI,
+     sr::MethodInfo* method, 
+     typelib_TypeDescriptionReference * return_type,
+     typelib_MethodParameter * params, int nParams,
+Index: bridges/source/cli_uno/makefile.mk
+===================================================================
+RCS file: /cvs/udk/bridges/source/cli_uno/makefile.mk,v
+retrieving revision 1.4
+diff -u -r1.4 makefile.mk
+--- bridges/source/cli_uno/makefile.mk	7 Sep 2005 22:16:23 -0000	1.4
++++ bridges/source/cli_uno/makefile.mk	25 Jun 2006 08:59:01 -0000
+@@ -48,7 +48,9 @@
+ .IF "$(COM)$(COMEX)" == "MSC8" || "$(COM)$(COMEX)" == "MSC10"
+ 
+ .IF "$(COM)" == "MSC"
+-CFLAGS += -clr -AI $(SOLARBINDIR)
++# When compiling for CLR, disable "warning C4339: use of undefined type detected
++# in CLR meta-data - use of this type may lead to a runtime exception":
++CFLAGS += -clr -AI $(SOLARBINDIR) -wd4339
+ .IF "$(debug)" != ""
+ CFLAGS += -Ob0
+ .ENDIF
+Index: bridges/source/cpp_uno/cc50_solaris_intel/cpp2uno.cxx
+===================================================================
+RCS file: /cvs/udk/bridges/source/cpp_uno/cc50_solaris_intel/cpp2uno.cxx,v
+retrieving revision 1.13
+diff -u -r1.13 cpp2uno.cxx
+--- bridges/source/cpp_uno/cc50_solaris_intel/cpp2uno.cxx	2 May 2006 11:59:59 -0000	1.13
++++ bridges/source/cpp_uno/cc50_solaris_intel/cpp2uno.cxx	25 Jun 2006 08:59:01 -0000
+@@ -194,7 +194,9 @@
+ 			if (pParams[nIndex].bOut) // inout/out
+ 			{
+ 				// convert and assign
+-				uno_destructData( pCppArgs[nIndex], pParamTypeDescr, cpp_release );
++				uno_destructData(
++                    pCppArgs[nIndex], pParamTypeDescr,
++                    reinterpret_cast< uno_ReleaseFunc >(cpp_release) );
+ 				uno_copyAndConvertData( pCppArgs[nIndex], pUnoArgs[nIndex], pParamTypeDescr,
+ 										pThis->getBridge()->getUno2Cpp() );
+ 			}
+@@ -320,7 +322,8 @@
+                 {
+                     ::uno_any_construct(
+                         reinterpret_cast< uno_Any * >( pCallStack[1] ),
+-                        &pInterface, pTD, cpp_acquire );
++                        &pInterface, pTD,
++                        reinterpret_cast< uno_AcquireFunc >(cpp_acquire) );
+                     pInterface->release();
+                     TYPELIB_DANGER_RELEASE( pTD );
+                     *(void **)&nRegReturn = pCallStack[1];
+@@ -442,8 +445,11 @@
+     p += sizeof (sal_Int32);
+     // jmp privateSnippetExecutor:
+     *p++ = 0xE9;
++#pragma disable_warn
++    void * e = reinterpret_cast< void * >(exec);
++#pragma enable_warn
+     *reinterpret_cast< sal_Int32 * >(p)
+-        = ((unsigned char *) exec) - p - sizeof (sal_Int32);
++        = static_cast< unsigned char * >(e) - p - sizeof (sal_Int32);
+     p += sizeof (sal_Int32);
+     OSL_ASSERT(p - code <= codeSnippetSize);
+     return code + codeSnippetSize;
+@@ -473,7 +479,7 @@
+ unsigned char * bridges::cpp_uno::shared::VtableFactory::addLocalFunctions(
+     void ** slots, unsigned char * code,
+     typelib_InterfaceTypeDescription const * type, sal_Int32 functionOffset,
+-    sal_Int32 functionCount, sal_Int32 vtableOffset)
++    sal_Int32, sal_Int32 vtableOffset)
+ {
+     for (sal_Int32 i = 0; i < type->nMembers; ++i) {
+         typelib_TypeDescription * member = 0;
+Index: bridges/source/cpp_uno/cc50_solaris_intel/except.cxx
+===================================================================
+RCS file: /cvs/udk/bridges/source/cpp_uno/cc50_solaris_intel/except.cxx,v
+retrieving revision 1.14
+diff -u -r1.14 except.cxx
+--- bridges/source/cpp_uno/cc50_solaris_intel/except.cxx	7 Sep 2005 22:17:13 -0000	1.14
++++ bridges/source/cpp_uno/cc50_solaris_intel/except.cxx	25 Jun 2006 08:59:02 -0000
+@@ -321,7 +321,8 @@
+ static void deleteException(
+     void* pExc, unsigned char* thunk, typelib_TypeDescription* pType )
+ {
+- 	uno_destructData( pExc, pType, cpp_release );
++ 	uno_destructData(
++        pExc, pType, reinterpret_cast< uno_ReleaseFunc >(cpp_release) );
+  	typelib_typedescription_release( pType );
+     delete[] thunk;
+ }
+@@ -391,8 +392,11 @@
+     thunk[14] = 0x04;
+     // call deleteException:
+     thunk[15] = 0xE8;
++#pragma disable_warn
++    void * d = reinterpret_cast< void * >(deleteException);
++#pragma enable_warn
+     *reinterpret_cast< std::ptrdiff_t * >(thunk + 16) =
+-        reinterpret_cast< unsigned char * >(deleteException) - (thunk + 20);
++        static_cast< unsigned char * >(d) - (thunk + 20);
+     // addl $12, %esp:
+     thunk[20] = 0x83;
+     thunk[21] = 0xC4;
+@@ -400,9 +404,10 @@
+     // ret:
+     thunk[23] = 0xC3;
+ 
+-	__Crun::ex_throw(
+-        pCppExc, (const __Crun::static_type_info*)pRTTI,
+-        reinterpret_cast< void (*)(void *) >(thunk) );
++#pragma disable_warn
++    void (* f)(void *) = reinterpret_cast< void (*)(void *) >(thunk);
++#pragma enable_warn
++	__Crun::ex_throw(pCppExc, (const __Crun::static_type_info*)pRTTI, f);
+ }
+ 
+ void cc50_solaris_intel_fillUnoException(
+Index: bridges/source/cpp_uno/cc50_solaris_intel/uno2cpp.cxx
+===================================================================
+RCS file: /cvs/udk/bridges/source/cpp_uno/cc50_solaris_intel/uno2cpp.cxx,v
+retrieving revision 1.14
+diff -u -r1.14 uno2cpp.cxx
+--- bridges/source/cpp_uno/cc50_solaris_intel/uno2cpp.cxx	16 Jan 2006 13:21:34 -0000	1.14
++++ bridges/source/cpp_uno/cc50_solaris_intel/uno2cpp.cxx	25 Jun 2006 08:59:03 -0000
+@@ -82,7 +82,6 @@
+ 	
+   	void * pCppReturn = 0; // if != 0 && != pUnoReturn, needs reconversion
+ 	
+-	long return_buffer[64];
+ 	void * pReturnSpace = 0;
+ 	
+ 	if (pReturnTypeDescr)
+@@ -244,7 +243,9 @@
+ 										pThis->getBridge()->getCpp2Uno() );
+ 			}
+ 			// destroy temp cpp param => cpp: every param was constructed
+-			uno_destructData( pCppArgs[nIndex], pParamTypeDescr, cpp_release );
++			uno_destructData(
++                pCppArgs[nIndex], pParamTypeDescr,
++                reinterpret_cast< uno_ReleaseFunc >(cpp_release) );
+ 
+ 			if (bAllocated)
+ 				rtl_freeMemory( pCppArgs[nIndex] );
+@@ -255,7 +256,9 @@
+ 		{
+ 			uno_copyAndConvertData( pUnoReturn, pCppReturn, pReturnTypeDescr,
+ 									pThis->getBridge()->getCpp2Uno() );
+-			uno_destructData( pCppReturn, pReturnTypeDescr, cpp_release );
++			uno_destructData(
++                pCppReturn, pReturnTypeDescr,
++                reinterpret_cast< uno_ReleaseFunc >(cpp_release) );
+ 		}
+  	}
+  	catch( ... )
+@@ -275,7 +278,9 @@
+ 			sal_Bool bAllocated = (nIndex & 0x80000000) != 0;
+ 			nIndex &= 0x7fffffff;
+ 			// destroy temp cpp param => cpp: every param was constructed
+-			uno_destructData( pCppArgs[nIndex], ppTempParamTypeDescr[nTempIndizes], cpp_release );
++			uno_destructData(
++                pCppArgs[nIndex], ppTempParamTypeDescr[nTempIndizes],
++                reinterpret_cast< uno_ReleaseFunc >(cpp_release) );
+ 			if (bAllocated)
+ 				rtl_freeMemory( pCppArgs[nIndex] );
+ 			TYPELIB_DANGER_RELEASE( ppTempParamTypeDescr[nTempIndizes] );
+@@ -293,10 +298,11 @@
+ 
+ }
+ 
+-//==================================================================================================
+-void bridges::cpp_uno::shared::UnoInterfaceProxy::dispatch(
++namespace bridges { namespace cpp_uno { namespace shared {
++
++void unoInterfaceProxyDispatch(
+ 	uno_Interface * pUnoI, const typelib_TypeDescription * pMemberDescr,
+-    void * pReturn, void * pArgs[], uno_Any ** ppException ) SAL_THROW(())
++    void * pReturn, void * pArgs[], uno_Any ** ppException )
+ {
+ 	// is my surrogate
+ 	bridges::cpp_uno::shared::UnoInterfaceProxy * pThis
+@@ -414,3 +420,4 @@
+ 	}
+ }
+ 
++} } }
+Index: bridges/source/cpp_uno/cc50_solaris_sparc/cpp2uno.cxx
+===================================================================
+RCS file: /cvs/udk/bridges/source/cpp_uno/cc50_solaris_sparc/cpp2uno.cxx,v
+retrieving revision 1.20
+diff -u -r1.20 cpp2uno.cxx
+--- bridges/source/cpp_uno/cc50_solaris_sparc/cpp2uno.cxx	2 May 2006 12:00:28 -0000	1.20
++++ bridges/source/cpp_uno/cc50_solaris_sparc/cpp2uno.cxx	25 Jun 2006 08:59:05 -0000
+@@ -199,7 +199,9 @@
+ 			if (pParams[nIndex].bOut) // inout/out
+ 			{
+ 				// convert and assign
+-				uno_destructData( pCppArgs[nIndex], pParamTypeDescr, cpp_release );
++				uno_destructData(
++                    pCppArgs[nIndex], pParamTypeDescr,
++                    reinterpret_cast< uno_ReleaseFunc >(cpp_release) );
+ 				uno_copyAndConvertData( pCppArgs[nIndex], pUnoArgs[nIndex], pParamTypeDescr,
+ 										pThis->getBridge()->getUno2Cpp() );
+ 			}
+@@ -337,7 +339,8 @@
+                 {
+                     ::uno_any_construct(
+                         reinterpret_cast< uno_Any * >( pCallStack[0] ),
+-                        &pInterface, pTD, cpp_acquire );
++                        &pInterface, pTD,
++                        reinterpret_cast< uno_AcquireFunc >(cpp_acquire) );
+                     pInterface->release();
+                     TYPELIB_DANGER_RELEASE( pTD );
+                     *(void **)pRegisterReturn = pCallStack[0];
+@@ -474,7 +477,7 @@
+ unsigned char * bridges::cpp_uno::shared::VtableFactory::addLocalFunctions(
+     void ** slots, unsigned char * code,
+     typelib_InterfaceTypeDescription const * type, sal_Int32 functionOffset,
+-    sal_Int32 functionCount, sal_Int32 vtableOffset)
++    sal_Int32, sal_Int32 vtableOffset)
+ {
+     for (sal_Int32 i = 0; i < type->nMembers; ++i) {
+         typelib_TypeDescription * member = 0;
+Index: bridges/source/cpp_uno/cc50_solaris_sparc/except.cxx
+===================================================================
+RCS file: /cvs/udk/bridges/source/cpp_uno/cc50_solaris_sparc/except.cxx,v
+retrieving revision 1.14
+diff -u -r1.14 except.cxx
+--- bridges/source/cpp_uno/cc50_solaris_sparc/except.cxx	7 Sep 2005 22:18:37 -0000	1.14
++++ bridges/source/cpp_uno/cc50_solaris_sparc/except.cxx	25 Jun 2006 08:59:05 -0000
+@@ -325,7 +325,8 @@
+ static void deleteException(
+     void* pExc, unsigned int* thunk, typelib_TypeDescription* pType )
+ {
+- 	uno_destructData( pExc, pType, cpp_release );
++ 	uno_destructData(
++        pExc, pType, reinterpret_cast< uno_ReleaseFunc >(cpp_release) );
+  	typelib_typedescription_release( pType );
+     delete[] thunk;
+ }
+@@ -399,9 +400,10 @@
+         | (reinterpret_cast< unsigned int >(pTypeDescr) & 0x3FF);
+     bridges::cpp_uno::cc50_solaris_sparc::flushCode(thunk, thunk + 6);
+ 
+-	__Crun::ex_throw(
+-        pCppExc, (const __Crun::static_type_info*)pRTTI,
+-        reinterpret_cast< void (*)(void *) >(thunk) );
++#pragma disable_warn
++    void (* f)(void *) = reinterpret_cast< void (*)(void *) >(thunk);
++#pragma enable_warn
++	__Crun::ex_throw(pCppExc, (const __Crun::static_type_info*)pRTTI, f);
+ }
+ 
+ void cc50_solaris_sparc_fillUnoException(
+Index: bridges/source/cpp_uno/cc50_solaris_sparc/uno2cpp.cxx
+===================================================================
+RCS file: /cvs/udk/bridges/source/cpp_uno/cc50_solaris_sparc/uno2cpp.cxx,v
+retrieving revision 1.18
+diff -u -r1.18 uno2cpp.cxx
+--- bridges/source/cpp_uno/cc50_solaris_sparc/uno2cpp.cxx	16 Jan 2006 13:22:06 -0000	1.18
++++ bridges/source/cpp_uno/cc50_solaris_sparc/uno2cpp.cxx	25 Jun 2006 08:59:05 -0000
+@@ -232,7 +232,9 @@
+ 										pThis->getBridge()->getCpp2Uno() );
+ 			}
+ 			// destroy temp cpp param => cpp: every param was constructed
+-			uno_destructData( pCppArgs[nIndex], pParamTypeDescr, cpp_release );
++			uno_destructData(
++                pCppArgs[nIndex], pParamTypeDescr,
++                reinterpret_cast< uno_ReleaseFunc >(cpp_release) );
+ 
+ 			TYPELIB_DANGER_RELEASE( pParamTypeDescr );
+ 		}
+@@ -241,7 +243,9 @@
+ 		{
+ 			uno_copyAndConvertData( pUnoReturn, pCppReturn, pReturnTypeDescr,
+ 									pThis->getBridge()->getCpp2Uno() );
+-			uno_destructData( pCppReturn, pReturnTypeDescr, cpp_release );
++			uno_destructData(
++                pCppReturn, pReturnTypeDescr,
++                reinterpret_cast< uno_ReleaseFunc >(cpp_release) );
+ 		}
+  	}
+  	catch( ... )
+@@ -258,7 +262,10 @@
+ 		{
+ 			sal_Int32 nIndex = pTempIndizes[nTempIndizes];
+ 			// destroy temp cpp param => cpp: every param was constructed
+-			uno_destructData( pCppArgs[nIndex], ppTempParamTypeDescr[nTempIndizes], cpp_release );
++			uno_destructData(
++                pCppArgs[nIndex],
++                ppTempParamTypeDescr[nTempIndizes],
++                reinterpret_cast< uno_ReleaseFunc >(cpp_release) );
+ 			TYPELIB_DANGER_RELEASE( ppTempParamTypeDescr[nTempIndizes] );
+ 		}
+ 		// return type
+@@ -269,10 +276,11 @@
+ 
+ }
+ 
+-//==================================================================================================
+-void bridges::cpp_uno::shared::UnoInterfaceProxy::dispatch(
++namespace bridges { namespace cpp_uno { namespace shared {
++
++void unoInterfaceProxyDispatch(
+ 	uno_Interface * pUnoI, const typelib_TypeDescription * pMemberDescr,
+-	void * pReturn, void * pArgs[], uno_Any ** ppException ) SAL_THROW(())
++	void * pReturn, void * pArgs[], uno_Any ** ppException )
+ {
+ 	// is my surrogate
+ 	bridges::cpp_uno::shared::UnoInterfaceProxy * pThis
+@@ -389,3 +397,5 @@
+ 	}
+ 	}
+ }
++
++} } }
+Index: bridges/source/cpp_uno/gcc3_freebsd_intel/uno2cpp.cxx
+===================================================================
+RCS file: /cvs/udk/bridges/source/cpp_uno/gcc3_freebsd_intel/uno2cpp.cxx,v
+retrieving revision 1.7
+diff -u -r1.7 uno2cpp.cxx
+--- bridges/source/cpp_uno/gcc3_freebsd_intel/uno2cpp.cxx	7 Sep 2005 22:21:05 -0000	1.7
++++ bridges/source/cpp_uno/gcc3_freebsd_intel/uno2cpp.cxx	25 Jun 2006 08:59:05 -0000
+@@ -320,10 +320,11 @@
+ 
+ }
+ 
+-//==================================================================================================
+-void bridges::cpp_uno::shared::UnoInterfaceProxy::dispatch(
++namespace bridges { namespace cpp_uno { namespace shared {
++
++void unoInterfaceProxyDispatch(
+ 	uno_Interface * pUnoI, const typelib_TypeDescription * pMemberDescr,
+-    void * pReturn, void * pArgs[], uno_Any ** ppException ) SAL_THROW(())
++    void * pReturn, void * pArgs[], uno_Any ** ppException )
+ {
+ 	// is my surrogate
+ 	bridges::cpp_uno::shared::UnoInterfaceProxy * pThis
+@@ -440,3 +441,5 @@
+ 	}
+ 	}
+ }
++
++} } }
+Index: bridges/source/cpp_uno/gcc3_linux_intel/cpp2uno.cxx
+===================================================================
+RCS file: /cvs/udk/bridges/source/cpp_uno/gcc3_linux_intel/cpp2uno.cxx,v
+retrieving revision 1.10
+diff -u -r1.10 cpp2uno.cxx
+--- bridges/source/cpp_uno/gcc3_linux_intel/cpp2uno.cxx	2 May 2006 12:01:33 -0000	1.10
++++ bridges/source/cpp_uno/gcc3_linux_intel/cpp2uno.cxx	25 Jun 2006 08:59:05 -0000
+@@ -120,6 +120,9 @@
+ 			case typelib_TypeClass_UNSIGNED_HYPER:
+ 			case typelib_TypeClass_DOUBLE:
+ 				pCppStack += sizeof(sal_Int32); // extra long
++                break;
++            default:
++                break;
+ 			}
+ 			// no longer needed
+ 			TYPELIB_DANGER_RELEASE( pParamTypeDescr );
+@@ -436,7 +439,7 @@
+ unsigned char * bridges::cpp_uno::shared::VtableFactory::addLocalFunctions(
+     void ** slots, unsigned char * code,
+     typelib_InterfaceTypeDescription const * type, sal_Int32 functionOffset,
+-    sal_Int32 functionCount, sal_Int32 vtableOffset)
++    sal_Int32 /*functionCount*/, sal_Int32 vtableOffset)
+ {
+     for (sal_Int32 i = 0; i < type->nMembers; ++i) {
+         typelib_TypeDescription * member = 0;
+Index: bridges/source/cpp_uno/gcc3_linux_intel/except.cxx
+===================================================================
+RCS file: /cvs/udk/bridges/source/cpp_uno/gcc3_linux_intel/except.cxx,v
+retrieving revision 1.11
+diff -u -r1.11 except.cxx
+--- bridges/source/cpp_uno/gcc3_linux_intel/except.cxx	7 Sep 2005 22:21:35 -0000	1.11
++++ bridges/source/cpp_uno/gcc3_linux_intel/except.cxx	25 Jun 2006 08:59:06 -0000
+@@ -139,8 +139,8 @@
+     OUString const & unoName = *(OUString const *)&pTypeDescr->aBase.pTypeName;
+ 
+     MutexGuard guard( m_mutex );
+-    t_rtti_map::const_iterator iFind( m_rttis.find( unoName ) );
+-    if (iFind == m_rttis.end())
++    t_rtti_map::const_iterator iRttiFind( m_rttis.find( unoName ) );
++    if (iRttiFind == m_rttis.end())
+     {
+         // RTTI symbol
+         OStringBuffer buf( 64 );
+@@ -204,7 +204,7 @@
+     }
+     else
+     {
+-        rtti = iFind->second;
++        rtti = iRttiFind->second;
+     }
+ 
+     return rtti;
+Index: bridges/source/cpp_uno/gcc3_linux_intel/uno2cpp.cxx
+===================================================================
+RCS file: /cvs/udk/bridges/source/cpp_uno/gcc3_linux_intel/uno2cpp.cxx,v
+retrieving revision 1.8
+diff -u -r1.8 uno2cpp.cxx
+--- bridges/source/cpp_uno/gcc3_linux_intel/uno2cpp.cxx	7 Sep 2005 22:22:17 -0000	1.8
++++ bridges/source/cpp_uno/gcc3_linux_intel/uno2cpp.cxx	25 Jun 2006 08:59:07 -0000
+@@ -142,6 +142,8 @@
+ 		case typelib_TypeClass_DOUBLE:
+ 			asm ( "fstpl %0\n\t" : : "m"(*(char *)pRegisterReturn) );
+ 			break;
++        default:
++            break;
+ 	}
+ }
+ 
+@@ -217,6 +219,9 @@
+ 			case typelib_TypeClass_UNSIGNED_HYPER:
+ 			case typelib_TypeClass_DOUBLE:
+ 				pCppStack += sizeof(sal_Int32); // extra long
++                break;
++            default:
++                break;
+ 			}
+ 			// no longer needed
+ 			TYPELIB_DANGER_RELEASE( pParamTypeDescr );
+@@ -320,15 +325,15 @@
+ 
+ }
+ 
+-//==================================================================================================
+-void bridges::cpp_uno::shared::UnoInterfaceProxy::dispatch(
++namespace bridges { namespace cpp_uno { namespace shared {
++
++void unoInterfaceProxyDispatch(
+ 	uno_Interface * pUnoI, const typelib_TypeDescription * pMemberDescr,
+-    void * pReturn, void * pArgs[], uno_Any ** ppException ) SAL_THROW(())
++    void * pReturn, void * pArgs[], uno_Any ** ppException )
+ {
+ 	// is my surrogate
+ 	bridges::cpp_uno::shared::UnoInterfaceProxy * pThis
+         = static_cast< bridges::cpp_uno::shared::UnoInterfaceProxy * >(pUnoI);
+-	typelib_InterfaceTypeDescription * pTypeDescr = pThis->pTypeDescr;
+ 	
+ 	switch (pMemberDescr->eTypeClass)
+ 	{
+@@ -440,3 +445,5 @@
+ 	}
+ 	}
+ }
++
++} } }
+Index: bridges/source/cpp_uno/gcc3_linux_powerpc/uno2cpp.cxx
+===================================================================
+RCS file: /cvs/udk/bridges/source/cpp_uno/gcc3_linux_powerpc/uno2cpp.cxx,v
+retrieving revision 1.6
+diff -u -r1.6 uno2cpp.cxx
+--- bridges/source/cpp_uno/gcc3_linux_powerpc/uno2cpp.cxx	7 Sep 2005 22:23:33 -0000	1.6
++++ bridges/source/cpp_uno/gcc3_linux_powerpc/uno2cpp.cxx	25 Jun 2006 08:59:07 -0000
+@@ -511,11 +511,11 @@
+ 
+ }
+ 
++namespace bridges { namespace cpp_uno { namespace shared {
+ 
+-//==================================================================================================
+-void bridges::cpp_uno::shared::UnoInterfaceProxy::dispatch(
++void unoInterfaceProxyDispatch(
+ 	uno_Interface * pUnoI, const typelib_TypeDescription * pMemberDescr,
+-	void * pReturn, void * pArgs[], uno_Any ** ppException ) SAL_THROW(())
++	void * pReturn, void * pArgs[], uno_Any ** ppException )
+ {
+ 	// is my surrogate
+         bridges::cpp_uno::shared::UnoInterfaceProxy * pThis 
+@@ -636,3 +636,4 @@
+ 	}
+ }
+ 
++} } }
+Index: bridges/source/cpp_uno/gcc3_linux_sparc/uno2cpp.cxx
+===================================================================
+RCS file: /cvs/udk/bridges/source/cpp_uno/gcc3_linux_sparc/uno2cpp.cxx,v
+retrieving revision 1.7
+diff -u -r1.7 uno2cpp.cxx
+--- bridges/source/cpp_uno/gcc3_linux_sparc/uno2cpp.cxx	7 Sep 2005 22:25:59 -0000	1.7
++++ bridges/source/cpp_uno/gcc3_linux_sparc/uno2cpp.cxx	25 Jun 2006 08:59:08 -0000
+@@ -468,11 +468,13 @@
+ 	}
+ }
+ 
++}
+ 
+-//==================================================================================================
+-void bridges::cpp_uno::shared::UnoInterfaceProxy::dispatch(
++namespace bridges { namespace cpp_uno { namespace shared {
++
++void unoInterfaceProxyDispatch(
+ 	uno_Interface * pUnoI, const typelib_TypeDescription * pMemberDescr,
+-void * pReturn, void * pArgs[], uno_Any ** ppException ) SAL_THROW(())
++    void * pReturn, void * pArgs[], uno_Any ** ppException )
+ {
+ #if defined BRIDGES_DEBUG
+     OString cstr( OUStringToOString( pMemberDescr->pTypeName, RTL_TEXTENCODING_ASCII_US ) );
+@@ -595,4 +597,4 @@
+ 	}
+ }
+ 
+-}
++} } }
+Index: bridges/source/cpp_uno/gcc3_macosx_powerpc/uno2cpp.cxx
+===================================================================
+RCS file: /cvs/udk/bridges/source/cpp_uno/gcc3_macosx_powerpc/uno2cpp.cxx,v
+retrieving revision 1.5
+diff -u -r1.5 uno2cpp.cxx
+--- bridges/source/cpp_uno/gcc3_macosx_powerpc/uno2cpp.cxx	7 Sep 2005 22:28:29 -0000	1.5
++++ bridges/source/cpp_uno/gcc3_macosx_powerpc/uno2cpp.cxx	25 Jun 2006 08:59:09 -0000
+@@ -504,10 +504,11 @@
+ 
+ }
+ 
+-//==================================================================================================
+-void bridges::cpp_uno::shared::UnoInterfaceProxy::dispatch(
++namespace bridges { namespace cpp_uno { namespace shared {
++
++void unoInterfaceProxyDispatch(
+ 	uno_Interface * pUnoI, const typelib_TypeDescription * pMemberDescr,
+-	void * pReturn, void * pArgs[], uno_Any ** ppException ) SAL_THROW(())
++	void * pReturn, void * pArgs[], uno_Any ** ppException )
+ {
+ 	// is my surrogate
+ 	bridges::cpp_uno::shared::UnoInterfaceProxy * pThis 
+@@ -628,3 +629,4 @@
+ 	}
+ }
+ 
++} } }
+Index: bridges/source/cpp_uno/gcc3_solaris_intel/uno2cpp.cxx
+===================================================================
+RCS file: /cvs/udk/bridges/source/cpp_uno/gcc3_solaris_intel/uno2cpp.cxx,v
+retrieving revision 1.4
+diff -u -r1.4 uno2cpp.cxx
+--- bridges/source/cpp_uno/gcc3_solaris_intel/uno2cpp.cxx	16 Jan 2006 13:23:15 -0000	1.4
++++ bridges/source/cpp_uno/gcc3_solaris_intel/uno2cpp.cxx	25 Jun 2006 08:59:10 -0000
+@@ -307,10 +307,11 @@
+ 
+ }
+ 
+-//==================================================================================================
+-void bridges::cpp_uno::shared::UnoInterfaceProxy::dispatch(
++namespace bridges { namespace cpp_uno { namespace shared {
++
++void unoInterfaceProxyDispatch(
+ 	uno_Interface * pUnoI, const typelib_TypeDescription * pMemberDescr,
+-    void * pReturn, void * pArgs[], uno_Any ** ppException ) SAL_THROW(())
++    void * pReturn, void * pArgs[], uno_Any ** ppException )
+ {
+ 	// is my surrogate
+ 	bridges::cpp_uno::shared::UnoInterfaceProxy * pThis
+@@ -427,3 +428,5 @@
+ 	}
+ 	}
+ }
++
++} } }
+Index: bridges/source/cpp_uno/gcc3_solaris_sparc/uno2cpp.cxx
+===================================================================
+RCS file: /cvs/udk/bridges/source/cpp_uno/gcc3_solaris_sparc/uno2cpp.cxx,v
+retrieving revision 1.4
+diff -u -r1.4 uno2cpp.cxx
+--- bridges/source/cpp_uno/gcc3_solaris_sparc/uno2cpp.cxx	16 Jan 2006 13:23:45 -0000	1.4
++++ bridges/source/cpp_uno/gcc3_solaris_sparc/uno2cpp.cxx	25 Jun 2006 08:59:10 -0000
+@@ -470,11 +470,13 @@
+ 	}
+ }
+ 
++}
+ 
+-//==================================================================================================
+-void bridges::cpp_uno::shared::UnoInterfaceProxy::dispatch(
++namespace bridges { namespace cpp_uno { namespace shared {
++
++void unoInterfaceProxyDispatch(
+ 	uno_Interface * pUnoI, const typelib_TypeDescription * pMemberDescr,
+-void * pReturn, void * pArgs[], uno_Any ** ppException ) SAL_THROW(())
++    void * pReturn, void * pArgs[], uno_Any ** ppException )
+ {
+ #if defined BRIDGES_DEBUG
+     OString cstr( OUStringToOString( pMemberDescr->pTypeName, RTL_TEXTENCODING_ASCII_US ) );
+@@ -597,4 +599,4 @@
+ 	}
+ }
+ 
+-}
++} } }
+Index: bridges/source/cpp_uno/msvc_win32_intel/cpp2uno.cxx
+===================================================================
+RCS file: /cvs/udk/bridges/source/cpp_uno/msvc_win32_intel/cpp2uno.cxx,v
+retrieving revision 1.15
+diff -u -r1.15 cpp2uno.cxx
+--- bridges/source/cpp_uno/msvc_win32_intel/cpp2uno.cxx	2 May 2006 12:06:41 -0000	1.15
++++ bridges/source/cpp_uno/msvc_win32_intel/cpp2uno.cxx	25 Jun 2006 08:59:11 -0000
+@@ -121,6 +121,9 @@
+ 			case typelib_TypeClass_UNSIGNED_HYPER:
+ 			case typelib_TypeClass_DOUBLE:
+ 				pCppStack += sizeof(sal_Int32); // extra long
++                break;
++            default:
++                break;
+ 			}
+ 			// no longer needed
+ 			TYPELIB_DANGER_RELEASE( pParamTypeDescr );
+@@ -467,7 +470,7 @@
+ 
+ unsigned char * bridges::cpp_uno::shared::VtableFactory::addLocalFunctions(
+     void ** slots, unsigned char * code,
+-    typelib_InterfaceTypeDescription const * type, sal_Int32 functionOffset,
++    typelib_InterfaceTypeDescription const *, sal_Int32 functionOffset,
+     sal_Int32 functionCount, sal_Int32 vtableOffset)
+ {
+     for (sal_Int32 i = 0; i < functionCount; ++i) {
+@@ -478,5 +481,5 @@
+ }
+ 
+ void bridges::cpp_uno::shared::VtableFactory::flushCode(
+-    unsigned char const * begin, unsigned char const * end)
++    unsigned char const *, unsigned char const *)
+ {}
+Index: bridges/source/cpp_uno/msvc_win32_intel/msci.hxx
+===================================================================
+RCS file: /cvs/udk/bridges/source/cpp_uno/msvc_win32_intel/msci.hxx,v
+retrieving revision 1.5
+diff -u -r1.5 msci.hxx
+--- bridges/source/cpp_uno/msvc_win32_intel/msci.hxx	7 Sep 2005 22:33:13 -0000	1.5
++++ bridges/source/cpp_uno/msvc_win32_intel/msci.hxx	25 Jun 2006 08:59:11 -0000
+@@ -33,7 +33,10 @@
+  *
+  ************************************************************************/
+ 
++#pragma warning(push, 1)
+ #include <windows.h>
++#pragma warning(pop)
++
+ #include "rtl/ustring.hxx"
+ 
+ 
+@@ -44,7 +47,7 @@
+ namespace CPPU_CURRENT_NAMESPACE
+ {
+ 
+-const long MSVC_ExceptionCode = 0xe06d7363;
++const DWORD MSVC_ExceptionCode = 0xe06d7363;
+ const long MSVC_magic_number = 0x19930520L;
+ 
+ //==============================================================================
+Index: bridges/source/cpp_uno/msvc_win32_intel/uno2cpp.cxx
+===================================================================
+RCS file: /cvs/udk/bridges/source/cpp_uno/msvc_win32_intel/uno2cpp.cxx,v
+retrieving revision 1.11
+diff -u -r1.11 uno2cpp.cxx
+--- bridges/source/cpp_uno/msvc_win32_intel/uno2cpp.cxx	7 Sep 2005 22:33:28 -0000	1.11
++++ bridges/source/cpp_uno/msvc_win32_intel/uno2cpp.cxx	25 Jun 2006 08:59:11 -0000
+@@ -219,6 +219,9 @@
+ 			case typelib_TypeClass_UNSIGNED_HYPER:
+ 			case typelib_TypeClass_DOUBLE:
+ 				pCppStack += sizeof(sal_Int32); // extra long
++                break;
++            default:
++                break;
+ 			}
+ 			// no longer needed
+ 			TYPELIB_DANGER_RELEASE( pParamTypeDescr );
+@@ -343,15 +346,15 @@
+ 
+ }
+ 
+-//==================================================================================================
+-void bridges::cpp_uno::shared::UnoInterfaceProxy::dispatch(
++namespace bridges { namespace cpp_uno { namespace shared {
++
++void unoInterfaceProxyDispatch(
+ 	uno_Interface * pUnoI, const typelib_TypeDescription * pMemberDescr,
+-    void * pReturn, void * pArgs[], uno_Any ** ppException ) SAL_THROW(())
++    void * pReturn, void * pArgs[], uno_Any ** ppException )
+ {
+ 	// is my surrogate
+ 	bridges::cpp_uno::shared::UnoInterfaceProxy * pThis
+         = static_cast< bridges::cpp_uno::shared::UnoInterfaceProxy * >(pUnoI);
+-	typelib_InterfaceTypeDescription * pTypeDescr = pThis->pTypeDescr;
+ 	
+ 	switch (pMemberDescr->eTypeClass)
+ 	{
+@@ -463,3 +466,5 @@
+ 	}
+ 	}
+ }
++
++} } }
+Index: bridges/source/cpp_uno/shared/bridge.cxx
+===================================================================
+RCS file: /cvs/udk/bridges/source/cpp_uno/shared/bridge.cxx,v
+retrieving revision 1.3
+diff -u -r1.3 bridge.cxx
+--- bridges/source/cpp_uno/shared/bridge.cxx	7 Sep 2005 22:33:42 -0000	1.3
++++ bridges/source/cpp_uno/shared/bridge.cxx	25 Jun 2006 08:59:11 -0000
+@@ -50,96 +50,26 @@
+ #include "uno/environment.h"
+ #include "uno/mapping.h"
+ 
+-using bridges::cpp_uno::shared::Bridge;
++namespace bridges { namespace cpp_uno { namespace shared {
+ 
+-uno_Mapping * Bridge::createMapping(
+-    uno_ExtEnvironment * pCppEnv, uno_ExtEnvironment * pUnoEnv,
+-    bool bExportCpp2Uno) SAL_THROW(())
++void freeMapping(uno_Mapping * pMapping)
+ {
+-    Bridge * bridge = new Bridge(pCppEnv, pUnoEnv, bExportCpp2Uno);
+-    return bExportCpp2Uno ? &bridge->aCpp2Uno : &bridge->aUno2Cpp;
++    delete static_cast< Bridge::Mapping * >( pMapping )->pBridge;
+ }
+ 
+-void Bridge::freeMapping(uno_Mapping * pMapping) SAL_THROW(())
+-{
+-    delete static_cast< Mapping * >( pMapping )->pBridge;
+-}
+-
+-void Bridge::acquire() SAL_THROW(())
++void acquireMapping(uno_Mapping * pMapping)
+ {
+-    if (1 == osl_incrementInterlockedCount( &nRef ))
+-    {
+-        if (bExportCpp2Uno)
+-        {
+-            uno_Mapping * pMapping = &aCpp2Uno;
+-            ::uno_registerMapping(
+-                &pMapping, freeMapping,
+-                (uno_Environment *)pCppEnv, (uno_Environment *)pUnoEnv, 0 );
+-        }
+-        else
+-        {
+-            uno_Mapping * pMapping = &aUno2Cpp;
+-            ::uno_registerMapping(
+-                &pMapping, freeMapping,
+-                (uno_Environment *)pUnoEnv, (uno_Environment *)pCppEnv, 0 );
+-        }
+-    }
++    static_cast< Bridge::Mapping * >( pMapping )->pBridge->acquire();
+ }
+ 
+-void Bridge::release() SAL_THROW(())
++void releaseMapping(uno_Mapping * pMapping)
+ {
+-    if (! osl_decrementInterlockedCount( &nRef ))
+-    {
+-        ::uno_revokeMapping( bExportCpp2Uno ? &aCpp2Uno : &aUno2Cpp );
+-    }
++    static_cast< Bridge::Mapping * >( pMapping )->pBridge->release();
+ }
+ 
+-Bridge::Bridge(
+-    uno_ExtEnvironment * pCppEnv_, uno_ExtEnvironment * pUnoEnv_,
+-    bool bExportCpp2Uno_) SAL_THROW(())
+-    : nRef( 1 )
+-    , pCppEnv( pCppEnv_ )
+-    , pUnoEnv( pUnoEnv_ )
+-    , bExportCpp2Uno( bExportCpp2Uno_ )
+-{
+-    bridges::cpp_uno::shared::g_moduleCount.modCnt.acquire(
+-        &bridges::cpp_uno::shared::g_moduleCount.modCnt );
+-
+-    aCpp2Uno.pBridge = this;
+-    aCpp2Uno.acquire = acquireMapping;
+-    aCpp2Uno.release = releaseMapping;
+-    aCpp2Uno.mapInterface = cpp2unoMapping;
+-
+-    aUno2Cpp.pBridge = this;
+-    aUno2Cpp.acquire = acquireMapping;
+-    aUno2Cpp.release = releaseMapping;
+-    aUno2Cpp.mapInterface = uno2cppMapping;
+-
+-    (*((uno_Environment *)pCppEnv)->acquire)( (uno_Environment *)pCppEnv );
+-    (*((uno_Environment *)pUnoEnv)->acquire)( (uno_Environment *)pUnoEnv );
+-}
+-
+-Bridge::~Bridge() SAL_THROW(())
+-{
+-    (*((uno_Environment *)pUnoEnv)->release)( (uno_Environment *)pUnoEnv );
+-    (*((uno_Environment *)pCppEnv)->release)( (uno_Environment *)pCppEnv );
+-    bridges::cpp_uno::shared::g_moduleCount.modCnt.release(
+-        &bridges::cpp_uno::shared::g_moduleCount.modCnt );
+-}
+-
+-void Bridge::acquireMapping(uno_Mapping * pMapping) SAL_THROW(())
+-{
+-    static_cast< Mapping * >( pMapping )->pBridge->acquire();
+-}
+-
+-void Bridge::releaseMapping(uno_Mapping * pMapping) SAL_THROW(())
+-{
+-    static_cast< Mapping * >( pMapping )->pBridge->release();
+-}
+-
+-void Bridge::cpp2unoMapping(
++void cpp2unoMapping(
+     uno_Mapping * pMapping, void ** ppUnoI, void * pCppI,
+-    typelib_InterfaceTypeDescription * pTypeDescr) SAL_THROW(())
++    typelib_InterfaceTypeDescription * pTypeDescr)
+ {
+     OSL_ENSURE( ppUnoI && pTypeDescr, "### null ptr!" );
+     if (*ppUnoI)
+@@ -150,7 +80,7 @@
+     }
+     if (pCppI)
+     {
+-        Bridge * pBridge = static_cast< Mapping * >( pMapping )->pBridge;
++        Bridge * pBridge = static_cast< Bridge::Mapping * >( pMapping )->pBridge;
+ 
+         // get object id of interface to be wrapped
+         rtl_uString * pOId = 0;
+@@ -174,7 +104,7 @@
+             // proxy may be exchanged during registration
+             (*pBridge->pUnoEnv->registerProxyInterface)(
+                 pBridge->pUnoEnv, reinterpret_cast< void ** >( &pSurrogate ),
+-                bridges::cpp_uno::shared::UnoInterfaceProxy::free, pOId,
++                freeUnoInterfaceProxy, pOId,
+                 pTypeDescr );
+ 
+             *ppUnoI = pSurrogate;
+@@ -183,9 +113,9 @@
+     }
+ }
+ 
+-void Bridge::uno2cppMapping(
++void uno2cppMapping(
+     uno_Mapping * pMapping, void ** ppCppI, void * pUnoI,
+-    typelib_InterfaceTypeDescription * pTypeDescr) SAL_THROW(())
++    typelib_InterfaceTypeDescription * pTypeDescr)
+ {
+     OSL_ASSERT( ppCppI && pTypeDescr );
+     if (*ppCppI)
+@@ -196,7 +126,7 @@
+     }
+     if (pUnoI)
+     {
+-        Bridge * pBridge = static_cast< Mapping * >( pMapping )->pBridge;
++        Bridge * pBridge = static_cast< Bridge::Mapping * >( pMapping )->pBridge;
+ 
+         // get object id of uno interface to be wrapped
+         rtl_uString * pOId = 0;
+@@ -219,7 +149,7 @@
+             // proxy may be exchanged during registration
+             (*pBridge->pCppEnv->registerProxyInterface)(
+                 pBridge->pCppEnv, reinterpret_cast< void ** >( &pProxy ),
+-                bridges::cpp_uno::shared::CppInterfaceProxy::free, pOId,
++                freeCppInterfaceProxy, pOId,
+                 pTypeDescr );
+ 
+             *ppCppI = pProxy;
+@@ -227,3 +157,75 @@
+         ::rtl_uString_release( pOId );
+     }
+ }
++
++uno_Mapping * Bridge::createMapping(
++    uno_ExtEnvironment * pCppEnv, uno_ExtEnvironment * pUnoEnv,
++    bool bExportCpp2Uno) SAL_THROW(())
++{
++    Bridge * bridge = new Bridge(pCppEnv, pUnoEnv, bExportCpp2Uno);
++    return bExportCpp2Uno ? &bridge->aCpp2Uno : &bridge->aUno2Cpp;
++}
++
++void Bridge::acquire() SAL_THROW(())
++{
++    if (1 == osl_incrementInterlockedCount( &nRef ))
++    {
++        if (bExportCpp2Uno)
++        {
++            uno_Mapping * pMapping = &aCpp2Uno;
++            ::uno_registerMapping(
++                &pMapping, freeMapping, (uno_Environment *)pCppEnv,
++                (uno_Environment *)pUnoEnv, 0 );
++        }
++        else
++        {
++            uno_Mapping * pMapping = &aUno2Cpp;
++            ::uno_registerMapping(
++                &pMapping, freeMapping, (uno_Environment *)pUnoEnv,
++                (uno_Environment *)pCppEnv, 0 );
++        }
++    }
++}
++
++void Bridge::release() SAL_THROW(())
++{
++    if (! osl_decrementInterlockedCount( &nRef ))
++    {
++        ::uno_revokeMapping( bExportCpp2Uno ? &aCpp2Uno : &aUno2Cpp );
++    }
++}
++
++Bridge::Bridge(
++    uno_ExtEnvironment * pCppEnv_, uno_ExtEnvironment * pUnoEnv_,
++    bool bExportCpp2Uno_) SAL_THROW(())
++    : nRef( 1 )
++    , pCppEnv( pCppEnv_ )
++    , pUnoEnv( pUnoEnv_ )
++    , bExportCpp2Uno( bExportCpp2Uno_ )
++{
++    bridges::cpp_uno::shared::g_moduleCount.modCnt.acquire(
++        &bridges::cpp_uno::shared::g_moduleCount.modCnt );
++
++    aCpp2Uno.pBridge = this;
++    aCpp2Uno.acquire = acquireMapping;
++    aCpp2Uno.release = releaseMapping;
++    aCpp2Uno.mapInterface = cpp2unoMapping;
++
++    aUno2Cpp.pBridge = this;
++    aUno2Cpp.acquire = acquireMapping;
++    aUno2Cpp.release = releaseMapping;
++    aUno2Cpp.mapInterface = uno2cppMapping;
++
++    (*((uno_Environment *)pCppEnv)->acquire)( (uno_Environment *)pCppEnv );
++    (*((uno_Environment *)pUnoEnv)->acquire)( (uno_Environment *)pUnoEnv );
++}
++
++Bridge::~Bridge() SAL_THROW(())
++{
++    (*((uno_Environment *)pUnoEnv)->release)( (uno_Environment *)pUnoEnv );
++    (*((uno_Environment *)pCppEnv)->release)( (uno_Environment *)pCppEnv );
++    bridges::cpp_uno::shared::g_moduleCount.modCnt.release(
++        &bridges::cpp_uno::shared::g_moduleCount.modCnt );
++}
++
++} } }
+Index: bridges/source/cpp_uno/shared/component.cxx
+===================================================================
+RCS file: /cvs/udk/bridges/source/cpp_uno/shared/component.cxx,v
+retrieving revision 1.3
+diff -u -r1.3 component.cxx
+--- bridges/source/cpp_uno/shared/component.cxx	7 Sep 2005 22:33:59 -0000	1.3
++++ bridges/source/cpp_uno/shared/component.cxx	25 Jun 2006 08:59:12 -0000
+@@ -99,7 +99,11 @@
+     return *s_pStaticOidPart;
+ }
+ 
+-void SAL_CALL computeObjectIdentifier(
++}
++
++extern "C" {
++
++static void SAL_CALL computeObjectIdentifier(
+     uno_ExtEnvironment * pEnv, rtl_uString ** ppOId, void * pInterface )
+     SAL_THROW( () )
+ {
+@@ -149,28 +153,24 @@
+     }
+ }
+ 
+-void SAL_CALL acquireInterface( uno_ExtEnvironment *, void * pCppI )
++static void SAL_CALL acquireInterface( uno_ExtEnvironment *, void * pCppI )
+     SAL_THROW( () )
+ {
+     reinterpret_cast< ::com::sun::star::uno::XInterface * >( pCppI )->acquire();
+ }
+ 
+-void SAL_CALL releaseInterface( uno_ExtEnvironment *, void * pCppI )
++static void SAL_CALL releaseInterface( uno_ExtEnvironment *, void * pCppI )
+     SAL_THROW( () )
+ {
+     reinterpret_cast< ::com::sun::star::uno::XInterface * >( pCppI )->release();
+ }
+ 
+-void SAL_CALL environmentDisposing( uno_Environment * ) SAL_THROW( () )
++static void SAL_CALL environmentDisposing( uno_Environment * ) SAL_THROW( () )
+ {
+     bridges::cpp_uno::shared::g_moduleCount.modCnt.release(
+         &bridges::cpp_uno::shared::g_moduleCount.modCnt );
+ }
+ 
+-}
+-
+-extern "C" {
+-
+ sal_Bool SAL_CALL component_canUnload(TimeValue * pTime) SAL_THROW_EXTERN_C() {
+     return bridges::cpp_uno::shared::g_moduleCount.canUnload(
+         &bridges::cpp_uno::shared::g_moduleCount, pTime);
+@@ -213,7 +213,7 @@
+ 			pMapping = bridges::cpp_uno::shared::Bridge::createMapping(
+                 pFrom->pExtEnv, pTo->pExtEnv, sal_True );
+ 			::uno_registerMapping(
+-                &pMapping, bridges::cpp_uno::shared::Bridge::freeMapping,
++                &pMapping, bridges::cpp_uno::shared::freeMapping,
+                 (uno_Environment *)pFrom->pExtEnv,
+                 (uno_Environment *)pTo->pExtEnv, 0 );
+ 		}
+@@ -227,7 +227,7 @@
+ 			pMapping = bridges::cpp_uno::shared::Bridge::createMapping(
+                 pTo->pExtEnv, pFrom->pExtEnv, sal_False );
+ 			::uno_registerMapping(
+-                &pMapping, bridges::cpp_uno::shared::Bridge::freeMapping,
++                &pMapping, bridges::cpp_uno::shared::freeMapping,
+                 (uno_Environment *)pFrom->pExtEnv,
+                 (uno_Environment *)pTo->pExtEnv, 0 );
+ 		}
+Index: bridges/source/cpp_uno/shared/cppinterfaceproxy.cxx
+===================================================================
+RCS file: /cvs/udk/bridges/source/cpp_uno/shared/cppinterfaceproxy.cxx,v
+retrieving revision 1.4
+diff -u -r1.4 cppinterfaceproxy.cxx
+--- bridges/source/cpp_uno/shared/cppinterfaceproxy.cxx	2 May 2006 12:07:01 -0000	1.4
++++ bridges/source/cpp_uno/shared/cppinterfaceproxy.cxx	25 Jun 2006 08:59:12 -0000
+@@ -51,8 +51,6 @@
+ #include <cstddef>
+ #include <new>
+ 
+-using bridges::cpp_uno::shared::CppInterfaceProxy;
+-
+ namespace {
+ 
+ struct InitVtableFactory {
+@@ -71,6 +69,30 @@
+ 
+ }
+ 
++namespace bridges { namespace cpp_uno { namespace shared {
++
++void freeCppInterfaceProxy(uno_ExtEnvironment * pEnv, void * pInterface)
++{
++    CppInterfaceProxy * pThis = CppInterfaceProxy::castInterfaceToProxy(
++        pInterface);
++    if (pEnv != pThis->pBridge->getCppEnv()) {
++        OSL_ASSERT(false);
++    }
++
++    (*pThis->pBridge->getUnoEnv()->revokeInterface)(
++        pThis->pBridge->getUnoEnv(), pThis->pUnoI );
++    (*pThis->pUnoI->release)( pThis->pUnoI );
++    ::typelib_typedescription_release(
++        (typelib_TypeDescription *)pThis->pTypeDescr );
++    pThis->pBridge->release();
++
++#if OSL_DEBUG_LEVEL > 1
++    *(int *)pInterface = 0xdeadbabe;
++#endif
++    pThis->~CppInterfaceProxy();
++    delete[] reinterpret_cast< char * >(pThis);
++}
++
+ com::sun::star::uno::XInterface * CppInterfaceProxy::create(
+     bridges::cpp_uno::shared::Bridge * pBridge, uno_Interface * pUnoI,
+     typelib_InterfaceTypeDescription * pTypeDescr, rtl::OUString const & rOId)
+@@ -94,26 +116,6 @@
+     return castProxyToInterface(pProxy);
+ }
+ 
+-void CppInterfaceProxy::free(uno_ExtEnvironment * pEnv, void * pInterface)
+-    SAL_THROW(())
+-{
+-    CppInterfaceProxy * pThis = castInterfaceToProxy(pInterface);
+-    OSL_ASSERT( pEnv == pThis->pBridge->getCppEnv() );
+-
+-    (*pThis->pBridge->getUnoEnv()->revokeInterface)(
+-        pThis->pBridge->getUnoEnv(), pThis->pUnoI );
+-    (*pThis->pUnoI->release)( pThis->pUnoI );
+-    ::typelib_typedescription_release(
+-        (typelib_TypeDescription *)pThis->pTypeDescr );
+-    pThis->pBridge->release();
+-
+-#if OSL_DEBUG_LEVEL > 1
+-    *(int *)pInterface = 0xdeadbabe;
+-#endif
+-    pThis->~CppInterfaceProxy();
+-    delete[] reinterpret_cast< char * >(pThis);
+-}
+-
+ void CppInterfaceProxy::acquireProxy() SAL_THROW(())
+ {
+     if (1 == osl_incrementInterlockedCount( &nRef ))
+@@ -122,7 +124,8 @@
+         // register at cpp env
+         void * pThis = castProxyToInterface( this );
+         (*pBridge->getCppEnv()->registerProxyInterface)(
+-            pBridge->getCppEnv(), &pThis, free, oid.pData, pTypeDescr );
++            pBridge->getCppEnv(), &pThis, freeCppInterfaceProxy, oid.pData,
++            pTypeDescr );
+         OSL_ASSERT( pThis == castProxyToInterface( this ) );
+     }
+ }
+@@ -175,3 +178,5 @@
+     return reinterpret_cast< CppInterfaceProxy * >(
+         static_cast< char * >(pInterface) - offset);
+ }
++
++} } }
+Index: bridges/source/cpp_uno/shared/types.cxx
+===================================================================
+RCS file: /cvs/udk/bridges/source/cpp_uno/shared/types.cxx,v
+retrieving revision 1.4
+diff -u -r1.4 types.cxx
+--- bridges/source/cpp_uno/shared/types.cxx	7 Sep 2005 22:35:09 -0000	1.4
++++ bridges/source/cpp_uno/shared/types.cxx	25 Jun 2006 08:59:13 -0000
+@@ -85,6 +85,9 @@
+                         }
+                     }
+                     break;
++
++                default:
++                    break;
+                 }
+             }
+             if (p->pBaseTypeDescription != 0) {
+@@ -113,7 +116,13 @@
+                 TYPELIB_DANGER_RELEASE(t);
+                 return b;
+             }
++
++        default:
++            break;
+         }
++        break;
++
++    default:
+         break;
+     }
+     return false;
+Index: bridges/source/cpp_uno/shared/unointerfaceproxy.cxx
+===================================================================
+RCS file: /cvs/udk/bridges/source/cpp_uno/shared/unointerfaceproxy.cxx,v
+retrieving revision 1.3
+diff -u -r1.3 unointerfaceproxy.cxx
+--- bridges/source/cpp_uno/shared/unointerfaceproxy.cxx	7 Sep 2005 22:35:28 -0000	1.3
++++ bridges/source/cpp_uno/shared/unointerfaceproxy.cxx	25 Jun 2006 08:59:13 -0000
+@@ -43,24 +43,16 @@
+ #include "typelib/typedescription.h"
+ #include "uno/dispatcher.h"
+ 
+-using bridges::cpp_uno::shared::UnoInterfaceProxy;
++namespace bridges { namespace cpp_uno { namespace shared {
+ 
+-UnoInterfaceProxy * UnoInterfaceProxy::create(
+-    bridges::cpp_uno::shared::Bridge * pBridge,
+-    com::sun::star::uno::XInterface * pCppI,
+-    typelib_InterfaceTypeDescription * pTypeDescr,
+-    rtl::OUString const & rOId) SAL_THROW(())
+-{
+-    return new UnoInterfaceProxy(pBridge, pCppI, pTypeDescr, rOId);
+-}
+-
+-void UnoInterfaceProxy::free(uno_ExtEnvironment * pEnv, void * pProxy)
+-    SAL_THROW(())
++void freeUnoInterfaceProxy(uno_ExtEnvironment * pEnv, void * pProxy)
+ {
+     UnoInterfaceProxy * pThis =
+         static_cast< UnoInterfaceProxy * >(
+             reinterpret_cast< uno_Interface * >( pProxy ) );
+-    OSL_ASSERT( pEnv == pThis->pBridge->getUnoEnv() );
++    if (pEnv != pThis->pBridge->getUnoEnv()) {
++        OSL_ASSERT(false);
++    }
+ 
+     (*pThis->pBridge->getCppEnv()->revokeInterface)(
+         pThis->pBridge->getCppEnv(), pThis->pCppI );
+@@ -75,6 +67,50 @@
+     delete pThis;
+ }
+ 
++void acquireProxy(uno_Interface * pUnoI)
++{
++    if (1 == osl_incrementInterlockedCount(
++            & static_cast< UnoInterfaceProxy * >( pUnoI )->nRef ))
++    {
++        // rebirth of proxy zombie
++        // register at uno env
++#if OSL_DEBUG_LEVEL > 1
++        void * pThis = pUnoI;
++#endif
++        (*static_cast< UnoInterfaceProxy * >( pUnoI )->pBridge->getUnoEnv()->
++         registerProxyInterface)(
++             static_cast< UnoInterfaceProxy * >( pUnoI )->pBridge->getUnoEnv(),
++             reinterpret_cast< void ** >( &pUnoI ), freeUnoInterfaceProxy,
++             static_cast< UnoInterfaceProxy * >( pUnoI )->oid.pData,
++             static_cast< UnoInterfaceProxy * >( pUnoI )->pTypeDescr );
++#if OSL_DEBUG_LEVEL > 1
++        OSL_ASSERT( pThis == pUnoI );
++#endif
++    }
++}
++
++void releaseProxy(uno_Interface * pUnoI)
++{
++    if (! osl_decrementInterlockedCount(
++            & static_cast< UnoInterfaceProxy * >( pUnoI )->nRef ))
++    {
++        // revoke from uno env on last release
++        (*static_cast< UnoInterfaceProxy * >( pUnoI )->pBridge->getUnoEnv()->
++         revokeInterface)(
++             static_cast< UnoInterfaceProxy * >( pUnoI )->pBridge->getUnoEnv(),
++             pUnoI );
++    }
++}
++
++UnoInterfaceProxy * UnoInterfaceProxy::create(
++    bridges::cpp_uno::shared::Bridge * pBridge,
++    com::sun::star::uno::XInterface * pCppI,
++    typelib_InterfaceTypeDescription * pTypeDescr,
++    rtl::OUString const & rOId) SAL_THROW(())
++{
++    return new UnoInterfaceProxy(pBridge, pCppI, pTypeDescr, rOId);
++}
++
+ UnoInterfaceProxy::UnoInterfaceProxy(
+     bridges::cpp_uno::shared::Bridge * pBridge_,
+     com::sun::star::uno::XInterface * pCppI_,
+@@ -102,44 +138,10 @@
+     // uno_Interface
+     acquire = acquireProxy;
+     release = releaseProxy;
+-    pDispatcher = dispatch;
++    pDispatcher = unoInterfaceProxyDispatch;
+ }
+ 
+ UnoInterfaceProxy::~UnoInterfaceProxy()
+ {}
+ 
+-void UnoInterfaceProxy::acquireProxy(uno_Interface * pUnoI) SAL_THROW(())
+-{
+-    if (1 == osl_incrementInterlockedCount(
+-            & static_cast< UnoInterfaceProxy * >( pUnoI )->nRef ))
+-    {
+-        // rebirth of proxy zombie
+-        // register at uno env
+-#if OSL_DEBUG_LEVEL > 1
+-        void * pThis = pUnoI;
+-#endif
+-        (*static_cast< UnoInterfaceProxy * >( pUnoI )->pBridge->getUnoEnv()->
+-         registerProxyInterface)(
+-             static_cast< UnoInterfaceProxy * >( pUnoI )->pBridge->getUnoEnv(),
+-             reinterpret_cast< void ** >( &pUnoI ),
+-             free,
+-             static_cast< UnoInterfaceProxy * >( pUnoI )->oid.pData,
+-             static_cast< UnoInterfaceProxy * >( pUnoI )->pTypeDescr );
+-#if OSL_DEBUG_LEVEL > 1
+-        OSL_ASSERT( pThis == pUnoI );
+-#endif
+-    }
+-}
+-
+-void UnoInterfaceProxy::releaseProxy(uno_Interface * pUnoI) SAL_THROW(())
+-{
+-    if (! osl_decrementInterlockedCount(
+-            & static_cast< UnoInterfaceProxy * >( pUnoI )->nRef ))
+-    {
+-        // revoke from uno env on last release
+-        (*static_cast< UnoInterfaceProxy * >( pUnoI )->pBridge->getUnoEnv()->
+-         revokeInterface)(
+-             static_cast< UnoInterfaceProxy * >( pUnoI )->pBridge->getUnoEnv(),
+-             pUnoI );
+-    }
+-}
++} } }
+Index: bridges/source/cpp_uno/shared/vtablefactory.cxx
+===================================================================
+RCS file: /cvs/udk/bridges/source/cpp_uno/shared/vtablefactory.cxx,v
+retrieving revision 1.5
+diff -u -r1.5 vtablefactory.cxx
+--- bridges/source/cpp_uno/shared/vtablefactory.cxx	2 May 2006 12:07:18 -0000	1.5
++++ bridges/source/cpp_uno/shared/vtablefactory.cxx	25 Jun 2006 08:59:13 -0000
+@@ -55,7 +55,9 @@
+ #include <sys/mman.h>
+ #elif defined SAL_W32
+ #define WIN32_LEAN_AND_MEAN
++#pragma warning(push,1) // disable warnings within system headers
+ #include <windows.h>
++#pragma warning(pop)
+ #else
+ #error Unsupported platform
+ #endif
+@@ -106,6 +108,7 @@
+ #if defined SAL_UNX
+     munmap(static_cast< char * >(address), size);
+ #elif defined SAL_W32
++    (void) size; // unused
+     VirtualFree(address, 0, MEM_RELEASE);
+ #endif
+ }
+Index: bridges/source/jni_uno/jni_bridge.cxx
+===================================================================
+RCS file: /cvs/udk/bridges/source/jni_uno/jni_bridge.cxx,v
+retrieving revision 1.15
+diff -u -r1.15 jni_bridge.cxx
+--- bridges/source/jni_uno/jni_bridge.cxx	19 Apr 2006 13:43:34 -0000	1.15
++++ bridges/source/jni_uno/jni_bridge.cxx	25 Jun 2006 08:59:14 -0000
+@@ -120,6 +120,8 @@
+                     OUSTR("[jni_uno bridge error] ") + err.m_message,
+                     RTL_TEXTENCODING_ASCII_US ) );
+             OSL_ENSURE( 0, cstr_msg.getStr() );
++#else
++            (void) err; // unused
+ #endif
+         }
+         catch (::jvmaccess::VirtualMachine::AttachGuard::CreationException &)
+@@ -188,6 +190,8 @@
+                 OUSTR("[jni_uno bridge error] ") + err.m_message,
+                 RTL_TEXTENCODING_ASCII_US ) );
+         OSL_ENSURE( 0, cstr_msg.getStr() );
++#else
++            (void) err; // unused
+ #endif
+     }
+     catch (::jvmaccess::VirtualMachine::AttachGuard::CreationException &)
+@@ -545,6 +549,8 @@
+                     OUSTR("[jni_uno bridge error] ") + err.m_message,
+                     RTL_TEXTENCODING_ASCII_US ) );
+             OSL_ENSURE( 0, cstr_msg.getStr() );
++#else
++            (void) err; // unused
+ #endif
+         }
+         catch (::jvmaccess::VirtualMachine::AttachGuard::CreationException &)
+Index: bridges/source/jni_uno/jni_data.cxx
+===================================================================
+RCS file: /cvs/udk/bridges/source/jni_uno/jni_data.cxx,v
+retrieving revision 1.20
+diff -u -r1.20 jni_data.cxx
+--- bridges/source/jni_uno/jni_data.cxx	7 Sep 2005 22:36:54 -0000	1.20
++++ bridges/source/jni_uno/jni_data.cxx	25 Jun 2006 08:59:18 -0000
+@@ -47,14 +47,14 @@
+ {
+ 
+ //------------------------------------------------------------------------------
+-inline auto_ptr< rtl_mem > seq_allocate( sal_Int32 nElements, sal_Int32 nSize )
++inline rtl_mem * seq_allocate( sal_Int32 nElements, sal_Int32 nSize )
+ {
+     auto_ptr< rtl_mem > seq(
+         rtl_mem::allocate( SAL_SEQUENCE_HEADER_SIZE + (nElements * nSize) ) );
+     uno_Sequence * p = (uno_Sequence *)seq.get();
+     p->nRefCount = 1;
+     p->nElements = nElements;
+-    return seq;
++    return seq.release();
+ }
+ 
+ //______________________________________________________________________________
+@@ -214,6 +214,10 @@
+         }
+         *static_cast< uno_Interface ** >(uno_data) = 0;
+         break;
++
++    default:
++        OSL_ASSERT(false);
++        break;
+     }
+ }
+ 
+@@ -1033,21 +1037,21 @@
+         switch (element_type->eTypeClass)
+         {
+         case typelib_TypeClass_CHAR:
+-            seq = seq_allocate( nElements, sizeof (sal_Unicode) );
++            seq.reset( seq_allocate( nElements, sizeof (sal_Unicode) ) );
+             jni->GetCharArrayRegion(
+                 (jcharArray) java_data.l, 0, nElements,
+                 (jchar *) ((uno_Sequence *) seq.get())->elements );
+             jni.ensure_no_exception();
+             break;
+         case typelib_TypeClass_BOOLEAN:
+-            seq = seq_allocate( nElements, sizeof (sal_Bool) );
++            seq.reset( seq_allocate( nElements, sizeof (sal_Bool) ) );
+             jni->GetBooleanArrayRegion(
+                 (jbooleanArray) java_data.l, 0, nElements,
+                 (jboolean *) ((uno_Sequence *) seq.get())->elements );
+             jni.ensure_no_exception();
+             break;
+         case typelib_TypeClass_BYTE:
+-            seq = seq_allocate( nElements, sizeof (sal_Int8) );
++            seq.reset( seq_allocate( nElements, sizeof (sal_Int8) ) );
+             jni->GetByteArrayRegion(
+                 (jbyteArray) java_data.l, 0, nElements,
+                 (jbyte *) ((uno_Sequence *) seq.get())->elements );
+@@ -1055,7 +1059,7 @@
+             break;
+         case typelib_TypeClass_SHORT:
+         case typelib_TypeClass_UNSIGNED_SHORT:
+-            seq = seq_allocate( nElements, sizeof (sal_Int16) );
++            seq.reset( seq_allocate( nElements, sizeof (sal_Int16) ) );
+             jni->GetShortArrayRegion(
+                 (jshortArray) java_data.l, 0, nElements,
+                 (jshort *) ((uno_Sequence *) seq.get())->elements );
+@@ -1063,7 +1067,7 @@
+             break;
+         case typelib_TypeClass_LONG:
+         case typelib_TypeClass_UNSIGNED_LONG:
+-            seq = seq_allocate( nElements, sizeof (sal_Int32) );
++            seq.reset( seq_allocate( nElements, sizeof (sal_Int32) ) );
+             jni->GetIntArrayRegion(
+                 (jintArray) java_data.l, 0, nElements,
+                 (jint *) ((uno_Sequence *) seq.get())->elements );
+@@ -1071,21 +1075,21 @@
+             break;
+         case typelib_TypeClass_HYPER:
+         case typelib_TypeClass_UNSIGNED_HYPER:
+-            seq = seq_allocate( nElements, sizeof (sal_Int64) );
++            seq.reset( seq_allocate( nElements, sizeof (sal_Int64) ) );
+             jni->GetLongArrayRegion(
+                 (jlongArray) java_data.l, 0, nElements,
+                 (jlong *) ((uno_Sequence *) seq.get())->elements );
+             jni.ensure_no_exception();
+             break;
+         case typelib_TypeClass_FLOAT:
+-            seq = seq_allocate( nElements, sizeof (float) );
++            seq.reset( seq_allocate( nElements, sizeof (float) ) );
+             jni->GetFloatArrayRegion(
+                 (jfloatArray) java_data.l, 0, nElements,
+                 (jfloat *)((uno_Sequence *)seq.get())->elements );
+             jni.ensure_no_exception();
+             break;
+         case typelib_TypeClass_DOUBLE:
+-            seq = seq_allocate( nElements, sizeof (double) );
++            seq.reset( seq_allocate( nElements, sizeof (double) ) );
+             jni->GetDoubleArrayRegion(
+                 (jdoubleArray) java_data.l, 0, nElements,
+                 (jdouble *) ((uno_Sequence *) seq.get())->elements );
+@@ -1101,7 +1105,7 @@
+         case typelib_TypeClass_INTERFACE:
+         {
+             TypeDescr element_td( element_type );
+-            seq = seq_allocate( nElements, element_td.get()->nSize );
++            seq.reset( seq_allocate( nElements, element_td.get()->nSize ) );
+ 
+             JNI_type_info const * element_info;
+             if (typelib_TypeClass_STRUCT == element_type->eTypeClass ||
+@@ -1718,14 +1722,14 @@
+                 break;
+             case typelib_TypeClass_SEQUENCE:
+             {
+-                jvalue java_data;
++                jvalue java_data2;
+                 // prefetch sequence td
+                 TypeDescr seq_td( pAny->pType );
+                 map_to_java(
+-                    jni, &java_data, pAny->pData, seq_td.get()->pWeakRef, 0,
++                    jni, &java_data2, pAny->pData, seq_td.get()->pWeakRef, 0,
+                     true /* in */, false /* no out */,
+                     true /* create integral wrappers */ );
+-                jo_any.reset( java_data.l );
++                jo_any.reset( java_data2.l );
+ 
+                 // determine inner element type
+                 ::com::sun::star::uno::Type element_type(
+@@ -1759,6 +1763,8 @@
+                     jni.ensure_no_exception();
+                     break;
+                 }
++                default:
++                    break;
+                 }
+                 break;
+             }
+@@ -1808,11 +1814,11 @@
+                 {
+                     // Box up in com.sun.star.uno.Any:
+                     JLocalAutoRef jo_type(jni, create_type(jni, pAny->pType));
+-                    jvalue java_data;
++                    jvalue java_data2;
+                     map_to_java(
+-                        jni, &java_data, pAny->pData, pAny->pType, 0, true,
++                        jni, &java_data2, pAny->pData, pAny->pType, 0, true,
+                         false);
+-                    jo_any.reset(java_data.l);
++                    jo_any.reset(java_data2.l);
+                     jvalue args[2];
+                     args[0].l = jo_type.get();
+                     args[1].l = jo_any.get();
+@@ -1827,12 +1833,12 @@
+             }
+             default:
+             {
+-                jvalue java_data;
++                jvalue java_data2;
+                 map_to_java(
+-                    jni, &java_data, pAny->pData, pAny->pType, 0,
++                    jni, &java_data2, pAny->pData, pAny->pType, 0,
+                     true /* in */, false /* no out */,
+                     true /* create integral wrappers */ );
+-                jo_any.reset( java_data.l );
++                jo_any.reset( java_data2.l );
+                 break;
+             }
+             }
+@@ -2133,11 +2139,11 @@
+                         }
+                         default:
+                         {
+-                            jvalue java_data;
++                            jvalue java_data2;
+                             map_to_java(
+-                                jni, &java_data, p, member_type, 0,
++                                jni, &java_data2, p, member_type, 0,
+                                 true /* in */, false /* no out */ );
+-                            JLocalAutoRef jo_obj( jni, java_data.l );
++                            JLocalAutoRef jo_obj( jni, java_data2.l );
+                             jni->SetObjectField(
+                                 jo_comp.get(), field_id, jo_obj.get() );
+                             break;
+@@ -2437,11 +2443,11 @@
+                 uno_Sequence ** elements = (uno_Sequence **) seq->elements;
+                 for ( sal_Int32 nPos = 0; nPos < nElements; ++nPos )
+                 {
+-                    jvalue java_data;
++                    jvalue java_data2;
+                     map_to_java(
+-                        jni, &java_data, elements + nPos, element_type, 0,
++                        jni, &java_data2, elements + nPos, element_type, 0,
+                         true /* in */, false /* no out */ );
+-                    JLocalAutoRef jo_seq( jni, java_data.l );
++                    JLocalAutoRef jo_seq( jni, java_data2.l );
+                     jni->SetObjectArrayElement(
+                         (jobjectArray) jo_ar.get(), nPos, jo_seq.get() );
+                     jni.ensure_no_exception();
+Index: bridges/source/jni_uno/jni_info.cxx
+===================================================================
+RCS file: /cvs/udk/bridges/source/jni_uno/jni_info.cxx,v
+retrieving revision 1.19
+diff -u -r1.19 jni_info.cxx
+--- bridges/source/jni_uno/jni_info.cxx	19 Apr 2006 13:43:57 -0000	1.19
++++ bridges/source/jni_uno/jni_info.cxx	25 Jun 2006 08:59:19 -0000
+@@ -139,11 +139,10 @@
+                               member_td.get() );
+                     
+                     sig_buf.append( '(' );
+-                    for ( sal_Int32 nPos = 0;
+-                          nPos < method_td->nParams; ++nPos )
++                    for ( sal_Int32 i = 0; i < method_td->nParams; ++i )
+                     {
+                         typelib_MethodParameter const & param =
+-                            method_td->pParams[ nPos ];
++                            method_td->pParams[ i ];
+                         if (param.bOut)
+                             sig_buf.append( '[' );
+                         JNI_info::append_sig( &sig_buf, param.pTypeRef );
+@@ -250,8 +249,8 @@
+ JNI_compound_type_info::JNI_compound_type_info(
+     JNI_context const & jni, typelib_TypeDescription * td_ )
+     : JNI_type_info( jni, td_ ),
+-      m_fields( 0 ),
+-      m_exc_ctor( 0 )
++      m_exc_ctor( 0 ),
++      m_fields( 0 )
+ {
+     OSL_ASSERT( typelib_TypeClass_STRUCT == m_td.get()->eTypeClass ||
+                 typelib_TypeClass_EXCEPTION == m_td.get()->eTypeClass );
+@@ -500,7 +499,10 @@
+ JNI_info::JNI_info(
+     JNIEnv * jni_env, jobject class_loader, jclass classClass,
+     jmethodID methodForName )
+-    : m_XInterface_queryInterface_td(
++    : m_class_Class( classClass ),
++      m_method_Class_forName( methodForName ),
++      m_class_JNI_proxy( 0 ),
++      m_XInterface_queryInterface_td(
+         (reinterpret_cast< typelib_InterfaceTypeDescription * >(
+             css::uno::TypeDescription(
+                 ::getCppuType(
+@@ -510,10 +512,7 @@
+       m_RuntimeException_type(
+           ::getCppuType( (css::uno::RuntimeException const *)0 ) ),
+       m_void_type( ::getCppuVoidType() ),
+-      m_class_JNI_proxy( 0 ),
+-      m_XInterface_type_info( 0 ),
+-      m_class_Class( classClass ),
+-      m_method_Class_forName( methodForName )
++      m_XInterface_type_info( 0 )
+ {
+     JNI_context jni( this, jni_env, class_loader ); // !no proper jni_info!
+ 
+@@ -960,7 +959,7 @@
+             jni_env, static_cast< jobject >(uno_vm->getClassLoader()), jo_class,
+             jo_forName );
+         
+-        ClearableMutexGuard guard( Mutex::getGlobalMutex() );
++        ClearableMutexGuard g( Mutex::getGlobalMutex() );
+         jni_info =
+             reinterpret_cast< JNI_info const * >(
+                 jni->GetStaticLongField(
+@@ -975,7 +974,7 @@
+         }
+         else
+         {
+-            guard.clear();
++            g.clear();
+             new_info->destroy( jni_env );
+         }
+     }
+@@ -991,7 +990,7 @@
+ //------------------------------------------------------------------------------
+ JNIEXPORT void
+ JNICALL Java_com_sun_star_bridges_jni_1uno_JNI_1info_1holder_finalize__J(
+-    JNIEnv * jni_env, jobject jo_holder, jlong jni_info_handle )
++    JNIEnv * jni_env, jobject, jlong jni_info_handle )
+     SAL_THROW_EXTERN_C()
+ {
+     ::jni_uno::JNI_info * jni_info =
+Index: bridges/source/jni_uno/jni_info.h
+===================================================================
+RCS file: /cvs/udk/bridges/source/jni_uno/jni_info.h,v
+retrieving revision 1.13
+diff -u -r1.13 jni_info.h
+--- bridges/source/jni_uno/jni_info.h	19 Apr 2006 13:44:09 -0000	1.13
++++ bridges/source/jni_uno/jni_info.h	25 Jun 2006 08:59:19 -0000
+@@ -87,7 +87,7 @@
+ protected:
+     inline void destruct( JNIEnv * jni_env )
+         { jni_env->DeleteGlobalRef( m_class ); }
+-    inline ~JNI_type_info() {}
++    virtual inline ~JNI_type_info() {}
+     explicit JNI_type_info(
+         JNI_context const & jni, typelib_TypeDescription * td );
+ };
+Index: bridges/source/jni_uno/jni_java2uno.cxx
+===================================================================
+RCS file: /cvs/udk/bridges/source/jni_uno/jni_java2uno.cxx,v
+retrieving revision 1.22
+diff -u -r1.22 jni_java2uno.cxx
+--- bridges/source/jni_uno/jni_java2uno.cxx	9 Jan 2006 09:47:03 -0000	1.22
++++ bridges/source/jni_uno/jni_java2uno.cxx	25 Jun 2006 08:59:20 -0000
+@@ -76,20 +76,20 @@
+             oid.pData, (typelib_InterfaceTypeDescription *)info->m_td.get() );
+ 
+         // create java and register java proxy
+-        jvalue args[ 6 ];
++        jvalue args2[ 6 ];
+         acquire();
+-        args[ 0 ].j = reinterpret_cast< sal_Int64 >( this );
++        args2[ 0 ].j = reinterpret_cast< sal_Int64 >( this );
+         (*pUnoI->acquire)( pUnoI );
+-        args[ 1 ].l = m_jni_info->m_object_java_env;
+-        args[ 2 ].j = reinterpret_cast< sal_Int64 >( pUnoI );
++        args2[ 1 ].l = m_jni_info->m_object_java_env;
++        args2[ 2 ].j = reinterpret_cast< sal_Int64 >( pUnoI );
+         typelib_typedescription_acquire( info->m_td.get() );
+-        args[ 3 ].j = reinterpret_cast< sal_Int64 >( info->m_td.get() );
+-        args[ 4 ].l = info->m_type;
+-        args[ 5 ].l = jo_oid.get();
+-        args[ 6 ].l = info->m_proxy_ctor;
++        args2[ 3 ].j = reinterpret_cast< sal_Int64 >( info->m_td.get() );
++        args2[ 4 ].l = info->m_type;
++        args2[ 5 ].l = jo_oid.get();
++        args2[ 6 ].l = info->m_proxy_ctor;
+         jo_iface = jni->CallStaticObjectMethodA(
+             m_jni_info->m_class_JNI_proxy,
+-            m_jni_info->m_method_JNI_proxy_create, args );
++            m_jni_info->m_method_JNI_proxy_create, args2 );
+         jni.ensure_no_exception();
+     }
+ 
+@@ -222,7 +222,8 @@
+             typelib_TypeClass_EXCEPTION == type->eTypeClass)
+         {
+             TypeDescr td( type );
+-            if (td.get()->nSize > sizeof (largest))
++            if (static_cast< sal_uInt32 >(td.get()->nSize)
++                > sizeof (largest))
+                 uno_args[ nPos ] = alloca( td.get()->nSize );
+         }
+ 
+@@ -245,11 +246,11 @@
+                 // cleanup uno in args
+                 for ( sal_Int32 n = 0; n < nPos; ++n )
+                 {
+-                    typelib_MethodParameter const & param = pParams[ n ];
+-                    if (param.bIn)
++                    typelib_MethodParameter const & p = pParams[ n ];
++                    if (p.bIn)
+                     {
+                         uno_type_destructData(
+-                            uno_args[ n ], param.pTypeRef, 0 );
++                            uno_args[ n ], p.pTypeRef, 0 );
+                     }
+                 }
+                 throw;
+@@ -353,9 +354,8 @@
+ //------------------------------------------------------------------------------
+ JNIEXPORT jobject
+ JNICALL Java_com_sun_star_bridges_jni_1uno_JNI_1proxy_dispatch_1call(
+-    JNIEnv * jni_env, jobject jo_proxy, jlong bridge_handle,
+-    jstring jo_decl_class, jstring jo_method,
+-    jobjectArray jo_args /* may be 0 */ )
++    JNIEnv * jni_env, jobject jo_proxy, jlong bridge_handle, jstring,
++    jstring jo_method, jobjectArray jo_args /* may be 0 */ )
+     SAL_THROW_EXTERN_C()
+ {
+     Bridge const * bridge = reinterpret_cast< Bridge const * >( bridge_handle );
+@@ -593,9 +593,11 @@
+             OUStringToOString(
+                 buf.makeStringAndClear(), RTL_TEXTENCODING_JAVA_UTF8 ) );
+         OSL_ENSURE( 0, cstr_msg.getStr() );
+-        jint res = jni->ThrowNew(
+-            jni_info->m_class_RuntimeException, cstr_msg.getStr() );
+-        OSL_ASSERT( 0 == res );
++        if (jni->ThrowNew(jni_info->m_class_RuntimeException, cstr_msg.getStr())
++            != 0)
++        {
++            OSL_ASSERT( false );
++        }
+         return 0;
+     }
+     catch (::jvmaccess::VirtualMachine::AttachGuard::CreationException &)
+@@ -607,9 +609,11 @@
+             OUStringToOString(
+                 jni.get_stack_trace(), RTL_TEXTENCODING_JAVA_UTF8 ) );
+         OSL_ENSURE( 0, cstr_msg.getStr() );
+-        jint res = jni->ThrowNew(
+-            jni_info->m_class_RuntimeException, cstr_msg.getStr() );
+-        OSL_ASSERT( 0 == res );
++        if (jni->ThrowNew(jni_info->m_class_RuntimeException, cstr_msg.getStr())
++            != 0)
++        {
++            OSL_ASSERT( false );
++        }
+         return 0;
+     }
+ }
+Index: bridges/source/jni_uno/jni_uno2java.cxx
+===================================================================
+RCS file: /cvs/udk/bridges/source/jni_uno/jni_uno2java.cxx,v
+retrieving revision 1.20
+diff -u -r1.20 jni_uno2java.cxx
+--- bridges/source/jni_uno/jni_uno2java.cxx	7 Sep 2005 22:38:09 -0000	1.20
++++ bridges/source/jni_uno/jni_uno2java.cxx	25 Jun 2006 08:59:21 -0000
+@@ -348,20 +348,20 @@
+                     // cleanup uno pure out
+                     for ( sal_Int32 n = 0; n < nPos; ++n )
+                     {
+-                        typelib_MethodParameter const & param = params[ n ];
+-                        if (! param.bIn)
++                        typelib_MethodParameter const & p = params[ n ];
++                        if (! p.bIn)
+                         {
+                             uno_type_destructData(
+-                                uno_args[ n ], param.pTypeRef, 0 );
++                                uno_args[ n ], p.pTypeRef, 0 );
+                         }
+                     }
+                     // cleanup java temp local refs
+                     for ( ; nPos < nParams; ++nPos )
+                     {
+-                        typelib_MethodParameter const & param = params[ nPos ];
+-                        if (param.bOut ||
++                        typelib_MethodParameter const & p = params[ nPos ];
++                        if (p.bOut ||
+                             typelib_TypeClass_DOUBLE <
+-                              param.pTypeRef->eTypeClass)
++                              p.pTypeRef->eTypeClass)
+                         {
+                             jni->DeleteLocalRef( java_args[ nPos ].l );
+                         }
+@@ -391,13 +391,13 @@
+             catch (...)
+             {
+                 // cleanup uno pure out
+-                for ( sal_Int32 nPos = 0; nPos < nParams; ++nPos )
++                for ( sal_Int32 i = 0; i < nParams; ++i )
+                 {
+-                    typelib_MethodParameter const & param = params[ nPos ];
++                    typelib_MethodParameter const & param = params[ i ];
+                     if (! param.bIn)
+                     {
+                         uno_type_destructData(
+-                            uno_args[ nPos ], param.pTypeRef, 0 );
++                            uno_args[ i ], param.pTypeRef, 0 );
+                     }
+                 }
+                 throw;
+@@ -538,7 +538,9 @@
+     UNO_proxy const * that = reinterpret_cast< UNO_proxy const * >( proxy );
+     Bridge const * bridge = that->m_bridge;
+ 
+-    OSL_ASSERT( env == bridge->m_uno_env );
++    if ( env != bridge->m_uno_env ) {
++        OSL_ASSERT(false);
++    }
+ #if OSL_DEBUG_LEVEL > 1
+     OString cstr_msg(
+         OUStringToOString( 
+@@ -563,6 +565,8 @@
+         OString cstr_msg(
+             OUStringToOString( err.m_message, RTL_TEXTENCODING_ASCII_US ) );
+         OSL_ENSURE( 0, cstr_msg.getStr() );
++#else
++        (void) err; // unused
+ #endif
+     }
+     catch (::jvmaccess::VirtualMachine::AttachGuard::CreationException &)
+@@ -745,22 +749,22 @@
+                                 "### different oids!" );
+ #endif
+                             // refcount initially 1
+-                            uno_Interface * pUnoI = new UNO_proxy(
++                            uno_Interface * pUnoI2 = new UNO_proxy(
+                                 jni, bridge, jo_ret.get(),
+                                 that->m_jo_oid, that->m_oid, info );
+ 
+                             (*bridge->m_uno_env->registerProxyInterface)(
+                                 bridge->m_uno_env,
+-                                (void **) &pUnoI,
++                                (void **) &pUnoI2,
+                                 UNO_proxy_free, that->m_oid.pData,
+                                 reinterpret_cast<
+                                   typelib_InterfaceTypeDescription * >(
+                                       info->m_td.get() ) );
+                             
+                             uno_any_construct(
+-                                (uno_Any *)uno_ret, &pUnoI,
++                                (uno_Any *)uno_ret, &pUnoI2,
+                                 demanded_td.get(), 0 );
+-                            (*pUnoI->release)( pUnoI );
++                            (*pUnoI2->release)( pUnoI2 );
+                         }
+                         else // object does not support demanded interface
+                         {
+Index: bridges/source/jni_uno/nativethreadpool.cxx
+===================================================================
+RCS file: /cvs/udk/bridges/source/jni_uno/nativethreadpool.cxx,v
+retrieving revision 1.3
+diff -u -r1.3 nativethreadpool.cxx
+--- bridges/source/jni_uno/nativethreadpool.cxx	7 Sep 2005 22:38:35 -0000	1.3
++++ bridges/source/jni_uno/nativethreadpool.cxx	25 Jun 2006 08:59:22 -0000
+@@ -90,7 +90,7 @@
+         env->CallObjectMethod(job->job, job->pool->execute);
+         env->DeleteGlobalRef(job->job);
+         delete job;
+-    } catch (jvmaccess::VirtualMachine::AttachGuard::CreationException & e) {
++    } catch (jvmaccess::VirtualMachine::AttachGuard::CreationException &) {
+         //TODO: DeleteGlobalRef(job->job)
+         delete job;
+     }
+Index: bridges/source/remote/context/context.cxx
+===================================================================
+RCS file: /cvs/udk/bridges/source/remote/context/context.cxx,v
+retrieving revision 1.7
+diff -u -r1.7 context.cxx
+--- bridges/source/remote/context/context.cxx	19 Apr 2006 13:44:21 -0000	1.7
++++ bridges/source/remote/context/context.cxx	25 Jun 2006 08:59:22 -0000
+@@ -41,7 +41,7 @@
+ #include <osl/interlck.h>
+ #include <osl/mutex.hxx>
+ 
+-#include <rtl/ustring>
++#include "rtl/ustring.hxx"
+ 
+ #include <bridges/remote/context.h>
+ #include <bridges/remote/remote.h>
+@@ -51,6 +51,12 @@
+ using namespace ::osl;
+ using namespace ::rtl;
+ 
++namespace {
++
++extern "C" typedef void * (SAL_CALL * MemAlloc)(sal_Size);
++
++}
++
+ namespace remote_context
+ {
+ 
+@@ -160,15 +166,15 @@
+ 	uno_Context *get( rtl_uString *pHost );
+ 
+ 	rtl_uString ** getConnectionList(
+-		sal_Int32 *pnStringCount ,
+-		void * ( SAL_CALL * memAlloc ) ( sal_Size nBytesToAlloc ) );
++        sal_Int32 *pnStringCount, MemAlloc memAlloc );
+ 
+ private:
+ 	::osl::Mutex          m_mutex;
+ 
+ 	ContextMap m_mapContext;
+ 
+-	::std::list< ::std::pair< void *, void *> > m_lstListener;
++    typedef std::list< std::pair< remote_contextListenerFunc, void * > > List;
++    List m_lstListener;
+ };
+ 
+ ContextAdmin *ContextAdmin::getInstance()
+@@ -188,20 +194,17 @@
+ {
+ 	::osl::MutexGuard guard( m_mutex );
+ 
+-	m_lstListener.push_back( ::std::pair< void * , void * > ( (void*) listener , pObject ) );
++	m_lstListener.push_back( std::make_pair( listener, pObject ) );
+ }
+ 
+ void ContextAdmin::removeContextListener( remote_contextListenerFunc listener , void *pObject )
+ {
+ 	::osl::MutexGuard guard( m_mutex );
+ 
+-	for( ::std::list< ::std::pair< void *, void *> >::iterator ii = m_lstListener.begin() ;
+-		 ii != m_lstListener.end() ;
+-		 ++ii )
++	for (List::iterator ii(m_lstListener.begin()); ii != m_lstListener.end();
++         ++ii)
+ 	{
+-		if( (*ii).first == (void*)listener  &&
+-			(*ii).second == (void*)pObject )
+-		{
++		if (ii->first == listener && ii->second == pObject) {
+ 			m_lstListener.erase( ii );
+ 			break;
+ 		}
+@@ -213,15 +216,13 @@
+ 	rtl_uString *pName,
+ 	rtl_uString *sDescription )
+ {
+-	::osl::MutexGuard guard( m_mutex );
+-	::std::list< ::std::pair< void *, void *> > lstListener = m_lstListener;
+-
+-	for( ::std::list< ::std::pair< void *, void *> >::iterator ii = lstListener.begin() ;
+-		 ii != lstListener.end();
+-		 ++ii)
+-	{
+-		remote_contextListenerFunc listener = (remote_contextListenerFunc) (*ii).first;
+-		listener( (*ii).second , nRemoteContextMode , pName, sDescription );
++    List lst;
++    {
++        ::osl::MutexGuard guard( m_mutex );
++        lst = m_lstListener;
++    }
++	for (List::iterator i(lst.begin()); i != lst.end(); ++i) {
++        (i->first)(i->second, nRemoteContextMode, pName, sDescription);
+ 	}
+ }
+ 
+@@ -286,8 +287,7 @@
+ 
+ 
+ rtl_uString ** ContextAdmin::getConnectionList(
+-	sal_Int32 *pnStringCount ,
+-	void * ( SAL_CALL * memAlloc ) ( sal_Size nBytesToAlloc ) )
++    sal_Int32 *pnStringCount, MemAlloc memAlloc )
+ {
+ 	::osl::MutexGuard guard( m_mutex );
+ 
+@@ -518,9 +518,7 @@
+ }
+ 
+ extern "C" rtl_uString ** SAL_CALL
+-remote_getContextList(
+-	sal_Int32 *pnStringCount,
+-	void * ( SAL_CALL * memAlloc ) ( sal_Size nBytesToAlloc ) )
++remote_getContextList( sal_Int32 *pnStringCount, MemAlloc memAlloc )
+ {
+ 	return ContextAdmin::getInstance()->getConnectionList( pnStringCount , memAlloc );
+ }
+Index: bridges/source/remote/static/helper.cxx
+===================================================================
+RCS file: /cvs/udk/bridges/source/remote/static/helper.cxx,v
+retrieving revision 1.5
+diff -u -r1.5 helper.cxx
+--- bridges/source/remote/static/helper.cxx	7 Sep 2005 22:42:20 -0000	1.5
++++ bridges/source/remote/static/helper.cxx	25 Jun 2006 08:59:22 -0000
+@@ -59,7 +59,7 @@
+ 	typelib_TypeDescription *pType = 0;
+ 	typelib_typedescriptionreference_getDescription( &pType, pTypeRef );	
+ 
+-	pEnvRemote->pExtEnv->getRegisteredInterface(
++	(void) pEnvRemote->pExtEnv->getRegisteredInterface(
+ 		pEnvRemote->pExtEnv,
+ 		(void **)ppRemoteI,
+ 		pOid,
+@@ -67,7 +67,7 @@
+ 
+ 	if( *ppRemoteI )
+ 	{
+-		if( (*ppRemoteI)->acquire == ::bridges_remote::Remote2RemoteStub::thisAcquire ) {
++		if( (*ppRemoteI)->acquire == acquireRemote2RemoteStub ) {
+ 
+   			if( releaseRemoteCallback )
+   			{
+@@ -99,7 +99,7 @@
+ 		pEnvRemote->pExtEnv->registerProxyInterface(
+ 			pEnvRemote->pExtEnv,
+ 			(void **) ppRemoteI,
+-			::bridges_remote::Remote2RemoteStub::thisFree,
++			freeRemote2RemoteStub,
+ 			pOid,
+ 			(typelib_InterfaceTypeDescription * ) pType );
+ 	}
+@@ -196,7 +196,7 @@
+ 	remote_Interface *pRemoteI,
+ 	rtl_uString **ppOid )
+ {
+-	if( pRemoteI->acquire == ::bridges_remote::Remote2RemoteStub::thisAcquire )
++	if( pRemoteI->acquire == acquireRemote2RemoteStub )
+ 	{
+ 		// Remote2RemoteStub
+ 		::bridges_remote::Remote2RemoteStub *pStub = (::bridges_remote::Remote2RemoteStub * ) pRemoteI;
+Index: bridges/source/remote/static/makefile.mk
+===================================================================
+RCS file: /cvs/udk/bridges/source/remote/static/makefile.mk,v
+retrieving revision 1.5
+diff -u -r1.5 makefile.mk
+--- bridges/source/remote/static/makefile.mk	7 Sep 2005 22:42:35 -0000	1.5
++++ bridges/source/remote/static/makefile.mk	25 Jun 2006 08:59:22 -0000
+@@ -48,8 +48,6 @@
+ .INCLUDE :  sv.mk
+ 
+ # ------------------------------------------------------------------
+-
+-BRIDGES_MARSHALLIB = bridges_marshal.lib
+ 
+ SLOFILES= 	\
+ 		$(SLO)$/proxy.obj \
+Index: bridges/source/remote/static/mapping.cxx
+===================================================================
+RCS file: /cvs/udk/bridges/source/remote/static/mapping.cxx,v
+retrieving revision 1.2
+diff -u -r1.2 mapping.cxx
+--- bridges/source/remote/static/mapping.cxx	7 Sep 2005 22:42:56 -0000	1.2
++++ bridges/source/remote/static/mapping.cxx	25 Jun 2006 08:59:22 -0000
+@@ -39,46 +39,19 @@
+ #include <bridges/remote/counter.hxx>
+ #include <bridges/remote/mapping.hxx>
+ 
+-namespace bridges_remote {
+-	
+-RemoteMapping::RemoteMapping( uno_Environment *pEnvUno_ ,
+-							  uno_Environment *pEnvRemote_,
+-							  uno_MapInterfaceFunc func,
+-							  const ::rtl::OUString sPurpose) :
+-	m_nRef( 1 ),
+-	m_sPurpose( sPurpose )
+-{
+-	pEnvUno = pEnvUno_;
+-	pEnvRemote = pEnvRemote_;
+-	
+-	pEnvUno->acquire( pEnvUno );
+-	pEnvRemote->acquire( pEnvRemote );
++using namespace bridges_remote;
+ 
+-	aBase.mapInterface = func;
+-	aBase.acquire = thisAcquire;
+-	aBase.release = thisRelease;
+-}
+-
+-void RemoteMapping::thisFree( uno_Mapping * p )
+-{
+-	delete ( RemoteMapping * ) p;
+-}
+-
+-RemoteMapping::~RemoteMapping( )
+-{
+-	pEnvUno->release( pEnvUno );
+-	pEnvRemote->release( pEnvRemote );
+-}
++extern "C" {
+ 
+-void RemoteMapping::thisAcquire( uno_Mapping *pMap )
++static void SAL_CALL thisAcquire( uno_Mapping *pMap )
+ {
+ 	RemoteMapping *p = SAL_REINTERPRET_CAST( RemoteMapping * , pMap );
+ 	if( 1 == osl_incrementInterlockedCount( &(p->m_nRef) ) )
+ 	{
+-		if( RemoteMapping::remoteToUno	== pMap->mapInterface )
++		if( remoteToUno == pMap->mapInterface )
+ 		{
+ 			uno_registerMapping( &pMap ,
+-								 RemoteMapping::thisFree,
++								 freeRemoteMapping,
+ 								 p->pEnvRemote ,
+ 								 p->pEnvUno ,
+ 								 p->m_sPurpose.pData );
+@@ -86,7 +59,7 @@
+ 		else
+ 		{
+ 			uno_registerMapping( &pMap ,
+-								 RemoteMapping::thisFree,
++								 freeRemoteMapping,
+ 								 p->pEnvUno ,
+ 								 p->pEnvRemote ,
+ 								 p->m_sPurpose.pData );
+@@ -95,7 +68,7 @@
+ 	}
+ }
+ 
+-void RemoteMapping::thisRelease( uno_Mapping *pMap )
++static void SAL_CALL thisRelease( uno_Mapping *pMap )
+ {
+ 	RemoteMapping *p = SAL_REINTERPRET_CAST( RemoteMapping * , pMap );
+ 	if (! osl_decrementInterlockedCount( &(p->m_nRef) ))
+@@ -104,11 +77,12 @@
+ 	}
+ }
+ 
++}
+ 
+-void RemoteMapping::remoteToUno(	uno_Mapping *pMapping,
+-									void **ppUnoI,
+-									void *pRemoteI,
+-									typelib_InterfaceTypeDescription *pTypeDescr )
++namespace bridges_remote {
++	
++void remoteToUno( uno_Mapping *pMapping, void **ppUnoI, void *pRemoteI,
++                  typelib_InterfaceTypeDescription *pTypeDescr )
+ {
+ 	remote_Mapping *pRemoteMapping = ( remote_Mapping * ) pMapping;
+ 	
+@@ -154,7 +128,7 @@
+ 			pRemoteMapping->pEnvUno->pExtEnv->registerProxyInterface(
+ 				pRemoteMapping->pEnvUno->pExtEnv,
+ 				ppUnoI,
+-				Remote2UnoProxy::thisFree,
++				freeRemote2UnoProxy,
+ 				pOid,
+ 				pTypeDescr );
+ 			
+@@ -164,11 +138,8 @@
+ 	}
+ }
+ 
+-
+-void RemoteMapping::unoToRemote(	uno_Mapping *pMapping,
+-									void **ppRemoteI,
+-									void *pUnoI,
+-									typelib_InterfaceTypeDescription *pTypeDescr )
++void unoToRemote( uno_Mapping *pMapping, void **ppRemoteI, void *pUnoI,
++                  typelib_InterfaceTypeDescription *pTypeDescr )
+ {
+ 	remote_Mapping *pRemoteMapping = ( remote_Mapping * ) pMapping;
+ 	OSL_ASSERT( ppRemoteI && pTypeDescr );
+@@ -212,13 +183,41 @@
+ 			pRemoteMapping->pEnvRemote->pExtEnv->registerProxyInterface(
+ 				pRemoteMapping->pEnvRemote->pExtEnv,
+ 				(void**) ppRemoteI,
+-				Uno2RemoteStub::thisFree,
++				freeUno2RemoteStub,
+ 				pOid,
+ 				pTypeDescr );
+ 		}
+ 
+ 		rtl_uString_release( pOid );
+ 	}
++}
++
++void freeRemoteMapping(uno_Mapping * mapping) {
++	delete reinterpret_cast< RemoteMapping * >(mapping);
++}
++
++RemoteMapping::RemoteMapping( uno_Environment *pEnvUno_ ,
++							  uno_Environment *pEnvRemote_,
++							  uno_MapInterfaceFunc func,
++							  const ::rtl::OUString sPurpose) :
++	m_nRef( 1 ),
++	m_sPurpose( sPurpose )
++{
++	pEnvUno = pEnvUno_;
++	pEnvRemote = pEnvRemote_;
++	
++	pEnvUno->acquire( pEnvUno );
++	pEnvRemote->acquire( pEnvRemote );
++
++	aBase.mapInterface = func;
++	aBase.acquire = thisAcquire;
++	aBase.release = thisRelease;
++}
++
++RemoteMapping::~RemoteMapping( )
++{
++	pEnvUno->release( pEnvUno );
++	pEnvRemote->release( pEnvRemote );
+ }
+ 
+ }
+Index: bridges/source/remote/static/proxy.cxx
+===================================================================
+RCS file: /cvs/udk/bridges/source/remote/static/proxy.cxx,v
+retrieving revision 1.10
+diff -u -r1.10 proxy.cxx
+--- bridges/source/remote/static/proxy.cxx	7 Sep 2005 22:43:14 -0000	1.10
++++ bridges/source/remote/static/proxy.cxx	25 Jun 2006 08:59:23 -0000
+@@ -60,14 +60,22 @@
+ using namespace ::bridges_remote;
+ using namespace ::com::sun::star::uno;
+ 
+-namespace bridges_remote {
++extern "C" {
+ 
+-void Remote2UnoProxy::thisFree( uno_ExtEnvironment *pEnvUno , void *pThis )
++void SAL_CALL remote_release( void *pRemoteI )
+ {
+-	delete (Remote2UnoProxy*) pThis;
++	((remote_Interface * )pRemoteI)->release( (remote_Interface * ) pRemoteI );
++}
++
++}
++
++namespace bridges_remote {
++
++void freeRemote2UnoProxy(uno_ExtEnvironment *, void * proxy) {
++	delete static_cast< Remote2UnoProxy * >(proxy);
+ }
+ 
+-void Remote2UnoProxy::thisAcquire( uno_Interface *pThis )
++void acquireRemote2UnoProxy( uno_Interface *pThis )
+ {
+ 	Remote2UnoProxy *p = ( Remote2UnoProxy * ) pThis;
+ 	if( 1 == osl_incrementInterlockedCount( &(p->m_nRef) ) )
+@@ -75,14 +83,14 @@
+ 		p->m_pEnvUno->pExtEnv->registerProxyInterface(
+ 			p->m_pEnvUno->pExtEnv,
+ 			(void**)&pThis,
+-			Remote2UnoProxy::thisFree,
++			freeRemote2UnoProxy,
+ 			p->m_sOid.pData,
+ 			p->m_pType );
+ 		assert( (uno_Interface *)p == pThis );
+ 	}
+ }
+ 
+-void Remote2UnoProxy::thisRelease( uno_Interface *pThis )
++void releaseRemote2UnoProxy( uno_Interface *pThis )
+ {
+ 	Remote2UnoProxy *p = ( Remote2UnoProxy * ) pThis;
+ 	if ( 0 == osl_decrementInterlockedCount( &(p->m_nRef) ))
+@@ -91,14 +99,9 @@
+ 	}
+ }
+ 
+-void SAL_CALL remote_release( void *pRemoteI )
+-{
+-	((remote_Interface * )pRemoteI)->release( (remote_Interface * ) pRemoteI );
+-}
+-
+-void Remote2UnoProxy::thisDispatch(
++void SAL_CALL dispatchRemote2UnoProxy(
+ 	uno_Interface * pUnoI,
+-	typelib_TypeDescription * pType,
++	typelib_TypeDescription const * pType,
+ 	void * pReturn,
+ 	void * ppArgs[],
+ 	uno_Any ** ppException )
+@@ -225,31 +228,31 @@
+ 			uno_destructData( pRemoteReturn , pReturnType , remote_release );
+ 		}
+ 
+-		sal_Int32 i;
+-		for( i = 0 ; i < nArgCount ; i ++ )
++		sal_Int32 j;
++		for( j = 0 ; j < nArgCount ; j ++ )
+ 		{
+-			if( pbConversionNeeded[i] )
++			if( pbConversionNeeded[j] )
+ 			{
+-				if( pbIsIn[i] ) {
+-					if( pbIsOut[i] ) {
+-						uno_destructData( ppArgs[i] ,
+-										  ppArgType[i] ,
++				if( pbIsIn[j] ) {
++					if( pbIsOut[j] ) {
++						uno_destructData( ppArgs[j] ,
++										  ppArgType[j] ,
+ 										  0 );
+-						uno_copyAndConvertData( ppArgs[i] ,
+-												ppRemoteArgs[i],
+-												ppArgType[i],
++						uno_copyAndConvertData( ppArgs[j] ,
++												ppRemoteArgs[j],
++												ppArgType[j],
+ 												p->m_mapRemote2Uno.get()  );
+ 					}
+ 				}
+ 				else // pure out
+ 				{
+-					uno_copyAndConvertData( ppArgs[i] ,
+-											ppRemoteArgs[i],
+-											ppArgType[i],
++					uno_copyAndConvertData( ppArgs[j] ,
++											ppRemoteArgs[j],
++											ppArgType[j],
+ 											p->m_mapRemote2Uno.get() );
+ 				}
+-				uno_destructData( ppRemoteArgs[i],
+-								  ppArgType[i],
++				uno_destructData( ppRemoteArgs[j],
++								  ppArgType[j],
+ 								  remote_release );
+ 			}
+ 		}
+@@ -313,9 +316,9 @@
+ 	m_pEnvUno->acquire( m_pEnvUno );
+ 	m_pEnvRemote->acquire( m_pEnvRemote );
+ 
+-	acquire = thisAcquire;
+-	release = thisRelease;
+-	pDispatcher = ( uno_DispatchMethod ) thisDispatch;
++	acquire = acquireRemote2UnoProxy;
++	release = releaseRemote2UnoProxy;
++	pDispatcher = dispatchRemote2UnoProxy;
+ 
+ 	m_pEnvRemote->pExtEnv->registerInterface(
+ 		m_pEnvRemote->pExtEnv,
+Index: bridges/source/remote/static/remote.cxx
+===================================================================
+RCS file: /cvs/udk/bridges/source/remote/static/remote.cxx,v
+retrieving revision 1.7
+diff -u -r1.7 remote.cxx
+--- bridges/source/remote/static/remote.cxx	7 Sep 2005 22:43:30 -0000	1.7
++++ bridges/source/remote/static/remote.cxx	25 Jun 2006 08:59:23 -0000
+@@ -45,8 +45,61 @@
+ static MyCounter thisCounter( "DEBUG : Remote2RemoteStub");
+ #endif
+ 
++using namespace bridges_remote;
++
++extern "C" {
++
++static void SAL_CALL thisRelease( remote_Interface *pThis )
++{
++	Remote2RemoteStub *p = ( Remote2RemoteStub * ) pThis;
++ 	if (! osl_decrementInterlockedCount( &(p->m_nRef) ))
++	{
++		p->m_pEnvRemote->pExtEnv->revokeInterface( p->m_pEnvRemote->pExtEnv, pThis );
++
++	}
++}
++
++static void SAL_CALL thisDispatch(
++	remote_Interface * pRemoteI,
++	typelib_TypeDescription const * pMemberType,
++	void * pReturn,
++	void * pArgs[],
++	uno_Any ** ppException )
++{
++	Remote2RemoteStub *pThis = ( Remote2RemoteStub * ) pRemoteI;
++
++	pThis->m_dispatch( pThis->m_pEnvRemote,
++					   pMemberType,
++					   pThis->m_sOid.pData,
++					   pThis->m_pType,
++					   pReturn,
++					   pArgs,
++					   ppException );
++}
++
++}
++
+ namespace bridges_remote {
+ 
++void acquireRemote2RemoteStub( remote_Interface *pThis )
++{
++	Remote2RemoteStub *p = ( Remote2RemoteStub * ) pThis;
++	if( 1 == osl_incrementInterlockedCount( &(p->m_nRef) ) )
++	{
++		p->m_pEnvRemote->pExtEnv->registerProxyInterface(
++			p->m_pEnvRemote->pExtEnv,
++			(void**)&pThis,
++			freeRemote2RemoteStub,
++			p->m_sOid.pData,
++			p->m_pType );
++		assert( (remote_Interface *)p == pThis );
++	}
++}
++
++void freeRemote2RemoteStub(uno_ExtEnvironment *, void * stub) {
++	delete static_cast< Remote2RemoteStub * >(stub);
++}
++
+ Remote2RemoteStub::Remote2RemoteStub( rtl_uString *pOid,
+ 									  typelib_InterfaceTypeDescription *pType,
+ 									  uno_Environment *pEnvRemote,
+@@ -61,7 +114,7 @@
+ 	typelib_typedescription_acquire( ( typelib_TypeDescription * ) m_pType );
+ 	m_pEnvRemote->acquire( m_pEnvRemote );
+ 
+-	acquire = thisAcquire;
++	acquire = acquireRemote2RemoteStub;
+ 	release = thisRelease;
+ 	pDispatcher = thisDispatch;
+ #if OSL_DEBUG_LEVEL > 1
+@@ -111,57 +164,9 @@
+ #endif
+ }
+ 
+-
+-void Remote2RemoteStub::thisFree( uno_ExtEnvironment *pEnvUno , void *pThis )
+-{
+-	delete (Remote2RemoteStub *) pThis;
+-}
+ void Remote2RemoteStub::releaseRemote()
+ {
+ 	osl_incrementInterlockedCount( &m_nReleaseRemote );
+-}
+-
+-void Remote2RemoteStub::thisAcquire( remote_Interface *pThis )
+-{
+-	Remote2RemoteStub *p = ( Remote2RemoteStub * ) pThis;
+-	if( 1 == osl_incrementInterlockedCount( &(p->m_nRef) ) )
+-	{
+-		p->m_pEnvRemote->pExtEnv->registerProxyInterface(
+-			p->m_pEnvRemote->pExtEnv,
+-			(void**)&pThis,
+-			Remote2RemoteStub::thisFree,
+-			p->m_sOid.pData,
+-			p->m_pType );
+-		assert( (remote_Interface *)p == pThis );
+-	}
+-}
+-
+-void Remote2RemoteStub::thisRelease( remote_Interface *pThis )
+-{
+-	Remote2RemoteStub *p = ( Remote2RemoteStub * ) pThis;
+- 	if (! osl_decrementInterlockedCount( &(p->m_nRef) ))
+-	{
+-		p->m_pEnvRemote->pExtEnv->revokeInterface( p->m_pEnvRemote->pExtEnv, pThis );
+-
+-	}
+-}
+-
+-void Remote2RemoteStub::thisDispatch(
+-	remote_Interface * pRemoteI,
+-	typelib_TypeDescription * pMemberType,
+-	void * pReturn,
+-	void * pArgs[],
+-	uno_Any ** ppException )
+-{
+-	Remote2RemoteStub *pThis = ( Remote2RemoteStub * ) pRemoteI;
+-
+-	pThis->m_dispatch( pThis->m_pEnvRemote,
+-					   pMemberType,
+-					   pThis->m_sOid.pData,
+-					   pThis->m_pType,
+-					   pReturn,
+-					   pArgs,
+-					   ppException );
+ }
+ 
+ } // end namespace bridges_remote
+Index: bridges/source/remote/static/remote_types.cxx
+===================================================================
+RCS file: /cvs/udk/bridges/source/remote/static/remote_types.cxx,v
+retrieving revision 1.2
+diff -u -r1.2 remote_types.cxx
+--- bridges/source/remote/static/remote_types.cxx	7 Sep 2005 22:43:47 -0000	1.2
++++ bridges/source/remote/static/remote_types.cxx	25 Jun 2006 08:59:24 -0000
+@@ -54,7 +54,8 @@
+ 			TYPELIB_DANGER_RELEASE( pTD );
+ 			return bRel;
+ 		}
+-
++        default:
++            break;
+ 		}
+ 	}
+ 	case typelib_TypeClass_STRUCT:
+@@ -81,7 +82,10 @@
+ 				TYPELIB_DANGER_RELEASE( pTD );
+ 				if (bRel)
+ 					return sal_True;
++                break;
+ 			}
++            default:
++                break;
+ 			}
+ 		}
+ 		if (pComp->pBaseTypeDescription)
+Index: bridges/source/remote/static/remote_types.hxx
+===================================================================
+RCS file: /cvs/udk/bridges/source/remote/static/remote_types.hxx,v
+retrieving revision 1.2
+diff -u -r1.2 remote_types.hxx
+--- bridges/source/remote/static/remote_types.hxx	7 Sep 2005 22:44:00 -0000	1.2
++++ bridges/source/remote/static/remote_types.hxx	25 Jun 2006 08:59:24 -0000
+@@ -63,7 +63,6 @@
+ 	switch (pTypeDescr->eTypeClass)
+ 	{
+ 	case typelib_TypeClass_SEQUENCE:
+-	{
+ 		switch (((typelib_IndirectTypeDescription *)pTypeDescr)->pType->eTypeClass)
+ 		{
+ 		case typelib_TypeClass_INTERFACE:
+@@ -73,23 +72,20 @@
+ 		case typelib_TypeClass_SEQUENCE:
+ 		case typelib_TypeClass_STRUCT:
+ 		case typelib_TypeClass_EXCEPTION:
+-		{
+ 			return remote_relatesToInterface2( pTypeDescr );
++        default:
++            return sal_False;
+ 		}
+-		}
+-		return sal_False;
+-	}
+ 	case typelib_TypeClass_STRUCT:
+ 	case typelib_TypeClass_EXCEPTION:
+-	{
+ 		return remote_relatesToInterface2( pTypeDescr );
+-	}
+ 	case typelib_TypeClass_UNION: // might relate to interface
+ 	case typelib_TypeClass_ANY: // might relate to interface
+ 	case typelib_TypeClass_INTERFACE:
+ 		return sal_True;
++    default:
++        return sal_False;
+ 	}
+-	return sal_False;
+ }
+ 
+ /** Determines whether given type is a cpp simple type, e.g. int, enum.<br>
+Index: bridges/source/remote/static/stub.cxx
+===================================================================
+RCS file: /cvs/udk/bridges/source/remote/static/stub.cxx,v
+retrieving revision 1.8
+diff -u -r1.8 stub.cxx
+--- bridges/source/remote/static/stub.cxx	7 Sep 2005 22:44:14 -0000	1.8
++++ bridges/source/remote/static/stub.cxx	25 Jun 2006 08:59:24 -0000
+@@ -51,78 +51,11 @@
+ #endif
+ 
+ using namespace ::com::sun::star::uno;
++using namespace bridges_remote;
+ 
+-namespace bridges_remote {
+-
+-Uno2RemoteStub::Uno2RemoteStub( uno_Interface *pUnoI,
+-								rtl_uString *pOid,
+-								typelib_InterfaceTypeDescription *pType,
+-								uno_Environment *pEnvUno,
+-								uno_Environment *pEnvRemote ) :
+-	m_sOid( pOid ),
+-	m_pType(  pType ),
+-	m_pUnoI( pUnoI ),
+-	m_nRef( 1 ),
+-	m_pEnvUno( pEnvUno ),
+-	m_pEnvRemote( pEnvRemote ),
+-	m_mapRemote2Uno( pEnvRemote, pEnvUno ),
+-	m_mapUno2Remote( pEnvUno, pEnvRemote )
+-{
+-	typelib_typedescription_acquire( (typelib_TypeDescription * )m_pType );
+-	m_pEnvUno->acquire( m_pEnvUno );
+-	m_pEnvRemote->acquire( m_pEnvRemote );
+-
+-	acquire = thisAcquire;
+-	release = thisRelease;
+-	pDispatcher = thisDispatch;
+-
+-	m_pEnvUno->pExtEnv->registerInterface( m_pEnvUno->pExtEnv,
+-										   (void **)&m_pUnoI,
+-										   m_sOid.pData,
+-										   m_pType );
+-	m_pUnoI->acquire( m_pUnoI );
+-#if OSL_DEBUG_LEVEL > 1
+-	thisCounter.acquire();
+-#endif
+-}
+-
+-Uno2RemoteStub::~Uno2RemoteStub()
+-{
+-	m_pEnvUno->pExtEnv->revokeInterface( m_pEnvUno->pExtEnv , m_pUnoI );
+-
+-	typelib_typedescription_release( (typelib_TypeDescription * )m_pType );
+-	m_pUnoI->release( m_pUnoI );
+-	m_pEnvUno->release( m_pEnvUno );
+-	m_pEnvRemote->release( m_pEnvRemote );
+-#if OSL_DEBUG_LEVEL > 1
+-	thisCounter.release();
+-#endif
+-}
+-
+-
+-void Uno2RemoteStub::thisFree( uno_ExtEnvironment *pEnvRemote, void *pThis )
+-{
+-	delete ( Uno2RemoteStub * ) pThis;
+-}
+-
+-void Uno2RemoteStub::thisAcquire( remote_Interface *pThis )
+-{
+-	Uno2RemoteStub *p = ( Uno2RemoteStub * ) pThis;
+-	if( 1 == osl_incrementInterlockedCount( &(p->m_nRef) ) )
+-	{
+-
+-		p->m_pEnvRemote->pExtEnv->registerProxyInterface(
+-			p->m_pEnvRemote->pExtEnv,
+-			(void**)&pThis,
+-			Uno2RemoteStub::thisFree,
+-			p->m_sOid.pData,
+-			p->m_pType );
+-
+-		OSL_ASSERT( (remote_Interface*) p == pThis );
+-	}
+-}
++extern "C" {
+ 
+-void Uno2RemoteStub::thisRelease( remote_Interface *pThis )
++void SAL_CALL thisRelease( remote_Interface *pThis )
+ {
+ 	Uno2RemoteStub *p = ( Uno2RemoteStub * ) pThis;
+ 	if (! osl_decrementInterlockedCount( &(p->m_nRef) ))
+@@ -131,9 +64,9 @@
+ 	}
+ }
+ 
+-void Uno2RemoteStub::thisDispatch(
++void SAL_CALL thisDispatch(
+ 	remote_Interface * pRemoteI,
+-	typelib_TypeDescription * pType,
++	typelib_TypeDescription const * pType,
+ 	void * pReturn,
+ 	void * ppArgs[],
+ 	uno_Any ** ppException )
+@@ -335,5 +268,74 @@
+ 	}
+ }
+ 
++}
++
++namespace bridges_remote {
++
++void acquireUno2RemoteStub( remote_Interface *pThis )
++{
++	Uno2RemoteStub *p = ( Uno2RemoteStub * ) pThis;
++	if( 1 == osl_incrementInterlockedCount( &(p->m_nRef) ) )
++	{
++
++		p->m_pEnvRemote->pExtEnv->registerProxyInterface(
++			p->m_pEnvRemote->pExtEnv,
++			(void**)&pThis,
++			freeUno2RemoteStub,
++			p->m_sOid.pData,
++			p->m_pType );
++
++		OSL_ASSERT( (remote_Interface*) p == pThis );
++	}
++}
++
++void freeUno2RemoteStub(uno_ExtEnvironment *, void * stub) {
++	delete static_cast< Uno2RemoteStub * >(stub);
++}
++
++Uno2RemoteStub::Uno2RemoteStub( uno_Interface *pUnoI,
++								rtl_uString *pOid,
++								typelib_InterfaceTypeDescription *pType,
++								uno_Environment *pEnvUno,
++								uno_Environment *pEnvRemote ) :
++	m_sOid( pOid ),
++	m_pType(  pType ),
++	m_pUnoI( pUnoI ),
++	m_nRef( 1 ),
++	m_pEnvUno( pEnvUno ),
++	m_pEnvRemote( pEnvRemote ),
++	m_mapRemote2Uno( pEnvRemote, pEnvUno ),
++	m_mapUno2Remote( pEnvUno, pEnvRemote )
++{
++	typelib_typedescription_acquire( (typelib_TypeDescription * )m_pType );
++	m_pEnvUno->acquire( m_pEnvUno );
++	m_pEnvRemote->acquire( m_pEnvRemote );
++
++	acquire = acquireUno2RemoteStub;
++	release = thisRelease;
++	pDispatcher = thisDispatch;
++
++	m_pEnvUno->pExtEnv->registerInterface( m_pEnvUno->pExtEnv,
++										   (void **)&m_pUnoI,
++										   m_sOid.pData,
++										   m_pType );
++	m_pUnoI->acquire( m_pUnoI );
++#if OSL_DEBUG_LEVEL > 1
++	thisCounter.acquire();
++#endif
++}
++
++Uno2RemoteStub::~Uno2RemoteStub()
++{
++	m_pEnvUno->pExtEnv->revokeInterface( m_pEnvUno->pExtEnv , m_pUnoI );
++
++	typelib_typedescription_release( (typelib_TypeDescription * )m_pType );
++	m_pUnoI->release( m_pUnoI );
++	m_pEnvUno->release( m_pEnvUno );
++	m_pEnvRemote->release( m_pEnvRemote );
++#if OSL_DEBUG_LEVEL > 1
++	thisCounter.release();
++#endif
++}
+ 
+ } // end namespace bridges_remote
+Index: bridges/source/remote/urp/urp_bridgeimpl.cxx
+===================================================================
+RCS file: /cvs/udk/bridges/source/remote/urp/urp_bridgeimpl.cxx,v
+retrieving revision 1.9
+diff -u -r1.9 urp_bridgeimpl.cxx
+--- bridges/source/remote/urp/urp_bridgeimpl.cxx	7 Sep 2005 22:44:41 -0000	1.9
++++ bridges/source/remote/urp/urp_bridgeimpl.cxx	25 Jun 2006 08:59:24 -0000
+@@ -206,7 +206,7 @@
+ 	
+ }
+ 
+-void urp_BridgeImpl::addError( char *pError )
++void urp_BridgeImpl::addError( char const *pError )
+ {
+ 	OUString message = OUString( RTL_CONSTASCII_USTRINGPARAM( "(tid=" ) );
+ 	message += OUString::valueOf( (sal_Int32 ) osl_getThreadIdentifier( 0 ) );
+Index: bridges/source/remote/urp/urp_bridgeimpl.hxx
+===================================================================
+RCS file: /cvs/udk/bridges/source/remote/urp/urp_bridgeimpl.hxx,v
+retrieving revision 1.7
+diff -u -r1.7 urp_bridgeimpl.hxx
+--- bridges/source/remote/urp/urp_bridgeimpl.hxx	7 Sep 2005 22:44:54 -0000	1.7
++++ bridges/source/remote/urp/urp_bridgeimpl.hxx	25 Jun 2006 08:59:24 -0000
+@@ -113,7 +113,7 @@
+ 
+ 	void startBlockBridge();
+ 	void stopBlockBridge();
+-	void addError( char *pError );
++	void addError( char const *pError );
+ 	void addError( const ::rtl::OUString &anError );
+ 	void dumpErrors( FILE *f );
+ 	::rtl::OUString getErrorsAsString();
+Index: bridges/source/remote/urp/urp_dispatch.cxx
+===================================================================
+RCS file: /cvs/udk/bridges/source/remote/urp/urp_dispatch.cxx,v
+retrieving revision 1.13
+diff -u -r1.13 urp_dispatch.cxx
+--- bridges/source/remote/urp/urp_dispatch.cxx	7 Sep 2005 22:45:39 -0000	1.13
++++ bridges/source/remote/urp/urp_dispatch.cxx	25 Jun 2006 08:59:24 -0000
+@@ -80,9 +80,9 @@
+ 		pImpl->m_pWriter->abort();
+ 	}
+ }
+-void SAL_CALL urp_sendRequest(
++extern "C" void SAL_CALL urp_sendRequest(
+ 	uno_Environment *pEnvRemote,
+-	typelib_TypeDescription * pMemberType,
++	typelib_TypeDescription const * pMemberType,
+ 	rtl_uString *pOid,
+ 	typelib_InterfaceTypeDescription *pInterfaceType,
+ 	void *pReturn,
+Index: bridges/source/remote/urp/urp_dispatch.hxx
+===================================================================
+RCS file: /cvs/udk/bridges/source/remote/urp/urp_dispatch.hxx,v
+retrieving revision 1.3
+diff -u -r1.3 urp_dispatch.hxx
+--- bridges/source/remote/urp/urp_dispatch.hxx	7 Sep 2005 22:45:52 -0000	1.3
++++ bridges/source/remote/urp/urp_dispatch.hxx	25 Jun 2006 08:59:24 -0000
+@@ -62,9 +62,9 @@
+ 
+ 	void SAL_CALL urp_sendCloseConnection( uno_Environment *pEnvRemote );
+ 	
+-	void SAL_CALL urp_sendRequest(
++	extern "C" void SAL_CALL urp_sendRequest(
+ 		uno_Environment *pEnvRemote,
+-		typelib_TypeDescription * pMemberType,
++		typelib_TypeDescription const * pMemberType,
+ 		rtl_uString *pOid,
+ 		typelib_InterfaceTypeDescription *pInterfaceType,
+ 		void *pReturn,
+Index: bridges/source/remote/urp/urp_environment.cxx
+===================================================================
+RCS file: /cvs/udk/bridges/source/remote/urp/urp_environment.cxx,v
+retrieving revision 1.17
+diff -u -r1.17 urp_environment.cxx
+--- bridges/source/remote/urp/urp_environment.cxx	7 Sep 2005 22:46:05 -0000	1.17
++++ bridges/source/remote/urp/urp_environment.cxx	25 Jun 2006 08:59:26 -0000
+@@ -153,8 +153,10 @@
+ 	Cache < OUString , equalOUString > cache ( 2 );
+ 
+ 	sal_Int32 n = cache.put( a );
+-	sal_Int32 nR = cache.seek( a );
+-	OSL_ASSERT( n == nR );
++	if (cache.seek( a ) != n)
++    {
++        OSL_ASSERT( false );
++    }
+ 	OSL_ASSERT( 0 == n );
+ 
+ 	n = cache.put( b );
+@@ -189,20 +191,6 @@
+ static MyCounter thisCounter( "Remote Environment" );
+ #endif
+ 
+-struct RemoteEnvironment
+-{
+-
+-	static void SAL_CALL thisDisposing( uno_Environment *pEnvRemote );
+-	static void SAL_CALL thisComputeObjectIdentifier( uno_ExtEnvironment *pEnvRemote,
+-													  rtl_uString **ppOid,
+-													  void *pInterface );
+-	static void SAL_CALL thisAcquireInterface( uno_ExtEnvironment * pEnvRemote ,
+-											   void *pInterface );
+-	static void SAL_CALL thisReleaseInterface( uno_ExtEnvironment * pEnvRemote,
+-											   void *pInterface);
+-	static void SAL_CALL thisDispose( uno_Environment *pEnvRemote );
+-};
+-
+ void SAL_CALL allThreadsAreGone( uno_Environment * pEnvRemote )
+ {
+ 	remote_Context *pContext = (remote_Context *) pEnvRemote->pContext;
+@@ -246,7 +234,7 @@
+ 	sal_Int32 i;
+ 	for( i  = 0 ; i < nCount ; i ++ )
+ 	{
+-  		if( ppInterfaces[i]->acquire == bridges_remote::Uno2RemoteStub::thisAcquire )
++  		if( ppInterfaces[i]->acquire == bridges_remote::acquireUno2RemoteStub )
+   		{
+   			// these are freed by the environment, so no release necessary
+   			pEnvRemote->pExtEnv->revokeInterface( pEnvRemote->pExtEnv, ppInterfaces[i] );
+@@ -260,7 +248,13 @@
+ 	rtl_freeMemory( (void*) ppInterfaces );
+ }
+ 
+-void RemoteEnvironment::thisDispose( uno_Environment *pEnvRemote )
++} // end namespace bridges_urp
++
++using namespace bridges_urp;
++
++extern "C" {
++
++static void SAL_CALL RemoteEnvironment_thisDispose( uno_Environment *pEnvRemote )
+ {
+ 	remote_Context *pContext = (remote_Context *) pEnvRemote->pContext;
+ 	urp_BridgeImpl *pImpl = ( urp_BridgeImpl *) pContext->m_pBridgeImpl;
+@@ -353,7 +347,8 @@
+ 	}
+ }
+ 
+-void RemoteEnvironment::thisDisposing( uno_Environment *pEnvRemote )
++static void SAL_CALL RemoteEnvironment_thisDisposing(
++    uno_Environment *pEnvRemote )
+ {
+ 	remote_Context *pContext = (remote_Context * )pEnvRemote->pContext;
+ 	urp_BridgeImpl *pImpl = ((urp_BridgeImpl*) pContext->m_pBridgeImpl);
+@@ -363,7 +358,7 @@
+ 		if( ! pImpl->m_bDisposed )
+ 		{
+ 			guard.clear();
+-			thisDispose( pEnvRemote );
++			RemoteEnvironment_thisDispose( pEnvRemote );
+ 		}
+ 	}
+ 	pImpl->m_pPropertyObject->thisRelease();
+@@ -379,38 +374,34 @@
+ #endif
+ }
+ 
+-void RemoteEnvironment::thisComputeObjectIdentifier( uno_ExtEnvironment *pEnvRemote,
+-													 rtl_uString **ppOid ,
+-													 void *pInterface)
++static void SAL_CALL RemoteEnvironment_thisComputeObjectIdentifier(
++    uno_ExtEnvironment *, rtl_uString **, void *)
+ {
+-	OSL_ENSURE( 0, "RemoteEnvironment::thisComputeObjectIdentifier should never be called" );
++	OSL_ENSURE( 0, "RemoteEnvironment_thisComputeObjectIdentifier should never be called" );
+ }
+ 
+-void RemoteEnvironment::thisAcquireInterface( uno_ExtEnvironment *pEnvRemote, void *pInterface )
++static void SAL_CALL RemoteEnvironment_thisAcquireInterface(
++    uno_ExtEnvironment *, void *pInterface )
+ {
+ 	((remote_Interface *)pInterface)->acquire( ( remote_Interface *) pInterface );
+ }
+ 
+-void RemoteEnvironment::thisReleaseInterface( uno_ExtEnvironment *pEnvRemote, void *pInterface )
++static void SAL_CALL RemoteEnvironment_thisReleaseInterface(
++    uno_ExtEnvironment *, void *pInterface )
+ {
+ 	((remote_Interface *)pInterface)->release( ( remote_Interface *) pInterface );
+ }
+ 
+-} // end namespace bridges_urp
+-using namespace bridges_urp;
+-
+-
+ //##################################################################################################
+-extern "C" void SAL_CALL uno_initEnvironment(
+-	uno_Environment * pEnvRemote )
++void SAL_CALL uno_initEnvironment( uno_Environment * pEnvRemote )
+ {
+ 	g_moduleCount.modCnt.acquire( &g_moduleCount.modCnt );
+ 	// set C-virtual methods
+-	pEnvRemote->environmentDisposing = RemoteEnvironment::thisDisposing;
+-	pEnvRemote->pExtEnv->computeObjectIdentifier = RemoteEnvironment::thisComputeObjectIdentifier;
+-	pEnvRemote->pExtEnv->acquireInterface = RemoteEnvironment::thisAcquireInterface;
+-	pEnvRemote->pExtEnv->releaseInterface = RemoteEnvironment::thisReleaseInterface;
+-	pEnvRemote->dispose = RemoteEnvironment::thisDispose;
++	pEnvRemote->environmentDisposing = RemoteEnvironment_thisDisposing;
++	pEnvRemote->pExtEnv->computeObjectIdentifier = RemoteEnvironment_thisComputeObjectIdentifier;
++	pEnvRemote->pExtEnv->acquireInterface = RemoteEnvironment_thisAcquireInterface;
++	pEnvRemote->pExtEnv->releaseInterface = RemoteEnvironment_thisReleaseInterface;
++	pEnvRemote->dispose = RemoteEnvironment_thisDispose;
+ 
+ 	remote_Context *pContext = ( remote_Context * ) pEnvRemote->pContext;
+ 	pContext->aBase.acquire( ( uno_Context * )  pContext );
+@@ -510,7 +501,7 @@
+ 
+ 
+ //##################################################################################################
+-extern "C" void SAL_CALL uno_ext_getMapping(
++void SAL_CALL uno_ext_getMapping(
+ 	uno_Mapping ** ppMapping,
+ 	uno_Environment * pFrom,
+ 	uno_Environment * pTo )
+@@ -531,7 +522,7 @@
+ 		{
+ 			pMapping =  new bridges_remote::RemoteMapping( pTo, /* Uno */
+ 									 pFrom, /*remote*/
+-									 bridges_remote::RemoteMapping::remoteToUno,
++									 bridges_remote::remoteToUno,
+ 									 OUString() );
+ 		}
+ 		else if ( sFromName.equalsIgnoreAsciiCase( sUno ) &&
+@@ -539,21 +530,23 @@
+ 		{
+ 			pMapping =  new bridges_remote::RemoteMapping( pFrom ,
+ 										   pTo ,
+-										   bridges_remote::RemoteMapping::unoToRemote,
++										   bridges_remote::unoToRemote,
+ 										   OUString() );
+ 		}
+ 
+ 		*ppMapping = (uno_Mapping * )pMapping;
+ 		OUString dummy;
+ 		uno_registerMapping( ppMapping ,
+-							 bridges_remote::RemoteMapping::thisFree,
++							 bridges_remote::freeRemoteMapping,
+ 							 pFrom ,
+ 							 pTo ,
+ 							 dummy.pData );
+ 	}
+ }
+ 
+-extern "C" sal_Bool SAL_CALL component_canUnload( TimeValue *pTime )
++sal_Bool SAL_CALL component_canUnload( TimeValue *pTime )
+ {
+ 	return g_moduleCount.canUnload( &g_moduleCount , pTime );
++}
++
+ }
+Index: bridges/source/remote/urp/urp_job.cxx
+===================================================================
+RCS file: /cvs/udk/bridges/source/remote/urp/urp_job.cxx,v
+retrieving revision 1.13
+diff -u -r1.13 urp_job.cxx
+--- bridges/source/remote/urp/urp_job.cxx	7 Sep 2005 22:46:23 -0000	1.13
++++ bridges/source/remote/urp/urp_job.cxx	25 Jun 2006 08:59:26 -0000
+@@ -62,6 +62,17 @@
+ using namespace ::osl;
+ using namespace ::com::sun::star::uno;
+ 
++using namespace bridges_urp;
++
++extern "C" {
++
++static void SAL_CALL doit(void * job) {
++    ServerMultiJob * p = static_cast< ServerMultiJob * >(job);
++    p->execute();
++    delete p;
++}
++
++}
+ 
+ namespace bridges_urp
+ {
+@@ -551,14 +562,6 @@
+ 	}
+ 
+ 	//-------------------------------------------------------------------------------------
+-	void ServerMultiJob::doit( void *pThis )
+-	{
+-		ServerMultiJob *pJob = ( ServerMultiJob * ) pThis;
+-		pJob->execute();
+-		delete pJob;
+-	}
+-
+-	//-------------------------------------------------------------------------------------
+ 	void ServerMultiJob::execute()
+ 	{
+ 		for( sal_Int32 i = 0; i < m_nCalls ; i ++ )
+@@ -641,12 +644,12 @@
+   			if( pMTI->m_bIsOneway )
+ 			{
+ 				// Oneway call, destruct in parameters
+-				for( sal_Int32 i = 0 ; i < pMTI->m_pMethodType->nParams ; i ++ )
++				for( sal_Int32 j = 0 ; j < pMTI->m_pMethodType->nParams ; j ++ )
+ 				{
+ 					// usually all parameters must be in parameters, but to be robust ...
+-					if( pMTI->m_pbIsIn[i] && !cppu_isSimpleType( pMTI->m_ppArgType[i] ) )
++					if( pMTI->m_pbIsIn[j] && !cppu_isSimpleType( pMTI->m_ppArgType[j] ) )
+ 					{
+-						uno_destructData( pSJE->m_ppArgs[i] , pMTI->m_ppArgType[i] , 0 );
++						uno_destructData( pSJE->m_ppArgs[j] , pMTI->m_ppArgType[j] , 0 );
+ 					}
+ 				}
+ 				
+@@ -702,11 +705,11 @@
+ 					uno_any_destruct( &(pSJE->m_exception) , ::bridges_remote::remote_release );
+ 					
+ 					// destroy in parameters
+-					for( sal_Int32 i = 0 ; i < pMTI->m_nArgCount ; i ++ )
++					for( sal_Int32 j = 0 ; j < pMTI->m_nArgCount ; j ++ )
+ 					{
+-						if( pMTI->m_pbIsIn[i] && ! cppu_isSimpleType( pMTI->m_ppArgType[i] ))
++						if( pMTI->m_pbIsIn[j] && ! cppu_isSimpleType( pMTI->m_ppArgType[j] ))
+ 						{
+-							uno_destructData( pSJE->m_ppArgs[i] , pMTI->m_ppArgType[i] ,
++							uno_destructData( pSJE->m_ppArgs[j] , pMTI->m_ppArgType[j] ,
+ 											  ::bridges_remote::remote_release );
+ 						}
+ 					}
+@@ -726,16 +729,16 @@
+ 											  ::bridges_remote::remote_release );
+ 						}
+ 					}
+-					for( sal_Int32 i = 0 ; i < pMTI->m_nArgCount ; i ++ )
++					for( sal_Int32 j = 0 ; j < pMTI->m_nArgCount ; j ++ )
+ 					{
+-						if( pMTI->m_pbIsOut[i] )
++						if( pMTI->m_pbIsOut[j] )
+ 						{
+ 							m_pBridgeImpl->m_blockMarshaler.pack(
+-								pSJE->m_ppArgs[i] , pMTI->m_ppArgType[i] );
++								pSJE->m_ppArgs[j] , pMTI->m_ppArgType[j] );
+ 						}
+-						if( ! cppu_isSimpleType( pMTI->m_ppArgType[i] ) )
++						if( ! cppu_isSimpleType( pMTI->m_ppArgType[j] ) )
+ 						{
+-							uno_destructData( pSJE->m_ppArgs[i], pMTI->m_ppArgType[i] ,
++							uno_destructData( pSJE->m_ppArgs[j], pMTI->m_ppArgType[j] ,
+ 											  ::bridges_remote::remote_release );
+ 						}
+ 					}
+Index: bridges/source/remote/urp/urp_job.hxx
+===================================================================
+RCS file: /cvs/udk/bridges/source/remote/urp/urp_job.hxx,v
+retrieving revision 1.8
+diff -u -r1.8 urp_job.hxx
+--- bridges/source/remote/urp/urp_job.hxx	7 Sep 2005 22:46:36 -0000	1.8
++++ bridges/source/remote/urp/urp_job.hxx	25 Jun 2006 08:59:27 -0000
+@@ -92,7 +92,7 @@
+ 	inline ClientJob( uno_Environment *pEnvRemote, // weak !
+ 					  struct urp_BridgeImpl *pBridgeImpl,
+ 					  rtl_uString *pOid,  // weak 
+-					  typelib_TypeDescription * pMemberType, // weak 
++					  typelib_TypeDescription const * pMemberType, // weak 
+ 					  typelib_InterfaceTypeDescription *pInterfaceType, // weak
+ 					  void *pReturn,
+ 					  void *ppArgs[],
+@@ -177,9 +177,6 @@
+ 					sal_Int32 nMaxMessages );
+ 	~ServerMultiJob();
+ public:
+-	// doit method is used only for ServerJobs, calls execute and pack
+-	static void  SAL_CALL doit( void *pThreadSpecificData );
+-
+ 	sal_Bool extract( );
+ 	void initiate();
+ 	void execute();
+@@ -285,7 +282,7 @@
+ 	uno_Environment *pEnvRemote,
+ 	struct urp_BridgeImpl *pBridgeImpl,
+ 	rtl_uString *pOid,
+-	typelib_TypeDescription * pMemberType,
++	typelib_TypeDescription const * pMemberType,
+ 	typelib_InterfaceTypeDescription *pInterfaceType,
+ 	void *pReturn,
+ 	void *ppArgs[],
+Index: bridges/source/remote/urp/urp_propertyobject.cxx
+===================================================================
+RCS file: /cvs/udk/bridges/source/remote/urp/urp_propertyobject.cxx,v
+retrieving revision 1.6
+diff -u -r1.6 urp_propertyobject.cxx
+--- bridges/source/remote/urp/urp_propertyobject.cxx	7 Sep 2005 22:48:11 -0000	1.6
++++ bridges/source/remote/urp/urp_propertyobject.cxx	25 Jun 2006 08:59:28 -0000
+@@ -53,6 +53,32 @@
+ using namespace ::com::sun::star::bridge;
+ using namespace ::com::sun::star::uno;
+ 
++using namespace bridges_urp;
++
++extern "C" {
++
++static void SAL_CALL staticAcquire( remote_Interface *pRemoteI )
++{
++    PropertyObject *pProperties = (PropertyObject *) pRemoteI;
++    pProperties->thisAcquire();
++}
++	
++static void SAL_CALL staticRelease( remote_Interface *pRemoteI )
++{
++    PropertyObject *pProperties = (PropertyObject *) pRemoteI;
++    pProperties->thisRelease();
++}
++
++static void SAL_CALL staticDispatch(
++    remote_Interface * pRemoteI, typelib_TypeDescription const * pMemberType,
++    void * pReturn, void * pArgs[], uno_Any ** ppException )
++{
++    PropertyObject *pProperties = (PropertyObject *) pRemoteI;
++    pProperties->thisDispatch( pMemberType, pReturn, pArgs, ppException );
++}
++
++}
++
+ namespace bridges_urp
+ {
+ // some nice constants ....	
+@@ -328,7 +354,8 @@
+ }
+ 
+ void SAL_CALL PropertyObject::thisDispatch(
+-	typelib_TypeDescription * pMemberType, void * pReturn, void * ppArgs[],uno_Any ** ppException )
++	typelib_TypeDescription const * pMemberType, void * pReturn, void * ppArgs[],
++    uno_Any ** ppException )
+ {
+ 	OSL_ASSERT( pMemberType->eTypeClass == typelib_TypeClass_INTERFACE_METHOD );
+ 	
+Index: bridges/source/remote/urp/urp_propertyobject.hxx
+===================================================================
+RCS file: /cvs/udk/bridges/source/remote/urp/urp_propertyobject.hxx,v
+retrieving revision 1.4
+diff -u -r1.4 urp_propertyobject.hxx
+--- bridges/source/remote/urp/urp_propertyobject.hxx	7 Sep 2005 22:48:25 -0000	1.4
++++ bridges/source/remote/urp/urp_propertyobject.hxx	25 Jun 2006 08:59:28 -0000
+@@ -105,7 +105,7 @@
+ 			}
+ 		}
+ 
+-	void SAL_CALL thisDispatch( typelib_TypeDescription * pMemberType,
++	void SAL_CALL thisDispatch( typelib_TypeDescription const * pMemberType,
+ 								void * pReturn,
+ 								void * pArgs[],
+ 								uno_Any ** ppException );
+@@ -129,31 +129,6 @@
+ 	void SAL_CALL     implGetProperties( uno_Sequence **ppReturnValue );
+ 	sal_Int32 SAL_CALL implRequestChange( sal_Int32 nRandomNumber, uno_Any **ppException );
+ 	void SAL_CALL     implCommitChange( uno_Sequence *seqOfProperties, uno_Any **ppException );
+-
+-
+-    // static helper methods
+-public:
+-	static void SAL_CALL staticAcquire( remote_Interface *pRemoteI )
+-		{
+-			PropertyObject *pProperties = (PropertyObject *) pRemoteI;
+-			pProperties->thisAcquire();
+-		}
+-	
+-	static void SAL_CALL staticRelease( remote_Interface *pRemoteI )
+-		{
+-			PropertyObject *pProperties = (PropertyObject *) pRemoteI;
+-			pProperties->thisRelease();
+-		}
+-	
+-	static void SAL_CALL staticDispatch( remote_Interface * pRemoteI, 
+-										 typelib_TypeDescription * pMemberType,
+-										 void * pReturn,
+-										 void * pArgs[],
+-										 uno_Any ** ppException )
+-		{
+-			PropertyObject *pProperties = (PropertyObject *) pRemoteI;
+-			pProperties->thisDispatch( pMemberType, pReturn, pArgs, ppException );
+-		}
+ };
+ 
+ }
+Index: bridges/source/remote/urp/urp_reader.cxx
+===================================================================
+RCS file: /cvs/udk/bridges/source/remote/urp/urp_reader.cxx,v
+retrieving revision 1.13
+diff -u -r1.13 urp_reader.cxx
+--- bridges/source/remote/urp/urp_reader.cxx	7 Sep 2005 22:48:39 -0000	1.13
++++ bridges/source/remote/urp/urp_reader.cxx	25 Jun 2006 08:59:29 -0000
+@@ -68,9 +68,8 @@
+ 	 *
+ 	 ***/
+ 	void SAL_CALL urp_releaseRemoteCallback (
+-		remote_Interface *pRemoteI,rtl_uString *pOid,
+-		typelib_TypeDescriptionReference *pTypeRef,
+-		uno_Environment *pEnvRemote	)
++		remote_Interface *, rtl_uString *pOid,
++        typelib_TypeDescriptionReference *pTypeRef, uno_Environment *pEnvRemote	)
+ 	{
+ 		remote_Context *pContext = (remote_Context *) pEnvRemote->pContext;
+ 		urp_BridgeImpl *pImpl = (urp_BridgeImpl*) ( pContext->m_pBridgeImpl );
+Index: bridges/source/remote/urp/urp_unmarshal.cxx
+===================================================================
+RCS file: /cvs/udk/bridges/source/remote/urp/urp_unmarshal.cxx,v
+retrieving revision 1.12
+diff -u -r1.12 urp_unmarshal.cxx
+--- bridges/source/remote/urp/urp_unmarshal.cxx	7 Sep 2005 22:49:54 -0000	1.12
++++ bridges/source/remote/urp/urp_unmarshal.cxx	25 Jun 2006 08:59:29 -0000
+@@ -139,7 +139,7 @@
+ sal_Bool Unmarshal::unpackOid( rtl_uString **ppOid )
+ {
+ 	sal_Bool bReturn = sal_True;
+-	sal_uInt16 nCacheIndex;
++	sal_uInt16 nCacheIndex = 0;
+ 
+ 	bReturn = bReturn && unpackString( ppOid );
+ 	bReturn = bReturn && unpackInt16( &nCacheIndex );
+@@ -586,7 +586,7 @@
+ 		}
+ 		else
+ 		{
+-			sal_uInt16 nCacheIndex;
++			sal_uInt16 nCacheIndex = 0;
+ 			bReturn = bReturn && unpackInt16( &nCacheIndex  );
+ 
+ 			if( bReturn )
+Index: bridges/test/makefile.mk
+===================================================================
+RCS file: /cvs/udk/bridges/test/makefile.mk,v
+retrieving revision 1.8
+diff -u -r1.8 makefile.mk
+--- bridges/test/makefile.mk	7 Sep 2005 22:50:51 -0000	1.8
++++ bridges/test/makefile.mk	25 Jun 2006 08:59:30 -0000
+@@ -127,31 +127,6 @@
+ 			$(OBJ)$/testcomp.obj  \
+ 			$(OBJ)$/testsameprocess.obj 
+ 
+-
+-# APP1TARGET=	testmarshal
+-# APP1OBJS=	$(OBJ)$/testmarshal.obj \
+-# 		$(SLO)$/urp_marshal.obj\
+-# 		$(SLO)$/urp_unmarshal.obj \
+-# 		$(SLO)$/urp_bridgeimpl.obj \
+-# 		$(SLB)$/bridges_remote_static.lib
+-		
+-# # 		$(SLO)$/marshal.obj\
+-# # 		$(SLO)$/unmarshal.obj\
+-
+-# .IF "$(OS)" == "LINUX"
+-# APP1STDLIBS+= -lstdc++
+-# .ENDIF
+-
+-#APP1LIBS+=	\
+-#			$(SLB)$/bridges_marshal.lib
+-# APP1STDLIBS+=	\
+-# 			$(UNOLIB) \
+-# 			$(CPPULIB)	\
+-# 			$(CPPUHELPERLIB)	\
+-# 			$(SALLIB)	\
+-# 			$(LIBCIMT)
+-
+-# APP1DEF=	$(MISC)$/$(APP1TARGET).def
+ 
+ APP2TARGET=	testserver
+ APP2OBJS=	$(OBJ)$/testserver.obj \

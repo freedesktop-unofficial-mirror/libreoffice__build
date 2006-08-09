@@ -15,6 +15,7 @@
 #include <docuno.hxx>
 
 #include <basic/sbx.hxx>
+#include <basic/sbstar.hxx>
 
 #include "vbahelper.hxx"
 #include "tabvwsh.hxx"
@@ -225,7 +226,7 @@ org::openoffice::isRangeShortCut( const ::rtl::OUString& sParam )
 org::openoffice::getCurrentDocument() throw (uno::RuntimeException)
 {
 	uno::Reference< frame::XModel > xModel;
-	SbxObject* pBasic = reinterpret_cast< SbxObject* > ( SFX_APP()->GetBasic() );
+	SbxObject* pBasic = dynamic_cast< SbxObject* > ( SFX_APP()->GetBasic() );
 	SbxObject* basicChosen =  pBasic ;
 	if ( basicChosen == NULL)
 	{
@@ -289,7 +290,7 @@ org::openoffice::getCurrentDocument() throw (uno::RuntimeException)
 ScDocShell* 
 org::openoffice::getDocShell( css::uno::Reference< css::frame::XModel>& xModel ) 
 {
-	ScModelObj* pModel = static_cast< ScModelObj* >( xModel.get() );
+	ScModelObj* pModel = dynamic_cast< ScModelObj* >( xModel.get() );
 	ScDocShell* pDocShell = NULL;
 	if ( pModel )
 		pDocShell = (ScDocShell*)pModel->GetEmbeddedObject();
@@ -324,3 +325,47 @@ org::openoffice::getCurrentViewFrame()
 	return NULL;
 }
 
+sal_Int32 
+org::openoffice::OORGBToXLRGB( sal_Int32 nCol )
+{
+	sal_Int32 nRed = nCol;
+	nRed &= 0x00FF0000;
+	nRed >>= 16;
+	sal_Int32 nGreen = nCol;
+	nGreen &= 0x0000FF00;
+	nGreen >>= 8;
+	sal_Int32 nBlue = nCol;
+	nBlue &= 0x000000FF;
+	sal_Int32 nRGB =  ( (nBlue << 16) | (nGreen << 8) | nRed );
+	return nRGB;
+}
+sal_Int32 
+org::openoffice::XLRGBToOORGB( sal_Int32 nCol )
+{
+	sal_Int32 nBlue = nCol;
+	nBlue &= 0x00FF0000;
+	nBlue >>= 16;
+	sal_Int32 nGreen = nCol;
+	nGreen &= 0x0000FF00;
+	nGreen >>= 8;
+	sal_Int32 nRed = nCol;
+	nRed &= 0x000000FF;
+	sal_Int32 nRGB =  ( (nRed << 16) | (nGreen << 8) | nBlue );
+	return nRGB;
+}
+uno::Any 
+org::openoffice::OORGBToXLRGB( const uno::Any& aCol )
+{
+	sal_Int32 nCol;
+	aCol >>= nCol;
+	nCol = OORGBToXLRGB( nCol );
+	return uno::makeAny( nCol );
+}
+uno::Any 
+org::openoffice::XLRGBToOORGB(  const uno::Any& aCol )
+{
+	sal_Int32 nCol;
+	aCol >>= nCol;
+	nCol = XLRGBToOORGB( nCol );
+	return uno::makeAny( nCol );
+}
