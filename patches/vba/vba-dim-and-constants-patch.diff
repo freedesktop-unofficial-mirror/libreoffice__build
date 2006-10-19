@@ -52,9 +52,9 @@ diff -u -r1.3 makefile.mk
  			}
  			else
  			{
---- basic.orig/source/runtime/step2.cxx	2005-09-19 09:36:54.000000000 +0100
-+++ basic/source/runtime/step2.cxx	2005-09-19 09:40:10.000000000 +0100
-@@ -72,6 +72,9 @@
+--- basic/source/runtime/step2.cxx	2006-10-18 12:57:10.000000000 +0100
++++ basic/source/runtime/step2.cxx	2006-10-18 13:00:24.000000000 +0100
+@@ -49,7 +49,10 @@
  
  using namespace com::sun::star::container;
  using namespace com::sun::star::lang;
@@ -64,32 +64,61 @@ diff -u -r1.3 makefile.mk
 +#endif //ENABLE_VBA
  
  // Suchen eines Elements
-@@ -152,10 +160,25 @@
- 					pElem->SetName( aName );
- 					refLocals->Put( pElem, refLocals->Count() );
- 				}
-+#ifdef ENABLE_VBA
-+				else if ( bIsVBAInterOp )
-+				{
+ // Die Bits im String-ID:
+@@ -115,15 +118,35 @@ SbxVariable* SbiRuntime::FindElement
+ 			// Ist es ein globaler Uno-Bezeichner?
+ 			if( bLocal && !pElem )
+ 			{
+-				// #72382 VORSICHT! Liefert jetzt wegen unbekannten
+-				// Modulen IMMER ein Ergebnis!
+-				SbxVariable* pUnoClass = findUnoClass( aName );
+-				if( pUnoClass )
++				bool bSetName = true; // preserve normal behaviour
++
++				// if VBAInterOp favour searching vba globals and
++				// vba constants before searching for uno classess
++				if ( bIsVBAInterOp )
+ 				{
+-					pElem = new SbxVariable( t );
+-					SbxValues aRes( SbxOBJECT );
+-					aRes.pObj = pUnoClass;
+-					pElem->SbxVariable::Put( aRes );
++					if ( !pElem  )
++						// Try StarBasic::Find
++						pElem = rBasic.Find( aName, SbxCLASS_DONTCARE );
++					if ( pElem )
++						bSetName = false; // don't overwrite uno name
 +					// last gasp see if name matches a 
 +					// vba idl constant (with no namespace)
 +					//
-+					pElem = getVBAConstant( aName ); 
-+					//Not sure whether I should
-+					//store this as a local ref or not,
-+					//what are the implications?
-+
-+					//refLocals->Put( pElem, refLocals->Count() );
++					if ( !pElem )
++						pElem = getVBAConstant( aName ); 
 +				}
-+#endif //ENABLE_VBA
- 			}
++				else
++				{
++					// #72382 VORSICHT! Liefert jetzt wegen unbekannten
++					// Modulen IMMER ein Ergebnis!
++					SbxVariable* pUnoClass = findUnoClass( aName );
++					if( pUnoClass )
++					{
++						pElem = new SbxVariable( t );
++						SbxValues aRes( SbxOBJECT );
++						aRes.pObj = pUnoClass;
++						pElem->SbxVariable::Put( aRes );
++					}
+ 				}
  
- 			if( !pElem )
- 			{
-+				
- 				// Nicht da und nicht im Objekt?
- 				// Hat das Ding Parameter, nicht einrichten!
- 				if( nOp1 & 0x8000 )
+ 				// #62939 Wenn eine Uno-Klasse gefunden wurde, muss
+@@ -138,7 +161,8 @@ SbxVariable* SbiRuntime::FindElement
+ 
+ 					// #72382 Lokal speichern, sonst werden alle implizit
+ 					// deklarierten Vars automatisch global !
+-					pElem->SetName( aName );
++					if ( bSetName )
++						pElem->SetName( aName );
+ 					refLocals->Put( pElem, refLocals->Count() );
+ 				}
+ 			}
 Index: basic/source/classes/sbunoobj.cxx
 ===================================================================
 RCS file: /cvs/script/basic/source/classes/sbunoobj.cxx,v
