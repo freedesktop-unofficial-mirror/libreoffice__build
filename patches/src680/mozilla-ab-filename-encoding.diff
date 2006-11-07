@@ -1,0 +1,278 @@
+--- connectivity/source/drivers/mozab/bootstrap/MNSFolders.cxx	20 Jun 2006 01:46:46 -0000	1.6
++++ connectivity/source/drivers/mozab/bootstrap/MNSFolders.cxx	9 Oct 2006 12:09:29 -0000	1.7.10.1
+@@ -39,6 +42,7 @@
+ #ifdef UNIX
+ #include <sys/types.h>
+ #include <strings.h>
++#include <string.h>
+ #endif // End UNIX
+ 
+ #ifdef WNT
+@@ -50,56 +54,132 @@
+ #include "post_include_windows.h"
+ #endif // End WNT
+ 
+-static const char * DefaultProductDir[] =
+-{
+-#if defined(XP_WIN)
+-	"Mozilla\\",
+-	"Mozilla\\Firefox\\",
+-	"Thunderbird\\"
+-#else
+-	".mozilla/",
+-	".mozilla/firefox/",
+-	".thunderbird/"
++#ifndef _OSL_SECURITY_HXX_
++#include <osl/security.hxx>
++#endif
++#ifndef _OSL_FILE_HXX_
++#include <osl/file.hxx>
+ #endif
+-};
+-#if defined(XP_MAC) || defined(XP_MACOSX)
+-#define APP_REGISTRY_NAME "Application Registry"
+-#elif defined(XP_WIN) || defined(XP_OS2)
+-#define APP_REGISTRY_NAME "registry.dat"
+-#else
+-#define APP_REGISTRY_NAME "appreg"
++#ifndef _OSL_THREAD_H_
++#include <osl/thread.h>
+ #endif
+ 
+-::rtl::OString getAppDir()
++using namespace ::com::sun::star::mozilla;
++
++namespace
+ {
+-#if defined(WNT)
+-	char szPath[MAX_PATH];
+-    if (!SHGetSpecialFolderPath(NULL, szPath, CSIDL_APPDATA, 0))
+-            return ::rtl::OString();
+-	return ::rtl::OString(szPath) + ::rtl::OString("\\");
+-#elif defined(UNIX)
+-    const char* homeDir = getenv("HOME");
+-	return ::rtl::OString(homeDir) + ::rtl::OString("/");
+-#endif
++    #if defined(XP_MAC) || defined(XP_MACOSX)
++        #define APP_REGISTRY_NAME "Application Registry"
++    #elif defined(XP_WIN) || defined(XP_OS2)
++        #define APP_REGISTRY_NAME "registry.dat"
++    #else
++        #define APP_REGISTRY_NAME "appreg"
++    #endif
++
++    // -------------------------------------------------------------------
++    static ::rtl::OUString lcl_getUserDataDirectory()
++    {
++        ::osl::Security   aSecurity;
++        ::rtl::OUString   aConfigPath;
++
++        aSecurity.getConfigDir( aConfigPath );
++        return aConfigPath + ::rtl::OUString::createFromAscii( "/" );
++    }
++
++    // -------------------------------------------------------------------
++    static const char* DefaultProductDir[3][3] =
++    {
++    #if defined(XP_WIN)
++        { "Mozilla/", NULL, NULL },
++        { "Mozilla/Firefox/", NULL, NULL },
++        { "Thunderbird/", "Mozilla/Thunderbird/", NULL }
++    #else
++        { ".mozilla/", NULL, NULL },
++        { ".mozilla/firefox/", NULL, NULL },
++        { ".thunderbird/", ".mozilla-thunderbird/", ".mozilla/thunderbird/" }
++    #endif
++    };
++
++    static const char* ProductRootEnvironmentVariable[3] =
++    {
++        "MOZILLA_PROFILE_ROOT",
++        "MOZILLA_FIREFOX_PROFILE_ROOT",
++        "MOZILLA_THUNDERBIRD_PROFILE_ROOT",
++    };
++
++    // -------------------------------------------------------------------
++    static ::rtl::OUString lcl_guessProfileRoot( MozillaProductType _product )
++    {
++        size_t productIndex = _product - 1;
++
++        static ::rtl::OUString s_productDirectories[3];
++
++        if ( !s_productDirectories[ productIndex ].getLength() )
++        {
++            ::rtl::OUString sProductPath;
++
++            // check whether we have an anevironment variable which helps us
++            const char* pProfileByEnv = getenv( ProductRootEnvironmentVariable[ productIndex ] );
++            if ( pProfileByEnv )
++            {
++                sProductPath = ::rtl::OUString( pProfileByEnv, strlen( pProfileByEnv ), osl_getThreadTextEncoding() );
++                // asume that this is fine, no further checks
++            }
++            else
++            {
++                ::rtl::OUString sProductDirCandidate;
++                const char* pProfileRegistry = ( _product == MozillaProductType_Mozilla ) ? APP_REGISTRY_NAME : "profiles.ini";
++
++                // check all possible candidates
++                for ( size_t i=0; i<3; ++i )
++                {
++                    if ( NULL == DefaultProductDir[ productIndex ][ i ] )
++                        break;
++
++                    sProductDirCandidate = lcl_getUserDataDirectory() +
++                        ::rtl::OUString::createFromAscii( DefaultProductDir[ productIndex ][ i ] );
++
++                    // check existence
++                    ::osl::DirectoryItem aRegistryItem;
++                    ::osl::FileBase::RC result = ::osl::DirectoryItem::get( sProductDirCandidate + ::rtl::OUString::createFromAscii( pProfileRegistry ), aRegistryItem );
++                    if ( result == ::osl::FileBase::E_None  )
++                    {
++                        ::osl::FileStatus aStatus( FileStatusMask_Validate );
++                        result = aRegistryItem.getFileStatus( aStatus );
++                        if ( result == ::osl::FileBase::E_None  )
++                        {
++                            // the registry file exists
++                            break;
++                        }
++                    }
++                }
++
++                ::osl::FileBase::getSystemPathFromFileURL( sProductDirCandidate, sProductPath );
++            }
++
++            s_productDirectories[ productIndex ] = sProductPath;
++        }
++
++        return s_productDirectories[ productIndex ];
++    }
+ }
+ 
+-::rtl::OString getRegistryDir(::com::sun::star::mozilla::MozillaProductType product)
++// -----------------------------------------------------------------------
++::rtl::OUString getRegistryDir(MozillaProductType product)
+ {
+-	if (product == ::com::sun::star::mozilla::MozillaProductType_Default)
+-	{
+-		return ::rtl::OString();
+-	}
+-	sal_Int32 type = product - 1;
+-	return getAppDir() + ::rtl::OString(DefaultProductDir[type]);
++	if (product == MozillaProductType_Default)
++		return ::rtl::OUString();
++
++    return lcl_guessProfileRoot( product );
+ }
+ 
+-::rtl::OString getRegistryFileName(::com::sun::star::mozilla::MozillaProductType product)
++// -----------------------------------------------------------------------
++::rtl::OUString getRegistryFileName(MozillaProductType product)
+ {
+-	if (product == ::com::sun::star::mozilla::MozillaProductType_Default)
+-	{
+-		return ::rtl::OString();
+-	}
+-	return getRegistryDir(product) + ::rtl::OString(APP_REGISTRY_NAME);
++	if (product == MozillaProductType_Default)
++		return ::rtl::OUString();
++
++	return getRegistryDir(product) + ::rtl::OUString::createFromAscii(APP_REGISTRY_NAME);
+ }
+ 
+ 
+--- connectivity/source/drivers/mozab/bootstrap/MNSFolders.hxx	8 Sep 2005 06:23:18 -0000	1.3
++++ connectivity/source/drivers/mozab/bootstrap/MNSFolders.hxx	9 Oct 2006 12:09:29 -0000	1.3.182.1
+@@ -47,9 +47,8 @@
+ 
+ #include <rtl/ustring.hxx>
+ 
+-::rtl::OString getAppDir();
+-::rtl::OString getRegistryDir(::com::sun::star::mozilla::MozillaProductType product);
+-::rtl::OString getRegistryFileName(::com::sun::star::mozilla::MozillaProductType product);
++::rtl::OUString getRegistryDir(::com::sun::star::mozilla::MozillaProductType product);
++::rtl::OUString getRegistryFileName(::com::sun::star::mozilla::MozillaProductType product);
+ 
+ #endif
+ 
+--- connectivity/source/drivers/mozab/bootstrap/MNSProfile.cxx	28 Aug 2006 15:39:52 -0000	1.5.48.1
++++ connectivity/source/drivers/mozab/bootstrap/MNSProfile.cxx	9 Oct 2006 12:11:03 -0000	1.7.10.1
+@@ -471,10 +474,9 @@
+ 	rtl::OUString path = xMozillaBootstrap->getProfilePath(xMozillaBootstrap->getCurrentProduct(),profileName);
+ 
+     nsCOMPtr<nsILocalFile>  localFile;
+-	rtl::OString sPath = OUStringToOString(path, RTL_TEXTENCODING_UTF8);
+-	nsCAutoString filePath(sPath.getStr());
++	nsAutoString filePath(path.getStr());
+ 
+-	rv = NS_NewNativeLocalFile(filePath, PR_TRUE,
++	rv = NS_NewLocalFile(filePath, PR_TRUE,
+                                    getter_AddRefs(localFile));
+     if (localFile && NS_SUCCEEDED(rv))
+         return localFile->QueryInterface(NS_GET_IID(nsIFile), (void**)profileDir);
+--- connectivity/source/drivers/mozab/bootstrap/MNSProfileDiscover.cxx	8 Sep 2005 06:25:30 -0000	1.3
++++ connectivity/source/drivers/mozab/bootstrap/MNSProfileDiscover.cxx	9 Oct 2006 12:11:03 -0000	1.4.10.2
+@@ -158,9 +161,9 @@
+ 
+ 			//step 1 : get mozilla registry file
+ 			nsCOMPtr<nsILocalFile>  localFile;
+-			::rtl::OString regDir = getRegistryFileName(MozillaProductType_Mozilla);
+-			nsCAutoString registryDir(regDir.getStr());
+-			rv = NS_NewNativeLocalFile(registryDir, PR_TRUE,
++			::rtl::OUString regDir( getRegistryFileName( MozillaProductType_Mozilla ) );
++			nsAutoString registryDir(regDir.getStr());
++			rv = NS_NewLocalFile(registryDir, PR_TRUE,
+                                 getter_AddRefs(localFile));
+ 			NS_ENSURE_SUCCESS(rv,rv);
+ 			PRBool bExist;
+@@ -260,9 +263,10 @@
+ 			ProductStruct &m_Product = m_ProductProfileList[index];
+ 
+ 			nsresult rv;
+-			::rtl::OString regDir = getRegistryDir(product);
+-			::rtl::OUString regDirU = ::rtl::OUString::createFromAscii(regDir) + ::rtl::OUString::createFromAscii("profiles.ini");
+-			IniParser parser(regDirU);
++			::rtl::OUString regDir = getRegistryDir(product);
++            ::rtl::OUString profilesIni( regDir );
++            profilesIni += ::rtl::OUString::createFromAscii( "profiles.ini" );
++			IniParser parser( profilesIni );
+ 			IniSectionMap &mAllSection = *(parser.getAllSection());
+ 
+ 			IniSectionMap::iterator iBegin = mAllSection.begin();
+@@ -306,7 +310,7 @@
+ 					}
+ 					
+ 					nsCOMPtr<nsILocalFile> rootDir;
+-					rv = NS_NewNativeLocalFile(EmptyCString(), PR_TRUE,
++					rv = NS_NewLocalFile(EmptyString(), PR_TRUE,
+ 											getter_AddRefs(rootDir));
+ 					if (NS_FAILED(rv)) continue;
+ 
+@@ -314,9 +318,9 @@
+ 					nsCAutoString filePath(sPath.getStr());
+ 	
+ 					if (isRelative) {
+-						nsCAutoString registryDir(regDir.getStr());
++						nsAutoString registryDir( regDir.getStr() );
+ 						nsCOMPtr<nsILocalFile>     mAppData;
+-						rv = NS_NewNativeLocalFile(registryDir, PR_TRUE,
++						rv = NS_NewLocalFile(registryDir, PR_TRUE,
+ 										getter_AddRefs(mAppData));
+ 						if (NS_FAILED(rv)) continue;
+ 						rv = rootDir->SetRelativeDescriptor(mAppData, filePath);
+@@ -457,12 +461,12 @@
+ 			::rtl::OUString path = getProfilePath(product,profileName);
+ 			if (!path.getLength())
+ 				return sal_True;
+-			::rtl::OString sPath = ::rtl::OUStringToOString(path, RTL_TEXTENCODING_UTF8);
+-			nsCAutoString filePath(sPath.getStr());
++
++			nsAutoString filePath(path.getStr());
+ 
+ 			nsresult rv;
+ 			nsCOMPtr<nsILocalFile>  localFile;
+-			rv = NS_NewNativeLocalFile(filePath, PR_TRUE,
++			rv = NS_NewLocalFile(filePath, PR_TRUE,
+                                 getter_AddRefs(localFile));
+ 			NS_ENSURE_SUCCESS(rv,sal_True);
+ 
