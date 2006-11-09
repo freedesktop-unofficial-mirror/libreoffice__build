@@ -60,6 +60,7 @@
 #include <org/openoffice/vba/Excel/XlSortDataOption.hpp>
 #include <org/openoffice/vba/Excel/XlDeleteShiftDirection.hpp>
 #include <org/openoffice/vba/Excel/XlReferenceStyle.hpp>
+#include <org/openoffice/vba/Excel/XlBordersIndex.hpp>
 
 
 #include <scitems.hxx>
@@ -101,6 +102,7 @@
 // end test includes
 
 using namespace ::org::openoffice;
+using namespace ::org::openoffice::vba::Excel;
 using namespace ::com::sun::star;
 
 //    * 1 point = 1/72 inch = 20 twips
@@ -108,6 +110,9 @@ using namespace ::com::sun::star;
 //    * 1 cm = 567 twips
 double lcl_hmmToPoints( double nVal ) { return ( (double)((nVal /1000 ) * 567 ) / 20 ); }
 double lcl_pointsToHmm( double nVal ) { return (double)( ( nVal * 20 ) / 567 ) * 1000; }
+
+static const sal_Int16 supportedIndexTable[] = {  XlBordersIndex::xlEdgeLeft, XlBordersIndex::xlEdgeTop, XlBordersIndex::xlEdgeBottom, XlBordersIndex::xlEdgeRight, XlBordersIndex::xlDiagonalDown, XlBordersIndex::xlDiagonalUp, XlBordersIndex::xlInsideVertical, XlBordersIndex::xlInsideHorizontal };
+
 USHORT lcl_pointsToTwips( double nVal ) 
 { 
 	nVal = nVal * static_cast<double>(20);
@@ -239,7 +244,8 @@ ScVbaRangeAreas::createCollectionObject( const uno::Any& aSource )
 ScDocShell* getDocShellFromRange( const uno::Reference< table::XCellRange >& xRange )
 {
 	// need the ScCellRangeObj to get docshell
-	ScCellRangeObj* pUno = dynamic_cast<  ScCellRangeObj* >( xRange.get() );
+	ScCellRangeObj* pUno = static_cast<  ScCellRangeObj* >( xRange.get() );
+			
 	if ( !pUno )
 		throw uno::RuntimeException( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( "Failed to access underlying uno range object" ) ), uno::Reference< uno::XInterface >()  );
 	return pUno->GetDocShell();
@@ -1926,6 +1932,8 @@ ScVbaRange::Range( const uno::Any &Cell1, const uno::Any &Cell2, bool bForceUseI
 		xRanges->getCellRangeByPosition( getColumn()-1, getRow()-1, 
 				xAddressable->getRangeAddress().EndColumn, 
 				xAddressable->getRangeAddress().EndRow );
+	// xAddressable now for this range	
+	xAddressable.set( xReferrer, uno::UNO_QUERY_THROW );
 
 	
 	if( !Cell1.hasValue() )
@@ -1934,6 +1942,7 @@ ScVbaRange::Range( const uno::Any &Cell1, const uno::Any &Cell2, bool bForceUseI
 			uno::Reference< XInterface >() );
 
 	table::CellRangeAddress resultAddress;
+	table::CellRangeAddress parentRangeAddress = xAddressable->getRangeAddress();
 
 	ScRange aRange;
 	// Cell1 defined only
@@ -1962,14 +1971,47 @@ ScVbaRange::Range( const uno::Any &Cell1, const uno::Any &Cell2, bool bForceUseI
 		resultAddress.EndRow = ( cell1.EndRow >  cell2.EndRow ) ? cell1.EndRow : cell2.EndRow;
 		if ( bForceUseInpuRangeTab )
 		{
+			// this is a call from Application.Range( x,y )
+			// its possiblefor x or y to specify a different sheet from
+			// the current or active on ( but they must be the same )
 			if ( cell1.Sheet != cell2.Sheet )
 				throw uno::RuntimeException();
-			resultAddress.Sheet = cell1.Sheet;
+			parentRangeAddress.Sheet = cell1.Sheet;
+		}
+		else
+		{
+			// this is not a call from Application.Range( x,y )
+			// if a different sheet from this range is specified it's
+			// an error
+			if ( parentRangeAddress.Sheet != cell1.Sheet 
+			|| parentRangeAddress.Sheet != cell2.Sheet 
+			)
+				throw uno::RuntimeException();
+
 		}
 		ScUnoConversion::FillScRange( aRange, resultAddress );
 	}
-	uno::Reference< table::XCellRange > xCellRange( new ScCellRangeObj( getDocShellFromRange( mxRange ), aRange )  );
+	ScRange parentAddress;
+	ScUnoConversion::FillScRange( parentAddress, parentRangeAddress);	
+	uno::Reference< table::XCellRange > xCellRange;
+	if ( aRange.aStart.Col() >= 0 && aRange.aStart.Row() >= 0 && aRange.aEnd.Col() >= 0 && aRange.aEnd.Row() >= 0 )
+	{
+		sal_Int32 nStartX = parentAddress.aStart.Col() + aRange.aStart.Col();
+		sal_Int32 nStartY = parentAddress.aStart.Row() + aRange.aStart.Row();
+		sal_Int32 nEndX = parentAddress.aStart.Col() + aRange.aEnd.Col();
+		sal_Int32 nEndY = parentAddress.aStart.Row() + aRange.aEnd.Row();
+
+		if ( nStartX <= nEndX && nEndX <= parentAddress.aEnd.Col() &&
+			 nStartY <= nEndY && nEndY <= parentAddress.aEnd.Row() )
+		{
+			ScRange aNew( (SCCOL)nStartX, (SCROW)nStartY, parentAddress.aStart.Tab(),
+						  (SCCOL)nEndX, (SCROW)nEndY, parentAddress.aEnd.Tab() );
+			xCellRange = new ScCellRangeObj( getDocShellFromRange( mxRange ), aNew );
+		}
+	}
+		
 	return uno::Reference< vba::XRange > ( new ScVbaRange( m_xContext, xCellRange )  );
+
 }
 
 // Allow access to underlying openoffice uno api ( useful for debugging
@@ -2279,7 +2321,13 @@ ScVbaRange::getCellRangeForName(  const rtl::OUString& sRangeName, const uno::Re
 {
 	uno::Reference< table::XCellRange > xRanges( xDoc, uno::UNO_QUERY_THROW );
 	ScCellRangeObj* pRanges = dynamic_cast< ScCellRangeObj* >( xRanges.get() );
-	ScAddress::Details dDetails( ScAddress::CONV_XL_A1, 0, 0 );
+    ScAddress::Convention eConv = ScAddress::CONV_XL_A1;     // see if there is a match with a named range
+
+    uno::Reference< frame::XModel > xModel( getCurrentDocument(), uno::UNO_QUERY_THROW );
+    ScDocShell* pDocSh = getDocShell( xModel );
+    eConv = pDocSh->GetDocument()->GetAddressConvention();
+
+	ScAddress::Details dDetails( eConv, 0, 0 );
 		
 	uno::Reference< table::XCellRange > xRange;
 	if ( pRanges )
@@ -2901,6 +2949,53 @@ ScVbaRange::Borders( const uno::Any& item ) throw( css::uno::RuntimeException )
 	return m_Borders->Item( item );
 }
 
+uno::Any SAL_CALL
+ScVbaRange::BorderAround( const css::uno::Any& LineStyle, const css::uno::Any& Weight,
+                const css::uno::Any& ColorIndex, const css::uno::Any& Color ) throw (css::uno::RuntimeException)
+{
+    sal_Int32 nCount = m_Borders->getCount();
+    uno::Reference< vba::XBorders > xBorders( m_Borders, uno::UNO_QUERY_THROW);
+    for( sal_Int32 i = 0; i < nCount; i++ )
+    {
+        const sal_Int32 nLineType = supportedIndexTable[i];
+        switch( nLineType )
+        {
+            case XlBordersIndex::xlEdgeLeft:
+            case XlBordersIndex::xlEdgeTop:
+            case XlBordersIndex::xlEdgeBottom:
+            case XlBordersIndex::xlEdgeRight:
+            {
+                uno::Reference< vba::XBorder > xBorder( m_Borders->Item( uno::makeAny( nLineType ) ), uno::UNO_QUERY_THROW );
+                if( LineStyle.hasValue() )
+                {
+                    xBorder->setLineStyle( LineStyle );
+                }
+                if( Weight.hasValue() )
+                {
+                    xBorder->setWeight( Weight );
+                }
+                if( ColorIndex.hasValue() )
+                {
+                    xBorder->setColorIndex( ColorIndex );
+                }
+                if( Color.hasValue() )
+                {
+                    xBorder->setColor( Color );
+                }
+                break;
+            }
+            case XlBordersIndex::xlInsideVertical:
+            case XlBordersIndex::xlInsideHorizontal:
+            case XlBordersIndex::xlDiagonalDown:
+            case XlBordersIndex::xlDiagonalUp:
+                break;
+            default:
+                return uno::makeAny( sal_False );
+        }
+    }
+    return uno::makeAny( sal_True );
+}
+
 uno::Any SAL_CALL 
 ScVbaRange::getRowHeight() throw (uno::RuntimeException)
 {
@@ -3015,7 +3110,8 @@ ScVbaRange::ApplicationRange( const uno::Reference< uno::XComponentContext >& xC
 	}
 	uno::Reference< sheet::XSpreadsheetView > xView( getCurrentDocument()->getCurrentController(), uno::UNO_QUERY );
 	uno::Reference< table::XCellRange > xSheetRange( xView->getActiveSheet(), uno::UNO_QUERY_THROW ); 
-	ScVbaRange xVbSheetRange( xContext, xSheetRange );
-	return xVbSheetRange.Range( Cell1, Cell2, true ); 
+	ScVbaRange* pRange = new ScVbaRange( xContext, xSheetRange );
+	uno::Reference< vba::XRange > xVbSheetRange( pRange );
+	return pRange->Range( Cell1, Cell2, true ); 
 }
 
