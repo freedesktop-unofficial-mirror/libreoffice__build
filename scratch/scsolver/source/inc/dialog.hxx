@@ -71,14 +71,13 @@ class ConstEditBtnListener;
 class WindowFocusListener;
 class WindowMouseListener;
 class ConstListBoxListener;
-	
 class OKCancelBtnListener;
+class ConstDlgCloseAction;
+class SolverDlgCloseAction;
 
-
-//---------------------------------------------------------------------------
-// Class ConstEditDialog
-
-
+/**
+ * Constraint input dialog.
+ */
 class ConstEditDialog : public BaseDialog
 {
 public:
@@ -121,11 +120,13 @@ private:
 	OKCancelBtnListener* m_pCancelListener;
 	RngBtnListener* m_pLeftRngListener;
 	RngBtnListener* m_pRightRngListener;
+	TopWindowListener* m_pTopWindowListener;
+	ConstDlgCloseAction* m_pCloseAction;
 };
 
-//---------------------------------------------------------------------------
-// Class SolverDialog
-
+/**
+ * Main solver dialog.
+ */
 class SolverDialog : public BaseDialog
 {
 
@@ -138,13 +139,12 @@ public:
 	virtual bool doneRangeSelection() const { return true; }
 
 	void initialize();
-	
 
 	ConstEditDialog* getConstEditDialog();
-	OptionDialog* getOptionDialog();
+	OptionDialog*    getOptionDialog();
 
 	sal_Int16 getSelectedConstraintPos();
-	
+
 	Reference< awt::XTextComponent > getXTextComponentFromWidget( const rtl::OUString& ) const;
 	
 	rtl::OUString getTargetCellAddress() const;
@@ -195,9 +195,9 @@ private:
 	std::auto_ptr<MessageDialog> m_pSolFoundDlg;
 
 	// Action Listeners
+	TopWindowListener* m_pTopWindowListener;
 	RngBtnListener* m_pTargetRngListener;
 	RngBtnListener* m_pVarCellsRngListener;
-	WindowMouseListener* m_pWindowMouseListener;
 	SolveBtnListener* m_pSolveListener;
 	CloseBtnListener* m_pOKListener;
 	SaveBtnListener* m_pSaveListener;
@@ -208,8 +208,8 @@ private:
 	ConstEditBtnListener* m_pConstAddListener;
 	ConstEditBtnListener* m_pConstChangeListener;
 	ConstEditBtnListener* m_pConstDeleteListener;
-	WindowFocusListener* m_pWindowFocusListener;
 	ConstListBoxListener* m_pConstListBoxListener;
+	SolverDlgCloseAction* m_pCloseAction;
 
 	// Constraint
 	std::vector< ConstraintString > m_aConstraint;
