@@ -57,6 +57,8 @@ public:
 	 */
 	virtual bool doneRangeSelection() const;
 
+	virtual void close();
+
 	/**
 	 * Must return a unique name that identifies its dialog type.
 	 * Should be deprecated and its use in a nested-if or switch

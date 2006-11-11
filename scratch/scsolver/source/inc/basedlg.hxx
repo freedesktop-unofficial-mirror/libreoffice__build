@@ -95,6 +95,8 @@ public:
      */
 	virtual bool doneRangeSelection() const = 0;
 
+	virtual void close() = 0;
+
 	// Widget creation methods
 	
 	apWidgetProp addButton( sal_Int32, sal_Int32, sal_Int32, sal_Int32,

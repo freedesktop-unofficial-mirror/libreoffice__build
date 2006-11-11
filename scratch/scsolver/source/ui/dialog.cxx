@@ -81,8 +81,7 @@ class ConstDlgCloseAction : public SimpleActionObject
 public:
 	virtual void execute(BaseDialog *dlg)
 	{
-		dlg->setVisible(false);
-		static_cast<ConstEditDialog*>(dlg)->reset();
+		dlg->close();
 	}
 };
 
@@ -221,6 +220,12 @@ bool ConstEditDialog::doneRangeSelection() const
 	}
 
 	return true;
+}
+
+void ConstEditDialog::close()
+{
+	reset();
+	setVisible(false);
 }
 
 rtl::OUString ConstEditDialog::getLeftCellReference()
@@ -362,10 +367,7 @@ class SolverDlgCloseAction : public SimpleActionObject
 public:
 	virtual void execute(BaseDialog *dlg)
 	{
-		SolverDialog* p = static_cast<SolverDialog*>(dlg);
-		p->setVisible(false);
-		p->getConstEditDialog()->setVisible(false);
-		p->getConstEditDialog()->reset();
+		dlg->close();
 	}
 };
 
@@ -549,6 +551,14 @@ void SolverDialog::setVisible( bool bVisible )
 		getConstEditDialog()->setVisible( false );
 
 	setVisibleDefault( bVisible );
+}
+
+void SolverDialog::close()
+{
+	getConstEditDialog()->reset();
+	getConstEditDialog()->setVisible(false);
+	getOptionDialog()->setVisible(false);
+	setVisible(false);
 }
 
 ConstEditDialog* SolverDialog::getConstEditDialog()

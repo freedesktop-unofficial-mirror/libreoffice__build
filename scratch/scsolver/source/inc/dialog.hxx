@@ -86,6 +86,7 @@ public:
 	virtual const rtl::OUString getDialogName() const { return ascii( "ConstEditDialog" ); }
 	virtual void setVisible( bool );
 	virtual bool doneRangeSelection() const;
+	virtual void close();
 
 	void initialize();
 	void reset();
@@ -137,6 +138,7 @@ public:
 	virtual const rtl::OUString getDialogName() const { return ascii( "SolverDialog" ); }
 	virtual void setVisible( bool );
 	virtual bool doneRangeSelection() const { return true; }
+	virtual void close();
 
 	void initialize();
 

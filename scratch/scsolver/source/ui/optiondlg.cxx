@@ -74,8 +74,7 @@ class OptionDlgWinCloseAction : public SimpleActionObject
 public:
 	virtual void execute( BaseDialog *dlg )
 	{
-		OptionDialog* p = static_cast<OptionDialog*>(dlg);
-		p->setVisible(false);
+		dlg->close();
 	}
 };
 
@@ -153,6 +152,11 @@ void OptionDialog::unregisterListeners() throw()
 bool OptionDialog::doneRangeSelection() const
 {
 	return false;
+}
+
+void OptionDialog::close()
+{
+	setVisible(false);
 }
 
 const rtl::OUString OptionDialog::getDialogName() const
