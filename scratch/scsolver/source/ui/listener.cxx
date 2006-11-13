@@ -234,7 +234,7 @@ void CloseBtnListener::disposing( const lang::EventObject& )
 void CloseBtnListener::actionPerformed( const awt::ActionEvent& )
 	throw ( RuntimeException )
 {
-	getDialog()->setVisible( false );
+	getDialog()->close();
 }
 
 
