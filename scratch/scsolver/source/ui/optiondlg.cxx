@@ -37,6 +37,7 @@
 
 using namespace ::com::sun::star;
 using namespace ::com::sun::star::uno;
+using namespace std;
 
 namespace scsolver {
 
@@ -63,9 +64,37 @@ public:
 	}
 };
 
+/**
+ * Specifies the action to perform when the window closing event
+ * is received (typically when the user clicks the close button
+ * on the title bar).
+ */
+class OptionDlgWinCloseAction : public SimpleActionObject
+{
+public:
+	virtual void execute( BaseDialog *dlg )
+	{
+		dlg->close();
+	}
+};
+
+//-----------------------------------------------------------------
+
+struct OptionDialogImpl
+{
+	auto_ptr<ActionObject>       pActionOK;
+	auto_ptr<SimpleActionObject> pActionWinClose;
+
+	TopWindowListener* pTopWinListener;
+	ActionListener*    pOKListener;
+	CloseBtnListener*  pCloseListener;
+};
+
+//-----------------------------------------------------------------
+
 OptionDialog::OptionDialog( SolverImpl* p ) :
 	BaseDialog( p ),
-	m_pActionOK( new OptionDlgOKAction )
+	m_pImpl( new OptionDialogImpl )
 {
 	initialize();
 }
@@ -100,21 +129,34 @@ void OptionDialog::initialize()
 
 void OptionDialog::registerListeners()
 {
-	m_pOKListener = new ActionListener( this, m_pActionOK.get() );
-	registerListener( ascii("btnOK"), m_pOKListener );
+	m_pImpl->pActionOK.reset( new OptionDlgOKAction );
+	m_pImpl->pOKListener = new ActionListener( this, m_pImpl->pActionOK.get() );
+	registerListener( ascii("btnOK"), m_pImpl->pOKListener );
 
-	m_pCloseListener = new CloseBtnListener(this);
-	registerListener( ascii("btnCancel"), m_pCloseListener );
+	m_pImpl->pCloseListener = new CloseBtnListener(this);
+	registerListener( ascii("btnCancel"), m_pImpl->pCloseListener );
+
+	m_pImpl->pActionWinClose.reset( new OptionDlgWinCloseAction );
+	m_pImpl->pTopWinListener = new TopWindowListener(this);
+	m_pImpl->pTopWinListener->setActionClosing(m_pImpl->pActionWinClose.get());
+	registerListener( m_pImpl->pTopWinListener );
 }
 
 void OptionDialog::unregisterListeners() throw()
 {
-	unregisterListener( ascii("btnCancel"), m_pCloseListener );
+	unregisterListener( ascii("btnOK"), m_pImpl->pOKListener );
+	unregisterListener( ascii("btnCancel"), m_pImpl->pCloseListener );
+	unregisterListener( m_pImpl->pTopWinListener );
 }
 
 bool OptionDialog::doneRangeSelection() const
 {
 	return false;
+}
+
+void OptionDialog::close()
+{
+	setVisible(false);
 }
 
 const rtl::OUString OptionDialog::getDialogName() const
