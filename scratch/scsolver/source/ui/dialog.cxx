@@ -992,6 +992,18 @@ void SolverDialog::loadModelFromDocument()
 	}
 }
 
-//---------------------------------------------------------------------------
+void SolverDialog::updateWidgets()
+{
+	if ( getSelectedConstraintPos() < 0 )
+	{
+		enableWidget(ascii("btnConstChange"), false);
+		enableWidget(ascii("btnConstDelete"), false);
+	}
+	else
+	{
+		enableWidget(ascii("btnConstChange"), true);
+		enableWidget(ascii("btnConstDelete"), true);
+	}
+}
 
 }

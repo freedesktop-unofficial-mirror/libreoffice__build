@@ -177,6 +177,8 @@ public:
 	void saveModelToDocument();
 	void loadModelFromDocument();
 
+	void updateWidgets();
+
 	ResMgr& GetResMgr();
 
 protected:

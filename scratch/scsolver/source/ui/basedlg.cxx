@@ -226,14 +226,20 @@ void BaseDialogImpl::initialize( sal_Int16 nW, sal_Int16 nH, const rtl::OUString
 
 void BaseDialogImpl::setVisibleDefault( bool bVisible )
 {
+	Debug("BaseDialogImpl::setVisibleDefault");
 	Reference< awt::XWindow > xWnd( m_oDlg, UNO_QUERY );
-	if ( bVisible && m_bHasClosed )
-		xWnd->setPosSize( m_aRect.X, m_aRect.Y, m_aRect.Width, m_aRect.Height, awt::PosSize::POS );
-	xWnd->setVisible( bVisible );
-	if ( bVisible )
-		xWnd->setFocus();
+	if ( xWnd.is() )
+	{
+		if ( bVisible && m_bHasClosed )
+			xWnd->setPosSize( m_aRect.X, m_aRect.Y, m_aRect.Width, m_aRect.Height, awt::PosSize::POS );
+		xWnd->setVisible( bVisible );
+		if ( bVisible )
+			xWnd->setFocus();
+		else
+			m_bHasClosed = true;
+	}
 	else
-		m_bHasClosed = true;
+		Debug("xWnd is NULL!");
 }
 
 apWidgetProp BaseDialogImpl::addButton( 
@@ -532,14 +538,10 @@ void BaseDialogImpl::toFront()
 
 void BaseDialogImpl::execute()
 {
-	Debug( "execute" );
-
 	setVisibleDefault( true );
 	toFront();
 	Reference< awt::XDialog > xDlg( m_oDlg, UNO_QUERY );
 	sal_Int16 r = xDlg->execute();
-
-	Debug( "done" );
 }
 
 //--------------------------------------------------------------------------
