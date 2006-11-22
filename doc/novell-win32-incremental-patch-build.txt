@@ -1,0 +1,117 @@
+Procedure to produce incremental patch for the NovellWin32ISO
+installers. This is somewhat hard to automate. This document is very
+much a work in progress, written and updated while working out how
+this actually should be done. Read with a large pinch of salt.
+
+The NovellWin32ISO builds are identified by the full three-part
+PACKAGEVERSION from openoffice.lst (2.0.4, for instance) suffixed by a
+dash and an counter, starting from 1 in the first build. The first
+distributed NovellWin32ISO build of 2.0.4 is thus 2.0.4-1.
+
+The "PATCHLEVEL" we talk about below is a NovellWin32ISO concept, not
+to be confused with other things related to "patching" that might have
+similar names in the upstream installer-building Perl code (much of
+which is undocumented, and even probably unfinished, or remains of
+procedures never fully implemented, or whatever). So when you see
+mentions of patching and updating in solenv/bin/modules/installer/*.pm
+etc, note that this has nothing to do with the MSI patching stuff
+described here.
+
+For the first build, build 1, PATCHLEVEL is 0. For build 2 it is 1,
+etc.
+
+The idea is that the original build directory is kept intact, and only
+those projects where there has been code changes since the previous
+build are rebuilt. Thus the files that are included in each build's
+installer are mostly from the original build, only those that have
+actual changes are fresher.
+
+- Rename build/$tag/instsetoo_native/wntmsci10.pro/OpenOffice to
+OpenOffice-$previous (where $previous is the previous build
+counter). Ditto for OpenOffice_languagepack.
+
+- Add a new marker to ChangeLog indicating at which stage this build
+was done.
+
+- edit novell-win32-vrb-branding.diff, increment the PATCHLEVEL
+value. This means that DLLs built from now on (once the patch is
+applied) will get a new version number.
+
+- Run make patch.apply
+
+- Run sh doc/AUTOGEN.NovellWin32ISO.sh. Run make and interrupt it when
+it starts the main build with "Building project solenv", i.e. after
+having done the upstream configure script and set_soenv stuff.
+
+- Inspect ChangeLog entries since the last marker. Go to build/$tag,
+source winenv.set.sh. In each project directly affected by changes
+since the last marker, to a build && deliver. Be careful to do this in
+the correct order in case a patch since the last release build has
+changed the API of some project, but I sure hope that won't happen.
+
+For 2.0.4-2 vs. 2.0.4-1, the projects affected by patches changed seem
+to be, in a hopefully correct order:
+
+officecfg
+sfx2
+sc
+binfilter (but nothing that affected what gets built had changed)
+helpcontent2
+
+Note carefully what changed/new files get delivered, just for
+double-checking later.
+
+- Remove sfx2/wntmsci10.pro/about.obj and do a build && deliver in
+sfx2, too.
+
+- Go to instsetoo_native and do a the build there. Edit
+util/makefile.mk to avoid building language packs. Won't bother for
+now with diffs to those, should be no changes anyway (?).
+
+- do an administrative install of previous build, and of what you just
+built:
+
+  msiexec /a openofficeorg20.msi 
+
+for instance, for 2.0.4-1 and 2.0.4-2: install into
+c:\tmp\OOo-2.0.4-1-admin and c:\tmp\OOo-2.0.4-2-admin
+
+- make a new folder for the patch installer, for instance
+c:\tmp\OOo-2.0.4-1-2-patch. 
+
+- run msimsp to find the differences between the two above
+installations, verify that the DLL and EXE files that have changed
+indeed have the updated version in their VRBs.
+
+  msimsp -s openofficeorg20.pcp -p openofficeorg20.msp -l logfile.log
+
+Read the logfile looking for which files have changed
+
+msimsp will not yet actually produce a .msp that would contain
+anything, as the ProductVersion properties in the two .msi databases
+are the same. Increment the ProductVersion of the newer. For instance,
+for 2.0.4-1, it is 2.0.9073, and for 2.0.4-2 manually incremented to
+2.0.9074. MS braindamage: The ProductVersion property is three digits:
+uchar.uchar.ushort, i.e. the first two <= 255, the last <= 65535. So
+we can't use the same kind of version number as for the FileVersion
+column in the File table, which is four ushorts, and constructed as
+OOO_MAJOR . OOO_MINOR*100+OOO_MICRO . BUILDID . PATCHLEVEL
+
+For files that are changed in 2.0.4-2, that would be 2.4.9073.1. This
+sucks, yeah. But just incrementing the last part (buildid) hopefully
+won't cause any trouble, even though it is misleading, as the real
+buildid of course is the same for all NovellWin32ISO 2.0.4-x
+builds. (Recall that "buildid" in OOo means a number corresponding to
+the milestone, it has nothing to do with actual "builds" by
+distributors of OOo, or NovellWin32ISO builds. For OOO_2_0_4 the
+buildid is 9073.)
+
+- edit the corresponding rows (updated DLLs, EXEs, and nonversioned
+files) in openofficeorg20.msi in the second administrative
+installation, change the final number of the FileVersion rows in the
+File table to the patchlevel in question
+
+- run msimsp again
+
+- verify that the changed files are indeed exactly those for which you
+edited the FileVersion, no more, no less.
