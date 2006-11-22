@@ -366,6 +366,10 @@ void ConstEditBtnListener::actionPerformed( const awt::ActionEvent& )
 				ConstEditDialog* pCE = pMainDlg->getConstEditDialog();
 				if ( pCE != NULL )
 				{
+					// We need to show the dialog first then set the values, or
+					// the equality combo box does not show proper item in first
+					// invocation.
+					pCE->setVisible( true );
 					if ( eType == CONST_CHANGE )
 					{
 						// Set the selected constraint to the dialog.
@@ -389,8 +393,6 @@ void ConstEditBtnListener::actionPerformed( const awt::ActionEvent& )
 						OSL_ASSERT( eType == CONST_ADD );
 						pCE->setChangeMode( false );
 					}
-					
-					pCE->setVisible( true );
 				}
 				else
 					OSL_ASSERT( !"ConstEditDialog is NULL" );
