@@ -65,7 +65,7 @@ namespace scsolver {
  */
 void lcl_dumpServiceNames( const Reference< uno::XInterface >& oWgt )
 {
-#ifdef DEBUG
+#ifdef SCSOLVER_DEBUG
 	Reference< lang::XServiceInfo > xSN( oWgt, UNO_QUERY );
 	Sequence< rtl::OUString > sSN = xSN->getSupportedServiceNames();
 	for ( int nIdx = 0; nIdx < sSN.getLength(); ++nIdx )
@@ -226,7 +226,6 @@ void BaseDialogImpl::initialize( sal_Int16 nW, sal_Int16 nH, const rtl::OUString
 
 void BaseDialogImpl::setVisibleDefault( bool bVisible )
 {
-	Debug("BaseDialogImpl::setVisibleDefault");
 	Reference< awt::XWindow > xWnd( m_oDlg, UNO_QUERY );
 	if ( xWnd.is() )
 	{

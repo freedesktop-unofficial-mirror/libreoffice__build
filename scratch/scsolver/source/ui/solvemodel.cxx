@@ -62,7 +62,7 @@ using com::sun::star::table::CellAddress;
 
 namespace scsolver {
 
-static typedef struct {
+typedef struct {
 	short sheet;
 	long  column;
 	long  row;
@@ -106,7 +106,6 @@ public:
 			// This should never happen, because we are just querying the 
 			// existing value associated with a specified address.
 			throw ConstraintError();
-			return 0.0;
 		}
 		return m_List[key];
 	}
@@ -151,6 +150,33 @@ private:
 		isNewKey = true;
 		return;
 	}
+};
+
+/**
+ * Used only to safely switch off cell updates.  Declare a local
+ * variable of this class type at the beginning of a block where
+ * the cell updates should be disabled.  It automatically
+ * re-enables cell updates when the variable goes out of scope.
+ */
+class CellUpdateSwitch
+{
+public:
+	CellUpdateSwitch(CalcInterface* p) :
+		m_pCalc(p)
+	{
+		p->disableCellUpdates();
+	}
+
+	~CellUpdateSwitch() throw()
+	{
+		m_pCalc->enableCellUpdates();
+	}
+
+private:
+	CellUpdateSwitch();              // disabled
+	void* operator new(size_t size); // disabled
+
+	CalcInterface* m_pCalc;
 };
 
 class SolveModelImpl
@@ -203,7 +229,8 @@ public:
 		Goal eGoal = pMainDlg->getGoal();
 		if ( eGoal == GOAL_UNKNOWN )
 		{
-			pMainDlg->showSolveError( ascii_i18n("Goal is not set") );
+			pMainDlg->showSolveError( 
+				pMainDlg->getResStr(SCSOLVER_STR_MSG_GOAL_NOT_SET) );
 			return;
 		}
 
@@ -356,7 +383,7 @@ private:
 	 */
 	void parseConstraints( LpModelBuilder* pBuilder )
 	{
-		m_pSolverImpl->getCalcInterface()->disableCellUpdates();
+		CellUpdateSwitch aCellUpdate( m_pSolverImpl->getCalcInterface() );
 
 		// Create a cost vector from the decision variables.
 
@@ -460,7 +487,6 @@ private:
 			cout.flush();
 		}
 #endif
-		m_pSolverImpl->getCalcInterface()->enableCellUpdates();
 	}
 
 	void resolveConstraintAddress( LpModelBuilder* pBuilder );
