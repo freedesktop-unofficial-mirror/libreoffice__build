@@ -527,7 +527,7 @@ void SolverDialog::unregisterListeners()
 	unregisterListener( ascii( "btnSave" ), m_pSaveListener );
 	unregisterListener( ascii( "btnLoad" ), m_pLoadListener );
 	unregisterListener( ascii( "btnReset" ), m_pResetListener );
-	unregisterListener( ascii( "btnOption" ), m_pOptionListener );
+	unregisterListener( ascii( "btnOptions" ), m_pOptionListener );
 	unregisterListener( ascii( "rbMax" ), m_pMaxListener );
 	unregisterListener( ascii( "btnConstAdd" ), m_pConstAddListener );
 	unregisterListener( ascii( "btnConstChange" ), m_pConstChangeListener );

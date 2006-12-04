@@ -65,7 +65,9 @@ namespace scsolver {
  */
 void lcl_dumpServiceNames( const Reference< uno::XInterface >& oWgt )
 {
-#ifdef SCSOLVER_DEBUG
+#if SCSOLVER_DEBUG
+	if (oWgt == NULL)
+		return;
 	Reference< lang::XServiceInfo > xSN( oWgt, UNO_QUERY );
 	Sequence< rtl::OUString > sSN = xSN->getSupportedServiceNames();
 	for ( int nIdx = 0; nIdx < sSN.getLength(); ++nIdx )
@@ -463,7 +465,13 @@ void BaseDialogImpl::unregisterListener( ListenerT* p )
 template<typename ListenerT>
 void BaseDialogImpl::unregisterListener( const rtl::OUString& sName, ListenerT* p )
 {
-	unregisterListener( getWidgetByName( sName ), p );
+	Reference<uno::XInterface> oWgt = getWidgetByName(sName);
+	if (oWgt == NULL)
+	{
+		printOUStr(ascii("warning: widget named ") + sName + ascii(" does not exist, thus cannot be unregistered."));
+		return;
+	}
+	unregisterListener(oWgt, p);
 }
 
 void BaseDialogImpl::unregisterListener( const Reference< uno::XInterface >& oWgt, ActionListener* p )

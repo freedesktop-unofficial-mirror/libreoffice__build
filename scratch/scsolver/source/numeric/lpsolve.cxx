@@ -85,6 +85,10 @@ void LpSolveImpl::solve()
 			set_lowbo(lp, i, 0.0); // positive variable constraint
 		else
 			set_unbounded(lp, i);
+		if ( model->getVarInteger() )
+			set_int(lp, i, 1);
+		else
+			set_int(lp, i, 0);
 	}
 
 	// map constraints

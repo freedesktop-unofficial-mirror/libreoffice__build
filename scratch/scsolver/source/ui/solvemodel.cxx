@@ -254,6 +254,7 @@ public:
 
 		OptionData* pOption = getSolverImpl()->getOptionData();
 		aModel.setVarPositive( pOption->getVarPositive() );
+		aModel.setVarInteger( pOption->getVarInteger() );
 
 #ifdef SCSOLVER_DEBUG
 		aModel.print(); // prints model to stdout
@@ -280,13 +281,13 @@ public:
 		catch( const scsolver::RuntimeError& e )
 		{
 			// This error message is localizable.
-			cout << "RuntimeError: " << e.what() << endl;
 			pMainDlg->showSolveError( e.getMessage() );
 		}
 		catch( const std::exception& e )
 		{
-			cout << "standard exception: " << e.what() << endl; // ascii_i18n [!?]
-			pMainDlg->showSolveError( ascii( e.what() ) );
+			// standard exception.  should rarely happen.
+			pMainDlg->showSolveError(
+				pMainDlg->getResStr(SCSOLVER_STR_MSG_STD_EXCEPTION_CAUGHT) );
 		}
 	}
 
