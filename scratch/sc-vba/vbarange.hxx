@@ -1,8 +1,6 @@
 #ifndef SC_VBA_RANGE_HXX
 #define SC_VBA_RANGE_HXX
 
-#include <cppuhelper/implbase1.hxx>
-#include <cppuhelper/implbase2.hxx>
 #include <cppuhelper/implbase3.hxx>
 #include <com/sun/star/container/XEnumerationAccess.hpp>
 
@@ -86,7 +84,7 @@ class ScVbaRange : public ScVbaRange_BASE
 	SfxItemSet* getCurrentDataSet( )  throw ( css::uno::RuntimeException );
 
 public:
-	ScVbaRange( const css::uno::Reference< css::uno::XComponentContext >& xContext, const css::uno::Reference< css::table::XCellRange >& xRange, sal_Bool bIsRows = false, sal_Bool bIsColumns = true ) throw ( css::lang::IllegalArgumentException );
+	ScVbaRange( const css::uno::Reference< css::uno::XComponentContext >& xContext, const css::uno::Reference< css::table::XCellRange >& xRange, sal_Bool bIsRows = false, sal_Bool bIsColumns = false ) throw ( css::lang::IllegalArgumentException );
 	ScVbaRange( const css::uno::Reference< css::uno::XComponentContext >& xContext, const css::uno::Reference< css::sheet::XSheetCellRangeContainer >& xRanges, sal_Bool bIsRows = false, sal_Bool bIsColumns = false ) throw ( css::lang::IllegalArgumentException );
 
 	virtual ~ScVbaRange();
@@ -170,6 +168,8 @@ public:
 	virtual void SAL_CALL Delete( const css::uno::Any& Shift ) throw (css::uno::RuntimeException);
 	virtual css::uno::Any SAL_CALL Areas( const css::uno::Any& ) throw (css::uno::RuntimeException);
 	virtual css::uno::Any SAL_CALL Borders( const css::uno::Any& ) throw (css::uno::RuntimeException);
+	virtual css::uno::Any SAL_CALL BorderAround( const css::uno::Any& LineStyle, 
+                const css::uno::Any& Weight, const css::uno::Any& ColorIndex, const css::uno::Any& Color ) throw (css::uno::RuntimeException);
 
 	// XPropertySet
 
