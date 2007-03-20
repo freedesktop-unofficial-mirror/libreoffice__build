@@ -1,0 +1,344 @@
+Index: shell/source/unix/exec/makefile.mk
+===================================================================
+RCS file: /cvs/gsl/shell/source/unix/exec/makefile.mk,v
+retrieving revision 1.9
+retrieving revision 1.9.70.2
+diff -u -p -u -p -r1.9 -r1.9.70.2
+--- shell/source/unix/exec/makefile.mk	24 May 2006 14:04:52 -0000	1.9
++++ shell/source/unix/exec/makefile.mk	11 Jan 2007 09:42:38 -0000	1.9.70.2
+@@ -42,6 +42,8 @@ ENABLE_EXCEPTIONS=TRUE
+ 
+ COMP1TYPELIST=syssh
+ 
++TESTAPP1=urltest
++
+ # --- Settings -----------------------------------------------------
+ 
+ .INCLUDE :  settings.mk
+@@ -68,7 +70,25 @@ SHL1STDLIBS=$(CPPULIB)\
+ SHL1LIBS=
+ SHL1DEPN=
+ 
++.IF "$(test)" != "" 
++
++APP1TARGET=$(TESTAPP1)
++APP1STDLIBS= $(SHL1STDLIBS)
++APP1OBJS= \
++	$(SLO)$/shellexec.obj \
++	$(SLO)$/$(APP1TARGET).obj
++
++.ENDIF # "$(test)" != "" 
++
++
+ # --- Targets ------------------------------------------------------
+ 
+ .INCLUDE :	target.mk
+ 
++run_test : $(BIN)$/$(TESTAPP1).sh
++    dmake test=t
++	$(BIN)$/$(TESTAPP1) urltest.txt
++
++$(BIN)$/$(TESTAPP1).sh : $$(@:f)
++	$(COPY) $< $@
++	-chmod +x $@ 
+Index: shell/source/unix/exec/shellexec.cxx
+===================================================================
+RCS file: /cvs/gsl/shell/source/unix/exec/shellexec.cxx,v
+retrieving revision 1.15
+retrieving revision 1.15.28.2
+diff -u -p -u -p -r1.15 -r1.15.28.2
+--- shell/source/unix/exec/shellexec.cxx	17 Sep 2006 01:41:54 -0000	1.15
++++ shell/source/unix/exec/shellexec.cxx	11 Jan 2007 09:42:38 -0000	1.15.28.2
+@@ -52,10 +52,6 @@
+ #include <osl/file.hxx>
+ #endif
+ 
+-#ifndef _RTL_STRBUF_HXX_
+-#include <rtl/strbuf.hxx>
+-#endif
+-
+ #ifndef _RTL_USTRBUF_HXX_
+ #include <rtl/ustrbuf.hxx>
+ #endif
+@@ -124,6 +120,20 @@ namespace // private
+     }
+ }
+ 
++void escapeForShell( rtl::OStringBuffer & rBuffer, const rtl::OString & rURL)
++{
++    sal_Int32 nmax = rURL.getLength();
++    for(sal_Int32 n=0; n < nmax; ++n)
++    {
++        // escape every non alpha numeric characters (excluding a few "known good") by prepending a '\'
++        sal_Char c = rURL[n];
++        if( ( c < 'A' || c > 'Z' ) && ( c < 'a' || c > 'z' ) && ( c < '0' || c > '9' )  && c != '/' && c != '.' )
++            rBuffer.append( '\\' );
++        
++        rBuffer.append( c );
++    }
++}
++
+ //-----------------------------------------------------------------------------------------
+ // 
+ //-----------------------------------------------------------------------------------------
+@@ -208,7 +218,7 @@ void SAL_CALL ShellExec::execute( const 
+         OString aTmp = OUStringToOString(aProgram, osl_getThreadTextEncoding());
+         nIndex = aTmp.lastIndexOf('/');
+         if (nIndex > 0)
+-            aBuffer.append(aTmp.copy(0, nIndex+1));
++            escapeForShell(aBuffer, aTmp.copy(0, nIndex+1));
+             
+         // Respect the desktop environment - if there is an executable named 
+         // <desktop-environement-is>-open-url, pass the url to this one instead
+@@ -236,21 +246,19 @@ void SAL_CALL ShellExec::execute( const 
+              
+         aBuffer.append("open-url");
+ #endif
+-        aBuffer.append(" \'");
+-        aBuffer.append(OUStringToOString(aURL, osl_getThreadTextEncoding()));
+-        aBuffer.append("\'");
++        aBuffer.append(" ");
++        escapeForShell(aBuffer, OUStringToOString(aURL, osl_getThreadTextEncoding()));
+         
+         if ( pDesktopLaunch && *pDesktopLaunch )
+         {
+             aLaunchBuffer.append( pDesktopLaunch );
+-            aLaunchBuffer.append( " \'" );
+-            aLaunchBuffer.append(OUStringToOString(aURL, osl_getThreadTextEncoding()));
+-            aLaunchBuffer.append( "\'" );
++            aLaunchBuffer.append(" ");
++            escapeForShell(aLaunchBuffer, OUStringToOString(aURL, osl_getThreadTextEncoding()));
+         }
+     } else {
+-        aBuffer.append(OUStringToOString(aCommand, osl_getThreadTextEncoding()));
++        escapeForShell(aBuffer, OUStringToOString(aCommand, osl_getThreadTextEncoding()));
+         aBuffer.append(" ");
+-        aBuffer.append(OUStringToOString(aParameter, osl_getThreadTextEncoding()));
++        escapeForShell(aBuffer, OUStringToOString(aParameter, osl_getThreadTextEncoding()));
+     }
+     
+     // Prefer DESKTOP_LAUNCH when available
+Index: shell/source/unix/exec/shellexec.hxx
+===================================================================
+RCS file: /cvs/gsl/shell/source/unix/exec/shellexec.hxx,v
+retrieving revision 1.4
+retrieving revision 1.4.126.2
+diff -u -p -u -p -r1.4 -r1.4.126.2
+--- shell/source/unix/exec/shellexec.hxx	7 Sep 2005 19:54:18 -0000	1.4
++++ shell/source/unix/exec/shellexec.hxx	11 Jan 2007 09:42:38 -0000	1.4.126.2
+@@ -44,6 +44,10 @@
+ #include <osl/mutex.hxx>
+ #endif
+ 
++#ifndef _RTL_STRBUF_HXX_
++#include <rtl/strbuf.hxx>
++#endif
++
+ #ifndef _COM_SUN_STAR_LANG_XSERVICEINFO_HPP_
+ #include <com/sun/star/lang/XServiceInfo.hpp>
+ #endif
+@@ -89,5 +93,9 @@ public:
+     virtual ::com::sun::star::uno::Sequence< ::rtl::OUString > SAL_CALL getSupportedServiceNames(  ) 
+         throw(::com::sun::star::uno::RuntimeException);    
+ }; 
++
++
++// helper function - needed for urltest
++void escapeForShell( rtl::OStringBuffer & rBuffer, const rtl::OString & rURL);
+ 
+ #endif 
+Index: shell/source/unix/exec/urltest.cxx
+===================================================================
+RCS file: shell/source/unix/exec/urltest.cxx
+diff -N shell/source/unix/exec/urltest.cxx
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ shell/source/unix/exec/urltest.cxx	11 Jan 2007 09:42:38 -0000	1.1.2.2
+@@ -0,0 +1,159 @@
++/*************************************************************************
++ *
++ *  OpenOffice.org - a multi-platform office productivity suite
++ *
++ *  $RCSfile$
++ *
++ *  $Revision$
++ *
++ *  last change: $Author$ $Date$
++ *
++ *  The Contents of this file are made available subject to
++ *  the terms of GNU Lesser General Public License Version 2.1.
++ *
++ *
++ *    GNU Lesser General Public License Version 2.1
++ *    =============================================
++ *    Copyright 2005 by Sun Microsystems, Inc.
++ *    901 San Antonio Road, Palo Alto, CA 94303, USA
++ *
++ *    This library is free software; you can redistribute it and/or
++ *    modify it under the terms of the GNU Lesser General Public
++ *    License version 2.1, as published by the Free Software Foundation.
++ *
++ *    This library is distributed in the hope that it will be useful,
++ *    but WITHOUT ANY WARRANTY; without even the implied warranty of
++ *    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ *    Lesser General Public License for more details.
++ *
++ *    You should have received a copy of the GNU Lesser General Public
++ *    License along with this library; if not, write to the Free Software
++ *    Foundation, Inc., 59 Temple Place, Suite 330, Boston,
++ *    MA  02111-1307  USA
++ *
++ ************************************************************************/
++
++#include "shellexec.hxx"
++
++#include <osl/process.h>
++
++#include <stdio.h>
++#include <limits.h>
++#include <string.h>
++#include <strings.h>
++
++// -----------------------------------------------------------------------
++
++int main(int argc, const char *argv[])
++{
++    int ret = 0;
++    
++    if( argc != 2 )
++    {
++        fprintf(stderr, "Usage: urltest <urllist>\n");
++        return -1;
++    }
++       	
++    FILE * fp = fopen( argv[1], "r" );
++    if( NULL == fp )
++    {
++        perror( argv[1] );
++        return -1;
++    }
++
++    // expect urltest.sh beside this binary
++    char line[LINE_MAX];
++    size_t len = strlen(argv[0]);
++    strcpy( line, argv[0] );
++    strcpy( line + len, ".sh " );
++    len += 4;
++    
++    unsigned int errors = 0;
++    
++    // read url(s) to test from file
++    char url[512];
++    while( NULL != fgets(url, sizeof(url), fp))
++    {
++        // remove trailing line break
++        strtok( url, "\r\n" );
++        
++        printf( "Passing URL: %s\n", url );
++        
++        // test the encoding functionality from shellexec.cxx
++        rtl::OString aURL( url );
++        rtl::OStringBuffer aBuffer;
++        escapeForShell(aBuffer, aURL);
++        
++        // append encoded URL as (only) parameter to the script
++        strcpy( line + len, aBuffer.getStr() );
++        
++        printf( "Command line: %s\n", line );
++        
++        FILE * pipe = popen( line, "r" );
++        if( NULL != pipe )
++        {
++            char buffer[BUFSIZ];
++
++            // initialize buffer with '\0'
++            memset(buffer, '\0', BUFSIZ);
++
++            // read the output of the script
++            if(NULL == fgets( buffer, BUFSIZ, pipe))
++            {
++                perror("FAILED: output of script could not be read");
++                printf( "\n");
++                ++errors;
++                continue;
++            }
++            
++            // remove trailing line break again
++            strtok( buffer, "\r\n" );
++            
++            int n = pclose(pipe);
++            if( 0 != n )
++            {
++                printf("FAILED: fclose returned %d\n\n", n );
++                ++errors;
++                continue;
++            }
++            
++            if( 0 == strcmp( url, buffer ) )
++            {
++                // strings are identical: good !
++                printf( "OK\n\n");
++            }
++            else
++            {
++                // compare failed
++                printf( "FAILED: returned string is %s\n\n", buffer);
++                ++errors;
++            }
++            
++        }
++        else
++        {
++            perror( line );
++            ret = -2;
++            break;
++        }
++    }
++    
++    if( ferror( fp ) )
++    {
++        perror( argv[1] );
++        ret = -1;
++    }
++    
++    fclose( fp );
++    
++    if( errors )
++    {
++        printf( "Number of tests failing: %d\n", errors);
++        ret = -3;
++    }
++    else
++        printf( "All tests passed OK.\n" );
++        
++    
++    return ret;
++}
+Index: shell/source/unix/exec/urltest.sh
+===================================================================
+RCS file: shell/source/unix/exec/urltest.sh
+diff -N shell/source/unix/exec/urltest.sh
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ shell/source/unix/exec/urltest.sh	10 Jan 2007 15:02:16 -0000	1.1.2.1
+@@ -0,0 +1,2 @@
++#!/bin/sh
++echo "$1"
+\ No newline at end of file
+Index: shell/source/unix/exec/urltest.txt
+===================================================================
+RCS file: shell/source/unix/exec/urltest.txt
+diff -N shell/source/unix/exec/urltest.txt
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ shell/source/unix/exec/urltest.txt	10 Jan 2007 15:02:16 -0000	1.1.2.1
+@@ -0,0 +1,11 @@
++http://www.openoffice.org
++http://en.wiktionary.org/wiki/harmless';CMD=lsx-lx$HOME;IFS=x;$CMD;#'
++http://en.wikipedia.org/wiki/Shell_(computers)
++http://www.google.com/search?hl=$100+bill
++http://unix.t-a-y-l-o-r.com/;clear;ls
++http://www.google.com/;exec mozilla;
++http://www.yahoo.com/<>
++http://www.yahoo.com/\
++http://www.yahoo.com/"
++http://www.yahoo.com/'
++http://www.yahoo.com/;echo 'this';
+\ No newline at end of file
