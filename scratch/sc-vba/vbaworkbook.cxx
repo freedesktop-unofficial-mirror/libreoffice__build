@@ -13,7 +13,7 @@
 #include "vbaworkbook.hxx"
 #include "vbawindows.hxx"
 #include "vbahelper.hxx"
-
+#include <osl/file.hxx>
 #include <stdio.h>
 
 // Much of the impl. for the equivalend UNO module is
@@ -56,7 +56,7 @@ ScVbaWorkbook::getName() throw (uno::RuntimeException)
 	{
 
 		INetURLObject aURL( getModel()->getURL() );
-		sName = aURL.GetLastName();
+		::osl::File::getSystemPathFromFileURL( aURL.GetLastName(), sName );
 	}
 	else
 	{
