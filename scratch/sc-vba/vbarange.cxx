@@ -969,7 +969,7 @@ getRangeForName( const uno::Reference< uno::XComponentContext >& xContext, const
 }
 
 uno::Reference< vba::XCollection >
-lcl_setupBorders( const uno::Reference< excel::XRange >& xParentRange, const uno::Reference<uno::XComponentContext>& xContext,  uno::Reference< table::XCellRange >& xRange  ) throw( uno::RuntimeException )
+lcl_setupBorders( const uno::Reference< excel::XRange >& xParentRange, const uno::Reference<uno::XComponentContext>& xContext,  const uno::Reference< table::XCellRange >& xRange  ) throw( uno::RuntimeException )
 {
 	uno::Reference< vba::XHelperInterface > xParent( xParentRange, uno::UNO_QUERY_THROW ); 
 	ScDocument* pDoc = getDocumentFromRange(xRange);
@@ -1023,8 +1023,8 @@ uno::Reference< vba::XCollection >& ScVbaRange::getBorders()
 {
 	if ( !m_Borders.is() )
 	{
-		uno::Reference< table::XCellRange > xRange( mxRanges->getByIndex(0), uno::UNO_QUERY_THROW );
-		m_Borders = lcl_setupBorders( this, mxContext, xRange );
+		uno::Reference< excel::XRange > xRange( getArea(0), uno::UNO_QUERY_THROW );
+		m_Borders = lcl_setupBorders( this, mxContext, uno::Reference< table::XCellRange >( xRange->getCellRange(), uno::UNO_QUERY_THROW ) );
 	}
 	return m_Borders;
 }
