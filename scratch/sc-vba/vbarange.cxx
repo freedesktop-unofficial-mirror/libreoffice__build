@@ -582,7 +582,21 @@ void CellValueGetter::visitNode( sal_Int32 x, sal_Int32 y, const uno::Reference<
 			else if ( sFormula.equals( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM("=FALSE()") ) ) )
 				aValue <<= sal_False;
 			else 	
-				aValue <<= xCell->getValue();
+			{
+				uno::Reference< beans::XPropertySet > xProp( xCell, uno::UNO_QUERY_THROW );
+				
+				table::CellContentType eFormulaType = table::CellContentType_VALUE;
+				// some formulas give textual results
+				xProp->getPropertyValue( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM("FormulaResultType" ) ) ) >>= eFormulaType;
+
+				if ( eFormulaType == table::CellContentType_TEXT )
+				{
+					uno::Reference< text::XTextRange > xTextRange(xCell, ::uno::UNO_QUERY_THROW);
+					aValue <<= xTextRange->getString();
+				}
+				else	
+					aValue <<= xCell->getValue();
+			}
 		}
 		else
 		{

@@ -259,19 +259,15 @@ ScVbaWorkbook::Save() throw (uno::RuntimeException)
 }
 
 void
-ScVbaWorkbook::SaveCopyAs( const uno::Any& Filename ) throw ( uno::RuntimeException)
+ScVbaWorkbook::SaveCopyAs( const rtl::OUString& sFileName ) throw ( uno::RuntimeException)
 {
-	rtl::OUString sFileName;
-	if ( Filename >>= sFileName  )
-	{
-		rtl::OUString aURL;
-		osl::FileBase::getFileURLFromSystemPath( sFileName, aURL );
-		uno::Reference< frame::XStorable > xStor( getModel(), uno::UNO_QUERY_THROW );
-		uno::Sequence<  beans::PropertyValue > storeProps(1);
-		storeProps[0].Name = rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( "FilterName" ) );
-		storeProps[0].Value <<= rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( "MS Excel 97" ) );
-		xStor->storeToURL( aURL, storeProps );
-	}
+	rtl::OUString aURL;
+	osl::FileBase::getFileURLFromSystemPath( sFileName, aURL );
+	uno::Reference< frame::XStorable > xStor( getModel(), uno::UNO_QUERY_THROW );
+	uno::Sequence<  beans::PropertyValue > storeProps(1);
+	storeProps[0].Name = rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( "FilterName" ) );
+	storeProps[0].Value <<= rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( "MS Excel 97" ) );
+	xStor->storeToURL( aURL, storeProps );
 }
 
 void 
