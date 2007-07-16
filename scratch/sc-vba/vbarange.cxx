@@ -2,6 +2,7 @@
 #include <sfx2/objsh.hxx>
 
 #include <com/sun/star/script/ArrayWrapper.hpp>
+#include <com/sun/star/sheet/XGoalSeek.hpp>
 #include <com/sun/star/sheet/XSheetOperation.hpp>
 #include <com/sun/star/sheet/CellFlags.hpp>
 #include <com/sun/star/table/XColumnRowRange.hpp>
@@ -155,6 +156,55 @@ uno::Any lcl_makeRange( uno::Reference< uno::XComponentContext >& xContext, cons
 	uno::Reference< table::XCellRange > xCellRange( aAny, uno::UNO_QUERY_THROW );
 	return uno::makeAny( uno::Reference< vba::XRange >( new ScVbaRange( xContext, xCellRange ) ) );
 }
+
+// this should be moved to vbahelper
+rtl::OUString lcl_getAnyAsString( const uno::Any& pvargItem ) throw ( uno::RuntimeException )
+{
+	uno::Type aType = pvargItem.getValueType();
+	uno::TypeClass eTypeClass = aType.getTypeClass();
+	rtl::OUString sString;
+	switch ( eTypeClass )
+	{
+		case uno::TypeClass_BOOLEAN:
+		{
+			sal_Bool bBool = sal_False;
+			pvargItem >>= bBool;
+			sString = rtl::OUString::valueOf( bBool );
+			break;
+		}
+		case uno::TypeClass_STRING:
+			pvargItem >>= sString;
+			break;
+		case uno::TypeClass_FLOAT:
+			float aFloat;
+			pvargItem >>= aFloat;
+			sString = rtl::OUString::valueOf( aFloat );
+			break;
+		case uno::TypeClass_DOUBLE:
+			double aDouble;
+			pvargItem >>= aDouble;
+			sString = rtl::OUString::valueOf( aDouble );
+			break;
+		case uno::TypeClass_SHORT:
+		case uno::TypeClass_LONG:
+		case uno::TypeClass_BYTE:
+			sal_Int32 aNum;
+			pvargItem >>= aNum;
+			sString = rtl::OUString::valueOf( aNum );
+			break;
+
+		case uno::TypeClass_HYPER:
+			sal_Int64 aHyper;
+			pvargItem >>= aHyper;
+			sString = rtl::OUString::valueOf( aHyper );
+			break;
+		default:
+       			throw uno::RuntimeException( rtl::OUString::createFromAscii( "Invalid type, can't convert" ), uno::Reference< uno::XInterface >() );
+	}
+	return sString;
+}
+
+
 
 SfxItemSet*  ScVbaRange::getCurrentDataSet( ) throw ( uno::RuntimeException )
 {
@@ -3757,4 +3807,34 @@ ScVbaRange::AutoFill(  const uno::Reference< vba::XRange >& Destination, const u
 	ScDocFunc aFunc(*pDocSh);
 	aFunc.FillAuto( aSourceRange, NULL, eDir, eCmd, eDateCmd,
 								nCount, fStep, fEndValue, TRUE, TRUE );
+}
+
+sal_Bool SAL_CALL
+ScVbaRange::GoalSeek( const uno::Any& Goal, const uno::Reference< vba::XRange >& ChangingCell ) throw (uno::RuntimeException)
+{
+	ScDocShell* pDocShell = getDocShellFromRange( mxRange );
+	sal_Bool bRes = sal_True;
+	ScVbaRange* pRange = dynamic_cast< ScVbaRange* >( ChangingCell.get() );
+	if ( pDocShell && pRange )
+	{
+		uno::Reference< sheet::XGoalSeek > xGoalSeek(  pDocShell->GetModel(), uno::UNO_QUERY_THROW );
+		RangeHelper thisRange( mxRange );
+		table::CellRangeAddress thisAddress = thisRange.getCellRangeAddressable()->getRangeAddress();
+		RangeHelper changingCellRange( pRange->mxRange );
+		table::CellRangeAddress changingCellAddr = changingCellRange.getCellRangeAddressable()->getRangeAddress();
+		rtl::OUString sGoal = lcl_getAnyAsString( Goal );
+		table::CellAddress thisCell( thisAddress.Sheet, thisAddress.StartColumn, thisAddress.StartRow );
+		table::CellAddress changingCell( changingCellAddr.Sheet, changingCellAddr.StartColumn, changingCellAddr.StartRow );
+		sheet::GoalResult res = xGoalSeek->seekGoal( thisCell, changingCell, sGoal );
+		ChangingCell->setValue( uno::makeAny( res.Result ) );
+		
+		// openoffice behaves differently, result is 0 if the divergence is too great
+                // but... if it detects 0 is the value it requires then it will use that
+		// e.g. divergence & result both = 0.0 does NOT mean there is an error
+		if ( ( res.Divergence != 0.0 ) && ( res.Result == 0.0 ) )
+			bRes = sal_False;
+	}
+	else
+		bRes = sal_False;
+	return bRes;
 }
