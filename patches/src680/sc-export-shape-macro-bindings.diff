@@ -1,0 +1,243 @@
+diff -rup sc/source/filter/excel/xeescher.cxx sc/source/filter/excel/xeescher.cxx
+--- sc/source/filter/excel/xeescher.cxx	2006-12-01 17:56:23.000000000 +0000
++++ sc/source/filter/excel/xeescher.cxx	2007-08-31 17:31:04.000000000 +0100
+@@ -77,6 +77,9 @@
+ #include "xestyle.hxx"
+ #endif
+ 
++#include "userdat.hxx"
++#include "drwlayer.hxx"
++
+ using ::rtl::OUString;
+ using ::com::sun::star::uno::UNO_QUERY;
+ using ::com::sun::star::uno::Reference;
+@@ -256,7 +259,7 @@ XclExpObjTbxCtrl::XclExpObjTbxCtrl(
+         const Reference< XShape >& rxShape,
+         const Reference< XControlModel >& rxCtrlModel ) :
+     XclObj( rRoot, EXC_OBJ_CMO_UNKNOWN, true ),
+-    XclExpCtrlLinkHelper( rRoot ),
++    XclMacroHelper( rRoot ),
+     mnHeight( 0 ),
+     mnState( 0 ),
+     mnLineCount( 0 ),
+@@ -517,21 +520,7 @@ XclExpObjTbxCtrl::XclExpObjTbxCtrl(
+ 
+ bool XclExpObjTbxCtrl::SetMacroLink( const ScriptEventDescriptor& rEvent )
+ {
+-    if( rEvent.ListenerType.getLength() && (rEvent.ListenerType == XclTbxControlHelper::GetListenerType( mnObjType )) &&
+-        rEvent.EventMethod.getLength() && (rEvent.EventMethod == XclTbxControlHelper::GetEventMethod( mnObjType )) &&
+-        (rEvent.ScriptType == XclTbxControlHelper::GetScriptType()) )
+-    {
+-        // macro name is stored in a NAME record, and referred to by a formula containing a tNameXR token
+-        String aMacroName( XclTbxControlHelper::GetXclMacroName( rEvent.ScriptCode ) );
+-        if( aMacroName.Len() )
+-        {
+-            sal_uInt16 nExtSheet = GetLocalLinkManager().FindExtSheet( EXC_EXTSH_OWNDOC );
+-            sal_uInt16 nNameIdx = GetNameManager().InsertMacroCall( aMacroName, true, false );
+-            mxMacroLink = GetFormulaCompiler().CreateNameXFormula( nExtSheet, nNameIdx );
+-            return true;
+-        }
+-    }
+-    return false;
++    return XclMacroHelper::SetMacroLink( rEvent, mnObjType );
+ }
+ 
+ void XclExpObjTbxCtrl::WriteSubRecs( XclExpStream& rStrm )
+@@ -662,12 +651,6 @@ void XclExpObjTbxCtrl::WriteSubRecs( Xcl
+     }
+ }
+ 
+-void XclExpObjTbxCtrl::WriteMacroSubRec( XclExpStream& rStrm )
+-{
+-    if( mxMacroLink.is() )
+-        WriteFormulaSubRec( rStrm, EXC_ID_OBJ_FTMACRO, *mxMacroLink );
+-}
+-
+ void XclExpObjTbxCtrl::WriteCellLinkSubRec( XclExpStream& rStrm, sal_uInt16 nSubRecId )
+ {
+     if( const XclTokenArray* pCellLink = GetCellLinkTokArr() )
+@@ -835,3 +818,70 @@ void XclExpNote::WriteBody( XclExpStream
+ 
+ // ============================================================================
+ 
++XclMacroHelper::XclMacroHelper( const XclExpRoot& rRoot ) :
++    XclExpCtrlLinkHelper( rRoot )
++{
++}
++
++XclMacroHelper::~XclMacroHelper()
++{
++}
++
++void XclMacroHelper::WriteMacroSubRec( XclExpStream& rStrm )
++{
++    if( mxMacroLink.is() )
++        WriteFormulaSubRec( rStrm, EXC_ID_OBJ_FTMACRO, *mxMacroLink );
++}
++
++bool 
++XclMacroHelper::SetMacroLink( const ScriptEventDescriptor& rEvent, sal_uInt16 nObjType )
++{
++    if( rEvent.ListenerType.getLength() && (rEvent.ListenerType == XclTbxControlHelper::GetListenerType( nObjType )) &&
++        rEvent.EventMethod.getLength() && (rEvent.EventMethod == XclTbxControlHelper::GetEventMethod( nObjType )) &&
++        (rEvent.ScriptType == XclTbxControlHelper::GetScriptType()) )
++    {
++        // macro name is stored in a NAME record, and referred to by a formula containing a tNameXR token
++	 String aMacroName( XclTbxControlHelper::GetXclMacroName( rEvent.ScriptCode ) );
++        return SetMacroLink( aMacroName );
++    }
++    return false;
++}
++
++bool
++XclMacroHelper::SetMacroLink( const String& rMacroName )
++{
++   OSL_TRACE("SetMacroLink %s", rtl::OUStringToOString( rMacroName, RTL_TEXTENCODING_UTF8 ).getStr() );
++   if( rMacroName.Len() )
++    {
++        sal_uInt16 nExtSheet = GetLocalLinkManager().FindExtSheet( EXC_EXTSH_OWNDOC );
++        sal_uInt16 nNameIdx = GetNameManager().InsertMacroCall( rMacroName, true, false );
++        mxMacroLink = GetFormulaCompiler().CreateNameXFormula( nExtSheet, nNameIdx );
++        return true;
++    }
++    return false;
++}
++
++XclExpShapeObj::XclExpShapeObj( const XclExpRoot& rRoot, ::com::sun::star::uno::Reference< ::com::sun::star::drawing::XShape > xShape ) : 
++    XclObjAny( rRoot ),
++    XclMacroHelper( rRoot )
++{
++    OSL_TRACE("creating XclExpShapeObj");
++    if( SdrObject* pSdrObj = ::GetSdrObjectFromXShape( xShape ) )
++    {
++        ScMacroInfo* pInfo = ScDrawLayer::GetMacroInfo( pSdrObj );
++        if ( pInfo && pInfo->GetMacro().getLength() )
++            SetMacroLink( XclTbxControlHelper::GetXclMacroName( pInfo->GetMacro() ) ); 
++    }
++}
++
++XclExpShapeObj::~XclExpShapeObj()
++{
++}
++
++void XclExpShapeObj::WriteSubRecs( XclExpStream& rStrm )
++{
++    WriteMacroSubRec( rStrm );
++}
++
++// ============================================================================
++
+diff -rup sc/source/filter/excel/xlocx.cxx sc/source/filter/excel/xlocx.cxx
+--- sc/source/filter/excel/xlocx.cxx	2007-07-12 09:34:40.000000000 +0100
++++ sc/source/filter/excel/xlocx.cxx	2007-08-31 17:11:39.000000000 +0100
+@@ -771,3 +771,8 @@ void XclExpOcxConverter::ConvertTbxMacro
+ 
+ // ============================================================================
+ 
++XclExpShapeObj* 
++ShapeInteractionHelper::CreateShapeObj(const XclExpRoot& rRoot, const Reference< XShape >& xShape )
++{
++    return new XclExpShapeObj( rRoot, xShape );
++}
+diff -rup sc/source/filter/inc/xeescher.hxx sc/source/filter/inc/xeescher.hxx
+--- sc/source/filter/inc/xeescher.hxx	2006-12-01 17:56:25.000000000 +0000
++++ sc/source/filter/inc/xeescher.hxx	2007-08-31 17:04:52.000000000 +0100
+@@ -79,6 +79,34 @@ private:
+     sal_uInt16          mnEntryCount;   /// Number of entries in source range.
+ };
+ 
++class XclMacroHelper : public XclExpCtrlLinkHelper
++{
++protected:
++    XclTokenArrayRef    mxMacroLink;    /// Token array containing a link to an attached macro.
++
++public:
++    explicit            XclMacroHelper( const XclExpRoot& rRoot );
++    virtual             ~XclMacroHelper();
++    /** Writes an ftMacro subrecord containing a macro link, or nothing, if no macro present. */
++    void                WriteMacroSubRec( XclExpStream& rStrm  );
++    /** Sets the name of a macro for object of passed type
++        @return  true = The passed event descriptor was valid, macro name has been found. */
++    bool                SetMacroLink( const ::com::sun::star::script::ScriptEventDescriptor& rEvent, sal_uInt16 nObjType );
++
++    /** Sets the name of a macro 
++        @return  true = The passed macro name has been found. */
++    bool                SetMacroLink( const String& rMacro );
++};
++
++class XclExpShapeObj : public XclObjAny, public XclMacroHelper
++{
++public:
++    explicit            XclExpShapeObj( const XclExpRoot& rRoot, ::com::sun::star::uno::Reference< ::com::sun::star::drawing::XShape > xShape );
++    virtual             ~XclExpShapeObj();
++private:
++    virtual void        WriteSubRecs( XclExpStream& rStrm );
++};
++
+ // ----------------------------------------------------------------------------
+ 
+ #if EXC_EXP_OCX_CTRL
+@@ -108,7 +136,7 @@ private:
+ #else
+ 
+ /** Represents an OBJ record for an TBX form control. */
+-class XclExpObjTbxCtrl : public XclObj, public XclExpCtrlLinkHelper
++class XclExpObjTbxCtrl : public XclObj, public XclMacroHelper
+ {
+ public:
+     explicit            XclExpObjTbxCtrl(
+@@ -125,8 +153,6 @@ public:
+ private:
+     virtual void        WriteSubRecs( XclExpStream& rStrm );
+ 
+-    /** Writes an ftMacro subrecord containing a macro link, or nothing, if no macro present. */
+-    void                WriteMacroSubRec( XclExpStream& rStrm );
+     /** Writes a subrecord containing a cell link, or nothing, if no link present. */
+     void                WriteCellLinkSubRec( XclExpStream& rStrm, sal_uInt16 nSubRecId );
+     /** Writes the ftSbs sub structure containing scrollbar data. */
+@@ -134,7 +160,6 @@ private:
+ 
+ private:
+     ScfInt16Vec         maMultiSel;     /// Indexes of all selected entries in a multi selection.
+-    XclTokenArrayRef    mxMacroLink;    /// Token array containing a link to an attached macro.
+     sal_Int32           mnHeight;       /// Height of the control.
+     sal_uInt16          mnState;        /// Checked/unchecked state.
+     sal_Int16           mnLineCount;    /// Combobox dropdown line count.
+diff -rup sc/source/filter/inc/xlocx.hxx sc/source/filter/inc/xlocx.hxx
+--- sc/source/filter/inc/xlocx.hxx	2007-07-12 09:34:40.000000000 +0100
++++ sc/source/filter/inc/xlocx.hxx	2007-08-31 17:11:33.000000000 +0100
+@@ -184,7 +184,14 @@ private:
+     SotStorageStreamRef  mxStrm;         /// The 'Ctls' stream.
+ #endif
+ };
+-
++ 
++class XclExpShapeObj;
++class ShapeInteractionHelper
++{
++public:
++   static XclExpShapeObj* CreateShapeObj(const XclExpRoot& rRoot, const ::com::sun::star::uno::Reference<
++                            ::com::sun::star::drawing::XShape >& xShape );
++};
+ // ============================================================================
+ 
+ #endif
+diff -rup sc/source/filter/xcl97/xcl97esc.cxx sc/source/filter/xcl97/xcl97esc.cxx
+--- sc/source/filter/xcl97/xcl97esc.cxx	2006-12-01 17:56:27.000000000 +0000
++++ sc/source/filter/xcl97/xcl97esc.cxx	2007-08-31 17:44:55.000000000 +0100
+@@ -252,13 +252,13 @@ EscherExHostAppData* XclEscherEx::StartS
+         {
+             pCurrXclObj = aOcxConverter.CreateCtrlObj( rShape );
+             if( !pCurrXclObj )
+-                pCurrXclObj = new XclObjAny( rRoot );   // just a metafile
++                pCurrXclObj = ShapeInteractionHelper::CreateShapeObj( rRoot, rShape );
+         }
+         else if( pObj->GetLayer() != SC_LAYER_INTERN )
+         {
+             // #107540# ignore permanent note shapes
+             // #i12190# do not ignore callouts (do not filter by object type ID)
+-            pCurrXclObj = new XclObjAny( rRoot );   // just a metafile
++            pCurrXclObj = ShapeInteractionHelper::CreateShapeObj( rRoot, rShape );
+         }
+ 	}
+ 	if ( pCurrXclObj )
