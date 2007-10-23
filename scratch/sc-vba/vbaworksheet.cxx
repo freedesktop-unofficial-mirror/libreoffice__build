@@ -2,7 +2,7 @@
  *
  *  OpenOffice.org - a multi-platform office productivity suite
  *
- *  $RCSfile$
+ *  $RCSfile: vbaworksheet.cxx,v $
  *
  *  $Revision$
  *
@@ -66,18 +66,11 @@
 
 #include <tools/string.hxx>
 
-//zhangyun showdataform
-#include <sfx2/sfxdlg.hxx>
-#include <scabstdlg.hxx>
-#include <tabvwsh.hxx>
-#include <scitems.hxx>
-
 #include <svx/svdouno.hxx>
 
 #include "cellsuno.hxx"
 #include "drwlayer.hxx"
 
-#include "scextopt.hxx"
 #include "vbaoutline.hxx"
 #include "vbarange.hxx"
 #include "vbacomments.hxx"
@@ -607,25 +600,6 @@ ScVbaWorksheet::Shapes( const uno::Any& aIndex ) throw (uno::RuntimeException)
    return uno::makeAny( xVbaShapes );
 }
 
-//zhangyun showdataform
-uno::Any SAL_CALL
-ScVbaWorksheet::ShowDataForm( ) throw (uno::RuntimeException)
-{
-	uno::Reference< frame::XModel > xModel( getModel(), uno::UNO_QUERY_THROW );
-	ScTabViewShell* pTabViewShell = getBestViewShell( xModel );
-
-	ScAbstractDialogFactory* pFact = ScAbstractDialogFactory::Create();
-	DBG_ASSERT(pFact, "ScAbstractFactory create fail!");//CHINA001
-
-	AbstractScDataFormDlg* pDlg = pFact->CreateScDataFormDlg( pTabViewShell->GetDialogParent(),RID_SCDLG_DATAFORM, pTabViewShell);
-	DBG_ASSERT(pDlg, "Dialog create fail!");//CHINA001
-
-	pDlg->Execute();
-
-	return uno::Any();
-}
-//end
-
 uno::Any SAL_CALL 
 ScVbaWorksheet::Evaluate( const ::rtl::OUString& Name ) throw (uno::RuntimeException)
 {
@@ -800,46 +774,6 @@ ScVbaWorksheet::getServiceNames()
 		aServiceNames[ 0 ] = rtl::OUString( RTL_CONSTASCII_USTRINGPARAM("org.openoffice.excel.Worksheet" ) );
 	}
 	return aServiceNames;
-}
-
-rtl::OUString SAL_CALL
-ScVbaWorksheet::getCodeName() throw (css::uno::RuntimeException)
-{
-    uno::Reference <sheet::XSpreadsheetDocument> xSpreadDoc( getModel(), uno::UNO_QUERY_THROW );
-    SCTAB nTab = 0;
-    rtl::OUString aSheetName = getName();
-    bool bSheetExists = nameExists (xSpreadDoc, aSheetName, nTab);
-    if ( bSheetExists )
-    {
-        uno::Reference< frame::XModel > xModel( getModel(), uno::UNO_QUERY_THROW );
-        ScDocument* pDoc = getDocShell( xModel )->GetDocument();
-        ScExtDocOptions* pExtOptions = pDoc->GetExtDocOptions();
-        rtl::OUString sCodeName = pExtOptions->GetCodeName( nTab );
-        return sCodeName;
-    }
-    else
-		throw uno::RuntimeException(::rtl::OUString(
-                                RTL_CONSTASCII_USTRINGPARAM( "Sheet Name does not exist. ") ),
-                                uno::Reference< XInterface >() );
-}
-void SAL_CALL
-ScVbaWorksheet::setCodeName( const rtl::OUString& sCodeName ) throw (css::uno::RuntimeException)
-{
-    uno::Reference <sheet::XSpreadsheetDocument> xSpreadDoc( getModel(), uno::UNO_QUERY_THROW );
-    SCTAB nTab = 0;
-    rtl::OUString aSheetName = getName();
-    bool bSheetExists = nameExists (xSpreadDoc, aSheetName, nTab);
-    if ( bSheetExists )
-    {
-        uno::Reference< frame::XModel > xModel( getModel(), uno::UNO_QUERY_THROW );
-        ScDocument* pDoc = getDocShell( xModel )->GetDocument();
-        ScExtDocOptions* pExtOptions = pDoc->GetExtDocOptions();
-        pExtOptions->SetCodeName( sCodeName, nTab );
-    }
-    else
-               throw uno::RuntimeException(::rtl::OUString(
-                                RTL_CONSTASCII_USTRINGPARAM( "Sheet Name does not exist. ") ),
-                                uno::Reference< XInterface >() );
 }
 
 sal_Int16

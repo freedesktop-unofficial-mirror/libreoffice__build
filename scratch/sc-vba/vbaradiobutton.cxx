@@ -2,11 +2,11 @@
  *
  *  OpenOffice.org - a multi-platform office productivity suite
  *
- *  $RCSfile: vbaradiobutton.cxx,v $
+ *  $RCSfile$
  *
- *  $Revision: 1.1.2.4 $
+ *  $Revision$
  *
- *  last change: $Author: npower $ $Date: 2007/07/23 11:47:24 $
+ *  last change: $Author$ $Date$
  *
  *  The Contents of this file are made available subject to
  *  the terms of GNU Lesser General Public License Version 2.1.

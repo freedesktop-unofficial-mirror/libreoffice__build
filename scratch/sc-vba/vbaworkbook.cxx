@@ -2,7 +2,7 @@
  *
  *  OpenOffice.org - a multi-platform office productivity suite
  *
- *  $RCSfile$
+ *  $RCSfile: vbaworkbook.cxx,v $
  *
  *  $Revision$
  *
@@ -464,26 +464,6 @@ ScVbaWorkbook::getServiceNames()
 		aServiceNames[ 0 ] = rtl::OUString( RTL_CONSTASCII_USTRINGPARAM("org.openoffice.excel.Workbook" ) );
 	}
 	return aServiceNames;
-}
-
-::rtl::OUString SAL_CALL
-ScVbaWorkbook::getCodeName() throw (css::uno::RuntimeException)
-{
-    uno::Reference< frame::XModel > xModel( getModel(), uno::UNO_QUERY_THROW );
-    ScDocument* pDoc = getDocShell( xModel )->GetDocument();
-    ScExtDocOptions* pExtOptions = pDoc->GetExtDocOptions();
-    ScExtDocSettings pExtSettings = pExtOptions->GetDocSettings();
-    ::rtl::OUString sGlobCodeName = pExtSettings.maGlobCodeName;
-    return sGlobCodeName;
-}
-void SAL_CALL
-ScVbaWorkbook::setCodeName( const ::rtl::OUString& sGlobCodeName ) throw (css::uno::RuntimeException)
-{
-    uno::Reference< frame::XModel > xModel( getModel(), uno::UNO_QUERY_THROW );
-    ScDocument* pDoc = getDocShell( xModel )->GetDocument();
-    ScExtDocOptions* pExtOptions = pDoc->GetExtDocOptions();
-    ScExtDocSettings pExtSettings = pExtOptions->GetDocSettings();
-    pExtSettings.maGlobCodeName = sGlobCodeName;
 }
 
 namespace workbook
