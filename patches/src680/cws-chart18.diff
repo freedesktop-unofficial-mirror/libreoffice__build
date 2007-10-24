@@ -1,0 +1,149 @@
+Index: chart2/source/view/axes/ScaleAutomatism.cxx
+===================================================================
+RCS file: /cvs/graphics/chart2/source/view/axes/ScaleAutomatism.cxx,v
+retrieving revision 1.8
+retrieving revision 1.8.34.1
+diff -u -p -u -p -r1.8 -r1.8.34.1
+--- chart2/source/view/axes/ScaleAutomatism.cxx	11 Jun 2007 15:02:44 -0000	1.8
++++ chart2/source/view/axes/ScaleAutomatism.cxx	27 Sep 2007 11:16:26 -0000	1.8.34.1
+@@ -121,8 +121,8 @@ void ScaleAutomatism::setAutoScalingOpti
+ 
+ void ScaleAutomatism::setMaximumAutoMainIncrementCount( sal_Int32 nMaximumAutoMainIncrementCount )
+ {
+-    if( nMaximumAutoMainIncrementCount < 1 )
+-        m_nMaximumAutoMainIncrementCount = 1;
++    if( nMaximumAutoMainIncrementCount < 2 )
++        m_nMaximumAutoMainIncrementCount = 2; //#i82006
+     else if( nMaximumAutoMainIncrementCount > MAXIMUM_AUTO_INCREMENT_COUNT )
+         m_nMaximumAutoMainIncrementCount = MAXIMUM_AUTO_INCREMENT_COUNT;
+     else
+Index: chart2/source/view/axes/TickmarkHelper.cxx
+===================================================================
+RCS file: /cvs/graphics/chart2/source/view/axes/TickmarkHelper.cxx,v
+retrieving revision 1.11
+retrieving revision 1.11.52.2
+diff -u -p -u -p -r1.11 -r1.11.52.2
+--- chart2/source/view/axes/TickmarkHelper.cxx	11 Jun 2007 15:02:56 -0000	1.11
++++ chart2/source/view/axes/TickmarkHelper.cxx	9 Oct 2007 14:30:39 -0000	1.11.52.2
+@@ -475,9 +475,15 @@ double* TickmarkHelper::getMajorTick( sa
+     m_pfCurrentValues[0] = m_fOuterMajorTickBorderMin + nTick*m_rIncrement.Distance;
+ 
+     if(m_pfCurrentValues[0]>m_fOuterMajorTickBorderMax)
+-        return NULL;
++    {
++        if( !approxEqual(m_pfCurrentValues[0],m_fOuterMajorTickBorderMax) )
++            return NULL;
++    }
+     if(m_pfCurrentValues[0]<m_fOuterMajorTickBorderMin)
+-        return NULL;
++    {
++        if( !approxEqual(m_pfCurrentValues[0],m_fOuterMajorTickBorderMin) )
++            return NULL;
++    }
+ 
+     //return always the value after scaling
+     if(!m_rIncrement.PostEquidistant && m_xInverseScaling.is() )
+@@ -548,8 +554,10 @@ bool TickmarkHelper::isVisible( double f
+             return false;
+     }
+     if(fScaledValue<m_fScaledVisibleMin)
+-        return false;
+-
++    {
++        if( !approxEqual(fScaledValue,m_fScaledVisibleMin) )
++            return false;
++    }
+     return true;
+ }
+ 
+Index: chart2/source/view/charttypes/AreaChart.cxx
+===================================================================
+RCS file: /cvs/graphics/chart2/source/view/charttypes/AreaChart.cxx,v
+retrieving revision 1.48.10.1
+retrieving revision 1.48.10.1.10.2
+diff -u -p -u -p -r1.48.10.1 -r1.48.10.1.10.2
+--- chart2/source/view/charttypes/AreaChart.cxx	17 Aug 2007 09:23:51 -0000	1.48.10.1
++++ chart2/source/view/charttypes/AreaChart.cxx	26 Sep 2007 18:18:07 -0000	1.48.10.1.10.2
+@@ -714,26 +714,26 @@ void AreaChart::createShapes()
+                             rfMaxX=fLogicX;
+                     }
+ 
+-                    //better performance for big data
++                    drawing::Position3D aUnscaledLogicPosition( fLogicX, fLogicY, fLogicZ );
++                    drawing::Position3D aScaledLogicPosition(aUnscaledLogicPosition);
++                    pPosHelper->doLogicScaling( aScaledLogicPosition );
++
++                    //transformation 3) -> 4)
++                    drawing::Position3D aScenePosition( pPosHelper->transformLogicToScene( fLogicX,fLogicY,fLogicZ, false ) );
++
++                    //better performance for big data   
+                     FormerPoint aFormerPoint( aSeriesFormerPointMap[pSeries] );
+                     pPosHelper->setCoordinateSystemResolution( m_aCoordinateSystemResolution );
+                     if( !pSeries->isAttributedDataPoint(nIndex)
+                             &&
+                         pPosHelper->isSameForGivenResolution( aFormerPoint.m_fX, aFormerPoint.m_fY, aFormerPoint.m_fZ
+-                                                            , fLogicX, fLogicY, fLogicZ ) )
++                                                            , aScaledLogicPosition.PositionX, aScaledLogicPosition.PositionY, aScaledLogicPosition.PositionZ ) )
+                     {
+                         nSkippedPoints++;
+                         continue;
+                     }
+-                    aSeriesFormerPointMap[pSeries] = FormerPoint(fLogicX,fLogicY,fLogicZ);
++                    aSeriesFormerPointMap[pSeries] = FormerPoint(aScaledLogicPosition.PositionX, aScaledLogicPosition.PositionY, aScaledLogicPosition.PositionZ);
+                     //
+-                    
+-                    drawing::Position3D aUnscaledLogicPosition( fLogicX, fLogicY, fLogicZ );
+-                    drawing::Position3D aScaledLogicPosition(aUnscaledLogicPosition);
+-                    pPosHelper->doLogicScaling( aScaledLogicPosition );
+-
+-                    //transformation 3) -> 4)
+-                    drawing::Position3D aScenePosition( pPosHelper->transformLogicToScene( fLogicX,fLogicY,fLogicZ, false ) );
+ 
+                     //store point information for series polygon
+                     //for area and/or line (symbols only do not need this)
+Index: chart2/source/view/inc/PlottingPositionHelper.hxx
+===================================================================
+RCS file: /cvs/graphics/chart2/source/view/inc/PlottingPositionHelper.hxx,v
+retrieving revision 1.10
+retrieving revision 1.10.46.1
+diff -u -p -u -p -r1.10 -r1.10.46.1
+--- chart2/source/view/inc/PlottingPositionHelper.hxx	22 May 2007 19:19:45 -0000	1.10
++++ chart2/source/view/inc/PlottingPositionHelper.hxx	26 Sep 2007 16:29:42 -0000	1.10.46.1
+@@ -286,20 +286,30 @@ void PlottingPositionHelper::setCoordina
+ }
+ 
+ bool PlottingPositionHelper::isSameForGivenResolution( double fX, double fY, double fZ
+-                                , double fX2, double fY2, double fZ2 )
++                                , double fX2, double fY2, double fZ2 /*these values are all expected tp be scaled already*/ )
+ {
+     if( !::rtl::math::isFinite(fX) || !::rtl::math::isFinite(fY) || !::rtl::math::isFinite(fZ)
+         || !::rtl::math::isFinite(fX2) || !::rtl::math::isFinite(fY2) || !::rtl::math::isFinite(fZ2) )
+         return false;
+ 
+-    bool bSameX = ( static_cast<sal_Int32>(m_nXResolution*(fX - getLogicMinX())/(getLogicMaxX()-getLogicMinX()))
+-                == static_cast<sal_Int32>(m_nXResolution*(fX2 - getLogicMinX())/(getLogicMaxX()-getLogicMinX())) );
++    double fScaledMinX = getLogicMinX();
++    double fScaledMinY = getLogicMinY();
++    double fScaledMinZ = getLogicMinZ();
++    double fScaledMaxX = getLogicMaxX();
++    double fScaledMaxY = getLogicMaxY();
++    double fScaledMaxZ = getLogicMaxZ();
++
++    doLogicScaling( &fScaledMinX, &fScaledMinY, &fScaledMinZ );
++    doLogicScaling( &fScaledMaxX, &fScaledMaxY, &fScaledMaxZ);
+ 
+-    bool bSameY = ( static_cast<sal_Int32>(m_nYResolution*(fY - getLogicMinY())/(getLogicMaxY()-getLogicMinY()))
+-                == static_cast<sal_Int32>(m_nYResolution*(fY2 - getLogicMinY())/(getLogicMaxY()-getLogicMinY())) );
++    bool bSameX = ( static_cast<sal_Int32>(m_nXResolution*(fX - fScaledMinX)/(fScaledMaxX-fScaledMinX))
++                == static_cast<sal_Int32>(m_nXResolution*(fX2 - fScaledMinX)/(fScaledMaxX-fScaledMinX)) );
+ 
+-    bool bSameZ = ( static_cast<sal_Int32>(m_nZResolution*(fZ - getLogicMinZ())/(getLogicMaxZ()-getLogicMinZ()))
+-                == static_cast<sal_Int32>(m_nZResolution*(fZ2 - getLogicMinZ())/(getLogicMaxZ()-getLogicMinZ())) );
++    bool bSameY = ( static_cast<sal_Int32>(m_nYResolution*(fY - fScaledMinY)/(fScaledMaxY-fScaledMinY))
++                == static_cast<sal_Int32>(m_nYResolution*(fY2 - fScaledMinY)/(fScaledMaxY-fScaledMinY)) );
++
++    bool bSameZ = ( static_cast<sal_Int32>(m_nZResolution*(fZ - fScaledMinZ)/(fScaledMaxZ-fScaledMinZ))
++                == static_cast<sal_Int32>(m_nZResolution*(fZ2 - fScaledMinZ)/(fScaledMaxZ-fScaledMinZ)) );
+ 
+     return (bSameX && bSameY && bSameZ);
+ }
