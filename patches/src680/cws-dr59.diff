@@ -1,0 +1,128 @@
+Index: sc/source/core/tool/interpr1.cxx
+===================================================================
+RCS file: /cvs/sc/sc/source/core/tool/interpr1.cxx,v
+retrieving revision 1.50
+retrieving revision 1.50.10.1
+diff -u -p -u -p -r1.50 -r1.50.10.1
+--- sc/source/core/tool/interpr1.cxx	31 Jul 2007 16:36:31 -0000	1.50
++++ sc/source/core/tool/interpr1.cxx	12 Oct 2007 13:27:52 -0000	1.50.10.1
+@@ -2271,25 +2271,30 @@ void ScInterpreter::ScPropper()
+ {
+ //2do: what to do with I18N-CJK ?!?
+ 	String aStr( GetString() );
+-	String aUpr( ScGlobal::pCharClass->upper( aStr ) );
+-	String aLwr( ScGlobal::pCharClass->lower( aStr ) );
+-	register sal_Unicode* pStr = aStr.GetBufferAccess();
+-	const sal_Unicode* pUpr = aUpr.GetBuffer();
+-	const sal_Unicode* pLwr = aLwr.GetBuffer();
+-	*pStr = *pUpr;
+-	String aTmpStr( 'x' );
+-	xub_StrLen nPos = 1;
+-	const xub_StrLen nLen = aStr.Len();
+-	while( nPos < nLen )
+-	{
+-		aTmpStr.SetChar( 0, pStr[nPos-1] );
+-		if ( !ScGlobal::pCharClass->isLetter( aTmpStr, 0 ) )
+-			pStr[nPos] = pUpr[nPos];
+-		else
+-			pStr[nPos] = pLwr[nPos];
+-		nPos++;
+-	}
+-	aStr.ReleaseBufferAccess( nLen );
++    const xub_StrLen nLen = aStr.Len();
++    // #i82487# don't try to write to empty string's BufferAccess
++    // (would crash now that the empty string is const)
++    if ( nLen > 0 )
++    {
++        String aUpr( ScGlobal::pCharClass->upper( aStr ) );
++        String aLwr( ScGlobal::pCharClass->lower( aStr ) );
++        register sal_Unicode* pStr = aStr.GetBufferAccess();
++        const sal_Unicode* pUpr = aUpr.GetBuffer();
++        const sal_Unicode* pLwr = aLwr.GetBuffer();
++        *pStr = *pUpr;
++        String aTmpStr( 'x' );
++        xub_StrLen nPos = 1;
++        while( nPos < nLen )
++        {
++            aTmpStr.SetChar( 0, pStr[nPos-1] );
++            if ( !ScGlobal::pCharClass->isLetter( aTmpStr, 0 ) )
++                pStr[nPos] = pUpr[nPos];
++            else
++                pStr[nPos] = pLwr[nPos];
++            nPos++;
++        }
++        aStr.ReleaseBufferAccess( nLen );
++    }
+ 	PushString( aStr );
+ }
+ 
+Index: sc/source/ui/drawfunc/drtxtob2.cxx
+===================================================================
+RCS file: /cvs/sc/sc/source/ui/drawfunc/drtxtob2.cxx,v
+retrieving revision 1.17
+retrieving revision 1.17.160.1
+diff -u -p -u -p -r1.17 -r1.17.160.1
+--- sc/source/ui/drawfunc/drtxtob2.cxx	10 May 2007 16:56:45 -0000	1.17
++++ sc/source/ui/drawfunc/drtxtob2.cxx	12 Oct 2007 11:42:01 -0000	1.17.160.1
+@@ -125,7 +125,7 @@ void __EXPORT ScDrawTextObjectBar::Execu
+                 aAttr.Put( SvxWritingModeItem(
+                     nSlot == SID_TEXTDIRECTION_LEFT_TO_RIGHT ?
+                         com::sun::star::text::WritingMode_LR_TB : com::sun::star::text::WritingMode_TB_RL,
+-                        ATTR_WRITINGDIR ) );
++                        SDRATTR_TEXTDIRECTION ) );
+ 				pView->SetAttributes( aAttr );
+ 				pViewData->GetScDrawView()->InvalidateDrawTextAttrs();	// Bidi slots may be disabled
+ 				rReq.Done( aAttr );
+Index: sc/source/ui/miscdlgs/acredlin.cxx
+===================================================================
+RCS file: /cvs/sc/sc/source/ui/miscdlgs/acredlin.cxx,v
+retrieving revision 1.23
+retrieving revision 1.23.160.1
+diff -u -p -u -p -r1.23 -r1.23.160.1
+--- sc/source/ui/miscdlgs/acredlin.cxx	26 Apr 2007 09:53:23 -0000	1.23
++++ sc/source/ui/miscdlgs/acredlin.cxx	12 Oct 2007 12:03:10 -0000	1.23.160.1
+@@ -1862,7 +1862,8 @@ IMPL_LINK( ScAcceptChgDlg, UpdateSelecti
+         pEntry = pTheView->NextSelected( pEntry );
+ 	}
+ 
+-    BOOL bEnable = pDoc->IsDocEditable() && !pDoc->GetChangeTrack()->IsProtected();
++    ScChangeTrack* pChanges = pDoc->GetChangeTrack();
++    BOOL bEnable = pDoc->IsDocEditable() && pChanges && !pChanges->IsProtected();
+     pTPView->EnableAccept( bAcceptFlag && bEnable );
+     pTPView->EnableReject( bRejectFlag && bEnable );
+ 
+Index: sfx2/source/doc/oleprops.cxx
+===================================================================
+RCS file: /cvs/framework/sfx2/source/doc/oleprops.cxx,v
+retrieving revision 1.2
+retrieving revision 1.2.78.1
+diff -u -p -u -p -r1.2 -r1.2.78.1
+--- sfx2/source/doc/oleprops.cxx	17 Jul 2007 13:44:56 -0000	1.2
++++ sfx2/source/doc/oleprops.cxx	15 Oct 2007 12:09:29 -0000	1.2.78.1
+@@ -644,7 +644,7 @@ void SfxOleDictionaryProperty::ImplLoad(
+     sal_Int32 nNameCount = GetPropType();
+     // read property ID/name pairs
+     maPropNameMap.clear();
+-    for( sal_Int32 nIdx = 0; (nIdx < nNameCount) && (rStrm.GetErrorCode() == SVSTREAM_OK); ++nIdx )
++    for( sal_Int32 nIdx = 0; (nIdx < nNameCount) && (rStrm.GetErrorCode() == SVSTREAM_OK) && !rStrm.IsEof(); ++nIdx )
+     {
+         sal_Int32 nPropId;
+         rStrm >> nPropId;
+@@ -882,7 +882,7 @@ void SfxOleSection::ImplLoad( SvStream& 
+     // read property ID/position pairs
+     typedef ::std::map< sal_Int32, sal_uInt32 > SfxOlePropPosMap;
+     SfxOlePropPosMap aPropPosMap;
+-    for( sal_Int32 nPropIdx = 0; (nPropIdx < nPropCount) && (rStrm.GetErrorCode() == SVSTREAM_OK); ++nPropIdx )
++    for( sal_Int32 nPropIdx = 0; (nPropIdx < nPropCount) && (rStrm.GetErrorCode() == SVSTREAM_OK) && !rStrm.IsEof(); ++nPropIdx )
+     {
+         sal_Int32 nPropId;
+         sal_uInt32 nPropPos;
+@@ -1099,7 +1099,7 @@ void SfxOlePropertySet::ImplLoad( SvStre
+ 
+     // read sections
+     sal_Size nSectPosPos = rStrm.Tell();
+-    for( sal_Int32 nSectIdx = 0; (nSectIdx < nSectCount) && (rStrm.GetErrorCode() == SVSTREAM_OK); ++nSectIdx )
++    for( sal_Int32 nSectIdx = 0; (nSectIdx < nSectCount) && (rStrm.GetErrorCode() == SVSTREAM_OK) && !rStrm.IsEof(); ++nSectIdx )
+     {
+         // read section guid/position pair
+         rStrm.Seek( nSectPosPos );
