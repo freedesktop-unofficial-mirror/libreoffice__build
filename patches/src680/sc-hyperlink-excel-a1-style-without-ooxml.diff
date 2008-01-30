@@ -1,0 +1,85 @@
+? sc/sc.vpj
+Index: sc/source/core/tool/address.cxx
+===================================================================
+RCS file: /cvs/sc/sc/source/core/tool/address.cxx,v
+retrieving revision 1.9
+diff -u -r1.9 address.cxx
+--- sc/source/core/tool/address.cxx	27 Feb 2007 12:11:39 -0000	1.9
++++ sc/source/core/tool/address.cxx	17 Oct 2007 20:19:55 -0000
+@@ -616,9 +616,14 @@
+     }
+ 
+     // prepare as if it's a singleton, in case we want to fall back */
+-    r.aEnd = r.aStart;
++    r.aEnd.SetCol( r.aStart.Col() );
++    r.aEnd.SetRow( r.aStart.Row() );    // don't overwrite sheet number as parsed in lcl_ScRange_Parse_XL_Header
+     if( *tmp2 != ':' )
++    {
++        if ( !bOnlyAcceptSingle )
++            nFlags &= ~SCA_VALID;   // when looking for a double ref, a single-cell ref must not be accepted
+         return nFlags;
++    }
+ 
+     p = tmp2;
+     tmp1 = lcl_a1_get_col( p+1, &r.aEnd, &nFlags2 );
+Index: sc/source/ui/view/tabvwsh3.cxx
+===================================================================
+RCS file: /cvs/sc/sc/source/ui/view/tabvwsh3.cxx,v
+retrieving revision 1.35
+diff -u -r1.35 tabvwsh3.cxx
+--- sc/source/ui/view/tabvwsh3.cxx	27 Sep 2007 13:56:50 -0000	1.35
++++ sc/source/ui/view/tabvwsh3.cxx	17 Oct 2007 20:19:56 -0000
+@@ -99,6 +99,28 @@
+ 
+ //------------------------------------------------------------------
+ 
++/** Try to parse the given range using Calc-style syntax first, then
++    Excel-style if that fails. */
++USHORT lcl_ParseRange(ScRange& rScRange, const String& aAddress, ScDocument* pDoc, USHORT nSlot)
++{
++    USHORT nResult = rScRange.Parse(aAddress, pDoc);
++    if ( (nResult & SCA_VALID) )
++        return nResult;
++
++    return rScRange.Parse(aAddress, pDoc, ScAddress::Details(ScAddress::CONV_XL_A1, 0, 0));
++}
++
++/** Try to parse the given address using Calc-style syntax first, then
++    Excel-style if that fails. */
++USHORT lcl_ParseAddress(ScAddress& rScAddress, const String& aAddress, ScDocument* pDoc, USHORT nSlot)
++{
++    USHORT nResult = rScAddress.Parse(aAddress, pDoc);
++    if ( (nResult & SCA_VALID) )
++        return nResult;
++
++    return rScAddress.Parse(aAddress, pDoc, ScAddress::Details(ScAddress::CONV_XL_A1, 0, 0));
++}
++
+ void ScTabViewShell::Execute( SfxRequest& rReq )
+ {
+ 	SfxViewFrame*		pThisFrame  = GetViewFrame();
+@@ -259,11 +281,11 @@
+ 				ScMarkData& rMark	  = pViewData->GetMarkData();
+ 				ScRange		aScRange;
+ 				ScAddress	aScAddress;
+-				USHORT		nResult = aScRange.Parse( aAddress, pDoc );
++                USHORT      nResult = lcl_ParseRange(aScRange, aAddress, pDoc, nSlot);
+ 				SCTAB		nTab = pViewData->GetTabNo();
+ 				BOOL		bMark = TRUE;
+ 
+-				// Ist es ein Bereich ?
++                // Is this a range ?
+ 				if( nResult & SCA_VALID )
+ 				{
+ 					if ( nResult & SCA_TAB_3D )
+@@ -277,8 +299,8 @@
+ 						aScRange.aEnd.SetTab( nTab );
+ 					}
+ 				}
+-				// Ist es eine Zelle ?
+-				else if( (nResult=aScAddress.Parse( aAddress, pDoc )) & SCA_VALID )
++                // Is this a cell ?
++                else if ( (nResult = lcl_ParseAddress(aScAddress, aAddress, pDoc, nSlot)) & SCA_VALID )
+ 				{
+ 					if ( nResult & SCA_TAB_3D )
+ 					{
