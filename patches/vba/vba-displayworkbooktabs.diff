@@ -1,0 +1,157 @@
+diff -rup oovbaapi/org/openoffice/excel/XWindow.idl oovbaapi.patched/org/openoffice/excel/XWindow.idl
+--- oovbaapi/org/openoffice/excel/XWindow.idl	2008-02-07 15:44:37.000000000 +0000
++++ oovbaapi/org/openoffice/excel/XWindow.idl	2008-02-07 15:46:27.000000000 +0000
+@@ -54,12 +54,15 @@ interface XWindow
+ 	interface ::org::openoffice::vba::XHelperInterface;
+ 
+ 	[attribute] boolean DisplayGridlines; 
++	[attribute] boolean DisplayHeadings;
+ 	[attribute] boolean DisplayVerticalScrollBar; 
+ 	[attribute] boolean DisplayHorizontalScrollBar; 
++	[attribute] boolean DisplayWorkbookTabs;
+ 	[attribute] any Caption;
+ 	[attribute] any ScrollRow;
+ 	[attribute] any ScrollColumn;
+ 	[attribute] any WindowState;
++	[attribute] any Zoom;
+ 	any SelectedSheets( [in] any aIndex );
+ 	void SmallScroll( [in] any Down, [in] any Up, [in] any ToRight, [in] any ToLeft );
+ 	void LargeScroll( [in] any Down, [in] any Up, [in] any ToRight, [in] any ToLeft );
+diff -rup sc/source/ui/vba/vbawindow.cxx sc.patched/source/ui/vba/vbawindow.cxx
+--- sc/source/ui/vba/vbawindow.cxx	2008-02-07 15:44:37.000000000 +0000
++++ sc/source/ui/vba/vbawindow.cxx	2008-02-07 15:47:37.000000000 +0000
+@@ -39,6 +39,7 @@
+ #include <com/sun/star/sheet/XSpreadsheetDocument.hpp>
+ #include <com/sun/star/sheet/XSpreadsheet.hpp>
+ #include <com/sun/star/container/XNamed.hpp>
++#include <com/sun/star/view/DocumentZoomType.hpp>
+ #include <org/openoffice/excel/XlWindowState.hpp>
+ #include <org/openoffice/excel/Constants.hpp>
+ 
+@@ -49,6 +50,7 @@
+ #include <hash_map>
+ #include <sfx2/viewfrm.hxx>
+ #include <sfx2/topfrm.hxx>
++#include "unonames.hxx"
+ 
+ using namespace ::com::sun::star;
+ using namespace ::org::openoffice;
+@@ -478,6 +480,24 @@ ScVbaWindow::setDisplayGridlines( ::sal_
+ }
+ 
+ ::sal_Bool SAL_CALL 
++ScVbaWindow::getDisplayHeadings() throw (uno::RuntimeException)
++{
++	uno::Reference< beans::XPropertySet > xProps( m_xModel->getCurrentController(), uno::UNO_QUERY_THROW );
++	rtl::OUString sName( RTL_CONSTASCII_USTRINGPARAM( SC_UNO_COLROWHDR ) );
++	sal_Bool bHeading = sal_True;
++	xProps->getPropertyValue( sName ) >>= bHeading;
++	return bHeading;	
++}
++
++void SAL_CALL 
++ScVbaWindow::setDisplayHeadings( ::sal_Bool _bDisplayHeadings ) throw (uno::RuntimeException)
++{
++	uno::Reference< beans::XPropertySet > xProps( m_xModel->getCurrentController(), uno::UNO_QUERY_THROW );
++	rtl::OUString sName( RTL_CONSTASCII_USTRINGPARAM( SC_UNO_COLROWHDR ) );
++	xProps->setPropertyValue( sName, uno::makeAny( _bDisplayHeadings ));
++}
++
++::sal_Bool SAL_CALL 
+ ScVbaWindow::getDisplayVerticalScrollBar() throw (css::uno::RuntimeException)
+ {
+ 	uno::Reference< beans::XPropertySet > xProps( m_xModel->getCurrentController(), uno::UNO_QUERY_THROW );
+@@ -496,6 +516,68 @@ ScVbaWindow::setDisplayVerticalScrollBar
+ }
+ 
+ ::sal_Bool SAL_CALL 
++ScVbaWindow::getDisplayWorkbookTabs() throw (uno::RuntimeException)
++{
++	uno::Reference< beans::XPropertySet > xProps( m_xModel->getCurrentController(), uno::UNO_QUERY_THROW );
++	rtl::OUString sName( RTL_CONSTASCII_USTRINGPARAM( SC_UNO_SHEETTABS ) );
++	sal_Bool bWorkbookTabs = sal_True;
++	xProps->getPropertyValue( sName ) >>= bWorkbookTabs;
++	return bWorkbookTabs;	
++}
++
++void SAL_CALL 
++ScVbaWindow::setDisplayWorkbookTabs( ::sal_Bool _bDisplayWorkbookTabs ) throw (uno::RuntimeException)
++{
++	uno::Reference< beans::XPropertySet > xProps( m_xModel->getCurrentController(), uno::UNO_QUERY_THROW );
++	rtl::OUString sName( RTL_CONSTASCII_USTRINGPARAM( SC_UNO_SHEETTABS ) );
++	xProps->setPropertyValue( sName, uno::makeAny( _bDisplayWorkbookTabs ));
++}
++
++uno::Any SAL_CALL 
++ScVbaWindow::getZoom() throw (uno::RuntimeException)
++{	
++	uno::Reference< beans::XPropertySet > xProps( m_xModel->getCurrentController(), uno::UNO_QUERY_THROW );
++	rtl::OUString sName( RTL_CONSTASCII_USTRINGPARAM( SC_UNO_ZOOMTYPE ) );
++	sal_Int16 nZoomType = view::DocumentZoomType::PAGE_WIDTH;
++	xProps->getPropertyValue( sName ) >>= nZoomType;
++	if( nZoomType == view::DocumentZoomType::PAGE_WIDTH )
++	{
++		return uno::makeAny( sal_True );
++	}
++	else if( nZoomType == view::DocumentZoomType::BY_VALUE )
++	{
++		sName = rtl::OUString( RTL_CONSTASCII_USTRINGPARAM(SC_UNO_ZOOMVALUE));
++		sal_Int16 nZoom = 100;
++		xProps->getPropertyValue( sName ) >>= nZoom;
++		return uno::makeAny( nZoom );
++	}
++    return uno::Any();
++}
++
++void SAL_CALL 
++ScVbaWindow::setZoom( const uno::Any& _zoom ) throw (uno::RuntimeException)
++{
++	uno::Reference< beans::XPropertySet > xProps( m_xModel->getCurrentController(), uno::UNO_QUERY_THROW );
++	rtl::OUString sZoomType( RTL_CONSTASCII_USTRINGPARAM( SC_UNO_ZOOMTYPE ) );
++	sal_Int16 nZoomType = view::DocumentZoomType::PAGE_WIDTH;
++	if( _zoom.getValueTypeClass() == uno::TypeClass_BOOLEAN )
++	{		
++		//zoom type is PAGE_WIDTH_EXACT in helperapi, it seems that there is a issue for this zoom type in current OOo.
++		// so PAGE_WIDTH is used.   	
++		xProps->setPropertyValue(sZoomType, uno::makeAny( nZoomType ));
++	}					
++	else
++	{
++		nZoomType = view::DocumentZoomType::BY_VALUE;
++		rtl::OUString sZoomValue( RTL_CONSTASCII_USTRINGPARAM( SC_UNO_ZOOMVALUE ));
++		sal_Int16 nZoomValue = 100;
++		_zoom >>= nZoomValue;
++		xProps->setPropertyValue( sZoomType, uno::makeAny( nZoomType ));
++		xProps->setPropertyValue( sZoomValue, uno::makeAny( nZoomValue ));
++	}			
++}
++
++::sal_Bool SAL_CALL 
+ ScVbaWindow::getDisplayHorizontalScrollBar() throw (css::uno::RuntimeException)
+ {
+ 	uno::Reference< beans::XPropertySet > xProps( m_xModel->getCurrentController(), uno::UNO_QUERY_THROW );
+diff -rup sc/source/ui/vba/vbawindow.hxx sc.patched/source/ui/vba/vbawindow.hxx
+--- sc/source/ui/vba/vbawindow.hxx	2008-02-07 15:44:37.000000000 +0000
++++ sc/source/ui/vba/vbawindow.hxx	2008-02-07 15:47:08.000000000 +0000
+@@ -58,8 +58,12 @@ public:
+ 	// XWindow
+ 	virtual ::sal_Bool SAL_CALL getDisplayGridlines() throw (css::uno::RuntimeException);
+ 	virtual void SAL_CALL setDisplayGridlines( ::sal_Bool _displaygridlines ) throw (css::uno::RuntimeException);
++	virtual ::sal_Bool SAL_CALL getDisplayHeadings() throw (css::uno::RuntimeException);
++	virtual void SAL_CALL setDisplayHeadings( ::sal_Bool _bDisplayHeadings ) throw (css::uno::RuntimeException);
+ 	virtual ::sal_Bool SAL_CALL getDisplayVerticalScrollBar() throw (css::uno::RuntimeException);
+ 	virtual void SAL_CALL setDisplayVerticalScrollBar( ::sal_Bool _displayverticalscrollbar ) throw (css::uno::RuntimeException);
++	virtual ::sal_Bool SAL_CALL getDisplayWorkbookTabs() throw (css::uno::RuntimeException);
++	virtual void SAL_CALL setDisplayWorkbookTabs( ::sal_Bool _bDisplayWorkbookTabs ) throw (css::uno::RuntimeException);
+ 	virtual ::sal_Bool SAL_CALL getDisplayHorizontalScrollBar() throw (css::uno::RuntimeException);
+ 	virtual void SAL_CALL setDisplayHorizontalScrollBar( ::sal_Bool _displayhorizontalscrollbar ) throw (css::uno::RuntimeException);
+ 	virtual void SAL_CALL setCaption( const css::uno::Any& _caption ) throw (css::uno::RuntimeException);
+@@ -70,6 +74,8 @@ public:
+     virtual void SAL_CALL setScrollColumn( const css::uno::Any& _scrollcolumn ) throw (css::uno::RuntimeException) ;
+     virtual css::uno::Any SAL_CALL getWindowState() throw (css::uno::RuntimeException);
+     virtual void SAL_CALL setWindowState( const css::uno::Any& _windowstate ) throw (css::uno::RuntimeException);
++    virtual css::uno::Any SAL_CALL getZoom() throw (css::uno::RuntimeException);
++    virtual void SAL_CALL setZoom( const css::uno::Any& _zoom ) throw (css::uno::RuntimeException);
+ 
+ 	// Methods
+ 	virtual void SAL_CALL SmallScroll( const css::uno::Any& Down, const css::uno::Any& Up, const css::uno::Any& ToRight, const css::uno::Any& ToLeft ) throw (css::uno::RuntimeException);
