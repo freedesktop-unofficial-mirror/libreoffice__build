@@ -1,0 +1,2140 @@
+Index: comphelper/inc/comphelper/namedvaluecollection.hxx
+===================================================================
+RCS file: /cvs/util/comphelper/inc/comphelper/namedvaluecollection.hxx,v
+retrieving revision 1.6
+retrieving revision 1.6.54.1
+diff -u -p -u -r1.6 -r1.6.54.1
+--- comphelper/inc/comphelper/namedvaluecollection.hxx	27 Jun 2007 14:54:05 -0000	1.6
++++ comphelper/inc/comphelper/namedvaluecollection.hxx	16 Oct 2007 13:03:01 -0000	1.6.54.1
+@@ -197,6 +197,28 @@ namespace comphelper
+             return impl_has( _rValueName );
+         }
+ 
++        /** puts a value into the collection
++
++            @return <TRUE/> if and only if a value was already present previously, in
++                which case it has been overwritten.
++        */
++        template < typename VALUE_TYPE >
++        inline bool put( const sal_Char* _pAsciiValueName, const VALUE_TYPE& _rValue )
++        {
++            return impl_put( ::rtl::OUString::createFromAscii( _pAsciiValueName ), ::com::sun::star::uno::makeAny( _rValue ) );
++        }
++
++        /** puts a value into the collection
++
++            @return <TRUE/> if and only if a value was already present previously, in
++                which case it has been overwritten.
++        */
++        template < typename VALUE_TYPE >
++        inline bool put( const ::rtl::OUString& _rValueName, const VALUE_TYPE& _rValue )
++        {
++            return impl_put( _rValueName, ::com::sun::star::uno::makeAny( _rValue ) );
++        }
++
+         /** removes the value with the given name from the collection
+ 
+             @return <TRUE/> if and only if a value with the given name existed in the collection.
+@@ -215,6 +237,20 @@ namespace comphelper
+             return impl_remove( _rValueName );
+         }
+ 
++        /** transforms the collection to a sequence of PropertyValues
++
++            @return
++                the  number of elements in the sequence
++        */
++        sal_Int32 operator >>= ( ::com::sun::star::uno::Sequence< ::com::sun::star::beans::PropertyValue >& _out_rValues );
++
++        /** transforms the collection to a sequence of NamedValues
++
++            @return
++                the  number of elements in the sequence
++        */
++        sal_Int32 operator >>= ( ::com::sun::star::uno::Sequence< ::com::sun::star::beans::NamedValue >& _out_rValues );
++
+     private:
+         void    impl_assign( const ::com::sun::star::uno::Sequence< ::com::sun::star::uno::Any >& _rArguments );
+         void    impl_assign( const ::com::sun::star::uno::Sequence< ::com::sun::star::beans::PropertyValue >& _rArguments );
+@@ -231,6 +267,8 @@ namespace comphelper
+ 
+         bool    impl_has( const ::rtl::OUString& _rValueName ) const;
+ 
++        bool    impl_put( const ::rtl::OUString& _rValueName, const ::com::sun::star::uno::Any& _rValue );
++
+         bool    impl_remove( const ::rtl::OUString& _rValueName );
+     };
+ 
+Index: comphelper/source/misc/namedvaluecollection.cxx
+===================================================================
+RCS file: /cvs/util/comphelper/source/misc/namedvaluecollection.cxx,v
+retrieving revision 1.7
+retrieving revision 1.7.54.1
+diff -u -p -u -r1.7 -r1.7.54.1
+--- comphelper/source/misc/namedvaluecollection.cxx	27 Jun 2007 14:55:20 -0000	1.7
++++ comphelper/source/misc/namedvaluecollection.cxx	16 Oct 2007 13:03:35 -0000	1.7.54.1
+@@ -41,18 +41,17 @@
+ #endif
+ 
+ /** === begin UNO includes === **/
+-#ifndef _COM_SUN_STAR_BEANS_NAMEDVALUE_HPP_
+ #include <com/sun/star/beans/NamedValue.hpp>
+-#endif
+-#ifndef _COM_SUN_STAR_LANG_ILLEGALARGUMENTEXCEPTION_HPP_
+ #include <com/sun/star/lang/IllegalArgumentException.hpp>
+-#endif
++#include <com/sun/star/beans/PropertyState.hpp>
+ /** === end UNO includes === **/
+ 
+ #include <rtl/ustrbuf.hxx>
+ #include <osl/diagnose.h>
+ 
+ #include <hash_map>
++#include <functional>
++#include <algorithm>
+ 
+ //........................................................................
+ namespace comphelper
+@@ -70,6 +69,7 @@ namespace comphelper
+     using ::com::sun::star::uno::cpp_queryInterface;
+     using ::com::sun::star::lang::IllegalArgumentException;
+     using ::com::sun::star::beans::NamedValue;
++    using ::com::sun::star::beans::PropertyState_DIRECT_VALUE;
+     /** === end UNO using === **/
+ 
+     //====================================================================
+@@ -231,6 +231,14 @@ namespace comphelper
+     }
+ 
+     //--------------------------------------------------------------------
++    bool NamedValueCollection::impl_put( const ::rtl::OUString& _rValueName, const Any& _rValue )
++    {
++        bool bHas = impl_has( _rValueName );
++        m_pImpl->aValues[ _rValueName ] = _rValue;
++        return bHas;
++    }
++
++    //--------------------------------------------------------------------
+     bool NamedValueCollection::impl_remove( const ::rtl::OUString& _rValueName )
+     {
+         NamedValueRepository::iterator pos = m_pImpl->aValues.find( _rValueName );
+@@ -240,6 +248,43 @@ namespace comphelper
+         return true;
+     }
+ 
++    //--------------------------------------------------------------------
++    namespace
++    {
++        struct Value2PropertyValue : public ::std::unary_function< NamedValueRepository::value_type, PropertyValue >
++        {
++            PropertyValue operator()( const NamedValueRepository::value_type& _rValue )
++            {
++                return PropertyValue(
++                    _rValue.first, 0, _rValue.second, PropertyState_DIRECT_VALUE );
++            }
++        };
++
++        struct Value2NamedValue : public ::std::unary_function< NamedValueRepository::value_type, NamedValue >
++        {
++            NamedValue operator()( const NamedValueRepository::value_type& _rValue )
++            {
++                return NamedValue( _rValue.first, _rValue.second );
++            }                                     
++        };
++    }
++
++    //--------------------------------------------------------------------
++    sal_Int32 NamedValueCollection::operator >>= ( Sequence< PropertyValue >& _out_rValues )
++    {
++        _out_rValues.realloc( m_pImpl->aValues.size() );
++        ::std::transform( m_pImpl->aValues.begin(), m_pImpl->aValues.end(), _out_rValues.getArray(), Value2PropertyValue() );
++        return _out_rValues.getLength();
++    }
++
++    //--------------------------------------------------------------------
++    sal_Int32 NamedValueCollection::operator >>= ( Sequence< NamedValue >& _out_rValues )
++    {
++        _out_rValues.realloc( m_pImpl->aValues.size() );
++        ::std::transform( m_pImpl->aValues.begin(), m_pImpl->aValues.end(), _out_rValues.getArray(), Value2NamedValue() );
++        return _out_rValues.getLength();
++    }
++
+ //........................................................................
+ } // namespace comphelper
+ //........................................................................
+Index: config_office/configure.in
+===================================================================
+RCS file: /cvs/tools/config_office/configure.in,v
+retrieving revision 1.216.2.2
+retrieving revision 1.216.2.2.12.2
+diff -u -p -u -r1.216.2.2 -r1.216.2.2.12.2
+--- config_office/configure.in	24 Aug 2007 12:29:27 -0000	1.216.2.2
++++ config_office/configure.in	26 Oct 2007 05:26:17 -0000	1.216.2.2.12.2
+@@ -3187,7 +3187,7 @@ if test -n "$with_system_hsqldb" -o -n "
+         fi
+         AC_CHECK_FILE($HSQLDB_JAR, [],
+                [AC_MSG_ERROR(hsqldb.jar not found.)], [])
+-        AC_MSG_CHECKING([whether hsqldb is >= 1.8.0.8])
++        AC_MSG_CHECKING([whether hsqldb is >= 1.8.0.9])
+         export HSQLDB_JAR
+         if $PERL -e 'use Archive::Zip;
+             my $file = "$ENV{'HSQLDB_JAR'}";
+@@ -3200,7 +3200,7 @@ if test -n "$with_system_hsqldb" -o -n "
+ 		        ($t, $version) = split (/:/,$line);
+ 		        $version =~ s/^\s//;
+ 		        ($a, $b, $c, $d) = split (/\./,$version);
+-		        if (($c == "0" && $d > "7") || $c > 0)  {
++		        if (($c == "0" && $d > "8") || $c > 0)  {
+ 		            exit 0;
+ 		        } else {
+ 		            exit 1;
+@@ -3212,7 +3212,7 @@ if test -n "$with_system_hsqldb" -o -n "
+             }'; then
+             AC_MSG_RESULT([yes])
+          else
+-            AC_MSG_ERROR([no, hsqldb >= 1.8.0.8 is needed])
++            AC_MSG_ERROR([no, hsqldb >= 1.8.0.9 is needed])
+          fi
+ else
+     AC_MSG_RESULT([internal])
+Index: connectivity/source/drivers/hsqldb/HDriver.cxx
+===================================================================
+RCS file: /cvs/dba/connectivity/source/drivers/hsqldb/HDriver.cxx,v
+retrieving revision 1.23.48.1
+retrieving revision 1.23.48.1.6.2
+diff -u -p -u -r1.23.48.1 -r1.23.48.1.6.2
+--- connectivity/source/drivers/hsqldb/HDriver.cxx	24 Aug 2007 12:28:37 -0000	1.23.48.1
++++ connectivity/source/drivers/hsqldb/HDriver.cxx	20 Oct 2007 12:21:43 -0000	1.23.48.1.6.2
+@@ -101,6 +101,13 @@
+ #ifndef _DBHELPER_DBEXCEPTION_HXX_
+ #include <connectivity/dbexception.hxx>
+ #endif
++#ifndef COMPHELPER_NAMEDVALUECOLLECTION_HXX
++#include <comphelper/namedvaluecollection.hxx>
++#endif
++#ifndef _UNOTOOLS_CONFIGNODE_HXX_
++#include <unotools/confignode.hxx>
++#endif
++
+ //........................................................................
+ namespace connectivity
+ {
+@@ -186,6 +193,37 @@ namespace connectivity
+ 	}
+ 
+ 	//--------------------------------------------------------------------
++    namespace
++    {
++        ::rtl::OUString lcl_getPermittedJavaMethods_nothrow( const Reference< XMultiServiceFactory >& _rxORB )
++        {
++            ::rtl::OUStringBuffer aConfigPath;
++            aConfigPath.appendAscii( "/org.openoffice.Office.DataAccess/DriverSettings/" );
++            aConfigPath.append     ( ODriverDelegator::getImplementationName_Static() );
++            aConfigPath.appendAscii( "/PermittedJavaMethods" );
++            ::utl::OConfigurationTreeRoot aConfig( ::utl::OConfigurationTreeRoot::createWithServiceFactory(
++                _rxORB, aConfigPath.makeStringAndClear() ) );
++
++            ::rtl::OUStringBuffer aPermittedMethods;
++            Sequence< ::rtl::OUString > aNodeNames( aConfig.getNodeNames() );
++            for (   const ::rtl::OUString* pNodeNames = aNodeNames.getConstArray();
++                    pNodeNames != aNodeNames.getConstArray() + aNodeNames.getLength();
++                    ++pNodeNames
++                )
++            {
++                ::rtl::OUString sPermittedMethod;
++                OSL_VERIFY( aConfig.getNodeValue( *pNodeNames ) >>= sPermittedMethod );
++
++                if ( aPermittedMethods.getLength() )
++                    aPermittedMethods.append( (sal_Unicode)';' );
++                aPermittedMethods.append( sPermittedMethod );
++            }
++
++            return aPermittedMethods.makeStringAndClear();;
++        }
++    }
++
++	//--------------------------------------------------------------------
+ 	Reference< XConnection > SAL_CALL ODriverDelegator::connect( const ::rtl::OUString& url, const Sequence< PropertyValue >& info ) throw (SQLException, RuntimeException)
+ 	{
+ 		Reference< XConnection > xConnection;
+@@ -228,39 +266,49 @@ namespace connectivity
+ 
+                 bool bIsNewDatabase = !xStorage->hasElements();
+ 
+-				Sequence< PropertyValue > aConvertedProperties(9);
+-				sal_Int32 nPos = 0;
+-				aConvertedProperties[nPos].Name = ::rtl::OUString(RTL_CONSTASCII_USTRINGPARAM("storage_key"));
+-				::rtl::OUString sConnPartURL = sSystemPath.copy(0,::std::max<sal_Int32>(nIndex,sSystemPath.getLength()));
+-				::rtl::OUString sKey = StorageContainer::registerStorage(xStorage,sConnPartURL);
+-				aConvertedProperties[nPos++].Value <<= sKey;
+-				aConvertedProperties[nPos].Name = ::rtl::OUString(RTL_CONSTASCII_USTRINGPARAM("storage_class_name"));
+-				aConvertedProperties[nPos++].Value <<= ::rtl::OUString(RTL_CONSTASCII_USTRINGPARAM("com.sun.star.sdbcx.comp.hsqldb.StorageAccess"));
+-				aConvertedProperties[nPos].Name = ::rtl::OUString(RTL_CONSTASCII_USTRINGPARAM("fileaccess_class_name"));
+-				aConvertedProperties[nPos++].Value <<= ::rtl::OUString(RTL_CONSTASCII_USTRINGPARAM("com.sun.star.sdbcx.comp.hsqldb.StorageFileAccess"));
+-				aConvertedProperties[nPos].Name = ::rtl::OUString(RTL_CONSTASCII_USTRINGPARAM("JavaDriverClass"));
+-				aConvertedProperties[nPos++].Value <<= ::rtl::OUString(RTL_CONSTASCII_USTRINGPARAM("org.hsqldb.jdbcDriver"));
+-				aConvertedProperties[nPos].Name = ::rtl::OUString(RTL_CONSTASCII_USTRINGPARAM("JavaDriverClassPath"));
+-				aConvertedProperties[nPos++].Value <<= ::rtl::OUString(
++                ::comphelper::NamedValueCollection aProperties;
++
++                // properties for accessing the embedded storage
++				::rtl::OUString sConnPartURL = sSystemPath.copy( 0, ::std::max< sal_Int32 >( nIndex, sSystemPath.getLength() ) );
++				::rtl::OUString sKey = StorageContainer::registerStorage( xStorage, sConnPartURL );
++                aProperties.put( "storage_key", sKey );
++                aProperties.put( "storage_class_name",
++                    ::rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( "com.sun.star.sdbcx.comp.hsqldb.StorageAccess" ) ) );
++                aProperties.put( "fileaccess_class_name",
++                    ::rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( "com.sun.star.sdbcx.comp.hsqldb.StorageFileAccess" ) ) );
++
++                // JDBC driver and driver's classpath
++                aProperties.put( "JavaDriverClass",
++                    ::rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( "org.hsqldb.jdbcDriver" ) ) );
++                aProperties.put( "JavaDriverClassPath",
++				    ::rtl::OUString(
+ #ifdef SYSTEM_HSQLDB
+-					RTL_CONSTASCII_USTRINGPARAM(HSQLDB_JAR
+-					" vnd.sun.star.expand:$ORIGIN/classes/sdbc_hsqldb.jar")
++    					RTL_CONSTASCII_USTRINGPARAM(HSQLDB_JAR
++	    				" vnd.sun.star.expand:$ORIGIN/classes/sdbc_hsqldb.jar" )
+ #else
+-					RTL_CONSTASCII_USTRINGPARAM("vnd.sun.star.expand:$ORIGIN/classes/hsqldb.jar"
+-					" vnd.sun.star.expand:$ORIGIN/classes/sdbc_hsqldb.jar")
++	    				RTL_CONSTASCII_USTRINGPARAM("vnd.sun.star.expand:$ORIGIN/classes/hsqldb.jar"
++		    			" vnd.sun.star.expand:$ORIGIN/classes/sdbc_hsqldb.jar" )
+ #endif
+-				);
+-				aConvertedProperties[nPos].Name = ::rtl::OUString(RTL_CONSTASCII_USTRINGPARAM("IsAutoRetrievingEnabled"));
+-				aConvertedProperties[nPos++].Value <<= sal_True;
+-				aConvertedProperties[nPos].Name = ::rtl::OUString(RTL_CONSTASCII_USTRINGPARAM("AutoRetrievingStatement"));
+-				aConvertedProperties[nPos++].Value <<= ::rtl::OUString(RTL_CONSTASCII_USTRINGPARAM("CALL IDENTITY()"));
+-				aConvertedProperties[nPos].Name = ::rtl::OUString(RTL_CONSTASCII_USTRINGPARAM("IgnoreDriverPrivileges"));
+-				aConvertedProperties[nPos++].Value <<= sal_True;
++                        ) );
++
++                // auto increment handling
++                aProperties.put( "IsAutoRetrievingEnabled", true );
++                aProperties.put( "AutoRetrievingStatement",
++                    ::rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( "CALL IDENTITY()" ) ) );
++                aProperties.put( "IgnoreDriverPrivileges", true );
+ 
+                 // don't want to expose HSQLDB's schema capabilities which exist since 1.8.0RC10
+-				aConvertedProperties[nPos].Name = ::rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( "default_schema" ) );
+-                aConvertedProperties[nPos++].Value <<= ::rtl::OUString(RTL_CONSTASCII_USTRINGPARAM("true"));
++                aProperties.put( "default_schema",
++                    ::rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( "true" ) ) );
+ 
++                // security: permitted Java classes
++                NamedValue aPermittedClasses(
++                    ::rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( "hsqldb.method_class_names" ) ),
++                    makeAny( lcl_getPermittedJavaMethods_nothrow( m_xFactory ) )
++                );
++                aProperties.put( "SystemProperties", Sequence< NamedValue >( &aPermittedClasses, 1 ) );
++
++                // readonly?
+ 				Reference<XPropertySet> xProp(xStorage,UNO_QUERY);
+ 				if ( xProp.is() )
+ 				{
+@@ -268,19 +316,20 @@ namespace connectivity
+ 					xProp->getPropertyValue(::rtl::OUString(RTL_CONSTASCII_USTRINGPARAM("OpenMode"))) >>= nMode;
+ 					if ( (nMode & ElementModes::WRITE) != ElementModes::WRITE )
+ 					{
+-						aConvertedProperties.realloc(nPos+1);
+-						aConvertedProperties[nPos].Name = ::rtl::OUString(RTL_CONSTASCII_USTRINGPARAM("readonly"));
+-						aConvertedProperties[nPos++].Value <<= ::rtl::OUString(RTL_CONSTASCII_USTRINGPARAM("true"));
++                        aProperties.put( "readonly", ::rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( "true" ) ) );
+ 					}
+ 				}
+ 
++                Sequence< PropertyValue > aConnectionArgs;
++                aProperties >>= aConnectionArgs;
++
+ 				::rtl::OUString sConnectURL(RTL_CONSTASCII_USTRINGPARAM("jdbc:hsqldb:"));
+ 
+ 				sConnectURL += sConnPartURL;
+                 Reference<XConnection> xOrig;
+                 try
+                 {
+-                    xOrig = xDriver->connect( sConnectURL, aConvertedProperties );
++                    xOrig = xDriver->connect( sConnectURL, aConnectionArgs );
+                 }
+                 catch(const Exception& e)
+                 {
+Index: connectivity/source/drivers/hsqldb/makefile.mk
+===================================================================
+RCS file: /cvs/dba/connectivity/source/drivers/hsqldb/makefile.mk,v
+retrieving revision 1.11.48.1
+retrieving revision 1.11.48.1.6.1
+diff -u -p -u -r1.11.48.1 -r1.11.48.1.6.1
+--- connectivity/source/drivers/hsqldb/makefile.mk	24 Aug 2007 12:28:49 -0000	1.11.48.1
++++ connectivity/source/drivers/hsqldb/makefile.mk	16 Oct 2007 13:09:54 -0000	1.11.48.1.6.1
+@@ -105,7 +105,8 @@ SHL1STDLIBS=\
+ 	$(JVMACCESSLIB)				\
+ 	$(DBTOOLSLIB)				\
+ 	$(JVMFWKLIB)				\
+-	$(COMPHELPERLIB)
++	$(COMPHELPERLIB)            \
++	$(UNOTOOLSLIB)
+ 
+ 
+ SHL1DEPN=
+Index: connectivity/source/drivers/jdbc/JConnection.cxx
+===================================================================
+RCS file: /cvs/dba/connectivity/source/drivers/jdbc/JConnection.cxx,v
+retrieving revision 1.5
+retrieving revision 1.5.14.2
+diff -u -p -u -r1.5 -r1.5.14.2
+--- connectivity/source/drivers/jdbc/JConnection.cxx	27 Jun 2007 14:35:59 -0000	1.5
++++ connectivity/source/drivers/jdbc/JConnection.cxx	16 Oct 2007 13:11:20 -0000	1.5.14.2
+@@ -63,6 +63,12 @@
+ #ifndef _COM_SUN_STAR_LANG_DISPOSEDEXCEPTION_HPP_
+ #include <com/sun/star/lang/DisposedException.hpp>
+ #endif
++#ifndef _COM_SUN_STAR_SDBC_SQLWARNING_HPP_
++#include <com/sun/star/sdbc/SQLWarning.hpp>
++#endif
++#ifndef _COM_SUN_STAR_BEANS_NAMEDVALUE_HPP_
++#include <com/sun/star/beans/NamedValue.hpp>
++#endif
+ #ifndef _CONNECTIVITY_SQLPARSE_HXX
+ #include "connectivity/sqlparse.hxx"
+ #endif
+@@ -70,6 +76,7 @@
+ #include "connectivity/dbexception.hxx"
+ #endif
+ #include "java/util/Property.hxx"
++#include "java/LocalRef.hxx"
+ #include "resource/jdbc_log.hrc"
+ #include "com/sun/star/uno/XComponentContext.hpp"
+ #include "jvmaccess/classpath.hxx"
+@@ -80,6 +87,7 @@
+ #include <memory>
+ 
+ using namespace connectivity;
++using namespace connectivity::jdbc;
+ using namespace ::com::sun::star::uno;
+ using namespace ::com::sun::star::beans;
+ using namespace ::com::sun::star::sdbc;
+@@ -797,14 +805,68 @@ Any SAL_CALL java_sql_Connection::getWar
+ 	if( out )
+ 	{
+ 		java_sql_SQLWarning_BASE		warn_base(t.pEnv, out);
+-		return makeAny(
+-            static_cast< starsdbc::SQLException >(
+-                java_sql_SQLWarning(warn_base,*this)));
++        SQLException aAsException( static_cast< starsdbc::SQLException >( java_sql_SQLWarning( warn_base, *this ) ) );
++
++        // translate to warning
++        SQLWarning aWarning;
++        aWarning.Context = aAsException.Context;
++        aWarning.Message = aAsException.Message;
++        aWarning.SQLState = aAsException.SQLState;
++        aWarning.ErrorCode = aAsException.ErrorCode;
++        aWarning.NextException = aAsException.NextException;
++        
++		return makeAny( aWarning );
+ 	}
+ 
+ 	return Any();
+ }
+ // -----------------------------------------------------------------------------
++namespace
++{
++    bool lcl_setSystemProperties_nothrow( const java::sql::ConnectionLog& _rLogger,
++        JNIEnv& _rEnv, const Sequence< NamedValue >& _rSystemProperties )
++    {
++        if ( _rSystemProperties.getLength() == 0 )
++            // nothing to do
++            return true;
++
++        LocalRef< jclass > systemClass( _rEnv );
++        jmethodID nSetPropertyMethodID = 0;
++        // retrieve the java.lang.System class
++        systemClass.set( _rEnv.FindClass( "java/lang/System" ) );
++        if ( systemClass.is() )
++        {
++            nSetPropertyMethodID = _rEnv.GetStaticMethodID(
++                systemClass.get(), "setProperty", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;" );
++        }
++
++        if ( nSetPropertyMethodID == 0 )
++            return false;
++
++        for (   const NamedValue* pSystemProp = _rSystemProperties.getConstArray();
++                pSystemProp != _rSystemProperties.getConstArray() + _rSystemProperties.getLength();
++                ++pSystemProp
++            )
++        {
++            ::rtl::OUString sValue;
++            OSL_VERIFY( pSystemProp->Value >>= sValue );
++
++            _rLogger.log( LogLevel::FINER, STR_LOG_SETTING_SYSTEM_PROPERTY, pSystemProp->Name, sValue );
++
++            LocalRef< jstring > jName( _rEnv, convertwchar_tToJavaString( &_rEnv, pSystemProp->Name ) );
++            LocalRef< jstring > jValue( _rEnv, convertwchar_tToJavaString( &_rEnv, sValue ) );
++
++            _rEnv.CallStaticObjectMethod( systemClass.get(), nSetPropertyMethodID, jName.get(), jValue.get() );
++            LocalRef< jthrowable > throwable( _rEnv, _rEnv.ExceptionOccurred() );
++            if ( throwable.is() )
++                return false;
++        }
++
++        return true;
++    }
++}
++
++// -----------------------------------------------------------------------------
+ void java_sql_Connection::loadDriverFromProperties(
+         const Sequence< PropertyValue >& info, ::rtl::OUString& _rsGeneratedValueStatement,
+ 		sal_Bool& _rbAutoRetrievingEnabled, sal_Bool& _bParameterSubstitution, sal_Bool& _bIgnoreDriverPrivileges )
+@@ -813,6 +875,7 @@ void java_sql_Connection::loadDriverFrom
+     SDBThreadAttach t; OSL_ENSURE(t.pEnv,"Java Enviroment geloescht worden!");
+ 	try
+ 	{
++        Sequence< NamedValue > aSystemProperties;
+         const PropertyValue* pJavaDriverClass = 0;
+         const PropertyValue* pJavaDriverClassPath = 0;
+ 		const PropertyValue* pBegin	= info.getConstArray();
+@@ -843,9 +906,16 @@ void java_sql_Connection::loadDriverFrom
+ 			{
+ 				OSL_VERIFY( pBegin->Value >>= _bIgnoreDriverPrivileges );
+ 			}
++            else if(!pBegin->Name.compareToAscii("SystemProperties"))
++            {
++                OSL_VERIFY( pBegin->Value >>= aSystemProperties );
++            }
+ 		}
+         if ( !object && pJavaDriverClass != 0 )
+         {
++            if ( !lcl_setSystemProperties_nothrow( getLogger(), *t.pEnv, aSystemProperties ) )
++                ThrowLoggedSQLException( getLogger(), t.pEnv, *this );
++
+             // here I try to find the class for jdbc driver
+             java_sql_SQLException_BASE::getMyClass();
+             java_lang_Throwable::getMyClass();
+Index: connectivity/source/drivers/jdbc/JDriver.cxx
+===================================================================
+RCS file: /cvs/dba/connectivity/source/drivers/jdbc/JDriver.cxx,v
+retrieving revision 1.38
+retrieving revision 1.38.14.1
+diff -u -p -u -r1.38 -r1.38.14.1
+--- connectivity/source/drivers/jdbc/JDriver.cxx	27 Jun 2007 14:36:14 -0000	1.38
++++ connectivity/source/drivers/jdbc/JDriver.cxx	16 Oct 2007 13:11:20 -0000	1.38.14.1
+@@ -176,9 +176,26 @@ Sequence< DriverPropertyInfo > SAL_CALL 
+ 				::rtl::OUString(RTL_CONSTASCII_USTRINGPARAM("JavaDriverClass"))
+ 				,::rtl::OUString(RTL_CONSTASCII_USTRINGPARAM("The JDBC driver class name."))
+ 				,sal_True
+-				,::rtl::OUString(RTL_CONSTASCII_USTRINGPARAM("com.mysql.jdbc.Driver"))
++				,::rtl::OUString()
+ 				,Sequence< ::rtl::OUString >())
+ 				);
++
++		aDriverInfo.push_back(DriverPropertyInfo(
++				::rtl::OUString(RTL_CONSTASCII_USTRINGPARAM("JavaDriverClassPath"))
++				,::rtl::OUString(RTL_CONSTASCII_USTRINGPARAM("The class path where to look for the JDBC driver."))
++				,sal_True
++				,::rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( "" ) )
++				,Sequence< ::rtl::OUString >())
++				);
++
++		aDriverInfo.push_back(DriverPropertyInfo(
++				::rtl::OUString(RTL_CONSTASCII_USTRINGPARAM("SystemProperties"))
++				,::rtl::OUString(RTL_CONSTASCII_USTRINGPARAM("Additional properties to set at java.lang.System before loading the driver."))
++				,sal_True
++				,::rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( "" ) )
++				,Sequence< ::rtl::OUString >())
++				);
++
+ 		aDriverInfo.push_back(DriverPropertyInfo(
+ 				::rtl::OUString(RTL_CONSTASCII_USTRINGPARAM("ParameterNameSubstitution"))
+ 				,::rtl::OUString(RTL_CONSTASCII_USTRINGPARAM("Change named parameters with '?'."))
+@@ -186,6 +203,7 @@ Sequence< DriverPropertyInfo > SAL_CALL 
+ 				,::rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( "false" ) )
+ 				,aBooleanValues)
+ 				);
++
+ 		aDriverInfo.push_back(DriverPropertyInfo(
+ 				::rtl::OUString(RTL_CONSTASCII_USTRINGPARAM("IgnoreDriverPrivileges"))
+ 				,::rtl::OUString(RTL_CONSTASCII_USTRINGPARAM("Ignore the privileges from the database driver."))
+@@ -193,6 +211,7 @@ Sequence< DriverPropertyInfo > SAL_CALL 
+ 				,::rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( "false" ) )
+ 				,aBooleanValues)
+ 				);
++
+ 		aDriverInfo.push_back(DriverPropertyInfo(
+ 				::rtl::OUString(RTL_CONSTASCII_USTRINGPARAM("IsAutoRetrievingEnabled"))
+ 				,::rtl::OUString(RTL_CONSTASCII_USTRINGPARAM("Retrieve generated values."))
+@@ -200,13 +219,15 @@ Sequence< DriverPropertyInfo > SAL_CALL 
+ 				,::rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( "false" ) )
+ 				,aBooleanValues)
+ 				);
+-		aDriverInfo.push_back(DriverPropertyInfo(
++
++        aDriverInfo.push_back(DriverPropertyInfo(
+ 				::rtl::OUString(RTL_CONSTASCII_USTRINGPARAM("AutoRetrievingStatement"))
+ 				,::rtl::OUString(RTL_CONSTASCII_USTRINGPARAM("Auto-increment statement."))
+ 				,sal_False
+ 				,::rtl::OUString()
+ 				,Sequence< ::rtl::OUString >())
+ 				);
++
+ 		aDriverInfo.push_back(DriverPropertyInfo(
+ 				::rtl::OUString(RTL_CONSTASCII_USTRINGPARAM("GenerateASBeforeCorrelationName"))
+ 				,::rtl::OUString(RTL_CONSTASCII_USTRINGPARAM("Generate AS before table correlation names."))
+Index: connectivity/source/drivers/jdbc/SQLException.cxx
+===================================================================
+RCS file: /cvs/dba/connectivity/source/drivers/jdbc/SQLException.cxx,v
+retrieving revision 1.11
+retrieving revision 1.11.112.1
+diff -u -p -u -r1.11 -r1.11.112.1
+--- connectivity/source/drivers/jdbc/SQLException.cxx	17 Sep 2006 02:49:02 -0000	1.11
++++ connectivity/source/drivers/jdbc/SQLException.cxx	30 Jul 2007 07:22:33 -0000	1.11.112.1
+@@ -107,12 +107,12 @@ starsdbc::SQLException java_sql_SQLExcep
+ 	if( t.pEnv ){
+ 
+ 		// temporaere Variable initialisieren
+-		static const char * cSignature = "()Ljava/sql/Exception;";
++		static const char * cSignature = "()Ljava/sql/SQLException;";
+ 		static const char * cMethodName = "getNextException";
+ 		// Java-Call absetzen
+ 		static jmethodID mID = NULL;
+ 		if ( !mID  )
+-			mID  = t.pEnv->GetMethodID( getMyClass(), cMethodName, cSignature );
++			mID  = t.pEnv->GetMethodID( getMyClass(), cMethodName, cSignature );OSL_ENSURE(mID,"Unknown method id!");
+ 		if( mID ){
+ 			out = t.pEnv->CallObjectMethod( object, mID);
+ 			ThrowSQLException(t.pEnv,0);
+Index: connectivity/source/drivers/jdbc/tools.cxx
+===================================================================
+RCS file: /cvs/dba/connectivity/source/drivers/jdbc/tools.cxx,v
+retrieving revision 1.25
+retrieving revision 1.25.40.1
+diff -u -p -u -r1.25 -r1.25.40.1
+--- connectivity/source/drivers/jdbc/tools.cxx	12 Mar 2007 10:41:24 -0000	1.25
++++ connectivity/source/drivers/jdbc/tools.cxx	16 Oct 2007 13:11:20 -0000	1.25.40.1
+@@ -164,6 +164,7 @@ java_util_Properties* connectivity::crea
+ 		// this is a special property to find the jdbc driver
+ 		if( pBegin->Name.compareToAscii("JavaDriverClass") &&
+             pBegin->Name.compareToAscii("JavaDriverClassPath") &&
++            pBegin->Name.compareToAscii("SystemProperties") &&
+ 			pBegin->Name.compareToAscii("CharSet") &&
+ 			pBegin->Name.compareToAscii("AppendTableAlias") &&
+ 			pBegin->Name.compareToAscii("GenerateASBeforeCorrelationName") &&
+Index: connectivity/source/inc/java/LocalRef.hxx
+===================================================================
+RCS file: connectivity/source/inc/java/LocalRef.hxx
+diff -N connectivity/source/inc/java/LocalRef.hxx
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ connectivity/source/inc/java/LocalRef.hxx	16 Oct 2007 12:59:02 -0000	1.1.4.2
+@@ -0,0 +1,114 @@
++/*************************************************************************
++ *
++ *  OpenOffice.org - a multi-platform office productivity suite
++ *
++ *  $RCSfile: LocalRef.hxx,v $
++ *
++ *  $Revision: 1.1.4.2 $
++ *
++ *  last change: $Author: fs $ $Date: 2007/10/16 12:59:02 $
++ *
++ *  The Contents of this file are made available subject to
++ *  the terms of GNU Lesser General Public License Version 2.1.
++ *
++ *
++ *    GNU Lesser General Public License Version 2.1
++ *    =============================================
++ *    Copyright 2005 by Sun Microsystems, Inc.
++ *    901 San Antonio Road, Palo Alto, CA 94303, USA
++ *
++ *    This library is free software; you can redistribute it and/or
++ *    modify it under the terms of the GNU Lesser General Public
++ *    License version 2.1, as published by the Free Software Foundation.
++ *
++ *    This library is distributed in the hope that it will be useful,
++ *    but WITHOUT ANY WARRANTY; without even the implied warranty of
++ *    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ *    Lesser General Public License for more details.
++ *
++ *    You should have received a copy of the GNU Lesser General Public
++ *    License along with this library; if not, write to the Free Software
++ *    Foundation, Inc., 59 Temple Place, Suite 330, Boston,
++ *    MA  02111-1307  USA
++ *
++ ************************************************************************/
++
++#ifndef CONNECTIVITY_LOCALREF_HXX
++#define CONNECTIVITY_LOCALREF_HXX
++
++/** === begin UNO includes === **/
++/** === end UNO includes === **/
++
++#include <jvmaccess/virtualmachine.hxx>
++
++//........................................................................
++namespace connectivity { namespace jdbc
++{
++//........................................................................
++
++	//====================================================================
++	//= LocalRef
++	//====================================================================
++    /** helper class to hold a local ref to a JNI object
++
++        Note that this class never actually calls NewLocalRef. It is assumed that all objects
++        passed are already acquired with a local ref (as it usually is the case if you obtain
++        the object from an JNI method).
++    */
++    template< typename T >
++    class LocalRef
++    {
++    public:
++        explicit LocalRef( JNIEnv& environment )
++            :m_environment( environment )
++            ,m_object( NULL )
++        {
++        }
++
++        LocalRef( JNIEnv& environment, T object )
++            :m_environment( environment )
++            ,m_object( object )
++        {
++        }
++
++        ~LocalRef()
++        {
++            reset();
++        }
++
++        T release()
++        {
++            T t = m_object;
++            m_object = NULL;
++            return t;
++        }
++
++        void set( T object ) { reset(); m_object = object; }
++
++        void reset()
++        {
++            if ( m_object != NULL )
++            {
++                m_environment.DeleteLocalRef( m_object );
++                m_object = NULL;
++            }
++        }
++
++        JNIEnv& env() const { return m_environment; }
++        T       get() const { return m_object; }
++        bool    is()  const { return m_object != NULL; }
++
++    private:
++        LocalRef(LocalRef &); // not defined
++        void operator =(LocalRef &); // not defined
++
++    protected:
++        JNIEnv& m_environment;
++        T       m_object;
++    };
++
++//........................................................................
++} } // namespace connectivity::jdbc
++//........................................................................
++
++#endif // CONNECTIVITY_LOCALREF_HXX
+Index: connectivity/source/inc/java/sql/ConnectionLog.hxx
+===================================================================
+RCS file: /cvs/dba/connectivity/source/inc/java/sql/ConnectionLog.hxx,v
+retrieving revision 1.2
+retrieving revision 1.2.14.1
+diff -u -p -u -r1.2 -r1.2.14.1
+--- connectivity/source/inc/java/sql/ConnectionLog.hxx	27 Jun 2007 14:38:37 -0000	1.2
++++ connectivity/source/inc/java/sql/ConnectionLog.hxx	16 Oct 2007 13:11:51 -0000	1.2.14.1
+@@ -115,31 +115,31 @@ namespace connectivity { namespace java 
+         }
+ 
+         template< typename ARGTYPE1 >
+-        bool        log( const sal_Int32 _nLogLevel, const sal_Int32 _nMessageResID, ARGTYPE1 _argument1 )
++        bool        log( const sal_Int32 _nLogLevel, const sal_Int32 _nMessageResID, ARGTYPE1 _argument1 ) const
+         {
+             return ConnectionLog_Base::log( _nLogLevel, _nMessageResID, m_nObjectID, _argument1 );
+         }
+ 
+         template< typename ARGTYPE1, typename ARGTYPE2 >
+-        bool        log( const sal_Int32 _nLogLevel, const sal_Int32 _nMessageResID, ARGTYPE1 _argument1, ARGTYPE2 _argument2 )
++        bool        log( const sal_Int32 _nLogLevel, const sal_Int32 _nMessageResID, ARGTYPE1 _argument1, ARGTYPE2 _argument2 ) const
+         {
+             return ConnectionLog_Base::log( _nLogLevel, _nMessageResID, m_nObjectID, _argument1, _argument2 );
+         }
+ 
+         template< typename ARGTYPE1, typename ARGTYPE2, typename ARGTYPE3 >
+-        bool        log( const sal_Int32 _nLogLevel, const sal_Int32 _nMessageResID, ARGTYPE1 _argument1, ARGTYPE2 _argument2, ARGTYPE3 _argument3 )
++        bool        log( const sal_Int32 _nLogLevel, const sal_Int32 _nMessageResID, ARGTYPE1 _argument1, ARGTYPE2 _argument2, ARGTYPE3 _argument3 ) const
+         {
+             return ConnectionLog_Base::log( _nLogLevel, _nMessageResID, m_nObjectID, _argument1, _argument2, _argument3 );
+         }
+ 
+         template< typename ARGTYPE1, typename ARGTYPE2, typename ARGTYPE3, typename ARGTYPE4 >
+-        bool        log( const sal_Int32 _nLogLevel, const sal_Int32 _nMessageResID, ARGTYPE1 _argument1, ARGTYPE2 _argument2, ARGTYPE3 _argument3, ARGTYPE4 _argument4 )
++        bool        log( const sal_Int32 _nLogLevel, const sal_Int32 _nMessageResID, ARGTYPE1 _argument1, ARGTYPE2 _argument2, ARGTYPE3 _argument3, ARGTYPE4 _argument4 ) const
+         {
+             return ConnectionLog_Base::log( _nLogLevel, _nMessageResID, m_nObjectID, _argument1, _argument2, _argument3, _argument4 );
+         }
+ 
+         template< typename ARGTYPE1, typename ARGTYPE2, typename ARGTYPE3, typename ARGTYPE4, typename ARGTYPE5 >
+-        bool        log( const sal_Int32 _nLogLevel, const sal_Int32 _nMessageResID, ARGTYPE1 _argument1, ARGTYPE2 _argument2, ARGTYPE3 _argument3, ARGTYPE4 _argument4, ARGTYPE5 _argument5 )
++        bool        log( const sal_Int32 _nLogLevel, const sal_Int32 _nMessageResID, ARGTYPE1 _argument1, ARGTYPE2 _argument2, ARGTYPE3 _argument3, ARGTYPE4 _argument4, ARGTYPE5 _argument5 ) const
+         {
+             return ConnectionLog_Base::log( _nLogLevel, _nMessageResID, m_nObjectID, _argument1, _argument2, _argument3, _argument4, _argument5 );
+         }
+Index: connectivity/source/inc/resource/jdbc_log.hrc
+===================================================================
+RCS file: /cvs/dba/connectivity/source/inc/resource/jdbc_log.hrc,v
+retrieving revision 1.2
+retrieving revision 1.2.14.1
+diff -u -p -u -r1.2 -r1.2.14.1
+--- connectivity/source/inc/resource/jdbc_log.hrc	27 Jun 2007 14:40:40 -0000	1.2
++++ connectivity/source/inc/resource/jdbc_log.hrc	16 Oct 2007 13:12:27 -0000	1.2.14.1
+@@ -93,5 +93,6 @@
+ #define STR_LOG_META_DATA_RESULT            ( STR_JDBC_LOG_MESSAGE_BASE + 53 )
+ #define STR_LOG_META_DATA_SUCCESS           ( STR_JDBC_LOG_MESSAGE_BASE + 54 )
+ #define STR_LOG_THROWING_EXCEPTION          ( STR_JDBC_LOG_MESSAGE_BASE + 55 )
++#define STR_LOG_SETTING_SYSTEM_PROPERTY     ( STR_JDBC_LOG_MESSAGE_BASE + 56 )
+ 
+ #endif // CONNECTIVITY_RESOURCE_JDBC_LOG_HRC
+Index: connectivity/source/resource/conn_log_res.src
+===================================================================
+RCS file: /cvs/dba/connectivity/source/resource/conn_log_res.src,v
+retrieving revision 1.2
+retrieving revision 1.2.14.1
+diff -u -p -u -r1.2 -r1.2.14.1
+--- connectivity/source/resource/conn_log_res.src	27 Jun 2007 14:42:14 -0000	1.2
++++ connectivity/source/resource/conn_log_res.src	16 Oct 2007 13:12:39 -0000	1.2.14.1
+@@ -313,3 +313,8 @@ String STR_LOG_THROWING_EXCEPTION
+ {
+     Text = "SQLException to be thrown: message: '$1$', SQLState: $2$, ErrorCode: $3$";
+ };
++
++String STR_LOG_SETTING_SYSTEM_PROPERTY
++{
++    Text = "setting system property \"$1$\" to value \"$2$\"";
++};
+\ No newline at end of file
+Index: hsqldb/hsqldb_1_8_0
+===================================================================
+RCS file: /cvs/external/hsqldb/Attic/hsqldb_1_8_0,v
+retrieving revision 1.15
+retrieving revision 1.15.6.1
+diff -u -p -u -r1.15 -r1.15.6.1
+--- hsqldb/hsqldb_1_8_0	31 Jul 2007 14:05:17 -0000	1.15
++++ hsqldb/hsqldb_1_8_0	24 Oct 2007 07:18:17 -0000	1.15.6.1
+@@ -1,1200 +1,26 @@
+-*** misc/hsqldb/src/org/hsqldb/Constraint.java  Tue Apr 11 16:40:53 2006
+---- misc/build/hsqldb/src/org/hsqldb/Constraint.java    Thu Jul 19 14:33:00 2007
++*** misc/hsqldb/build/build.xml Sun Oct 23 18:54:00 2005
++--- misc/build/hsqldb/build/build.xml   Tue May 30 16:22:33 2006
+ ***************
+-*** 111,123 ****
+-      int              constType;
+-  
+-      /**
+-!      *  Constructor declaration for UNIQUE
+-       */
+-!     Constraint(HsqlName name, Table t, Index index) {
+-  
+-          core           = new ConstraintCore();
+-          constName      = name;
+-!         constType      = UNIQUE;
+-          core.mainTable = t;
+-          core.mainIndex = index;
+-          /* fredt - in unique constraints column list for iColMain is the
+---- 111,123 ----
+-      int              constType;
+-  
+-      /**
+-!      *  Constructor declaration for PK and UNIQUE
+-       */
+-!     Constraint(HsqlName name, Table t, Index index, int type) {
+-  
+-          core           = new ConstraintCore();
+-          constName      = name;
+-!         constType      = type;
+-          core.mainTable = t;
+-          core.mainIndex = index;
+-          /* fredt - in unique constraints column list for iColMain is the
+-***************
+-*** 179,195 ****
+-      }
+-  
+-      /**
+--      * PK constraint constructor
+--      */
+--     Constraint(HsqlName name, int[] cols) {
+-- 
+--         core              = new ConstraintCore();
+--         constName         = name;
+--         constType         = PRIMARY_KEY;
+--         core.mainColArray = cols;
+--     }
+-- 
+--     /**
+-       * temp constraint constructor
+-       */
+-      Constraint(HsqlName name, int[] mainCols, Table refTable, int[] refCols,
+---- 179,184 ----
+-*** misc/hsqldb/src/org/hsqldb/DatabaseCommandInterpreter.java  Mon Jul 17 00:29:34 2006
+---- misc/build/hsqldb/src/org/hsqldb/DatabaseCommandInterpreter.java    Thu Jul 19 14:33:34 2007
+-***************
+-*** 1238,1245 ****
+-                  }
+-  
+-                  Constraint newconstraint =
+-!                     new Constraint(primaryConst.constName,
+-!                                    primaryConst.core.mainColArray);
+-  
+-                  t.addConstraint(newconstraint);
+-                  database.schemaManager.registerConstraintName(
+---- 1238,1245 ----
+-                  }
+-  
+-                  Constraint newconstraint =
+-!                     new Constraint(primaryConst.constName, t, t.getPrimaryIndex(),
+-!                                    Constraint.PRIMARY_KEY);
+-  
+-                  t.addConstraint(newconstraint);
+-                  database.schemaManager.registerConstraintName(
+-***************
+-*** 2521,2527 ****
+-          boolean canAdd = true;
+-  
+-          if (t.findColumn(c.columnName.name) != -1) {
+-!             throw Trace.error(Trace.COLUMN_ALREADY_EXISTS);
+-          }
+-  
+-          if (c.isPrimaryKey() && t.hasPrimaryKey()) {
+---- 2521,2527 ----
+-          boolean canAdd = true;
+-  
+-          if (t.findColumn(c.columnName.name) != -1) {
+-!             throw Trace.error(Trace.COLUMN_ALREADY_EXISTS, c.columnName.name);
+-          }
+-  
+-          if (c.isPrimaryKey() && t.hasPrimaryKey()) {
+-*** misc/hsqldb/src/org/hsqldb/Index.java   Fri Jul 21 15:37:43 2006
+---- misc/build/hsqldb/src/org/hsqldb/Index.java Thu Jul 19 14:33:00 2007
+-***************
+-*** 101,107 ****
+-      private final HsqlName indexName;
+-      final boolean[]        colCheck;
+-      private final int[]    colIndex;
+-!     private final int[]    colType;
+-      final int[]            pkCols;
+-      final int[]            pkTypes;
+-      private final boolean  isUnique;    // DDL uniqueness
+---- 101,107 ----
+-      private final HsqlName indexName;
+-      final boolean[]        colCheck;
+-      private final int[]    colIndex;
+-!     private final int[]    colTypes;
+-      final int[]            pkCols;
+-      final int[]            pkTypes;
+-      private final boolean  isUnique;    // DDL uniqueness
+-***************
+-*** 116,121 ****
+---- 116,122 ----
+-          null);
+-      IndexRowIterator updatableIterators;
+-      final boolean    onCommitPreserve;
+-+     final Table      table;
+-  
+-      /**
+-       * Constructor declaration
+-***************
+-*** 131,147 ****
+-       * @param visColumns count of visible columns
+-       */
+-      Index(Database database, HsqlName name, Table table, int[] column,
+-!             int[] type, boolean isPk, boolean unique, boolean constraint,
+-              boolean forward, int[] pkcols, int[] pktypes, boolean temp) {
+-  
+-!         indexName    = name;
+-!         colIndex     = column;
+-!         colType      = type;
+-!         pkCols       = pkcols;
+-!         pkTypes      = pktypes;
+-!         isUnique     = unique;
+-!         isConstraint = constraint;
+-!         isForward    = forward;
+-          useRowId = (!isUnique && pkCols.length == 0)
+-                     || (colIndex.length == 0);
+-          colCheck = table.getNewColumnCheckList();
+---- 132,149 ----
+-       * @param visColumns count of visible columns
+-       */
+-      Index(Database database, HsqlName name, Table table, int[] column,
+-!             int[] colTypes, boolean isPk, boolean unique, boolean constraint,
+-              boolean forward, int[] pkcols, int[] pktypes, boolean temp) {
+-  
+-!         this.table     = table;
+-!         this.indexName = name;
+-!         this.colIndex  = column;
+-!         this.colTypes  = colTypes;
+-!         this.pkCols    = pkcols;
+-!         this.pkTypes   = pktypes;
+-!         isUnique       = unique;
+-!         isConstraint   = constraint;
+-!         isForward      = forward;
+-          useRowId = (!isUnique && pkCols.length == 0)
+-                     || (colIndex.length == 0);
+-          colCheck = table.getNewColumnCheckList();
+-***************
+-*** 203,209 ****
+-       * Returns the array containing column indexes for index
+-       */
+-      int[] getColumnTypes() {
+-!         return colType;    // todo: this gives back also primary key field(s)!
+-      }
+-  
+-      /**
+---- 205,227 ----
+-       * Returns the array containing column indexes for index
+-       */
+-      int[] getColumnTypes() {
+-!         return colTypes;    // todo: this gives back also primary key field(s)!
+-!     }
+-! 
+-!     String getColumnNameList() {
+-! 
+-!         String columnNameList = "";
+-! 
+-!         for (int j = 0; j < colIndex.length; ++j) {
+-!             columnNameList +=
+-!                 table.getColumn(colIndex[j]).columnName.statementName;
+-! 
+-!             if (j < colIndex.length - 1) {
+-!                 columnNameList += ",";
+-!             }
+-!         }
+-! 
+-!         return columnNameList;
+-      }
+-  
+-      /**
+-***************
+-*** 297,304 ****
+-              compare = compareRowForInsert(session, row, n.getRow());
+-  
+-              if (compare == 0) {
+-!                 throw Trace.error(Trace.VIOLATION_OF_UNIQUE_INDEX,
+-!                                   indexName.name);
+-              }
+-  
+-              isleft = compare < 0;
+---- 315,334 ----
+-              compare = compareRowForInsert(session, row, n.getRow());
+-  
+-              if (compare == 0) {
+-!                 int    errorCode = Trace.VIOLATION_OF_UNIQUE_INDEX;
+-!                 String name      = indexName.statementName;
+-! 
+-!                 if (isConstraint) {
+-!                     Constraint c =
+-!                         table.getUniqueOrPKConstraintForIndex(this);
+-! 
+-!                     name      = c.getName().name;
+-!                     errorCode = Trace.VIOLATION_OF_UNIQUE_CONSTRAINT;
+-!                 }
+-! 
+-!                 throw Trace.error(errorCode, new Object[] {
+-!                     name, getColumnNameList()
+-!                 });
+-              }
+-  
+-              isleft = compare < 0;
+-***************
+-*** 848,854 ****
+-              boolean t =
+-                  Column.compare(
+-                      collation, value, x.getData()[colIndex[0]],
+-!                     colType[0]) >= iTest;
+-  
+-              if (t) {
+-                  Node r = x.getRight();
+---- 878,884 ----
+-              boolean t =
+-                  Column.compare(
+-                      collation, value, x.getData()[colIndex[0]],
+-!                     colTypes[0]) >= iTest;
+-  
+-              if (t) {
+-                  Node r = x.getRight();
+-***************
+-*** 879,885 ****
+-          while (x != null) {
+-              Object colvalue = x.getData()[colIndex[0]];
+-              int result = Column.compare(collation, value, colvalue,
+-!                                         colType[0]);
+-  
+-              if (result >= iTest) {
+-                  x = next(x);
+---- 909,915 ----
+-          while (x != null) {
+-              Object colvalue = x.getData()[colIndex[0]];
+-              int result = Column.compare(collation, value, colvalue,
+-!                                         colTypes[0]);
+-  
+-              if (result >= iTest) {
+-                  x = next(x);
+-***************
+-*** 914,920 ****
+-  
+-          while (x != null) {
+-              boolean t = Column.compare(
+-!                 collation, null, x.getData()[colIndex[0]], colType[0]) >= 0;
+-  
+-              if (t) {
+-                  Node r = x.getRight();
+---- 944,950 ----
+-  
+-          while (x != null) {
+-              boolean t = Column.compare(
+-!                 collation, null, x.getData()[colIndex[0]], colTypes[0]) >= 0;
+-  
+-              if (t) {
+-                  Node r = x.getRight();
+-***************
+-*** 1146,1152 ****
+-                              Object[] b) throws HsqlException {
+-  
+-          int i = Column.compare(collation, a[rowColMap[0]], b[colIndex[0]],
+-!                                colType[0]);
+-  
+-          if (i != 0) {
+-              return i;
+---- 1176,1182 ----
+-                              Object[] b) throws HsqlException {
+-  
+-          int i = Column.compare(collation, a[rowColMap[0]], b[colIndex[0]],
+-!                                colTypes[0]);
+-  
+-          if (i != 0) {
+-              return i;
+-***************
+-*** 1156,1162 ****
+-  
+-          for (int j = 1; j < fieldcount; j++) {
+-              i = Column.compare(collation, a[rowColMap[j]], b[colIndex[j]],
+-!                                colType[j]);
+-  
+-              if (i != 0) {
+-                  return i;
+---- 1186,1192 ----
+-  
+-          for (int j = 1; j < fieldcount; j++) {
+-              i = Column.compare(collation, a[rowColMap[j]], b[colIndex[j]],
+-!                                colTypes[j]);
+-  
+-              if (i != 0) {
+-                  return i;
+-***************
+-*** 1214,1220 ****
+-          for (; j < colIndex.length; j++) {
+-              Object currentvalue = a[colIndex[j]];
+-              int i = Column.compare(collation, currentvalue, b[colIndex[j]],
+-!                                    colType[j]);
+-  
+-              if (i != 0) {
+-                  return i;
+---- 1244,1250 ----
+-          for (; j < colIndex.length; j++) {
+-              Object currentvalue = a[colIndex[j]];
+-              int i = Column.compare(collation, currentvalue, b[colIndex[j]],
+-!                                    colTypes[j]);
+-  
+-              if (i != 0) {
+-                  return i;
+-*** misc/hsqldb/src/org/hsqldb/Table.java   Wed Jun 28 23:47:11 2006
+---- misc/build/hsqldb/src/org/hsqldb/Table.java Thu Jul 19 14:33:34 2007
+-***************
+-*** 488,500 ****
+-       * @param  index
+-       * @return
+-       */
+-!     Constraint getUniqueConstraintForIndex(Index index) {
+-  
+-          for (int i = 0, size = constraintList.length; i < size; i++) {
+-              Constraint c = constraintList[i];
+-  
+-              if (c.getMainIndex() == index
+-!                     && c.getType() == Constraint.UNIQUE) {
+-                  return c;
+-              }
+-          }
+---- 488,501 ----
+-       * @param  index
+-       * @return
+-       */
+-!     Constraint getUniqueOrPKConstraintForIndex(Index index) {
+-  
+-          for (int i = 0, size = constraintList.length; i < size; i++) {
+-              Constraint c = constraintList[i];
+-  
+-              if (c.getMainIndex() == index
+-!                     && (c.getType() == Constraint.UNIQUE
+-!                         || c.getType() == Constraint.PRIMARY_KEY)) {
+-                  return c;
+-              }
+-          }
+-***************
+-*** 531,537 ****
+-      void addColumn(Column column) throws HsqlException {
+-  
+-          if (findColumn(column.columnName.name) >= 0) {
+-!             throw Trace.error(Trace.COLUMN_ALREADY_EXISTS);
+-          }
+-  
+-          if (column.isIdentity()) {
+---- 532,538 ----
+-      void addColumn(Column column) throws HsqlException {
+-  
+-          if (findColumn(column.columnName.name) >= 0) {
+-!             throw Trace.error(Trace.COLUMN_ALREADY_EXISTS, column.columnName.name);
+-          }
+-  
+-          if (column.isIdentity()) {
+-***************
+-*** 1498,1508 ****
+-  
+-          int newindexNo = createIndexStructureGetNo(column, name, unique,
+-              constraint, forward);
+-!         Index       newindex     = indexList[newindexNo];
+-!         Index       primaryindex = getPrimaryIndex();
+-!         RowIterator it           = primaryindex.firstRow(session);
+-!         int         rowCount     = 0;
+-!         int         error        = 0;
+-  
+-          try {
+-              while (it.hasNext()) {
+---- 1499,1509 ----
+-  
+-          int newindexNo = createIndexStructureGetNo(column, name, unique,
+-              constraint, forward);
+-!         Index         newindex     = indexList[newindexNo];
+-!         Index         primaryindex = getPrimaryIndex();
+-!         RowIterator   it           = primaryindex.firstRow(session);
+-!         int           rowCount     = 0;
+-!         HsqlException error        = null;
+-  
+-          try {
+-              while (it.hasNext()) {
+-***************
+-*** 1521,1529 ****
+-  
+-              return newindex;
+-          } catch (java.lang.OutOfMemoryError e) {
+-!             error = Trace.OUT_OF_MEMORY;
+-          } catch (HsqlException e) {
+-!             error = Trace.VIOLATION_OF_UNIQUE_INDEX;
+-          }
+-  
+-          // backtrack on error
+---- 1522,1533 ----
+-  
+-              return newindex;
+-          } catch (java.lang.OutOfMemoryError e) {
+-!             error = Trace.error(Trace.OUT_OF_MEMORY);
+-          } catch (HsqlException e) {
+-!             error = Trace.error(Trace.VIOLATION_OF_UNIQUE_INDEX,
+-!                                 new Object[] {
+-!                 newindex.getName().statementName, newindex.getColumnNameList()
+-!             });
+-          }
+-  
+-          // backtrack on error
+-***************
+-*** 1547,1553 ****
+-  
+-          setBestRowIdentifiers();
+-  
+-!         throw Trace.error(error);
+-      }
+-  
+-      /**
+---- 1551,1557 ----
+-  
+-          setBestRowIdentifiers();
+-  
+-!         throw error;
+-      }
+-  
+-      /**
+-***************
+-*** 2031,2044 ****
+-                  indexList[i].insert(null, row, i);
+-              }
+-          } catch (HsqlException e) {
+--             Index   index        = indexList[i];
+--             boolean isconstraint = index.isConstraint;
+-  
+-!             if (isconstraint) {
+-!                 throw Trace.error(Trace.VIOLATION_OF_UNIQUE_CONSTRAINT,
+-!                                   index.getName().name);
+-              }
+-  
+-              throw e;
+-          }
+-      }
+---- 2035,2051 ----
+-                  indexList[i].insert(null, row, i);
+-              }
+-          } catch (HsqlException e) {
+-  
+-!             // unique index violation - rollback insert
+-!             for (--i; i >= 0; i--) {
+-!                 Node n = row.getNode(i);
+-! 
+-!                 indexList[i].delete(null, n);
+-              }
+-  
+-+             row.delete();
+-+             removeRowFromStore(row);
+-+ 
+-              throw e;
+-          }
+-      }
+-***************
+-*** 3294,3301 ****
+-                  indexList[i].insert(session, row, i);
+-              }
+-          } catch (HsqlException e) {
+--             Index   index        = indexList[i];
+--             boolean isconstraint = index.isConstraint;
+-  
+-              // unique index violation - rollback insert
+-              for (--i; i >= 0; i--) {
+---- 3301,3306 ----
+-***************
+-*** 3307,3320 ****
+-              row.delete();
+-              removeRowFromStore(row);
+-  
+--             if (isconstraint) {
+--                 Constraint c    = getUniqueConstraintForIndex(index);
+--                 String     name = c == null ? index.getName().name
+--                                             : c.getName().name;
+-- 
+--                 throw Trace.error(Trace.VIOLATION_OF_UNIQUE_CONSTRAINT, name);
+--             }
+-- 
+-              throw e;
+-          }
+-      }
+---- 3312,3317 ----
+-*** misc/hsqldb/src/org/hsqldb/TableWorks.java  Tue Apr 11 16:56:40 2006
+---- misc/build/hsqldb/src/org/hsqldb/TableWorks.java    Thu Jul 19 14:33:00 2007
+-***************
+-*** 224,230 ****
+-                  table.getSchemaName(), false);
+-          addOrDropPrimaryKey(cols, false);
+-  
+-!         Constraint newconstraint = new Constraint(name, cols);
+-  
+-          table.addConstraint(newconstraint);
+-          table.database.schemaManager.registerConstraintName(name.name,
+---- 224,231 ----
+-                  table.getSchemaName(), false);
+-          addOrDropPrimaryKey(cols, false);
+-  
+-!         Constraint newconstraint = new Constraint(name, table,
+-!             table.getPrimaryIndex(), Constraint.PRIMARY_KEY);
+-  
+-          table.addConstraint(newconstraint);
+-          table.database.schemaManager.registerConstraintName(name.name,
+-***************
+-*** 286,293 ****
+-          // create an autonamed index
+-          HsqlName indexname = table.database.nameManager.newAutoName("IDX",
+-              name.name);
+-!         Index      index = createIndex(col, indexname, true, true, false);
+-!         Constraint newconstraint = new Constraint(name, table, index);
+-  
+-          table.addConstraint(newconstraint);
+-          table.database.schemaManager.registerConstraintName(name.name,
+---- 287,295 ----
+-          // create an autonamed index
+-          HsqlName indexname = table.database.nameManager.newAutoName("IDX",
+-              name.name);
+-!         Index index = createIndex(col, indexname, true, true, false);
+-!         Constraint newconstraint = new Constraint(name, table, index,
+-!             Constraint.UNIQUE);
+-  
+-          table.addConstraint(newconstraint);
+-          table.database.schemaManager.registerConstraintName(name.name,
+-***************
+-*** 488,495 ****
+-  
+-          if (column.isPrimaryKey()) {
+-              HsqlName pkNameAdd = tn.makeSysPKName();
+-!             Constraint newconstraint = new Constraint(pkNameAdd,
+-!                 new int[]{ colIndex });
+-  
+-              table.addConstraint(newconstraint);
+-              table.database.schemaManager.registerConstraintName(
+---- 490,497 ----
+-  
+-          if (column.isPrimaryKey()) {
+-              HsqlName pkNameAdd = tn.makeSysPKName();
+-!             Constraint newconstraint = new Constraint(pkNameAdd, table,
+-!                 table.getPrimaryIndex(), Constraint.PRIMARY_KEY);
+-  
+-              table.addConstraint(newconstraint);
+-              table.database.schemaManager.registerConstraintName(
+-*** misc/hsqldb/src/org/hsqldb/persist/TextCache.java   Mon Jul 24 13:20:45 2006
+---- misc/build/hsqldb/src/org/hsqldb/persist/TextCache.java Thu Jul 19 14:33:00 2007
+-***************
+-*** 479,485 ****
+-                      wasNormal = true;
+-                      complete  = wasCR;
+-                      wasCR     = false;
+-!                     hasQuote  = !hasQuote;
+-                      break;
+-  
+-                  case CR_CHAR :
+---- 479,487 ----
+-                      wasNormal = true;
+-                      complete  = wasCR;
+-                      wasCR     = false;
+-!                     if (isQuoted) {
+-!                         hasQuote  = !hasQuote;
+-!                     }
+-                      break;
+-  
+-                  case CR_CHAR :
+-*** misc/hsqldb/src/org/hsqldb/resources/sql-error-messages.properties  Thu Jun 15 13:15:06 2006
+---- misc/build/hsqldb/src/org/hsqldb/resources/sql-error-messages.properties    Thu Jul 19 14:33:00 2007
+-***************
+-*** 10,16 ****
+-  006=22012 Division by zero
+-  007=22019 Invalid escape character
+-  008=23000 Integrity constraint violation
+-! 009=23000 Violation of unique index
+-  010=23000 Attempt to insert null into a non-nullable column
+-  011=37000 Unexpected token
+-  012=37000 Unexpected end of command
+---- 10,16 ----
+-  006=22012 Division by zero
+-  007=22019 Invalid escape character
+-  008=23000 Integrity constraint violation
+-! 009=23000 Violation of unique index $$: duplicate value(s) for column(s) $$
+-  010=23000 Attempt to insert null into a non-nullable column
+-  011=37000 Unexpected token
+-  012=37000 Unexpected end of command
+-***************
+-*** 105,111 ****
+-  101=\u0020$$ table: $$
+-  102=duplicate column in list
+-  103=table has no primary key
+-! 104=23000 Unique constraint violation
+-  105=S0021 missing DEFAULT value on column $$
+-  106=S1000 Not a condition
+-  107=attempt to connect while db opening /closing
+---- 105,111 ----
+-  101=\u0020$$ table: $$
+-  102=duplicate column in list
+-  103=table has no primary key
+-! 104=23000 Violation of unique constraint $$: duplicate value(s) for column(s) $$
+-  105=S0021 missing DEFAULT value on column $$
+-  106=S1000 Not a condition
+-  107=attempt to connect while db opening /closing
+-***************
+-*** 139,145 ****
+-  135=properties name is null or empty
+-  136=Server certificate has no Common Name
+-  137=Server certificate has empty Common Name
+-! 138=Unknown JDBC escape sequence: {$$
+-  139=Certificate Common Name[$$] does not match host name[$$]
+-  140=NA
+-  141=NA
+---- 139,145 ----
+-  135=properties name is null or empty
+-  136=Server certificate has no Common Name
+-  137=Server certificate has empty Common Name
+-! 138=Unknown JDBC escape sequence: {$$
+-  139=Certificate Common Name[$$] does not match host name[$$]
+-  140=NA
+-  141=NA
+-*** misc/hsqldb/src/org/hsqldb/Parser.java  Wed Jun 14 14:24:48 2006
+---- misc/build/hsqldb/src/org/hsqldb/Parser.java    Thu Jul 19 14:33:34 2007
+-***************
+-*** 73,79 ****
+---- 73,82 ----
+-  import org.hsqldb.lib.HashMap;
+-  import org.hsqldb.lib.HashMappedList;
+-  import org.hsqldb.lib.HsqlArrayList;
+-+ import org.hsqldb.lib.IntKeyHashMap;
+-  import org.hsqldb.lib.IntValueHashMap;
+-+ import org.hsqldb.lib.Iterator;
+-+ import org.hsqldb.lib.StringConverter;
+-  import org.hsqldb.store.ValuePool;
+-  import org.hsqldb.lib.HashSet;
+-  
+-***************
+-*** 132,137 ****
+---- 135,141 ----
+-      private Object    oData;
+-      private int       iType;
+-      private int       iToken;
+-+     private boolean   compilingView;
+-  
+-      //
+-      private int           subQueryLevel;
+-***************
+-*** 150,155 ****
+---- 154,174 ----
+-          database     = db;
+-          tokenizer    = t;
+-          this.session = session;
+-+         compilingView = false;
+-+     }
+-+ 
+-+     /**
+-+      *  sets a flag indicating the parser is used for compiling a view
+-+      */
+-+     void setCompilingView() {
+-+         compilingView = true;
+-+     }
+-+ 
+-+     /**
+-+      *  determines whether the parser is used for compiling a view
+-+      */
+-+     boolean isCompilingView() {
+-+         return compilingView;
+-      }
+-  
+-      /**
+-***************
+-*** 394,401 ****
+---- 413,432 ----
+-          HsqlArrayList vcolumn = new HsqlArrayList();
+-  
+-          do {
+-+             int expPos = tokenizer.getPosition();
+-              Expression e = parseExpression();
+-  
+-+             if (isCompilingView()) {
+-+                 if (e.getType() == Expression.ASTERISK) {
+-+                     if (select.asteriskPositions == null)
+-+                         select.asteriskPositions = new IntKeyHashMap();
+-+                     // remember the position of the asterisk. For the moment, just
+-+                     // remember the expression, so it can later be found and replaced
+-+                     // with the concrete column list
+-+                     select.asteriskPositions.put(expPos, e);
+-+                 }
+-+             }
+-+ 
+-              token = tokenizer.getString();
+-  
+-              if (tokenizer.wasThis(Token.T_AS)) {
+-***************
+-*** 880,885 ****
+---- 911,917 ----
+-  
+-                  String tablename = e.getTableName();
+-  
+-+                 int oldPos = pos;
+-                  if (tablename == null) {
+-                      for (int i = 0; i < filters.length; i++) {
+-                          pos      = addFilterColumns(filters[i], vcolumn, pos);
+-***************
+-*** 895,900 ****
+---- 927,955 ----
+-                      pos      = addFilterColumns(f, vcolumn, pos);
+-                      colcount = vcolumn.size();
+-                  }
+-+ 
+-+                 if (isCompilingView()) {
+-+                     // find this expression's position in the Select's asterisk list
+-+                     boolean foundAsteriskPos = false;
+-+                     Iterator expSearch = select.asteriskPositions.keySet().iterator();
+-+                     while (expSearch.hasNext()) {
+-+                         int expPos = expSearch.nextInt();
+-+                         if (e == select.asteriskPositions.get(expPos)) {
+-+                             // compile the complete column list which later is to replace the asterisk
+-+                             StringBuffer completeColList = new StringBuffer();
+-+                             for (int col=oldPos; col<pos; ++col) {
+-+                                 Expression resolvedColExpr = (Expression) (vcolumn.get(col));
+-+                                 completeColList.append(resolvedColExpr.getColumnDDL());
+-+                                 if ( col < pos - 1 )
+-+                                     completeColList.append( ", " );
+-+                             }
+-+                             select.asteriskPositions.put(expPos, completeColList.toString());
+-+                             foundAsteriskPos = true;
+-+                             break;
+-+                         }
+-+                     }
+-+                     Trace.doAssert(foundAsteriskPos);
+-+                 }
+-              } else {
+-                  if (e.getFilter() == null) {
+-                      for (int i = 0; i < filters.length; i++) {
+-***************
+-*** 918,931 ****
+-      /**
+-       * Add all columns of a table filter to list of columns
+-       */
+-!     static int addFilterColumns(TableFilter filter, HsqlArrayList columnList,
+-!                                 int position) {
+-  
+-          Table table = filter.getTable();
+-          int   count = table.getColumnCount();
+-  
+-          for (int i = 0; i < count; i++) {
+-              Expression e = new Expression(filter, table.getColumn(i));
+-  
+-              columnList.add(position++, e);
+-          }
+---- 973,988 ----
+-      /**
+-       * Add all columns of a table filter to list of columns
+-       */
+-!     int addFilterColumns(TableFilter filter, HsqlArrayList columnList,
+-!                                 int position) throws HsqlException {
+-  
+-          Table table = filter.getTable();
+-          int   count = table.getColumnCount();
+-  
+-          for (int i = 0; i < count; i++) {
+-              Expression e = new Expression(filter, table.getColumn(i));
+-+             if (isCompilingView())
+-+                 e.resolveTables(filter);
+-  
+-              columnList.add(position++, e);
+-          }
+-*** misc/hsqldb/src/org/hsqldb/Select.java  Mon Jul 10 13:03:43 2006
+---- misc/build/hsqldb/src/org/hsqldb/Select.java    Thu Jul 19 14:33:51 2007
+-***************
+-*** 70,75 ****
+---- 70,76 ----
+-  import org.hsqldb.lib.HashMap;
+-  import org.hsqldb.lib.HashSet;
+-  import org.hsqldb.lib.HsqlArrayList;
+-+ import org.hsqldb.lib.IntKeyHashMap;
+-  import org.hsqldb.lib.Iterator;
+-  
+-  // fredt@users 20010701 - patch 1.6.1 by hybris
+-***************
+-*** 129,134 ****
+---- 130,136 ----
+-                            EXCEPT    = 4;
+-      private boolean       simpleLimit;        // true if maxrows can be uses as is
+-      Result.ResultMetaData resultMetaData;
+-+     IntKeyHashMap         asteriskPositions;
+-  
+-      /**
+-       * Experimental.
+-***************
+-*** 461,467 ****
+-          checkAggregateOrGroupByColumns(groupByEnd, orderByStart);
+-  
+-          // order by columns
+-!         checkAggregateOrGroupByOrderColumns(orderByStart, orderByEnd);
+-          prepareSort();
+-  
+-          simpleLimit = (isDistinctSelect == false && isGrouped == false
+---- 463,469 ----
+-          checkAggregateOrGroupByColumns(groupByEnd, orderByStart);
+-  
+-          // order by columns
+-!         checkAggregateOrGroupByOrderColumns(orderByStart, orderByEnd);
+-          prepareSort();
+-  
+-          simpleLimit = (isDistinctSelect == false && isGrouped == false
+-***************
+-*** 757,788 ****
+-                      continue;
+-                  }
+-  
+-!                 throw Trace.error(Trace.NOT_IN_AGGREGATE_OR_GROUP_BY, exp);
+-!             }
+-!         }
+-!     }
+-! 
+-!     private void checkAggregateOrGroupByOrderColumns(int start,
+-!             int end) throws HsqlException {
+-! 
+-!         checkAggregateOrGroupByColumns(start, end);
+-! 
+-!         if (start < end && isDistinctSelect) {
+-!             HsqlArrayList colExps = new HsqlArrayList();
+-! 
+-!             for (int i = start; i < end; i++) {
+-!                 exprColumns[i].collectInGroupByExpressions(colExps);
+-!             }
+-! 
+-!             for (int i = 0, size = colExps.size(); i < size; i++) {
+-!                 Expression exp = (Expression) colExps.get(i);
+-! 
+-!                 if (isSimilarIn(exp, 0, iResultLen)) {
+-!                     continue;
+-                  }
+-! 
+-!                 throw Trace.error(Trace.INVALID_ORDER_BY_IN_DISTINCT_SELECT,
+-!                                   exp);
+-              }
+-          }
+-      }
+---- 759,790 ----
+-                      continue;
+-                  }
+-  
+-!                 throw Trace.error(Trace.NOT_IN_AGGREGATE_OR_GROUP_BY, exp);
+-!             }
+-!         }
+-!     }
+-! 
+-!     private void checkAggregateOrGroupByOrderColumns(int start,
+-!             int end) throws HsqlException {
+-! 
+-!         checkAggregateOrGroupByColumns(start, end);
+-! 
+-!         if (start < end && isDistinctSelect) {
+-!             HsqlArrayList colExps = new HsqlArrayList();
+-! 
+-!             for (int i = start; i < end; i++) {
+-!                 exprColumns[i].collectInGroupByExpressions(colExps);
+-!             }
+-! 
+-!             for (int i = 0, size = colExps.size(); i < size; i++) {
+-!                 Expression exp = (Expression) colExps.get(i);
+-! 
+-!                 if (isSimilarIn(exp, 0, iResultLen)) {
+-!                     continue;
+-                  }
+-! 
+-!                 throw Trace.error(Trace.INVALID_ORDER_BY_IN_DISTINCT_SELECT,
+-!                                   exp);
+-              }
+-          }
+-      }
+-*** misc/hsqldb/src/org/hsqldb/Tokenizer.java   Fri Jul 21 15:38:12 2006
+---- misc/build/hsqldb/src/org/hsqldb/Tokenizer.java Thu Jul 19 14:33:35 2007
+-***************
+-*** 126,131 ****
+---- 126,132 ----
+-      private int              beginIndex;
+-      private int              iType;
+-      private String           sToken;
+-+     private int              indexLongNameFirst = -1;
+-      private String           sLongNameFirst = null;
+-      private int              typeLongNameFirst;
+-  
+-***************
+-*** 160,175 ****
+-  
+-      public void reset(String s) {
+-  
+-!         sCommand          = s;
+-!         iLength           = s.length();
+-!         iIndex            = 0;
+-!         tokenIndex        = 0;
+-!         nextTokenIndex    = 0;
+-!         beginIndex        = 0;
+-!         iType             = NO_TYPE;
+-!         typeLongNameFirst = NO_TYPE;
+-!         sToken            = null;
+-!         sLongNameFirst    = null;
+-  
+-  //        sLongNameLast  = null;
+-          bWait             = false;
+---- 161,177 ----
+-  
+-      public void reset(String s) {
+-  
+-!         sCommand           = s;
+-!         iLength            = s.length();
+-!         iIndex             = 0;
+-!         tokenIndex         = 0;
+-!         nextTokenIndex     = 0;
+-!         beginIndex         = 0;
+-!         iType              = NO_TYPE;
+-!         typeLongNameFirst  = NO_TYPE;
+-!         sToken             = null;
+-!         indexLongNameFirst = -1;
+-!         sLongNameFirst     = null;
+-  
+-  //        sLongNameLast  = null;
+-          bWait             = false;
+-***************
+-*** 188,194 ****
+-          }
+-  
+-          nextTokenIndex = iIndex;
+-!         iIndex         = tokenIndex;
+-          bWait          = true;
+-      }
+-  
+---- 190,196 ----
+-          }
+-  
+-          nextTokenIndex = iIndex;
+-!         iIndex         = ( indexLongNameFirst != -1 ) ? indexLongNameFirst : tokenIndex;
+-          bWait          = true;
+-      }
+-  
+-***************
+-*** 741,748 ****
+-          }
+-  
+-          if (!retainFirst) {
+-!             sLongNameFirst    = null;
+-!             typeLongNameFirst = NO_TYPE;
+-          }
+-  
+-          while (iIndex < iLength
+---- 743,751 ----
+-          }
+-  
+-          if (!retainFirst) {
+-!             sLongNameFirst     = null;
+-!             indexLongNameFirst = -1;
+-!             typeLongNameFirst  = NO_TYPE;
+-          }
+-  
+-          while (iIndex < iLength
+-***************
+-*** 876,883 ****
+-                      c = sCommand.charAt(iIndex);
+-  
+-                      if (c == '.') {
+-!                         sLongNameFirst    = sToken;
+-!                         typeLongNameFirst = iType;
+-  
+-                          iIndex++;
+-  
+---- 879,887 ----
+-                      c = sCommand.charAt(iIndex);
+-  
+-                      if (c == '.') {
+-!                         sLongNameFirst     = sToken;
+-!                         indexLongNameFirst = tokenIndex;
+-!                         typeLongNameFirst  = iType;
+-  
+-                          iIndex++;
+-  
+-***************
+-*** 958,965 ****
+-                      }
+-  
+-                      if (c == '.') {
+-!                         typeLongNameFirst = iType;
+-!                         sLongNameFirst    = sToken;
+-  
+-                          iIndex++;
+-  
+---- 962,970 ----
+-                      }
+-  
+-                      if (c == '.') {
+-!                         typeLongNameFirst  = iType;
+-!                         sLongNameFirst     = sToken;
+-!                         indexLongNameFirst = tokenIndex;
+-  
+-                          iIndex++;
+-  
+-*** misc/hsqldb/src/org/hsqldb/View.java    Sun Oct 23 19:40:21 2005
+---- misc/build/hsqldb/src/org/hsqldb/View.java  Thu Jul 19 14:33:35 2007
+-***************
+-*** 82,87 ****
+---- 82,88 ----
+-          compileTimeSchema = session.getSchemaHsqlName(null);
+-  
+-          compile(session);
+-+         replaceAsterisksInStatement();
+-  
+-          HsqlName[] schemas = getSchemas();
+-  
+-***************
+-*** 125,130 ****
+---- 126,132 ----
+-          // create the working table
+-          Parser p = new Parser(session, this.database,
+-                                new Tokenizer(statement));
+-+         p.setCompilingView();
+-          int brackets = p.parseOpenBracketsSelect();
+-  
+-          viewSubQuery = p.parseSubquery(brackets, colList, true,
+-***************
+-*** 155,160 ****
+---- 157,215 ----
+-      }
+-  
+-      /**
+-+      *  is a private helper for replaceAsterisksInStatement, to avoid some code duplication
+-+      */
+-+     private void collectAsteriskPos(final Select select, HsqlArrayList asteriskPositions) {
+-+ 
+-+         if (select.asteriskPositions == null)
+-+             return;
+-+ 
+-+         Iterator asterisks = select.asteriskPositions.keySet().iterator();
+-+         while (asterisks.hasNext()) {
+-+             int pos = asterisks.nextInt();
+-+             asteriskPositions.set(pos, select.asteriskPositions.get(pos) );
+-+         }
+-+     }
+-+ 
+-+     /**
+-+      *  replaces all asterisks in our statement with the actual column list
+-+      *
+-+      *  This way, we ensure what is required by the standard: a view returns a result
+-+      *  which reflects the structure of the underlying tables at the *time of the definition*
+-+      *  of the view.
+-+      */
+-+     private void replaceAsterisksInStatement() {
+-+ 
+-+         HsqlArrayList asteriskPositions = new HsqlArrayList();
+-+         asteriskPositions.setSize(statement.length());
+-+ 
+-+         // asterisk positions in sub queries
+-+         for (int i=0; i<viewSubqueries.length; ++i) {
+-+             // collect the occurances of asterisks in the statement
+-+             Select subSelect = viewSubqueries[i].select;
+-+             collectAsteriskPos(subSelect, asteriskPositions);
+-+ 
+-+             // the same for all (possible) UNION SELECTs of the sub select
+-+             if (subSelect.unionArray != null) {
+-+                 // start with index 1, not 0 - the first select is the one already covered by subSelect
+-+                 for (int u=1; u<subSelect.unionArray.length; ++u)
+-+                     collectAsteriskPos(subSelect.unionArray[u], asteriskPositions);
+-+             }
+-+         }
+-+ 
+-+         StringBuffer expandedStatement = new StringBuffer(statement);
+-+         for (int pos = asteriskPositions.size()-1; pos >= 0; --pos) {
+-+             String colList = (String)asteriskPositions.get(pos);
+-+             if (colList == null)
+-+                 continue;
+-+ 
+-+             expandedStatement.replace(pos, expandedStatement.indexOf("*", pos) + 1, colList );
+-+         }
+-+ 
+-+         statement = expandedStatement.toString();
+-+     }
+-+ 
+-+     /**
+-       * Overridden to disable SET TABLE READONLY DDL for View objects.
+-       */
+-      void setDataReadOnly(boolean value) throws HsqlException {
+-*** misc/hsqldb/src/org/hsqldb/Expression.java  Mon Jul 10 13:02:53 2006
+---- misc/build/hsqldb/src/org/hsqldb/Expression.java    Thu Jul 19 14:33:51 2007
+-***************
+-*** 379,391 ****
+-       */
+-      Expression(Expression e, int dataType, int precision, int scale) {
+-  
+-!         this.exprType    = CONVERT;
+-!         this.eArg        = e;
+-!         this.dataType    = dataType;
+-!         this.precision   = precision;
+-!         this.scale       = scale;
+-!         this.columnAlias = e.columnAlias;
+-!         this.aliasQuoted = e.aliasQuoted;
+-  
+-          checkAggregate();
+-      }
+---- 379,391 ----
+-       */
+-      Expression(Expression e, int dataType, int precision, int scale) {
+-  
+-!         this.exprType    = CONVERT;
+-!         this.eArg        = e;
+-!         this.dataType    = dataType;
+-!         this.precision   = precision;
+-!         this.scale       = scale;
+-!         this.columnAlias = e.columnAlias;
+-!         this.aliasQuoted = e.aliasQuoted;
+-  
+-          checkAggregate();
+-      }
+-***************
+-*** 535,540 ****
+---- 535,568 ----
+-      }
+-  
+-      /**
+-+      *  returns the complete name of the column represented by the expression
+-+      *
+-+      *  If an alias is known for the column's table, this alias will precede the
+-+      *  column name, except it's "SYSTEM_SUBQUERY".
+-+      *  If no alias is known, the column's table will be asked for its
+-+      *  statementName, which then will precede the column name.
+-+      */
+-+     String getColumnDDL() throws HsqlException {
+-+ 
+-+         Trace.doAssert(exprType == COLUMN);
+-+ 
+-+         StringBuffer buf = new StringBuffer();
+-+ 
+-+         Table table = tableFilter.getTable();
+-+ 
+-+         if (tableName != null) {
+-+             if (!tableName.equals("SYSTEM_SUBQUERY"))
+-+                 buf.append('"').append(tableName).append('"').append('.');
+-+         }
+-+         else
+-+             buf.append(table.tableName.statementName).append('.');
+-+ 
+-+         buf.append(table.getColumn(columnIndex).columnName.statementName);
+-+ 
+-+         return buf.toString();
+-+     }
+-+ 
+-+     /**
+-       * For use with CHECK constraints. Under development.
+-       *
+-       * Currently supports a subset of expressions and is suitable for CHECK
+-***************
+-*** 2689,2695 ****
+-                  return tableFilter != null && tableFilter.isAssigned;
+-  
+-              case QUERY :
+-!                 return subQuery.isResolved;
+-          }
+-  
+-          // todo: could recurse here, but never miss a 'false'!
+---- 2717,2723 ----
+-                  return tableFilter != null && tableFilter.isAssigned;
+-  
+-              case QUERY :
+-!                 return subQuery.isResolved;
+-          }
+-  
+-          // todo: could recurse here, but never miss a 'false'!
+-***************
+-*** 3258,3266 ****
+-                  try {
+-                      return tableFilter.currentData[columnIndex];
+-                  } catch (NullPointerException e) {
+-!                     String name = tableName == null ? columnName :
+-!                         tableName + '.' + columnName;
+-!                     throw Trace.error(Trace.COLUMN_NOT_FOUND, name);
+-                  }
+-              case FUNCTION :
+-                  return function.getValue(session);
+---- 3286,3294 ----
+-                  try {
+-                      return tableFilter.currentData[columnIndex];
+-                  } catch (NullPointerException e) {
+-!                     String name = tableName == null ? columnName :
+-!                         tableName + '.' + columnName;
+-!                     throw Trace.error(Trace.COLUMN_NOT_FOUND, name);
+-                  }
+-              case FUNCTION :
+-                  return function.getValue(session);
++*** 16,28 ****
++     <property file='build/build.properties'/>
++     <property name="hsqldb.version" value="1.8.0"/>
++  
++!    <tstamp>
++!        <format property="_tmpstamp" pattern="yyyy/MM/dd-hh:mm:ss"
++!                locale="en"/>
++!    </tstamp>
++! 
++!    <property name="build.label" value="private-${_tmpstamp}"/>
++!    <property name="build.vendor" value="${user.name}"/>
++     <property name="hsqldb.title" value="HSQLDB"/>
++     <property name="hsqldb.vendor" value="The HSQLDB Development Group"/>
++     <property name="src" value="${basedir}/src"/>
++--- 16,23 ----
++     <property file='build/build.properties'/>
++     <property name="hsqldb.version" value="1.8.0"/>
++  
++!    <property name="build.label" value="replace-me"/>
++!    <property name="build.vendor" value="OpenOffice.org"/>
++     <property name="hsqldb.title" value="HSQLDB"/>
++     <property name="hsqldb.vendor" value="The HSQLDB Development Group"/>
++     <property name="src" value="${basedir}/src"/>
+Index: hsqldb/download/hsqldb_1_8_0.zip
+===================================================================
+RCS file: /cvs/external/hsqldb/download/hsqldb_1_8_0.zip,v
+retrieving revision 1.9
+retrieving revision 1.9.14.1
+diff -u -p -u -r1.9 -r1.9.14.1
+Binary files /tmp/cvs5baqfw and /tmp/cvs6baqfw differ
+Index: officecfg/registry/schema/org/openoffice/Office/DataAccess.xcs
+===================================================================
+RCS file: /cvs/util/officecfg/registry/schema/org/openoffice/Office/DataAccess.xcs,v
+retrieving revision 1.38
+retrieving revision 1.38.66.2
+diff -u -p -u -r1.38 -r1.38.66.2
+--- officecfg/registry/schema/org/openoffice/Office/DataAccess.xcs	24 Jul 2007 11:55:08 -0000	1.38
++++ officecfg/registry/schema/org/openoffice/Office/DataAccess.xcs	20 Oct 2007 12:21:21 -0000	1.38.66.2
+@@ -263,6 +263,7 @@
+ 				<desc>Contains a list of descriptions for user defined drivers.</desc>
+ 			</info>
+ 		</set>
++
+ 		<group oor:name="AddressBook">
+ 			<info>
+ 				<desc>Specifies the data source that can be used as an AddressBook.</desc>
+@@ -298,6 +299,7 @@
+ 				</info>
+ 			</set>
+ 		</group>
++
+ 		<group oor:name="Bibliography">
+ 			<info>
+ 				<author>OS</author>
+@@ -350,10 +352,12 @@
+ 				</info>
+ 			</set>
+ 		</group>
++
+ 		<group oor:name="DriverSettings">
+ 			<info>
+ 				<desc>Specifies the driver settings that are used.</desc>
+ 			</info>
++
+ 			<group oor:name="com.sun.star.comp.sdbc.MozabDriver">
+ 				<info>
+ 					<desc>Specifies the driver settings for the mozilla database driver.</desc>
+@@ -573,6 +577,7 @@
+ 					</prop>
+ 				</group>
+ 			</group>
++
+ 			<group oor:name="com.sun.star.comp.sdbc.evoab.OEvoabDriver">
+ 				<info>
+ 					<desc>Specifies the driver settings for the evolution database driver.</desc>
+@@ -760,6 +765,7 @@
+ 					</prop>
+ 				</group>
+ 			</group>
++
+             <group oor:name="com.sun.star.comp.sdbc.kab.Driver">
+                 <info>
+                     <desc>Specifies the driver settings for the mozilla database driver.</desc>
+@@ -773,7 +779,25 @@
+                     <value>false</value>
+                 </prop>
+             </group>
++
++            <group oor:name="com.sun.star.sdbcx.comp.hsqldb.Driver">
++                <info>
++                    <desc>Specifies settings for the driver accessing HSQL databases embedded into OpenOffice.org
++                          database documents (.odb)</desc>
++                </info>
++                <group oor:name="PermittedJavaMethods" oor:extensible="true">
++                    <info>
++                        <desc>HSQLDB features calling Java code directly from SQL statements. For security
++                              reasons, this is restricted to classes from the org.hsqldb.Library package,
++                              the java.lang.math package, plus any methods specified in this configuraton
++                              setting. If a method specification ends with .*, then all methods
++                              from the respectiv package are permitted.</desc>
++                    </info>
++                </group>
++            </group>
++
+         </group>
++
+ 		<group oor:name="FormSearchOptions">
+ 			<info>
+ 				<desc>Specifies the options for searching in forms.</desc>
