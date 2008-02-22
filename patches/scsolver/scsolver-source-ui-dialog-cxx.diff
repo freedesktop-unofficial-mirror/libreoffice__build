@@ -1,6 +1,6 @@
 --- /dev/null	
 +++ scsolver/source/ui/dialog.cxx	
-@@ -0,0 +1,1008 @@
+@@ -0,0 +1,1010 @@
 +/*************************************************************************
 + *
 + *  The Contents of this file are made available subject to
@@ -67,9 +67,12 @@
 +
 +#include <iostream>
 +
-+using namespace std;
 +using namespace ::scsolver::numeric;
 +using ::com::sun::star::uno::Reference;
++using ::std::vector;
++using ::std::cout;
++using ::std::endl;
++using ::std::distance;
 +
 +namespace scsolver {
 +
@@ -143,7 +146,7 @@
 +
 +void ConstEditDialog::initialize()
 +{
-+	BaseDialog::initialize( static_cast<sal_Int16>(180), static_cast<sal_Int16>(55), 
++	initializeDefault( static_cast<sal_Int16>(180), static_cast<sal_Int16>(55), 
 +		getResStr(SCSOLVER_STR_CONSTRAINTDLG_TITLE) );
 +	
 +	sal_Int32 nX, nY;
@@ -214,10 +217,11 @@
 +{
 +	SolverDialog* pDlg = getSolverImpl()->getMainDialog();
 +	pDlg->setVisible( true );
++    setFocus();
 +
 +	if ( !isCellRangeGeometryEqual() )
 +	{
-+		pDlg->showSolveError( getResStr(SCSOLVER_STR_MSG_REF_CON_RANGE_MISMATCH) );
++		pDlg->showMessage( getResStr(SCSOLVER_STR_MSG_REF_CON_RANGE_MISMATCH) );
 +		return false;
 +	}
 +
@@ -255,13 +259,10 @@
 +		{
 +			case 0:
 +				return LESS_THAN_EQUAL;
-+				break;
 +			case 1:
 +				return EQUAL;
-+				break;
 +			case 2:
 +				return GREATER_THAN_EQUAL;
-+				break;
 +			default:
 +				OSL_ASSERT( !"Unexpected (in)equal sign" );
 +		}
@@ -378,9 +379,6 @@
 +
 +	m_pConstEditDialog( NULL ),
 +	m_pOptionDialog( NULL ),
-+	m_pSolveErrorDlg( NULL ),
-+	m_pSolInfeasibleDlg( NULL ),
-+	m_pSolFoundDlg( NULL ),
 +	m_pTopWindowListener(NULL),
 +	m_pTargetRngListener( NULL ),
 +	m_pVarCellsRngListener( NULL ),
@@ -407,7 +405,7 @@
 +
 +void SolverDialog::initialize()
 +{
-+	BaseDialog::initialize( static_cast<sal_Int16>(260), static_cast<sal_Int16>(200), 
++	initializeDefault( static_cast<sal_Int16>(260), static_cast<sal_Int16>(200), 
 +		getResStr(SCSOLVER_STR_MAINDLG_TITLE) );
 +
 +	// START CREATING WIDGETS
@@ -423,11 +421,11 @@
 +	nY += 18;
 +	addFixedText( 10, nY, 35, 12, ascii( "ftObj" ), getResStr(SCSOLVER_STR_GOAL) );
 +	addRadioButton( 50, nY, 40, 12, ascii( "rbMax" ), getResStr(SCSOLVER_STR_MAXIMIZE) );
-+	addRadioButton( 95, nY, 40, 12, ascii( "rbMin" ), getResStr(SCSOLVER_STR_MINIMIZE) );
++	addRadioButton( 115, nY, 40, 12, ascii( "rbMin" ), getResStr(SCSOLVER_STR_MINIMIZE) );
 +	
 +	nY += 15;
 +	addFixedText( 10, nY+2, 60, 12, ascii( "ftDecVars" ), getResStr(SCSOLVER_STR_DECISIONVAR_CELLS) );
-+	addRangeEdit( 70, nY, 115, 12, ascii( "editVarCells" ), ascii( "btnRangeSelect" ) );
++	addRangeEdit( 85, nY, 115, 12, ascii( "editVarCells" ), ascii( "btnRangeSelect" ) );
 +	
 +	nY += 20;
 +	addFixedLine( 5, nY, 195, 12, ascii( "flConstraints" ), getResStr(SCSOLVER_STR_CONSTRAINT_SEP) );
@@ -547,7 +545,7 @@
 +
 +		Reference< sheet::XSpreadsheet > xSheet = pCalc->getActiveSheet();
 +		Reference< container::XNamed > xNamed( xSheet, UNO_QUERY );
-+		printOUStr( ascii( "Current sheet is " ) + xNamed->getName() );
++//      printOUStr( ascii( "Current sheet is " ) + xNamed->getName() );
 +	}
 +	else
 +		getConstEditDialog()->setVisible( false );
@@ -565,18 +563,24 @@
 +
 +ConstEditDialog* SolverDialog::getConstEditDialog()
 +{
-+	if ( m_pConstEditDialog.get() == NULL )
-+		m_pConstEditDialog.reset( new ConstEditDialog( getSolverImpl() ) );
-+
-+	return m_pConstEditDialog.get();
++    if (!m_pConstEditDialog.get())
++    {
++        m_pConstEditDialog.reset( new ConstEditDialog(getSolverImpl()) );
++        m_pConstEditDialog->setRefBoundingBox(getPosSize());
++    }
++    
++    return m_pConstEditDialog.get();
 +}
 +
 +OptionDialog* SolverDialog::getOptionDialog()
 +{
-+	if( m_pOptionDialog.get() == NULL )
-+		m_pOptionDialog.reset( new OptionDialog( getSolverImpl() ) );
++    if(!m_pOptionDialog.get())
++    {
++        m_pOptionDialog.reset( new OptionDialog( getSolverImpl() ) );
++        m_pOptionDialog->setRefBoundingBox(getPosSize());
++    }
 +
-+	return m_pOptionDialog.get();
++    return m_pOptionDialog.get();
 +}
 +
 +sal_Int16 SolverDialog::getSelectedConstraintPos()
@@ -720,7 +724,9 @@
 +	aConstItem.Equal = eEq;
 +	m_aConstraint.push_back( aConstItem );
 +	
-+	output();
++#if SCSOLVER_DEBUG	
++    output();
++#endif    
 +	setConstraintImpl( sLeft, sRight, eEq, false );
 +}
 +
@@ -747,7 +753,9 @@
 +		++pos; ++nCurId;
 +	}
 +	
-+	output();
++#if SCSOLVER_DEBUG	
++    output();
++#endif    
 +	setConstraintImpl( sLeft, sRight, eEqVal, true, nId );
 +}
 +
@@ -768,7 +776,9 @@
 +		++pos; ++nCurId;
 +	}
 +
-+	output();
++#if SCSOLVER_DEBUG	
++    output();
++#endif    
 +	
 +	removeConstraintsFromListBox( nIdx, 1 );
 +}
@@ -852,29 +862,21 @@
 + 		OSL_ASSERT( !"oLB is NULL" );
 +}
 +
-+void SolverDialog::showSolveError( const rtl::OUString& sMsg )
++void SolverDialog::showMessage( const rtl::OUString& sMsg )
 +{
-+	if ( m_pSolveErrorDlg.get() == NULL )
-+		m_pSolveErrorDlg.reset( new MessageDialog( getSolverImpl(), sMsg ) );
-+	else
-+		m_pSolveErrorDlg->setMessage( sMsg );
-+	m_pSolveErrorDlg->execute();
++    MessageDialog dlg(getSolverImpl(), sMsg);
++    dlg.setRefBoundingBox(getPosSize());
++    dlg.execute();
 +}
 +
 +void SolverDialog::showSolutionInfeasible()
 +{
-+	if ( m_pSolInfeasibleDlg.get() == NULL )
-+		m_pSolInfeasibleDlg.reset( new MessageDialog( getSolverImpl(), 
-+				getResStr(SCSOLVER_STR_MSG_SOLUTION_NOT_FOUND) ) );
-+	m_pSolInfeasibleDlg->execute();
++    showMessage(getResStr(SCSOLVER_STR_MSG_SOLUTION_NOT_FOUND));
 +}
 +
 +void SolverDialog::showSolutionFound()
 +{
-+	if ( m_pSolFoundDlg.get() == NULL )
-+		m_pSolFoundDlg.reset( new MessageDialog( getSolverImpl(), 
-+				getResStr(SCSOLVER_STR_MSG_SOLUTION_FOUND) ) );
-+	m_pSolFoundDlg->execute();
++    showMessage(getResStr(SCSOLVER_STR_MSG_SOLUTION_FOUND));
 +}
 +
 +void SolverDialog::reset()

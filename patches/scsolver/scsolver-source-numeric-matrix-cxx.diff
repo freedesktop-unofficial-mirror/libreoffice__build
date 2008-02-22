@@ -1,6 +1,6 @@
 --- /dev/null	
 +++ scsolver/source/numeric/matrix.cxx	
-@@ -0,0 +1,1349 @@
+@@ -0,0 +1,1279 @@
 +/*************************************************************************
 + *
 + *  The Contents of this file are made available subject to
@@ -37,6 +37,7 @@
 +#include <set>
 +#include <exception>
 +#include <iterator>
++#include <sstream>
 +
 +#ifdef __GNUC__
 +#warning "noalias not present in boost 1.30.2"
@@ -44,14 +45,12 @@
 +#undef noalias
 +#define noalias(a) (a)
 +
-+#include <boost/numeric/ublas/matrix_proxy.hpp>
-+#include <boost/numeric/ublas/io.hpp>
-+#include <boost/numeric/ublas/matrix_expression.hpp>
-+
 +namespace bnu = ::boost::numeric::ublas;
 +
-+using std::cout;
-+using std::endl;
++using ::std::cout;
++using ::std::endl;
++using ::boost::numeric::ublas::prod;
++using ::std::vector;
 +
 +namespace scsolver { namespace numeric {
 +
@@ -84,81 +83,6 @@
 +{
 +    return "Matrix not square where a square matrix is required";
 +}
-+
-+#if 0
-+class MatrixImpl
-+{
-+public:
-+	MatrixImpl();
-+	MatrixImpl( size_t, size_t, bool = false );
-+	MatrixImpl( const MatrixImpl& );
-+	MatrixImpl( const MatrixImpl* );
-+	MatrixImpl( ::bnu::matrix<double> );
-+	~MatrixImpl() throw();
-+	
-+	void setResizable( bool b ) { m_bResizable = b; }
-+	bool getResizable() const { return m_bResizable; }
-+	void swap( MatrixImpl& ) throw();
-+	void clear();
-+	void copy( const MatrixImpl& );
-+	
-+	const double getValue( size_t, size_t ) const;
-+	double& getValue( size_t, size_t );
-+	void setValue( size_t, size_t, double );
-+	
-+	MatrixImpl getColumn( size_t );
-+	MatrixImpl getRow( size_t );
-+	void deleteColumn( size_t );
-+	void deleteColumns( const std::vector<size_t>& );
-+	void deleteRow( size_t );
-+	void deleteRows( const std::vector<size_t>& );
-+	
-+	const MatrixImpl adj() const;
-+	double cofactor( size_t, size_t ) const;
-+	double det() const;
-+	const MatrixImpl inverse() const;
-+	const MatrixImpl trans() const;
-+	double minors( size_t, size_t ) const;
-+	void resize( size_t, size_t );
-+
-+	size_t rows() const { return m_aArray.size1(); }
-+	size_t cols() const { return m_aArray.size2(); }
-+	
-+	bool empty() const;
-+	bool isRowEmpty( size_t ) const;
-+	bool isColumnEmpty( size_t ) const;
-+	bool isSameSize( const MatrixImpl& ) const;
-+	bool isSquare() const;
-+	
-+	// Overloaded Operators
-+	
-+	MatrixImpl& operator=( const MatrixImpl& );
-+	const MatrixImpl operator+( const MatrixImpl& ) const;
-+	const MatrixImpl operator-( const MatrixImpl& ) const;
-+	const MatrixImpl operator*( double ) const;
-+	const MatrixImpl operator*( const MatrixImpl& ) const;
-+	const MatrixImpl operator/( double ) const;
-+	MatrixImpl& operator+=( const MatrixImpl& );
-+	MatrixImpl& operator+=( double );
-+	MatrixImpl& operator-=( const MatrixImpl& );
-+	MatrixImpl& operator*=( double );
-+	MatrixImpl& operator/=( double );
-+	const double operator()( size_t i, size_t j ) const { return getValue( i, j ); }
-+	double& operator()( size_t, size_t );
-+	
-+	bool operator==( const MatrixImpl& ) const;
-+	bool operator!=( const MatrixImpl& ) const;
-+	
-+	bool m_bResizable;
-+	bnu::matrix<double, bnu::row_major, std::vector<double> > m_aArray;
-+
-+private:
-+
-+	void expandAsNeeded( size_t, size_t );
-+	void throwIfEmpty() const;
-+
-+}; // class MatrixImpl
-+#endif
 +
 +//---------------------------------------------------------------------------
 +// Local helper functions
@@ -330,9 +254,15 @@
 +                U( i, j ) = A( i, j );
 +        }
 +
++#if REWRITE_FOR_SUN_STUDIO_COMPILER
++    n = cnP.size();
++    for (size_t i = 0; i < n; ++i)
++        P(i, cnP[i]) = 1.0;
++#else
 +    ::std::vector<size_t>::const_iterator it, itBeg = cnP.begin(), itEnd = cnP.end();
 +    for ( it = itBeg; it != itEnd; ++it )
-+        P( std::distance( itBeg, it ), *it ) = 1.0;
++        P( ::std::distance( itBeg, it ), *it ) = 1.0;
++#endif
 +
 +    noalias( mxU ) = U;
 +    noalias( mxL ) = L;
@@ -450,14 +380,14 @@
 +//---------------------------------------------------------------------------
 +
 +Matrix::Matrix() : 
-+    m_bResizable(false)
++    m_bResizable(true)
 +{
 +    bnu::matrix<double> m( 0, 0 );
 +    m_aArray = m;
 +}
 +
 +Matrix::Matrix(size_t row, size_t col, bool identity_matrix) :
-+    m_bResizable(false)
++    m_bResizable(true)
 +{   
 +    bnu::matrix<double> m(row, col);
 +    for ( unsigned int i = 0; i < m.size1(); ++i )
@@ -1030,7 +960,7 @@
 +}
 +#endif
 +
-+bnu::matrix< std::string > Matrix::getDisplayElements( 
++Matrix::StringMatrixType Matrix::getDisplayElements( 
 +        int prec, size_t nColSpace, bool bFormula) const
 +{
 +    using std::string;
@@ -1042,11 +972,11 @@
 +        aColLen.push_back( 0 );
 +    
 +    // Get string matrix.
-+    bnu::matrix<std::string> mxElements( m_aArray.size1(), m_aArray.size2() );
++    StringMatrixType mxElements( m_aArray.size1(), m_aArray.size2() );
 +    for ( unsigned int i = 0; i < m_aArray.size1(); ++i )
 +        for ( unsigned int j = 0; j < m_aArray.size2(); ++j )
 +        {
-+            ostringstream osElem;
++            ::std::ostringstream osElem;
 +            double fVal = m_aArray( i, j );
 +            for ( unsigned int k = 0; k < nColSpace; ++k )
 +                osElem << " ";
@@ -1125,14 +1055,14 @@
 +    return mxElements;
 +}
 +
-+void Matrix::print( size_t nPrec, size_t nColSpace ) const
++void Matrix::print(size_t prec, size_t colspace) const
 +{
 +    using std::string;
 +    using std::ostringstream;
 +
 +    // Print to stdout
 +    ostringstream os;
-+    const bnu::matrix< string > mElements = getDisplayElements( nPrec, nColSpace, false );
++    const bnu::matrix< string > mElements = getDisplayElements(prec, colspace, false);
 +    for ( unsigned int i = 0; i < mElements.size1(); ++i )
 +    {
 +        os << "|";
@@ -1141,7 +1071,7 @@
 +            std::string s = mElements( i, j );
 +            os << s;
 +        }
-+        os << repeatString( " ", nColSpace ) << "|" << endl;
++        os << repeatString( " ", colspace ) << "|" << endl;
 +    }
 +    cout << os.str();
 +}
