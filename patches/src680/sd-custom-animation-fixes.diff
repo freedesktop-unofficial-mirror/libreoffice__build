@@ -126,6 +126,182 @@
  			{
  				if( fTextGroupingAuto == -1.0 )
  				{
+--- sd/source/ui/animations/CustomAnimationCreateDialog.cxx
++++ sd/source/ui/animations/CustomAnimationCreateDialog.cxx
+@@ -253,6 +253,8 @@ public:
+ 	bool getIsPreview() const;
+ 	void setIsPreview( bool bIsPreview );
+ 
++	bool select( const OUString& rsPresetId );
++
+ private:
+ 	DECL_LINK( implSelectHdl, Control* );
+ 	DECL_LINK( implDoubleClickHdl, Control* );
+@@ -544,13 +546,33 @@ void CustomAnimationCreateTabPage::setIsPreview( bool bIsPreview )
+ 	mpCBXPReview->Check( bIsPreview ? TRUE : FALSE );
+ }
+ 
++bool CustomAnimationCreateTabPage::select( const OUString& rsPresetId )
++{
++	USHORT nPos = mpLBEffects->GetEntryCount();
++	while( nPos-- )
++	{
++		void* pEntryData = mpLBEffects->GetEntryData( nPos );
++		if( pEntryData )
++		{
++			CustomAnimationPresetPtr& pPtr = *static_cast< CustomAnimationPresetPtr* >(pEntryData);
++			if( pPtr.get() && pPtr->getPresetId() == rsPresetId )
++			{
++				mpLBEffects->SelectEntryPos( nPos );
++				return true;
++			}
++		}
++	}
++
++	return false;
++}
++
+ // --------------------------------------------------------------------
+ 
+-CustomAnimationCreateDialog::CustomAnimationCreateDialog( Window* pParent, CustomAnimationPane* pPane, const std::vector< ::com::sun::star::uno::Any >& rTargets, bool bHasText  )
+-:	TabDialog( pParent, SdResId( DLG_CUSTOMANIMATION_CREATE ) ),
+-	mpPane( pPane ), 
+-	mrTargets( rTargets ),
+-	mfDuration( 2.0f )
++CustomAnimationCreateDialog::CustomAnimationCreateDialog( Window* pParent, CustomAnimationPane* pPane, const std::vector< ::com::sun::star::uno::Any >& rTargets, bool bHasText, const ::rtl::OUString& rsPresetId, double fDuration  )
++:	TabDialog( pParent, SdResId( DLG_CUSTOMANIMATION_CREATE ) )
++,	mpPane( pPane )
++,	mrTargets( rTargets )
++,	mfDuration( fDuration )
+ {
+ 	mpTabControl = new TabControl( this, SdResId( 1 ) );
+ 	mpOKButton = new OKButton(this, SdResId( 1 ) ) ;
+@@ -583,6 +605,19 @@ CustomAnimationCreateDialog::CustomAnimationCreateDialog( Window* pParent, Custo
+ 	mpTabControl->SetDeactivatePageHdl( LINK( this, CustomAnimationCreateDialog, implDeactivatePagekHdl ) );
+ 
+     setPosition();
++
++	// select current preset if available
++	if( rsPresetId.getLength() != 0 )
++	{
++		for( sal_uInt16 i = ENTRANCE; i <= MOTIONPATH; i++ )
++		{
++			if( mpTabPages[i]->select( rsPresetId ) )
++			{
++				mpTabControl->SetCurPageId( RID_TP_CUSTOMANIMATION_ENTRANCE + i );
++				break;
++			}
++		}
++	}
+ }
+ 
+ CustomAnimationCreateDialog::~CustomAnimationCreateDialog()
+diff --git a/sd/source/ui/animations/CustomAnimationCreateDialog.hrc b/sd/source/ui/animations/CustomAnimationCreateDialog.hrc
+index 424a53c..d24a51a 100644
+--- sd/source/ui/animations/CustomAnimationCreateDialog.hxx
++++ sd/source/ui/animations/CustomAnimationCreateDialog.hxx
+@@ -62,7 +62,7 @@ class CustomAnimationCreateDialog : public TabDialog
+ {
+ 	friend class CustomAnimationCreateTabPage;
+ public:
+-	CustomAnimationCreateDialog( ::Window* pParent, CustomAnimationPane* pPane, const std::vector< ::com::sun::star::uno::Any >& rTargets, bool bHasText );
++	CustomAnimationCreateDialog( ::Window* pParent, CustomAnimationPane* pPane, const std::vector< ::com::sun::star::uno::Any >& rTargets, bool bHasText, const ::rtl::OUString& rsPresetId, double fDuration );
+ 	~CustomAnimationCreateDialog();
+ 
+ 	PathKind getCreatePathKind() const;
+diff --git a/sd/source/ui/animations/CustomAnimationCreateDialog.src b/sd/source/ui/animations/CustomAnimationCreateDialog.src
+index d6bfb9a..6dc89c7 100644
+--- sd/source/ui/animations/CustomAnimationDialog.cxx
++++ sd/source/ui/animations/CustomAnimationDialog.cxx
+@@ -2381,6 +2377,8 @@ private:
+ 	CheckBox	maCBXReverse;
+ 
+ 	const STLPropertySet* mpSet;
++
++	bool mbHasVisibleShapes;
+ };
+ 
+ CustomAnimationTextAnimTabPage::CustomAnimationTextAnimTabPage(Window* pParent, const ResId& rResId, const STLPropertySet* pSet)
+@@ -2391,7 +2389,8 @@ CustomAnimationTextAnimTabPage::CustomAnimationTextAnimTabPage(Window* pParent,
+ 	maMFGroupAuto( this, SdResId( MF_GROUP_AUTO ) ),
+ 	maCBXAnimateForm( this, SdResId( CBX_ANIMATE_FORM ) ),
+ 	maCBXReverse( this, SdResId( CBX_REVERSE ) ),
+-	mpSet( pSet )
++	mpSet( pSet ),
++	mbHasVisibleShapes(true)
+ {
+ 	FreeResource();
+ 
+@@ -2404,6 +2403,9 @@ CustomAnimationTextAnimTabPage::CustomAnimationTextAnimTabPage(Window* pParent,
+ 			maLBGroupText.SelectEntryPos( (USHORT)(nTextGrouping + 1) );
+ 	}
+ 
++	if( pSet->getPropertyState( nHandleHasVisibleShape ) != STLPropertyState_AMBIGUOUS )
++		pSet->getPropertyValue( nHandleHasVisibleShape ) >>= mbHasVisibleShapes;
++
+ 	if( pSet->getPropertyState( nHandleTextGroupingAuto ) != STLPropertyState_AMBIGUOUS )
+ 	{
+ 		double fTextGroupingAuto = 0.0;
+@@ -2516,6 +2518,16 @@ void CustomAnimationTextAnimTabPage::updateControlStates()
+ 	maCBXGroupAuto.Enable( nPos > 1 );
+ 	maMFGroupAuto.Enable( nPos > 1 );
+ 	maCBXReverse.Enable( nPos > 0 );
++
++	if( !mbHasVisibleShapes && nPos > 0 )
++	{
++		maCBXAnimateForm.Check(FALSE);
++		maCBXAnimateForm.Enable(FALSE);
++	}
++	else
++	{
++		maCBXAnimateForm.Enable(TRUE);
++	}
+ }
+ 
+ IMPL_LINK( CustomAnimationTextAnimTabPage, implSelectHdl, Control*, EMPTYARG )
+@@ -2622,6 +2634,7 @@ STLPropertySet* CustomAnimationDialog::createDefaultSet()
+ 	pSet->setPropertyDefaultValue( nHandleTrigger, aEmpty );
+ 
+ 	pSet->setPropertyDefaultValue( nHandleHasText, makeAny( sal_False ) );
++	pSet->setPropertyDefaultValue( nHandleHasVisibleShape, makeAny( sal_False ) );
+ 	pSet->setPropertyDefaultValue( nHandleTextGrouping, makeAny( (sal_Int32)-1 ) );
+ 	pSet->setPropertyDefaultValue( nHandleAnimateForm, makeAny( sal_True ) );
+ 	pSet->setPropertyDefaultValue( nHandleTextGroupingAuto, makeAny( (double)-1.0 ) );
+diff --git a/sd/source/ui/animations/CustomAnimationDialog.hrc b/sd/source/ui/animations/CustomAnimationDialog.hrc
+index 3315156..47bb690 100644
+--- sd/source/ui/animations/CustomAnimationDialog.hxx
++++ sd/source/ui/animations/CustomAnimationDialog.hxx
+@@ -98,6 +98,8 @@ const sal_Int32 nHandleSoundEndAfterSlide = 30;
+ 
+ const sal_Int32 nHandleCommand = 31;
+ 
++const sal_Int32 nHandleHasVisibleShape = 32;
++
+ const sal_Int32 nPropertyTypeNone = 0;
+ const sal_Int32 nPropertyTypeDirection = 1;
+ const sal_Int32 nPropertyTypeSpokes = 2;
+diff --git a/sd/source/ui/animations/CustomAnimationDialog.src b/sd/source/ui/animations/CustomAnimationDialog.src
+index c52dae9..77dcf0b 100644
+--- sd/source/ui/animations/CustomAnimationList.cxx
++++ sd/source/ui/animations/CustomAnimationList.cxx
+@@ -569,14 +569,14 @@ void CustomAnimationList::KeyInput( const KeyEvent& rKEvt )
+ 	const int nKeyCode = rKEvt.GetKeyCode().GetCode();
+ 	switch( nKeyCode )
+ 	{
+-		case KEY_DELETE:	mpController->onContextMenu( CM_REMOVE );	break;
+-		case KEY_INSERT:	mpController->onContextMenu( CM_CREATE ); break;
++		case KEY_DELETE:	mpController->onContextMenu( CM_REMOVE ); return;
++		case KEY_INSERT:	mpController->onContextMenu( CM_CREATE ); return;
+ 		case KEY_SPACE:		
+ 			{
+ 				const Point aPos;
+ 				const CommandEvent aCEvt( aPos, COMMAND_CONTEXTMENU ); 
+ 				Command( aCEvt );
+-				break;
++				return;
+ 			}
+ 			
+ 	}
 --- sd/source/ui/animations/CustomAnimationPane.cxx
 +++ sd/source/ui/animations/CustomAnimationPane.cxx
 @@ -80,6 +80,8 @@
@@ -163,7 +339,20 @@
  using ::com::sun::star::container::XIndexAccess;
  using ::com::sun::star::container::XEnumerationAccess;
  using ::com::sun::star::container::XEnumeration;
-@@ -1362,6 +1355,36 @@ bool CustomAnimationPane::setProperty1Value( sal_Int32 nType, CustomAnimationEff
+@@ -422,6 +415,12 @@ void CustomAnimationPane::StateChanged( StateChangedType nStateChange )
+ 		updateMotionPathTags();
+ }
+ 
++void CustomAnimationPane::KeyInput( const KeyEvent& rKEvt )
++{
++	if( mpCustomAnimationList )
++		mpCustomAnimationList->KeyInput( rKEvt );
++}
++
+ void CustomAnimationPane::addListener()
+ {
+ 	Link aLink( LINK(this,CustomAnimationPane,EventMultiplexerListener) );
+@@ -1362,6 +1361,36 @@ bool CustomAnimationPane::setProperty1Value( sal_Int32 nType, CustomAnimationEff
  	return bEffectChanged;
  }
  
@@ -200,7 +389,7 @@
  
  STLPropertySet* CustomAnimationPane::createSelectionSet()
  {
-@@ -1413,6 +1436,9 @@ STLPropertySet* CustomAnimationPane::createSelectionSet()
+@@ -1413,6 +1442,9 @@ STLPropertySet* CustomAnimationPane::createSelectionSet()
  		addValue( pSet, nHandlePresetId, makeAny( pEffect->getPresetId() ) );
  
  		addValue( pSet, nHandleHasText, makeAny( (sal_Bool)pEffect->hasText() ) );
@@ -210,7 +399,7 @@
  
  		Any aSoundSource;
  		if( pEffect->getAudio().is() )
-@@ -1434,7 +1460,9 @@ STLPropertySet* CustomAnimationPane::createSelectionSet()
+@@ -1434,7 +1466,9 @@ STLPropertySet* CustomAnimationPane::createSelectionSet()
  			pTextGroup = pEffectSequence->findGroup( nGroupId );
  
  		addValue( pSet, nHandleTextGrouping, makeAny( pTextGroup.get() ? pTextGroup->getTextGrouping() : (sal_Int32)-1 ) );
@@ -221,7 +410,7 @@
  		addValue( pSet, nHandleTextGroupingAuto, makeAny( pTextGroup.get() ? pTextGroup->getTextGroupingAuto() : (double)-1.0 ) );
  		addValue( pSet, nHandleTextReverse, makeAny( pTextGroup.get() ? (sal_Bool)pTextGroup->getTextReverse() : sal_False ) );
  
-@@ -1740,6 +1768,10 @@ void CustomAnimationPane::changeSelection( STLPropertySet* pResultSet, STLProper
+@@ -1740,6 +1774,10 @@ void CustomAnimationPane::changeSelection( STLPropertySet* pResultSet, STLProper
  		if( bHasTextGrouping )
  			pResultSet->getPropertyValue(nHandleTextGrouping) >>= nTextGrouping;
  
@@ -232,7 +421,7 @@
  		if( bHasAnimateForm )
  			pResultSet->getPropertyValue(nHandleAnimateForm) >>= bAnimateForm;
  
-@@ -1778,7 +1810,7 @@ void CustomAnimationPane::changeSelection( STLPropertySet* pResultSet, STLProper
+@@ -1778,7 +1816,7 @@ void CustomAnimationPane::changeSelection( STLPropertySet* pResultSet, STLProper
  			{
  				if( (pTextGroup->getTextGrouping() != nTextGrouping) )
  				{
@@ -241,7 +430,7 @@
  					bChanged = true;
  				}
  			}
-@@ -1796,7 +1828,7 @@ void CustomAnimationPane::changeSelection( STLPropertySet* pResultSet, STLProper
+@@ -1796,7 +1834,7 @@ void CustomAnimationPane::changeSelection( STLPropertySet* pResultSet, STLProper
  			{
  				if( pTextGroup->getTextGroupingAuto() != fTextGroupingAuto )
  				{
@@ -250,3 +439,48 @@
  					bChanged = true;
  				}
  			}
+@@ -1926,6 +1964,9 @@ void CustomAnimationPane::onChange( bool bCreate )
+ 
+ 	// first create vector of targets for dialog preview
+ 	std::vector< Any > aTargets;
++	OUString sPresetId;
++	double fDuration = 2.0f;
++
+ 	if( bCreate )
+ 	{
+ 		// gather shapes from the selection
+@@ -1992,15 +2033,22 @@ void CustomAnimationPane::onChange( bool bCreate )
+ 		{
+ 			if( !bHasText || !(*aIter)->hasText() )
+ 				bHasText = false;
++
++			if( sPresetId.getLength() == 0 )
++			{
++				sPresetId = (*aIter)->getPresetId();
++				fDuration = (*aIter)->getDuration();
++			}
++
+ 			aTargets.push_back( (*aIter++)->getTarget() );
+ 		}
+ 	}
+ 
+-	CustomAnimationCreateDialog* pDlg = new CustomAnimationCreateDialog( this, this, aTargets, bHasText );
++	CustomAnimationCreateDialog* pDlg = new CustomAnimationCreateDialog( this, this, aTargets, bHasText, sPresetId, fDuration );
+ 	if( pDlg->Execute() )
+ 	{
+ 		addUndo();
+-		double fDuration = pDlg->getSelectedDuration();
++		fDuration = pDlg->getSelectedDuration();
+ 		CustomAnimationPresetPtr pDescriptor = pDlg->getSelectedPreset();
+ 		if( pDescriptor.get() )
+ 		{
+--- sd/source/ui/animations/CustomAnimationPane.hxx
++++ sd/source/ui/animations/CustomAnimationPane.hxx
+@@ -111,6 +111,7 @@ public:
+ 	// Control
+ 	virtual void Resize();
+ 	virtual void StateChanged( StateChangedType nStateChange );
++	virtual void KeyInput( const KeyEvent& rKEvt );
+ 
+ 	// ICustomAnimationListController
+ 	virtual void onSelect();
