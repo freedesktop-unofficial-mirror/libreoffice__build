@@ -1,63 +1,419 @@
---- vcl/unx/gtk/window/gtkframe.cxx	23 Jan 2008 17:17:10 -0000	1.72.8.2
-+++ vcl/unx/gtk/window/gtkframe.cxx	15 Apr 2008 20:07:09 -0000
-@@ -1180,7 +1180,7 @@ void GtkSalFrame::Center()
-             GdkModifierType aMask;
-             gdk_display_get_pointer( getGdkDisplay(), &pScreen, &x, &y, &aMask );
+--- config_office/configure.in.before	2008-04-28 10:31:26.000000000 +0200
++++ config_office/configure.in	2008-04-28 10:32:01.000000000 +0200
+@@ -274,6 +274,9 @@
+ AC_ARG_ENABLE(xrender-link,
+ [  --enable-xrender-link   link with libXrender instead of dynamically open it
+ ],,)
++AC_ARG_ENABLE(randr,
++[  --disable-randr          disable RandR support in the vcl project
++],,enable_randr=yes)
+ AC_ARG_WITH(myspell-dicts,
+ [  --without-myspell-dicts Removes myspell dictionaries from openoffice.org
+                           installation set, for people building for specific
+@@ -838,6 +841,7 @@
+ 		build_gstreamer=yes
+ 		test_kde=yes
+ 		test_cups=yes
++        test_randr=yes
+ 		_os=SunOS
  
--            const std::vector< Rectangle >& rScreens = GetX11SalData()->GetDisplay()->GetXineramaScreens();
-+            const std::vector< Rectangle >& rScreens = GetX11SalData()->GetDisplay()->GetXineramaScreenRects();
-             for( unsigned int i = 0; i < rScreens.size(); i++ )
-                 if( rScreens[i].IsInside( Point( x, y ) ) )
-                 {
-@@ -1649,7 +1649,7 @@ void GtkSalFrame::ShowFullScreen( BOOL b
-     {
-         GtkSalDisplay* pDisp = getDisplay();
-         // xinerama ?
--        if( pDisp->IsXinerama() && pDisp->GetXineramaScreens().size() > 1 )
-+        if( pDisp->IsXinerama() && pDisp->GetXineramaScreenCount() > 1 )
-         {
-             if( bFullScreen )
-             {
-@@ -1663,10 +1663,10 @@ void GtkSalFrame::ShowFullScreen( BOOL b
-                 m_nStyle |= SAL_FRAME_STYLE_PARTIAL_FULLSCREEN;
-                 createNewWindow( None, false, m_nScreen );
-                 Rectangle aNewPosSize;
--                if( nScreen < 0 || nScreen >= static_cast<int>(pDisp->GetXineramaScreens().size()) )
-+                if( nScreen < 0 || nScreen >= static_cast<int>(pDisp->GetXineramaScreenCount()) )
-                     aNewPosSize = Rectangle( Point( 0, 0 ), pDisp->GetScreenSize(m_nScreen) );
-                 else
--                    aNewPosSize = pDisp->GetXineramaScreens()[ nScreen ];
-+                    aNewPosSize = pDisp->GetXineramaScreenRects()[ nScreen ];
-                 gtk_window_resize( m_pWindow,
-                                    maGeometry.nWidth = aNewPosSize.GetWidth(),
-                                    maGeometry.nHeight = aNewPosSize.GetHeight() );
---- vcl/unx/inc/saldisp.hxx	26 Feb 2008 18:14:50 -0000	1.42.112.2
-+++ vcl/unx/inc/saldisp.hxx	15 Apr 2008 20:07:17 -0000
-@@ -477,6 +479,7 @@ public:
-     void			Remove( XEvent   *pEvent );
+ 		dnl ===========================================================
+@@ -865,6 +869,7 @@
+ 		build_gstreamer=yes
+ 		test_kde=yes
+ 		test_cups=yes
++        test_randr=yes
+ 		if getconf GNU_LIBPTHREAD_VERSION |grep -q NPTL; then
+ 			PTHREAD_CFLAGS="-DNPTL"
+ 		fi
+@@ -884,6 +889,7 @@
+ 		test_gtk=yes
+ 		build_cairo=no
+ 		build_gstreamer=no
++        test_randr=no
+ 		_os=Darwin
+       if test "$enable_systray" = "yes" && test "$enable_gtk" != "no"; then
+          AC_MSG_WARN([Disabling gtk-quickstarter - not supported on Mac. Use --disable-systray])
+@@ -894,6 +900,7 @@
+ 	os2*)
+ 		test_x=no
+ 		test_cups=no
++        test_randr=no
+ 		test_gtk=no
+ 		_os=OS2
+ 		;;
+@@ -903,6 +910,7 @@
+ 		build_gstreamer=yes
+ 		test_kde=yes
+ 		test_cups=yes
++        test_randr=yes
+ 		AC_MSG_CHECKING([the FreeBSD operating system release])
+ 		if test -n "$with_os_version"; then
+ 			OSVERSION="$with_os_version"
+@@ -926,6 +934,7 @@
+ 		;;
+ 	osf)
+ 		test_cups=no
++        test_randr=no
+ 		_os=OSF1
+ 		;;
+ 	netbsd)
+@@ -934,16 +943,19 @@
+ 		build_gstreamer=yes
+ 		test_kde=yes
+ 		test_cups=no
++        test_randr=yes
+ 		PTHREAD_CFLAGS="-pthread"
+ 		PTHREAD_LIBS="-pthread -lpthread"
+ 		_os=NetBSD
+ 		;;
+ 	irix*)
+ 		test_cups=no
++        test_randr=no
+ 		_os=IRIX
+ 		;;
+ 	aix*)
+ 		test_cups=no
++        test_randr=no
+ 	   PTHREAD_LIBS=-pthread
+ 		echo "AIX is an alpha port --- Use at own risk" >> warn
+ 		_os=AIX
+@@ -1123,6 +1135,19 @@
+ AC_SUBST(ENABLE_FONTCONFIG)
  
-     virtual void          initScreen( int nScreen ) const;
-+    Size                  getScreenSize( int nScreen ) const;
-     const ScreenData&     getDataForScreen( int nScreen ) const
-     {
-         if( nScreen < 0 || nScreen >= static_cast<int>(m_aScreens.size()) )
-@@ -526,12 +529,13 @@ public:
-     ::vcl_sal::WMAdaptor* getWMAdaptor() const { return m_pWMAdaptor; }
-     DtIntegrator* getDtIntegrator() const { return m_pDtIntegrator; }
-     bool			IsXinerama() const { return m_bXinerama; }
--    const std::vector< Rectangle >& GetXineramaScreens() const { return m_aXineramaScreens; }
-+    const std::vector< Rectangle >& GetXineramaScreenRects();
-     XLIB_Window     GetRootWindow( int nScreen ) const
-     { return getDataForScreen( nScreen ).m_aRoot; }
-     const std::vector< ScreenData >& GetScreenData()
-     { return m_aScreens; }
-     int GetScreenCount() const { return static_cast<int>(m_aScreens.size()); }
-+    std::size_t GetXineramaScreenCount() const { return m_aXineramaScreens.size(); }
+ dnl ===================================================================
++dnl Build options
++dnl ===================================================================
++AC_MSG_CHECKING([whether to enable RandR support])
++if test "$test_randr" = "yes" -a \( "$enable_randr" = "yes" -o "$enable_randr" = "TRUE" \) ; then
++   ENABLE_RANDR="TRUE"
++   AC_MSG_RESULT([yes])
++else
++   ENABLE_RANDR=""
++   AC_MSG_RESULT([no])
++fi
++AC_SUBST(ENABLE_RANDR)
++
++dnl ===================================================================
+ dnl Disable legacy binary file formats filters
+ dnl ===================================================================
+ AC_MSG_CHECKING([whether to enable filters for legacy binary file formats (StarOffice 5.2)])
+@@ -1915,7 +1940,15 @@
+ fi
  
-     const std::list< SalFrame* >& getFrames() const
-     { return m_aFrames; }
---- vcl/unx/source/app/saldisp.cxx	23 Jan 2008 17:18:18 -0000	1.91.146.2
-+++ vcl/unx/source/app/saldisp.cxx	15 Apr 2008 20:07:25 -0000
+ dnl ===================================================================
++dnl Check if X11/extensions/Xrandr.h is available 
++dnl ===================================================================
++if test "$test_randr" = "yes" -a "$ENABLE_RANDR" = "TRUE" ; then
++    AC_CHECK_HEADER(X11/extensions/Xrandr.h, [],
++                    [AC_MSG_ERROR([X11/extensions/Xrandr.h could not be found. X11 dev missing?])], [])
++fi
++
++dnl ===================================================================
+ dnl Check if PAM/pam_appl.h is available on Linux or FreeBSD
+ dnl ===================================================================
+ if test "$_os" = "Linux" -o "$_os" = "FreeBSD" -o "$_os" = "GNU"; then
+
+--- vcl/unx/gtk/app/gtkdata.cxx	29 Jan 2008 16:20:56 -0000	1.36
++++ vcl/unx/gtk/app/gtkdata.cxx	7 Mar 2008 16:59:00 -0000	1.36.16.1
+@@ -191,6 +191,7 @@ GdkFilterReturn GtkSalDisplay::filterGdk
+             }
+         }
+         X11SalObject::Dispatch( pEvent );
++        pDisplay->processRandREvent( pEvent );
+     }
+ 
+     return aFilterReturn;
+--- vcl/unx/inc/saldisp.hxx	27 Feb 2008 10:32:35 -0000	1.44
++++ vcl/unx/inc/saldisp.hxx	12 Mar 2008 09:39:09 -0000	1.43.16.2
+@@ -418,6 +418,9 @@ protected:	
+     void			DestroyFontCache();
+     virtual long	Dispatch( XEvent *pEvent ) = 0;
+     void			InitXinerama();
++    void            InitRandR( XLIB_Window aRoot ) const;
++    void            DeInitRandR();
++    int             processRandREvent( XEvent* );
+ 
+     void			doDestruct();
+ public:
+--- vcl/unx/source/app/makefile.mk	7 Mar 2008 17:12:23 -0000	1.30
++++ vcl/unx/source/app/makefile.mk	1 Apr 2008 10:31:13 -0000	1.29.16.3
+@@ -64,6 +64,7 @@ SLOFILES=\
+ 			$(SLO)$/saldata.obj			\
+ 			$(SLO)$/saltimer.obj		\
+ 			$(SLO)$/saldisp.obj			\
++			$(SLO)$/randrwrapper.obj	\
+ 			$(SLO)$/salinst.obj			\
+ 			$(SLO)$/salsys.obj			\
+ 			$(SLO)$/soicon.obj			\
+@@ -81,6 +82,12 @@ EXCEPTIONSFILES=\
+             $(SLO)$/salsys.obj
+ 
+ 
++.IF "$(ENABLE_RANDR)" != ""
++.IF "$(OS)" != "SOLARIS"
++CDEFS+=-DUSE_RANDR
++.ENDIF
++.ENDIF
++
+ .IF "$(USE_XINERAMA)" != "NO"
+ CDEFS+=-DUSE_XINERAMA
+ .IF "$(USE_XINERAMA_VERSION)" == "Xorg"
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ vcl/unx/source/app/randrwrapper.cxx	15 Mar 2008 14:29:42 -0000	1.1.2.2
+@@ -0,0 +1,250 @@
++/*************************************************************************
++ *
++ *  OpenOffice.org - a multi-platform office productivity suite
++ *
++ *  $RCSfile$
++ *
++ *  $Revision$
++ *
++ *  last change: $Author$ $Date$
++ *
++ *  The Contents of this file are made available subject to
++ *  the terms of GNU Lesser General Public License Version 2.1.
++ *
++ *
++ *    GNU Lesser General Public License Version 2.1
++ *    =============================================
++ *    Copyright 2005 by Sun Microsystems, Inc.
++ *    901 San Antonio Road, Palo Alto, CA 94303, USA
++ *
++ *    This library is free software; you can redistribute it and/or
++ *    modify it under the terms of the GNU Lesser General Public
++ *    License version 2.1, as published by the Free Software Foundation.
++ *
++ *    This library is distributed in the hope that it will be useful,
++ *    but WITHOUT ANY WARRANTY; without even the implied warranty of
++ *    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ *    Lesser General Public License for more details.
++ *
++ *    You should have received a copy of the GNU Lesser General Public
++ *    License along with this library; if not, write to the Free Software
++ *    Foundation, Inc., 59 Temple Place, Suite 330, Boston,
++ *    MA  02111-1307  USA
++ *
++ ************************************************************************/
++
++#ifdef USE_RANDR
++
++#include "prex.h"
++#include <X11/extensions/Xrandr.h>
++#include "postx.h"
++
++#include "osl/module.h"
++#include "rtl/ustring.hxx"
++
++namespace
++{
++class RandRWrapper
++{
++    oslModule m_pRandRLib;
++    
++    // function pointers
++    Bool(*m_pXRRQueryExtension)(Display*,int*,int*);
++    Status(*m_pXRRQueryVersion)(Display*,int*,int*);
++    XRRScreenConfiguration*(*m_pXRRGetScreenInfo)(Display*,Drawable);
++    void(*m_pXRRFreeScreenConfigInfo)(XRRScreenConfiguration*);
++    void(*m_pXRRSelectInput)(Display*,XLIB_Window,int);
++    int(*m_pXRRUpdateConfiguration)(XEvent*);
++    XRRScreenSize*(*m_pXRRSizes)(Display*,int,int*);
++    XRRScreenSize*(*m_pXRRConfigSizes)(XRRScreenConfiguration*,int*);
++    SizeID(*m_pXRRConfigCurrentConfiguration)(XRRScreenConfiguration*,Rotation*);
++    
++    bool m_bValid;
++    
++    void initFromModule();
++    
++    RandRWrapper(Display*);
++    ~RandRWrapper();
++public:
++    static RandRWrapper& get(Display*);
++    static void releaseWrapper();
++    
++    Bool XRRQueryExtension(Display* i_pDisp, int* o_event_base, int* o_error_base )
++    {
++        Bool bRet = False;
++        if( m_bValid )
++            bRet = m_pXRRQueryExtension( i_pDisp, o_event_base, o_error_base );
++        return bRet;
++    }
++    Status XRRQueryVersion( Display* i_pDisp, int* o_major, int* o_minor )
++    {
++        return m_bValid ? m_pXRRQueryVersion( i_pDisp, o_major, o_minor ) : 0;
++    }
++    XRRScreenConfiguration* XRRGetScreenInfo( Display* i_pDisp, Drawable i_aDrawable )
++    {
++        return m_bValid ? m_pXRRGetScreenInfo( i_pDisp, i_aDrawable ) : NULL;
++    }
++    void XRRFreeScreenConfigInfo( XRRScreenConfiguration* i_pConfig )
++    {
++        if( m_bValid )
++            m_pXRRFreeScreenConfigInfo( i_pConfig );
++    }
++    void XRRSelectInput( Display* i_pDisp, XLIB_Window i_window, int i_nMask )
++    {
++        if( m_bValid )
++            m_pXRRSelectInput( i_pDisp, i_window, i_nMask );
++    }
++    int XRRUpdateConfiguration( XEvent* i_pEvent )
++    {
++        return m_bValid ? m_pXRRUpdateConfiguration( i_pEvent ) : 0;
++    }
++    XRRScreenSize* XRRSizes( Display* i_pDisp, int i_screen, int* o_nscreens )
++    {
++        return m_bValid ? m_pXRRSizes( i_pDisp, i_screen, o_nscreens ) : NULL;
++    }
++    XRRScreenSize* XRRConfigSizes( XRRScreenConfiguration* i_pConfig, int* o_nSizes )
++    {
++        return m_bValid ? m_pXRRConfigSizes( i_pConfig, o_nSizes ) : NULL;
++    }
++    SizeID XRRConfigCurrentConfiguration( XRRScreenConfiguration* i_pConfig, Rotation* o_pRot )
++    {
++        return m_bValid ? m_pXRRConfigCurrentConfiguration( i_pConfig, o_pRot ) : 0;
++    }
++};
++}
++
++void RandRWrapper::initFromModule()
++{
++    m_pXRRQueryExtension = (Bool(*)(Display*,int*,int*))osl_getAsciiFunctionSymbol( m_pRandRLib, "XRRQueryExtension" );
++    m_pXRRQueryVersion = (Status(*)(Display*,int*,int*))osl_getAsciiFunctionSymbol( m_pRandRLib, "XRRQueryVersion" );
++    m_pXRRGetScreenInfo = (XRRScreenConfiguration*(*)(Display*,Drawable))osl_getAsciiFunctionSymbol( m_pRandRLib, "XRRGetScreenInfo" );
++    m_pXRRFreeScreenConfigInfo = (void(*)(XRRScreenConfiguration*))osl_getAsciiFunctionSymbol( m_pRandRLib, "XRRFreeScreenConfigInfo" );
++    m_pXRRSelectInput = (void(*)(Display*,XLIB_Window,int))osl_getAsciiFunctionSymbol( m_pRandRLib, "XRRSelectInput" );
++    m_pXRRUpdateConfiguration = (int(*)(XEvent*))osl_getAsciiFunctionSymbol( m_pRandRLib, "XRRUpdateConfiguration" );
++    m_pXRRSizes = (XRRScreenSize*(*)(Display*,int,int*))osl_getAsciiFunctionSymbol( m_pRandRLib, "XRRSizes" );
++    m_pXRRConfigSizes = (XRRScreenSize*(*)(XRRScreenConfiguration*,int*))osl_getAsciiFunctionSymbol( m_pRandRLib, "XRRConfigSizes" );
++    m_pXRRConfigCurrentConfiguration = (SizeID(*)(XRRScreenConfiguration*,Rotation*))osl_getAsciiFunctionSymbol( m_pRandRLib, "XRRConfigCurrentConfiguration" );
++    
++    m_bValid = m_pXRRQueryExtension             &&
++               m_pXRRQueryVersion               &&
++               m_pXRRGetScreenInfo              &&
++               m_pXRRFreeScreenConfigInfo       &&
++               m_pXRRSelectInput                &&
++               m_pXRRUpdateConfiguration        &&
++               m_pXRRSizes                      &&
++               m_pXRRConfigSizes                &&
++               m_pXRRConfigCurrentConfiguration
++               ;
++}
++
++RandRWrapper::RandRWrapper( Display* pDisplay ) :
++        m_pRandRLib( NULL ),
++        m_pXRRQueryExtension( NULL ),
++        m_pXRRQueryVersion( NULL ),
++        m_pXRRGetScreenInfo( NULL ),
++        m_pXRRFreeScreenConfigInfo( NULL ),
++        m_pXRRSelectInput( NULL ),
++        m_pXRRUpdateConfiguration( NULL ),
++        m_pXRRSizes( NULL ),
++        m_pXRRConfigSizes( NULL ),
++        m_pXRRConfigCurrentConfiguration( NULL ),
++        m_bValid( false )
++{
++    // first try in process space (e.g. gtk links that ?)
++    initFromModule();
++    if( ! m_bValid )
++    {
++        rtl::OUString aLibName( RTL_CONSTASCII_USTRINGPARAM( "libXrandr.so.2" ) );
++        m_pRandRLib = osl_loadModule( aLibName.pData, SAL_LOADMODULE_DEFAULT );
++        initFromModule();
++    }
++    if( m_bValid )
++    {
++        int nEventBase = 0, nErrorBase = 0;
++        if( ! m_pXRRQueryExtension( pDisplay, &nEventBase, &nErrorBase ) )
++            m_bValid = false;
++    }
++}
++
++RandRWrapper::~RandRWrapper()
++{
++    if( m_pRandRLib )
++        osl_unloadModule( m_pRandRLib );
++}
++
++static RandRWrapper* pWrapper = NULL;
++
++RandRWrapper& RandRWrapper::get( Display* i_pDisplay )
++{
++    if( ! pWrapper )
++        pWrapper = new RandRWrapper( i_pDisplay );
++    return *pWrapper;
++}
++
++void RandRWrapper::releaseWrapper()
++{
++    delete pWrapper;
++    pWrapper = NULL;
++}
++
++#endif
++
++#include "saldisp.hxx"
++
++void SalDisplay::InitRandR( XLIB_Window aRoot ) const
++{
++    #ifdef USE_RANDR
++    RandRWrapper::get( GetDisplay() ).XRRSelectInput( GetDisplay(), aRoot, RRScreenChangeNotifyMask );
++    #else
++    (void)aRoot;
++    #endif
++}
++
++void SalDisplay::DeInitRandR()
++{
++    #ifdef USE_RANDR
++    RandRWrapper::releaseWrapper();
++    #endif
++}
++
++int SalDisplay::processRandREvent( XEvent* pEvent )
++{
++    int nRet = 0;
++    #ifdef USE_RANDR
++    if( pWrapper )
++    {
++        nRet = pWrapper->XRRUpdateConfiguration( pEvent );
++        if( nRet == 1 && pEvent->type != ConfigureNotify) // this should then be a XRRScreenChangeNotifyEvent
++        {
++            // update screens
++            for( size_t i = 0; i < m_aScreens.size(); i++ )
++            {
++                if( m_aScreens[i].m_bInit )
++                {
++                    XRRScreenConfiguration *pConfig = NULL;
++                    XRRScreenSize *pSizes = NULL;
++                    int nSizes = 0;
++                    Rotation nRot = 0;
++                    SizeID nId = 0;
++                
++                    pConfig = pWrapper->XRRGetScreenInfo( GetDisplay(), m_aScreens[i].m_aRoot );
++                    nId = pWrapper->XRRConfigCurrentConfiguration( pConfig, &nRot );
++                    pSizes = pWrapper->XRRConfigSizes( pConfig, &nSizes );
++                    XRRScreenSize *pTargetSize = pSizes + nId;
++                
++                    m_aScreens[i].m_aSize = Size( pTargetSize->width, pTargetSize->height );
++    
++                    pWrapper->XRRFreeScreenConfigInfo( pConfig );
++
++                    #if OSL_DEBUG_LEVEL > 1
++                    fprintf( stderr, "screen %d changed to size %dx%d\n", i, pTargetSize->width, pTargetSize->height );
++                    #endif
++                }
++            }
++        }
++    }
++    #else
++    (void)pEvent;
++    #endif
++    return nRet;
++}
+--- vcl/unx/source/app/saldisp.cxx	29 Jan 2008 16:22:34 -0000	1.93
++++ vcl/unx/source/app/saldisp.cxx	31 Mar 2008 16:44:44 -0000	1.93.16.2
 @@ -70,7 +70,7 @@
  
  #ifdef USE_XINERAMA
@@ -67,142 +423,41 @@
  #include <X11/extensions/Xinerama.h>
  #endif
  #elif defined USE_XINERAMA_XSUN
-@@ -847,6 +853,26 @@ void SalDisplay::initScreen( int nScreen
+@@ -715,6 +715,9 @@ SalX11Display::~SalX11Display()
+ 		XCloseDisplay( pDisp_ );
+ 		pDisp_ = NULL;
+ 	}
++    // don't do this in doDestruct since RandR extension adds hooks into Display
++    // that is XCloseDisplay still needs the RandR library if it was used
++    DeInitRandR();
  }
  
- // -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
-+
-+Size SalDisplay::getScreenSize( int nScreen ) const
-+{
-+    if( nScreen < 0 || nScreen >= static_cast<int>(m_aScreens.size()) )
-+        return Size();
-+    if( ! m_aScreens[nScreen].m_bInit )
-+        initScreen( nScreen );
-+    else
-+    {
-+        // update screen size everytime, xrandr etc. change this
-+        // without notice
-+        Screen* pScreen = ScreenOfDisplay( pDisp_, nScreen );
-+        const_cast<Size&>(m_aScreens[nScreen].m_aSize) = Size( WidthOfScreen( pScreen ), 
-+                                                               HeightOfScreen( pScreen ) );
-+    }
-+
-+    return m_aScreens[nScreen].m_aSize;
-+}
-+
-+// -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
- void SalDisplay::Init()
- {
-     for( size_t i = 0; i < POINTER_COUNT; i++ )
-@@ -2640,9 +2695,9 @@ void SalDisplay::GetScreenFontResolution
-         return;
+ void SalDisplay::initScreen( int nScreen ) const
+@@ -743,6 +746,9 @@ void SalDisplay::initScreen( int nScreen
+     rSD.m_aRoot = RootWindow( pDisp_, nScreen );
+     rSD.m_aVisual = SalVisual( &aVI );
+     rSD.m_aColormap = SalColormap( this, aColMap, nScreen );
++    
++    // we're interested in configure notification of root windows
++    InitRandR( rSD.m_aRoot );
  
-     int   nThreshold;
--    if (m_aScreens[m_nDefaultScreen].m_aSize.Height() <= 600)
-+    if (GetScreenSize(m_nDefaultScreen).Height() <= 600)
-         nThreshold =  96;
--    else if (m_aScreens[m_nDefaultScreen].m_aSize.Height() <= 768)
-+    else if (GetScreenSize(m_nDefaultScreen).Height() <= 768)
-         nThreshold = 108;
-     else
-         nThreshold = 120;
-@@ -2657,6 +2712,96 @@ void SalDisplay::GetScreenFontResolution
-     rDPIX = rDPIY;
+     // - - - - - - - - - - Reference Window/Default Drawable - -
+     XSetWindowAttributes aXWAttributes;
+@@ -2416,10 +2422,13 @@ long SalX11Display::Dispatch( XEvent *pE
+ 			return pFrame->Dispatch( pEvent );
+ 		}
+     }
+-
++    
+ 	// dispatch to salobjects
+ 	X11SalObject::Dispatch( pEvent );
+ 
++    // is this perhaps a root window that changed size ?
++    processRandREvent( pEvent );
++
+     return 0;
  }
  
-+const std::vector< Rectangle >& SalDisplay::GetXineramaScreenRects()
-+{ 
-+    OSL_ASSERT(m_bXinerama);
-+
-+    /* update screen rects from xinerama - should, for whatever
-+       reason, xinerama been disabled by now, just fill in empty
-+       rects, calling code is not prepared to handle IsXinerama() ==
-+       true & this here giving empty vector
-+    */
-+
-+    // clear rects
-+    std::fill(m_aXineramaScreens.begin(),
-+              m_aXineramaScreens.end(),
-+              Rectangle());
-+
-+#ifdef USE_XINERAMA
-+#if defined(USE_XINERAMA_XSUN)
-+    if( XineramaGetState( pDisp_, m_nDefaultScreen ) )
-+    {
-+        int nFramebuffers = 1;
-+        XRectangle pFramebuffers[MAXFRAMEBUFFERS];
-+        unsigned char hints[MAXFRAMEBUFFERS];
-+        int result = XineramaGetInfo( pDisp_,
-+                                      m_nDefaultScreen,
-+                                      pFramebuffers,
-+                                      hints,
-+                                      &nFramebuffers );
-+
-+        // limit to existing number of screens
-+        nFramebuffers = std::min(int(m_aXineramaScreens).size(),nFramebuffers);
-+        if( result > 0 )
-+        {
-+            for( int i = 0; i < nFramebuffers; i++ )
-+                m_aXineramaScreens[i] = Rectangle( Point( pFramebuffers[i].x,
-+                                                   pFramebuffers[i].y ),
-+                                            Size( pFramebuffers[i].width,
-+                                                  pFramebuffers[i].height ) );
-+        }
-+    }
-+#elif defined(USE_XINERAMA_XORG)
-+#if defined(X86) || defined(X86_64) || defined(MACOSX)
-+    if( XineramaIsActive( pDisp_ ) )
-+    {
-+        int nFramebuffers = 1;
-+        XineramaScreenInfo* pScreens = XineramaQueryScreens( pDisp_, &nFramebuffers );
-+        if( pScreens )
-+        {
-+            if( nFramebuffers > 1 )
-+            {
-+                // limit to existing number of screens
-+                nFramebuffers = std::min(int(m_aXineramaScreens.size()),nFramebuffers);
-+
-+                for( int i = 0, j = 0; i < nFramebuffers; i++ )
-+                {
-+                    // see if any frame buffers are at the same coordinates
-+                    // this can happen with weird configuration e.g. on
-+                    // XFree86 and Clone displays
-+                    bool bDuplicate = false;
-+                    for( int n = 0; n < i; n++ )
-+                    {
-+                        if( m_aXineramaScreens[n].Left() == pScreens[i].x_org &&
-+                            m_aXineramaScreens[n].Top() == pScreens[i].y_org )
-+                        {
-+                            bDuplicate = true;
-+                            if( m_aXineramaScreens[n].GetWidth() < pScreens[i].width ||
-+                                m_aXineramaScreens[n].GetHeight() < pScreens[i].height )
-+                            {
-+                                m_aXineramaScreens[n].SetSize( Size( pScreens[i].width,
-+                                                                     pScreens[i].height ) );
-+                            }
-+                            break;
-+                        }
-+                    }
-+                    if( ! bDuplicate )
-+                        m_aXineramaScreens[j++] = Rectangle( Point( pScreens[i].x_org,
-+                                                                    pScreens[i].y_org ),
-+                                                             Size( pScreens[i].width,
-+                                                                   pScreens[i].height ) );
-+                }
-+            }
-+            XFree( pScreens );
-+        }
-+    }
-+#endif
-+#endif
-+#endif // USE_XINERAMA
-+
-+    return m_aXineramaScreens; 
-+}
-+
- void SalDisplay::InitXinerama()
- {
-     if( m_aScreens.size() > 1 )
 @@ -2688,7 +2833,7 @@ void SalDisplay::InitXinerama()
          }
      }
@@ -212,159 +467,3 @@
  if( XineramaIsActive( pDisp_ ) )
  {
      int nFramebuffers = 1;
---- vcl/unx/source/app/salsys.cxx	27 Jun 2007 20:47:35 -0000	1.18
-+++ vcl/unx/source/app/salsys.cxx	15 Apr 2008 20:07:26 -0000
-@@ -66,7 +66,7 @@ X11SalSystem::~X11SalSystem()
- unsigned int X11SalSystem::GetDisplayScreenCount()
- {
-     SalDisplay* pSalDisp = GetX11SalData()->GetDisplay();
--    return pSalDisp->IsXinerama() ? pSalDisp->GetXineramaScreens().size() : pSalDisp->GetScreenCount();
-+    return pSalDisp->IsXinerama() ? pSalDisp->GetXineramaScreenCount() : pSalDisp->GetScreenCount();
- }
- 
- bool X11SalSystem::IsMultiDisplay()
-@@ -88,14 +88,13 @@ Rectangle X11SalSystem::GetDisplayScreen
-     SalDisplay* pSalDisp = GetX11SalData()->GetDisplay();
-     if( pSalDisp->IsXinerama() )
-     {
--        const std::vector< Rectangle >& rScreens = pSalDisp->GetXineramaScreens();
-+        const std::vector< Rectangle >& rScreens = pSalDisp->GetXineramaScreenRects();
-         if( nScreen < rScreens.size() )
-             aRet = rScreens[nScreen];
-     }
-     else
-     {
--        const SalDisplay::ScreenData& rScreen = pSalDisp->getDataForScreen( nScreen );
--        aRet = Rectangle( Point( 0, 0 ), rScreen.m_aSize );
-+        aRet = Rectangle( Point( 0, 0 ), pSalDisp->GetScreenSize(nScreen) );
-     }
-     
-     return aRet;
-@@ -113,8 +112,7 @@ rtl::OUString X11SalSystem::GetScreenNam
-     SalDisplay* pSalDisp = GetX11SalData()->GetDisplay();
-     if( pSalDisp->IsXinerama() )
-     {
--        const std::vector< Rectangle >& rScreens = pSalDisp->GetXineramaScreens();
--        if( nScreen >= rScreens.size() )
-+        if( nScreen >= pSalDisp->GetXineramaScreenCount() )
-             nScreen = 0;
-         rtl::OUStringBuffer aBuf( 256 );
-         aBuf.append( rtl::OStringToOUString( rtl::OString( DisplayString( pSalDisp->GetDisplay() ) ), osl_getThreadTextEncoding() ) );
---- vcl/unx/source/app/wmadaptor.cxx	23 Jan 2008 17:18:32 -0000	1.67.112.1
-+++ vcl/unx/source/app/wmadaptor.cxx	15 Apr 2008 20:07:31 -0000
-@@ -1580,7 +1580,7 @@ void WMAdaptor::maximizeFrame( X11SalFra
-         if( m_pSalDisplay->IsXinerama() )
-         {
-             Point aMed( aTL.X() + rGeom.nWidth/2, aTL.Y() + rGeom.nHeight/2 );
--            const std::vector< Rectangle >& rScreens = m_pSalDisplay->GetXineramaScreens();
-+            const std::vector< Rectangle >& rScreens = m_pSalDisplay->GetXineramaScreenRects();
-             for( unsigned int i = 0; i < rScreens.size(); i++ )
-                 if( rScreens[i].IsInside( aMed ) )
-                 {
-@@ -2202,7 +2202,7 @@ void NetWMAdaptor::showFullScreen( X11Sa
-                 m_pSalDisplay->GetRootWindow( pFrame->GetScreenNumber() ),
-                 &aRoot, &aChild,
-                 &root_x, &root_y, &lx, &ly, &mask );
--                const std::vector< Rectangle >& rScreens = m_pSalDisplay->GetXineramaScreens();
-+                const std::vector< Rectangle >& rScreens = m_pSalDisplay->GetXineramaScreenRects();
-                 Point aMousePoint( root_x, root_y );
-                 for( unsigned int i = 0; i < rScreens.size(); i++ )
-                 {
---- vcl/unx/source/gdi/salgdi3.cxx	31 Jan 2008 10:06:27 -0000	1.149.8.2
-+++ vcl/unx/source/gdi/salgdi3.cxx	15 Apr 2008 20:07:40 -0000
-@@ -905,7 +905,7 @@ bool X11SalGraphics::DrawServerAAForcedS
-         // clip with screen
-         int nScreenX = m_pFrame->maGeometry.nX+aXRect.x;
-         int nScreenY = m_pFrame->maGeometry.nY+aXRect.y;
--        const Size& rScreenSize = GetDisplay()->getDataForScreen( m_nScreen ).m_aSize;
-+        const Size& rScreenSize = GetDisplay()->GetScreenSize( m_nScreen );
-         int nScreenW = rScreenSize.Width();
-         int nScreenH = rScreenSize.Height();
-         if( nScreenX < 0 )
-@@ -941,7 +941,7 @@ bool X11SalGraphics::DrawServerAAForcedS
-             // geometry changed in the meantime; lets get the current geometry
-             // and clip against the current window size as well as the screen
-             // with the current frame position
--            const Size& rScreenSize = GetDisplay()->getDataForScreen(m_nScreen).m_aSize;
-+            const Size& rScreenSize = GetDisplay()->GetScreenSize(m_nScreen);
-             int nScreenW = rScreenSize.Width();
-             int nScreenH = rScreenSize.Height();
-             XLIB_Window aRoot = None;
---- vcl/unx/source/window/salframe.cxx	25 Jan 2008 16:37:31 -0000	1.219.110.3
-+++ vcl/unx/source/window/salframe.cxx	15 Apr 2008 20:07:50 -0000
-@@ -370,7 +370,7 @@ void X11SalFrame::Init( ULONG nSalFrameS
-     {
-         if( ! bUseGeometry )
-         {
--            Size aScreenSize( GetDisplay()->getDataForScreen( m_nScreen ).m_aSize );
-+            Size aScreenSize( GetDisplay()->GetScreenSize( m_nScreen ) );
-             w = aScreenSize.Width();
-             h = aScreenSize.Height();
-             if( nSalFrameStyle & SAL_FRAME_STYLE_SIZEABLE &&
-@@ -439,7 +439,7 @@ void X11SalFrame::Init( ULONG nSalFrameS
-                                    GetDisplay()->GetRootWindow( m_nScreen ),
-                                    &aRoot, &aChild,
-                                    &root_x, &root_y, &lx, &ly, &mask );
--                    const std::vector< Rectangle >& rScreens = GetDisplay()->GetXineramaScreens();
-+                    const std::vector< Rectangle >& rScreens = GetDisplay()->GetXineramaScreenRects();
-                     for( unsigned int i = 0; i < rScreens.size(); i++ )
-                         if( rScreens[i].IsInside( Point( root_x, root_y ) ) )
-                         {
-@@ -1443,7 +1443,7 @@ void X11SalFrame::Center( )
- 	int				nRealScreenWidth, nRealScreenHeight;
- 	int				nScreenX = 0, nScreenY = 0;
- 
--    const Size& aScreenSize = GetDisplay()->getDataForScreen( m_nScreen ).m_aSize;
-+    const Size& aScreenSize = GetDisplay()->GetScreenSize( m_nScreen );
-     nScreenWidth		= aScreenSize.Width();
-     nScreenHeight		= aScreenSize.Height();
-     nRealScreenWidth	= nScreenWidth;
-@@ -1469,7 +1469,7 @@ void X11SalFrame::Center( )
-                            &root_x, &root_y,
-                            &x, &y,
-                            &mask );
--        const std::vector< Rectangle >& rScreens = GetDisplay()->GetXineramaScreens();
-+        const std::vector< Rectangle >& rScreens = GetDisplay()->GetXineramaScreenRects();
-         for( unsigned int i = 0; i < rScreens.size(); i++ )
-             if( rScreens[i].IsInside( Point( root_x, root_y ) ) )
-             {
-@@ -1689,7 +1689,7 @@ void X11SalFrame::SetWindowState( const 
-                 bDoAdjust = true;
-             }
-             
--            const Size& aScreenSize = pDisplay_->getDataForScreen( m_nScreen ).m_aSize;
-+            const Size& aScreenSize = pDisplay_->GetScreenSize( m_nScreen );
-             const WMAdaptor *pWM = GetDisplay()->getWMAdaptor();
-             
-             if( bDoAdjust && aPosSize.GetWidth() <= aScreenSize.Width()
-@@ -1883,7 +1883,7 @@ void X11SalFrame::GetPosSize( Rectangle 
- {
- 	if( maGeometry.nWidth < 1 || maGeometry.nHeight < 1 )
- 	{
--        const Size& aScreenSize = pDisplay_->getDataForScreen( m_nScreen ).m_aSize;
-+        const Size& aScreenSize = pDisplay_->GetScreenSize( m_nScreen );
- 		long w = aScreenSize.Width()  - maGeometry.nLeftDecoration - maGeometry.nRightDecoration;
- 		long h = aScreenSize.Height() - maGeometry.nTopDecoration - maGeometry.nBottomDecoration;
- 
-@@ -2090,7 +2090,7 @@ void X11SalFrame::Restore()
- 
- void X11SalFrame::ShowFullScreen( BOOL bFullScreen, sal_Int32 nScreen )
- {
--    if( GetDisplay()->IsXinerama() && GetDisplay()->GetXineramaScreens().size() > 1 )
-+    if( GetDisplay()->IsXinerama() && GetDisplay()->GetXineramaScreenCount() > 1 )
-     {
-         if( mbFullScreen == (bool)bFullScreen )
-             return;
-@@ -2099,10 +2099,10 @@ void X11SalFrame::ShowFullScreen( BOOL b
-             maRestorePosSize = Rectangle( Point( maGeometry.nX, maGeometry.nY ),
-                                           Size( maGeometry.nWidth, maGeometry.nHeight ) );
-             Rectangle aRect;
--            if( nScreen < 0 || nScreen >= static_cast<int>(GetDisplay()->GetXineramaScreens().size()) )
-+            if( nScreen < 0 || nScreen >= static_cast<int>(GetDisplay()->GetXineramaScreenCount()) )
-                 aRect = Rectangle( Point(0,0), GetDisplay()->GetScreenSize( m_nScreen ) );
-             else
--                aRect = GetDisplay()->GetXineramaScreens()[nScreen];
-+                aRect = GetDisplay()->GetXineramaScreenRects()[nScreen];
-             nStyle_ |= SAL_FRAME_STYLE_PARTIAL_FULLSCREEN;
-             bool bVisible = bMapped_;
-             if( bVisible )
