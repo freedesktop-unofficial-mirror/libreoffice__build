@@ -1,0 +1,263 @@
+--- sc/source/ui/docshell/docsh.cxx.orig	2008-05-15 15:34:26.000000000 +0800
++++ sc/source/ui/docshell/docsh.cxx	2008-05-16 13:07:38.000000000 +0800
+@@ -140,6 +140,7 @@
+ #include "compiler.hxx"
+ #include "cfgids.hxx"
+ #include "warnpassword.hxx"
++#include "cellsuno.hxx"
+ 
+ #include "docsh.hxx"
+ #include "docshimp.hxx"
+@@ -2490,6 +2491,70 @@ void ScDocShell::SetModified( BOOL bModi
+ 	}
+ }
+ 
++void ScDocShell::PostContentChanged( const ScRange& rRange )
++{
++    ScRangeList aList;
++    aList.Append(rRange);
++    PostContentChanged(aList);
++}
++uno::Any createRange( const uno::Any& aRange );
++uno::Any createWorkSheet( ScDocShell* pShell, SCTAB nTab );
++
++void ScDocShell::PostContentChanged( const ScRangeList& rList )
++{
++#if 0		
++    String aStr;
++    rList.Format(aStr, SCR_ABS, &aDocument, ScAddress::CONV_XL_A1);
++    fprintf(stdout, "ScDocShell::PostContentChanged:   range = '%s'\n",
++            rtl::OUStringToOString(aStr, RTL_TEXTENCODING_UTF8).getStr());
++#endif
++    ScCellRangesBase* pObj = NULL;
++	const ScRange& rRange = *(rList.GetObject(0));
++	SCTAB nTab = rRange.aStart.Tab();
++
++	if( rList.Count() == 1 )
++		pObj = new ScCellRangeObj( this, rRange );
++	else
++		pObj = new ScCellRangesObj( this, rList );
++
++	ScExtDocOptions* pExtOptions = aDocument.GetExtDocOptions();
++	String sSheetModuleName;
++	// Use code name if that exists, blank to force a full search otherwise
++	if ( pExtOptions )
++		sSheetModuleName = pExtOptions->GetCodeName( nTab );
++			
++	String sSheetChangeScript( RTL_CONSTASCII_USTRINGPARAM("Worksheet_Change") );
++	String sWorkBookSheetChangeScript( RTL_CONSTASCII_USTRINGPARAM("Workbook_SheetChange") );
++	String sSheetChangeMacro = docMacroExists( this, sSheetModuleName, sSheetChangeScript );
++	String sWorkBookSheetChangeMacro = docMacroExists( this, String(), sWorkBookSheetChangeScript );
++	if( sSheetChangeMacro.Len() > 0 || sWorkBookSheetChangeMacro.Len() > 0 )
++	{
++		try
++		{	
++			uno::Any aRet;
++			uno::Any aArg =  uno::makeAny(uno::Reference<uno::XInterface>(static_cast<cppu::OWeakObject*>(pObj)));;
++			uno::Any aRange = createRange( aArg );
++			// Worksheet_Change
++			if( sSheetChangeMacro.Len() > 0 )
++			{
++				uno::Sequence< uno::Any > aArgs(1);
++				aArgs[0] = aRange;
++				executeWorkBookMacro( this, sSheetChangeMacro, aArgs, aRet );
++			}
++			// Workbook_SheetChanged
++			if( sWorkBookSheetChangeMacro.Len() > 0 )
++			{
++				uno::Sequence< uno::Any > aArgs(2);	
++				aArgs[0] = createWorkSheet( this, nTab );
++				aArgs[1] = aRange;
++				executeWorkBookMacro( this, sWorkBookSheetChangeMacro, aArgs, aRet );
++			}
++		}
++		catch( uno::Exception& /*e*/ )
++		{
++		}
++	}
++}
+ 
+ void ScDocShell::SetDocumentModified( BOOL bIsModified /* = TRUE */ )
+ {
+--- sc/source/ui/inc/docsh.hxx.orig	2008-05-15 10:56:09.000000000 +0800
++++ sc/source/ui/inc/docsh.hxx	2008-05-15 10:56:17.000000000 +0800
+@@ -343,6 +343,8 @@ public:
+ 	void            PostPaintExtras();
+ 
+ 	void            PostDataChanged();
++	void			PostContentChanged( const ScRange& rRange ); // for worsheet/workbook changed event
++    void            PostContentChanged( const ScRangeList& rList );
+ 
+ 	void			UpdatePaintExt( USHORT& rExtFlags, SCCOL nStartCol, SCROW nStartRow, SCTAB nStartTab,
+ 													   SCCOL nEndCol, SCROW nEndRow, SCTAB nEndTab );
+--- sc/source/ui/undo/undoblk3.cxx.orig	2008-05-15 15:34:18.000000000 +0800
++++ sc/source/ui/undo/undoblk3.cxx	2008-05-16 12:37:05.000000000 +0800
+@@ -117,6 +117,15 @@ ScUndoDeleteContents::ScUndoDeleteConten
+ 	if ( !(aMarkData.IsMarked() || aMarkData.IsMultiMarked()) )		// keine Zelle markiert:
+ 		aMarkData.SetMarkArea( aRange );							// Zelle unter Cursor markieren
+ 
++    if (aMarkData.IsMarked() || aMarkData.IsMultiMarked())
++    {
++        ScRangeList aList;
++        aMarkData.FillRangeListWithMarks(&aList, false);
++        pDocShell->PostContentChanged(aList);
++    }
++    else
++        pDocShell->PostContentChanged( aRange );
++
+ 	SetChangeTrack();
+ }
+ 
+@@ -211,6 +220,15 @@ void ScUndoDeleteContents::DoChange( con
+ 	if (pViewShell)
+ 		pViewShell->CellContentChanged();
+ 
++    /*if (aMarkData.IsMarked() || aMarkData.IsMultiMarked())
++    {
++        ScRangeList aList;
++        aMarkData.FillRangeListWithMarks(&aList, false);
++        pDocShell->PostContentChanged(aList);
++    }
++    else
++        pDocShell->PostContentChanged( aRange );*/
++
+ 	ShowTable( aRange );
+ }
+ 
+--- sc/source/ui/undo/undoblk.cxx.orig	2008-05-15 15:34:18.000000000 +0800
++++ sc/source/ui/undo/undoblk.cxx	2008-05-16 12:38:58.000000000 +0800
+@@ -129,6 +129,7 @@ ScUndoInsertCells::ScUndoInsertCells( Sc
+ 		aEffRange.aEnd.SetRow(MAXROW);
+ 	}
+ 
++	pDocShell->PostContentChanged( aEffRange );
+ 	SetChangeTrack();
+ }
+ 
+@@ -264,6 +265,7 @@ void ScUndoInsertCells::DoChange( const 
+ 	if (pViewShell)
+ 		pViewShell->CellContentChanged();
+ 
++	//pDocShell->PostContentChanged( aEffRange );
+ 	ShowTable( aEffRange.aStart.Tab() );
+ }
+ 
+@@ -337,6 +339,8 @@ ScUndoDeleteCells::ScUndoDeleteCells( Sc
+ 		aEffRange.aEnd.SetRow(MAXROW);
+ 	}
+ 
++	pDocShell->PostContentChanged( aEffRange );
++
+ 	SetChangeTrack();
+ }
+ 
+@@ -469,6 +473,7 @@ void ScUndoDeleteCells::DoChange( const 
+ 
+ 	pDocShell->PostDataChanged();
+ 	//	CellContentChanged kommt mit der Markierung
++	//pDocShell->PostContentChanged( aWorkRange );
+ 
+ 	ShowTable( aEffRange.aStart.Tab() );
+ }
+@@ -718,6 +723,7 @@ ScUndoCut::ScUndoCut( ScDocShell* pNewDo
+ 	pUndoDoc( pNewUndoDoc ),
+ 	aExtendedRange( aRange )
+ {
++	pDocShell->PostContentChanged( aExtendedRange );
+ 	SetChangeTrack();
+ }
+ 
+@@ -776,6 +782,7 @@ void ScUndoCut::DoChange( const BOOL bUn
+ 	pDocShell->PostDataChanged();
+ 	if (pViewShell)
+ 		pViewShell->CellContentChanged();
++	//pDocShell->PostContentChanged( aExtendedRange );
+ }
+ 
+ void __EXPORT ScUndoCut::Undo()
+@@ -842,6 +849,7 @@ ScUndoPaste::ScUndoPaste( ScDocShell* pN
+ 
+ 	if ( pOptions )
+ 		aPasteOptions = *pOptions;		// used only for Repeat
++	pDocShell->PostContentChanged( aBlockRange );
+ 
+ 	SetChangeTrack();
+ }
+@@ -1017,6 +1025,7 @@ void ScUndoPaste::DoChange( const BOOL b
+ 	pDocShell->PostDataChanged();
+ 	if (pViewShell)
+ 		pViewShell->CellContentChanged();
++	//pDocShell->PostContentChanged( aDrawRange );
+ }
+ 
+ void __EXPORT ScUndoPaste::Undo()
+--- sc/source/ui/undo/undocell.cxx.orig	2008-05-15 15:34:18.000000000 +0800
++++ sc/source/ui/undo/undocell.cxx	2008-05-16 12:34:41.000000000 +0800
+@@ -218,6 +218,7 @@ ScUndoEnterData::ScUndoEnterData( ScDocS
+ 	nTab( nNewTab ),
+ 	nCount( nNewCount )
+ {
++	pDocShell->PostContentChanged( ScRange( ScAddress( nCol, nRow, nTab ) ) );
+ 	SetChangeTrack();
+ }
+ 
+@@ -254,6 +255,7 @@ void ScUndoEnterData::DoChange() const
+ 		pViewShell->MoveCursorAbs( nCol, nRow, SC_FOLLOW_JUMP, FALSE, FALSE );
+ 	}
+ 
++//	pDocShell->PostContentChanged( ScRange( ScAddress( nCol, nRow, nTab ) ) );
+ 	pDocShell->PostDataChanged();
+ }
+ 
+@@ -375,6 +377,7 @@ ScUndoEnterValue::ScUndoEnterValue( ScDo
+ 	nValue		( nVal ),
+ 	bNeedHeight	( bHeight )
+ {
++	pDocShell->PostContentChanged( ScRange( aPos ) );
+ 	SetChangeTrack();
+ }
+ 
+@@ -425,6 +428,8 @@ void __EXPORT ScUndoEnterValue::Undo()
+ 
+ 	pDocShell->PostPaintCell( aPos.Col(), aPos.Row(), aPos.Tab() );
+ 
++	//pDocShell->PostContentChanged( ScRange( aPos ) );
++
+ 	ScChangeTrack* pChangeTrack = pDoc->GetChangeTrack();
+ 	if ( pChangeTrack )
+ 		pChangeTrack->Undo( nEndChangeAction, nEndChangeAction );
+@@ -440,6 +445,8 @@ void __EXPORT ScUndoEnterValue::Redo()
+ 	pDoc->SetValue( aPos.Col(), aPos.Row(), aPos.Tab(), nValue );
+ 	pDocShell->PostPaintCell( aPos.Col(), aPos.Row(), aPos.Tab() );
+ 
++	//pDocShell->PostContentChanged( ScRange( aPos ) );
++
+ 	SetChangeTrack();
+ 
+ 	EndRedo();
+@@ -469,6 +476,7 @@ ScUndoPutCell::ScUndoPutCell( ScDocShell
+ 	pEnteredCell( pRedoCell ),
+ 	bNeedHeight	( bHeight )
+ {
++	pDocShell->PostContentChanged( ScRange( aPos ) );
+ 	SetChangeTrack();
+ }
+ 
+@@ -521,6 +529,8 @@ void __EXPORT ScUndoPutCell::Undo()
+ 
+ 	pDocShell->PostPaintCell( aPos.Col(), aPos.Row(), aPos.Tab() );
+ 
++	//pDocShell->PostContentChanged( ScRange( aPos ) );
++
+ 	ScChangeTrack* pChangeTrack = pDoc->GetChangeTrack();
+ 	if ( pChangeTrack )
+ 		pChangeTrack->Undo( nEndChangeAction, nEndChangeAction );
+@@ -551,6 +561,8 @@ void __EXPORT ScUndoPutCell::Redo()
+ 
+ 	pDocShell->PostPaintCell( aPos.Col(), aPos.Row(), aPos.Tab() );
+ 
++	//pDocShell->PostContentChanged( ScRange( aPos ) );
++
+ 	SetChangeTrack();
+ 
+ 	EndRedo();
