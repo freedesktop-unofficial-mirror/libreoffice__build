@@ -531,7 +531,7 @@
 +        mnTextLineIncrement(0.0),
 +        maCurrentColor(1.0),
 +        mbVisibility(true),
-+        meFillType(NONE),
++        meFillType(SOLID),
 +        mnFillOpacity(1.0),
 +        meStrokeType(NONE),
 +        mnStrokeOpacity(1.0),
@@ -1849,7 +1849,7 @@
      
 --- filter/source/svg/svgreader.cxx	1970-01-01 01:00:00.000000000 +0100
 +++ filter/source/svg/svgreader.cxx	2008-04-11 09:33:30.000000000 +0200
-@@ -0,0 +1,1890 @@
+@@ -0,0 +1,1899 @@
 +/*************************************************************************
 + *
 + *    OpenOffice.org - a multi-platform office productivity suite
@@ -2196,7 +2196,8 @@
 +        rGradient.maStops = aNewStops;
 +
 +        // axial gradient, maybe?
-+        if( rGradient.maStops.size() == 3 && 
++        if( rGradient.meType == Gradient::LINEAR &&
++            rGradient.maStops.size() == 3 && 
 +            maGradientStopVector[rGradient.maStops.front()].maStopColor ==
 +            maGradientStopVector[rGradient.maStops.back()].maStopColor )
 +        {
@@ -2365,60 +2366,9 @@
 +                                         xUnoAttrs );
 +        
 +        xAttrs->Clear();
-+        if( rState.meFillType != NONE )
-+        {
-+            if( rState.meFillType == GRADIENT )
-+            {
-+                xAttrs->AddAttribute( USTR( "draw:fill" ), USTR("gradient"));
-+                xAttrs->AddAttribute( USTR( "draw:fill-gradient-name" ), 
-+                                      getStyleName("svggradient", rState.maFillGradient.mnId) );
-+                if( hasGradientOpacity(rState.maFillGradient) )
-+                {
-+                    // needs transparency gradient as well
-+                    xAttrs->AddAttribute( USTR( "draw:opacity-name" ), 
-+                                          getStyleName("svgopacity", rState.maFillGradient.mnId) );
-+                }
-+                else if( maCurrState.mnFillOpacity != 1.0 )
-+                    xAttrs->AddAttribute( USTR( "draw:opacity" ), 
-+                                          rtl::OUString::valueOf(100.0*maCurrState.mnFillOpacity)+USTR("%") );
-+            }
-+            else
-+            {
-+                xAttrs->AddAttribute( USTR( "draw:fill" ), USTR("solid"));
-+                xAttrs->AddAttribute( USTR( "draw:fill-color" ), getOdfColor(rState.maFillColor));
-+                if( maCurrState.mnFillOpacity != 1.0 )
-+                    xAttrs->AddAttribute( USTR( "draw:opacity" ), 
-+                                          rtl::OUString::valueOf(100.0*maCurrState.mnFillOpacity)+USTR("%") );
-+            }
-+        }
-+        else
-+            xAttrs->AddAttribute( USTR( "draw:fill" ), USTR("none"));
-+
-+        if( rState.meStrokeType != NONE )
-+        {
-+            xAttrs->AddAttribute( USTR( "draw:stroke" ), USTR("solid"));
-+            xAttrs->AddAttribute( USTR( "draw:stroke-color" ), getOdfColor(rState.maStrokeColor));
-+        }
-+        else
-+            xAttrs->AddAttribute( USTR( "draw:stroke" ), USTR("none"));
-+
-+        if( maCurrState.mnStrokeWidth != 0.0 )
-+        {
-+            ::basegfx::B2DVector aVec(maCurrState.mnStrokeWidth,0);
-+            aVec *= maCurrState.maCTM;
-+            xAttrs->AddAttribute( USTR("svg:stroke-width"), rtl::OUString::valueOf( aVec.getLength()/1000.0 )+USTR("mm"));
-+        }
-+        if( maCurrState.meLineJoin == basegfx::tools::B2DLINEJOIN_MITER )
-+            xAttrs->AddAttribute( USTR( "draw:stroke-linejoin"), USTR("miter"));
-+        else if( maCurrState.meLineJoin == basegfx::tools::B2DLINEJOIN_ROUND )
-+            xAttrs->AddAttribute( USTR( "draw:stroke-linejoin"), USTR("round"));
-+        else if( maCurrState.meLineJoin == basegfx::tools::B2DLINEJOIN_BEVEL )
-+            xAttrs->AddAttribute( USTR( "draw:stroke-linejoin"), USTR("bevel"));
-+        if( maCurrState.mnStrokeOpacity != 1.0 )
-+            xAttrs->AddAttribute( USTR("svg:stroke-opacity"), 
-+                                  rtl::OUString::valueOf(100.0*maCurrState.mnStrokeOpacity)+USTR("%"));
-+
-+        // beef up text box style with some auto-magic
++        // text or shape? if the former, no use in processing any
++        // graphic attributes except stroke color, ODF can do ~nothing
++        // with text shapes
 +        if( nTagId == XML_TEXT )
 +        {
 +            //xAttrs->AddAttribute( USTR( "draw:auto-grow-height"), USTR("true"));
@@ -2431,6 +2381,65 @@
 +            xAttrs->AddAttribute( USTR( "fo:padding-left"), USTR("0cm"));
 +            xAttrs->AddAttribute( USTR( "fo:padding-right"), USTR("0cm"));
 +            xAttrs->AddAttribute( USTR( "fo:padding-bottom"), USTR("0cm"));
++
++            // disable any background shape
++            xAttrs->AddAttribute( USTR( "draw:stroke" ), USTR("none"));
++            xAttrs->AddAttribute( USTR( "draw:fill" ), USTR("none"));
++        }
++        else
++        {
++            if( rState.meFillType != NONE )
++            {
++                if( rState.meFillType == GRADIENT )
++                {
++                    xAttrs->AddAttribute( USTR( "draw:fill" ), USTR("gradient"));
++                    xAttrs->AddAttribute( USTR( "draw:fill-gradient-name" ), 
++                                          getStyleName("svggradient", rState.maFillGradient.mnId) );
++                    if( hasGradientOpacity(rState.maFillGradient) )
++                    {
++                        // needs transparency gradient as well
++                        xAttrs->AddAttribute( USTR( "draw:opacity-name" ), 
++                                              getStyleName("svgopacity", rState.maFillGradient.mnId) );
++                    }
++                    else if( maCurrState.mnFillOpacity != 1.0 )
++                        xAttrs->AddAttribute( USTR( "draw:opacity" ), 
++                                              rtl::OUString::valueOf(100.0*maCurrState.mnFillOpacity)+USTR("%") );
++                }
++                else
++                {
++                    xAttrs->AddAttribute( USTR( "draw:fill" ), USTR("solid"));
++                    xAttrs->AddAttribute( USTR( "draw:fill-color" ), getOdfColor(rState.maFillColor));
++                    if( maCurrState.mnFillOpacity != 1.0 )
++                        xAttrs->AddAttribute( USTR( "draw:opacity" ), 
++                                              rtl::OUString::valueOf(100.0*maCurrState.mnFillOpacity)+USTR("%") );
++                }
++            }
++            else
++                xAttrs->AddAttribute( USTR( "draw:fill" ), USTR("none"));
++
++            if( rState.meStrokeType != NONE )
++            {
++                xAttrs->AddAttribute( USTR( "draw:stroke" ), USTR("solid"));
++                xAttrs->AddAttribute( USTR( "svg:stroke-color" ), getOdfColor(rState.maStrokeColor));
++            }
++            else
++                xAttrs->AddAttribute( USTR( "draw:stroke" ), USTR("none"));
++
++            if( maCurrState.mnStrokeWidth != 0.0 )
++            {
++                ::basegfx::B2DVector aVec(maCurrState.mnStrokeWidth,0);
++                aVec *= maCurrState.maCTM;
++                xAttrs->AddAttribute( USTR("svg:stroke-width"), rtl::OUString::valueOf( aVec.getLength()/100.0 )+USTR("mm"));
++            }
++            if( maCurrState.meLineJoin == basegfx::tools::B2DLINEJOIN_MITER )
++                xAttrs->AddAttribute( USTR( "draw:stroke-linejoin"), USTR("miter"));
++            else if( maCurrState.meLineJoin == basegfx::tools::B2DLINEJOIN_ROUND )
++                xAttrs->AddAttribute( USTR( "draw:stroke-linejoin"), USTR("round"));
++            else if( maCurrState.meLineJoin == basegfx::tools::B2DLINEJOIN_BEVEL )
++                xAttrs->AddAttribute( USTR( "draw:stroke-linejoin"), USTR("bevel"));
++            if( maCurrState.mnStrokeOpacity != 1.0 )
++                xAttrs->AddAttribute( USTR("svg:stroke-opacity"), 
++                                      rtl::OUString::valueOf(100.0*maCurrState.mnStrokeOpacity)+USTR("%"));
 +        }
 +
 +        mxDocumentHandler->startElement( USTR("style:graphic-properties"), 
