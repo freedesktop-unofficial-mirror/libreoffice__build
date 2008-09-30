@@ -24,9 +24,10 @@ clean-local:
 	for icons in $(OOO_ICONS_VERS) ; do \
 	    test "$(BUILDDIR)/$$icons" = "/" || rm -rf "$(BUILDDIR)/$$icons" ; \
 	done
-	test -z "$(BUILDDIR)/gcc-3.4.1" || rm -rf $(BUILDDIR)/gcc-3.4.1
+	test -z "$(BUILDDIR)/gcc-*" || rm -rf $(BUILDDIR)/gcc-*
+	test -z "$(BUILDDIR)/binutils-*" || rm -rf $(BUILDDIR)/binutils-*
 	test -z "$(BUILDDIR)/bin" || rm -rf $(BUILDDIR)/bin/*
-	test -z "$(BUILDDIR)/include/c++" || rm -rf $(BUILDDIR)/include/c++
+	test -z "$(BUILDDIR)/include" || rm -rf $(BUILDDIR)/include/*
 	test -z "$(BUILDDIR)/lib" || rm -rf $(BUILDDIR)/lib/*
 	test -z "$(BUILDDIR)/libexec" || rm -rf $(BUILDDIR)/libexec/*
 
