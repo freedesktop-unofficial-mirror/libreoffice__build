@@ -2157,11 +2157,11 @@ index 38f590e..84cc057 100644
  using namespace webdav_ucp;
  
 @@ -353,7 +352,8 @@ Content::Content(
+   m_eResourceType( UNKNOWN ),
    m_pProvider( pProvider ),
-   m_bTransient( false ),
-   m_bCollection( false ),
--  m_bDidGetOrHead( false )
-+  m_bDidGetOrHead( false ),
+   m_bTransient( sal_False ),
+-  m_bCollection( sal_False )
++  m_bCollection( sal_False ),
 +  m_bForceReadOnly( sal_False )
  {
      try
@@ -2207,9 +2207,9 @@ index 38f590e..84cc057 100644
 +        }
 +    }
 +
+ 	const ResourceType & rType = getResourceType( xEnv );
      {
          osl::Guard< osl::Mutex > aGuard( m_aMutex );
- 
 @@ -1463,8 +1493,13 @@ uno::Reference< sdbc::XRow > Content::getPropertyValues(
  
                          if ( !bNetworkAccessAllowed )
@@ -2226,7 +2226,7 @@ index 38f590e..84cc057 100644
                          }
                      }
                  }
-@@ -2023,30 +2058,86 @@ uno::Any Content::open(
+@@ -2023,30 +2058,90 @@ uno::Any Content::open(
          }
      }
  
@@ -2295,10 +2295,14 @@ index 38f590e..84cc057 100644
 +                osl::MutexGuard aGuard( m_aMutex );
 +
 +                // cache headers.
-+					if ( !m_xCachedProps.get())
-+                        m_xCachedProps.reset( new ContentProperties( aResource ) );
-+					else
-+						m_xCachedProps->addProperties( aResource );
++//                m_xCachedProps.reset( new ContentProperties( aResource ) );
++                std::vector< DAVPropertyValue >::const_iterator it = aResource.properties.begin();
++                std::vector< DAVPropertyValue >::const_iterator end = aResource.properties.end();
++                while ( it != end )
++                {
++                    DAVPropertyValue aProp = (*it++);
++                    m_xCachedProps->addProperty( aProp.Name, aProp.Value, true);
++                }
 +
 +                m_xResAccess.reset( 
 +                    new DAVResourceAccess( *xResAccess.get() ) );
@@ -2330,7 +2334,7 @@ index 38f590e..84cc057 100644
              try
              {
                  std::auto_ptr< DAVResourceAccess > xResAccess;
-@@ -2060,28 +2155,31 @@ uno::Any Content::open(
+@@ -2060,33 +2155,27 @@ uno::Any Content::open(
                      xResAccess.reset(
                          new DAVResourceAccess( *m_xResAccess.get() ) );
                  }
@@ -2348,16 +2352,21 @@ index 38f590e..84cc057 100644
 +                //                        ContentProperties::getMappableHTTPHeaders( aHeaders );
 +                uno::Reference< io::XInputStream > xIn
 +                    = xResAccess->GET( aHeaders, aResource, xEnv )->getInputStream();
-                 m_bDidGetOrHead = true;
- 				
+ 
                  {
                      osl::MutexGuard aGuard( m_aMutex );
  
                      // cache headers.
- 					if ( !m_xCachedProps.get())
-                         m_xCachedProps.reset( new ContentProperties( aResource ) );
- 					else
- 						m_xCachedProps->addProperties( aResource );
+ //                    m_xCachedProps.reset( new ContentProperties( aResource ) );
+-					std::vector< DAVPropertyValue >::const_iterator it = aResource.properties.begin();
+-  					std::vector< DAVPropertyValue >::const_iterator end	= aResource.properties.end();
+-				  	while ( it != end )
+-  					{
+-						DAVPropertyValue aProp = (*it++);
+-						m_xCachedProps->addProperty( aProp.Name, aProp.Value, true);
+-					}	
+-
+-
  
                      m_xResAccess.reset( 
                          new DAVResourceAccess( *xResAccess.get() ) );
@@ -2398,7 +2407,7 @@ index 38f590e..84cc057 100644
                      {
                          osl::MutexGuard aGuard( m_aMutex );
  
-@@ -2118,47 +2216,74 @@ uno::Any Content::open(
+@@ -2118,43 +2216,69 @@ uno::Any Content::open(
                      // fill inputsream sync; return if all data present
                      DAVResource aResource;
                      std::vector< rtl::OUString > aHeaders;
@@ -2432,21 +2441,18 @@ index 38f590e..84cc057 100644
 +
 +                    // pass the lock to the stream
 +                    static_cast< NeonInputStream* >( xStream.get() )->SetLock( aLock, m_xResAccess->getURL() );
-+
- 					m_bDidGetOrHead = true;
- 					
+ 
                      {
 +
                          osl::MutexGuard aGuard( m_aMutex );
-   
- 						// cache headers.
- 						if ( !m_xCachedProps.get())
- 							m_xCachedProps.reset( new ContentProperties( aResource ) );
- 						else
- 							m_xCachedProps->addProperties( aResource.properties );
- 						
+-  //                      m_xCachedProps.reset(
+-  //                          new ContentProperties( aResource ) );
++//                        m_xCachedProps.reset(
++//                            new ContentProperties( aResource ) );
+ 
                          m_xResAccess.reset( 
                              new DAVResourceAccess( *xResAccess.get() ) );
+ 
                      }
  
 -                    xDataSink->setInputStream( xIn );
@@ -2575,13 +2581,13 @@ index e945f78..cf91688 100644
 --- ucb/source/ucp/webdav/webdavcontent.hxx
 +++ ucb/source/ucp/webdav/webdavcontent.hxx
 @@ -90,6 +90,7 @@ class Content : public ::ucbhelper::ContentImplHelper,
-   	bool			  m_bTransient;
- 	bool              m_bCollection;
- 	bool              m_bDidGetOrHead;
+ 	ContentProvider*  m_pProvider; // No need for a ref, base class holds object
+   	sal_Bool 		  m_bTransient;
+ 	sal_Bool          m_bCollection;
 +	sal_Bool          m_bForceReadOnly;
- 	std::vector< rtl::OUString > m_aFailedPropNames;
  
  private:
+ 	virtual com::sun::star::uno::Sequence< com::sun::star::beans::Property >
 diff --git ucb/source/ucp/webdav/webdavcontentcaps.cxx ucb/source/ucp/webdav/webdavcontentcaps.cxx
 index ba3d4bc..f5c5652 100644
 --- ucb/source/ucp/webdav/webdavcontentcaps.cxx
