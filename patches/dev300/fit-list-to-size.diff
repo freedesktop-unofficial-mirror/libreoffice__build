@@ -461,7 +461,7 @@ index e457f0c..396e1cb 100644
          {
              ULONG nStat=rOutliner.GetControlWord();
              nStat|=EE_CNTRL_STRETCHING|EE_CNTRL_AUTOPAGESIZE;
-@@ -1798,13 +1798,54 @@ void SdrTextObj::ImpSetupDrawOutlinerForPaint( FASTBOOL 		bContourFrame,
+@@ -1798,13 +1798,65 @@ void SdrTextObj::ImpSetupDrawOutlinerForPaint( FASTBOOL 		bContourFrame,
      if (!bContourFrame)
      {
          // FitToSize erstmal nicht mit ContourFrame
@@ -484,23 +484,36 @@ index e457f0c..396e1cb 100644
 +{
 +    // EditEngine formatting is unstable enough for
 +    // line-breaking text that we need some more samples
-+    USHORT nMinStretchX=65535, nMinStretchY=65535;
 +    const Size aShapeSize = GetLastBoundRect().GetSize();
-+    for(int i=0; i<3; ++i)
++
++    // loop early-exits if we detect an already attained value
++    USHORT nMinStretchX=0, nMinStretchY=0;
++    USHORT aOldStretchXVals[]={0,0,0,0,0,0,0,0,0,0};
++    const size_t aStretchArySize=sizeof(aOldStretchXVals)/sizeof(*aOldStretchXVals);
++    for(int i=0; i<aStretchArySize; ++i)
 +    {
 +        const Size aCurrTextSize = rOutliner.CalcTextSize();
 +        double fFactor(1.0);
 +        if( IsVerticalWriting() )
-+            fFactor = double(aShapeSize.Width())/
-+                (aCurrTextSize.Width()+GetTextLeftDistance()+GetTextRightDistance());
++            fFactor = double(aShapeSize.Width())/aCurrTextSize.Width();
 +        else
-+            fFactor = double(aShapeSize.Height())/
-+                (aCurrTextSize.Height()+GetTextUpperDistance()+GetTextLowerDistance());
++            fFactor = double(aShapeSize.Height())/aCurrTextSize.Height();
 +
 +        USHORT nCurrStretchX, nCurrStretchY;
 +        rOutliner.GetGlobalCharStretching(nCurrStretchX, nCurrStretchY);
 +
-+        // only do the scaling once (we'll get notified again, recursively)
++        if (fFactor >= 1.0 )
++        {
++            // resulting text area fits into available shape rect -
++            // err on the larger streching, to optimally fill area
++            nMinStretchX = std::max(nMinStretchX,nCurrStretchX);
++            nMinStretchY = std::max(nMinStretchY,nCurrStretchY);
++        }
++
++        aOldStretchXVals[i] = nCurrStretchX;
++        if( std::find(aOldStretchXVals, aOldStretchXVals+i, nCurrStretchX) != aOldStretchXVals+i )
++            break; // same value already attained once; algo is looping, exit
++
 +        if (fFactor < 1.0 || (fFactor >= 1.0 && nCurrStretchX != 100))
 +        {
 +            nCurrStretchX = sal::static_int_cast<USHORT>(nCurrStretchX*fFactor);
@@ -508,12 +521,10 @@ index e457f0c..396e1cb 100644
 +            rOutliner.SetGlobalCharStretching(std::min(USHORT(100),nCurrStretchX),
 +                                              std::min(USHORT(100),nCurrStretchY));
 +            OSL_TRACE("SdrTextObj::onEditOutlinerStatusEvent(): zoom is %d", nCurrStretchX);
-+
-+            nMinStretchX = std::min(nMinStretchX,nCurrStretchX);
-+            nMinStretchY = std::min(nMinStretchY,nCurrStretchY);
 +        }
      }
 +
++    OSL_TRACE("---- SdrTextObj::onEditOutlinerStatusEvent(): final zoom is %d ----", nMinStretchX);
 +    rOutliner.SetGlobalCharStretching(std::min(USHORT(100),nMinStretchX),
 +                                      std::min(USHORT(100),nMinStretchY));
  }
