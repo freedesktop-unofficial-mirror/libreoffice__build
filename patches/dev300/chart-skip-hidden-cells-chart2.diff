@@ -24,17 +24,149 @@ index df18ec8..3d4e9a9 100644
      //new for XY charts
      rOutProperties.push_back(
          Property( C2U( "SortByXValues" ),
+diff --git chart2/source/controller/dialogs/ObjectNameProvider.cxx chart2/source/controller/dialogs/ObjectNameProvider.cxx
+index d477a34..20d9b81 100644
+--- chart2/source/controller/dialogs/ObjectNameProvider.cxx
++++ chart2/source/controller/dialogs/ObjectNameProvider.cxx
+@@ -63,6 +63,10 @@ using namespace ::com::sun::star::chart2;
+ using ::com::sun::star::uno::Reference;
+ using ::com::sun::star::uno::Sequence;
+ using ::com::sun::star::uno::Any;
++using ::com::sun::star::uno::UNO_QUERY;
++using ::com::sun::star::chart2::XDiagram;
++using ::com::sun::star::beans::XPropertySet;
++using ::com::sun::star::beans::UnknownPropertyException;
+ using rtl::OUString;
+ 
+ namespace
+@@ -95,11 +99,33 @@ void lcl_addText( OUString& rOut, const OUString& rSeparator, const OUString& rN
+         rOut+=rNext;
+ }
+ 
++bool lcl_isHiddenCellsIncluded( const Reference<frame::XModel>& xChartModel )
++{
++    bool bIncluded = true;  // hidden cells are included by default.
++
++    Reference< XDiagram > xDiagram( ChartModelHelper::findDiagram(xChartModel) );
++    if (!xDiagram.is())
++        return bIncluded;
++
++    Reference< XPropertySet > xProp( xDiagram, UNO_QUERY );
++    if (!xProp.is())
++        return bIncluded;
++
++    try
++    {
++        xProp->getPropertyValue(C2U("IncludeHiddenCells")) >>= bIncluded;
++    }
++    catch (const UnknownPropertyException&)
++    {
++    }
++
++    return bIncluded;
++}
++
+ OUString lcl_getDataPointValueText( const Reference< XDataSeries >& xSeries, sal_Int32 nPointIndex,
+                                     const Reference< XCoordinateSystem >& xCooSys,
+                                     const Reference< frame::XModel >& xChartModel )
+ {
+-
+     OUString aRet;
+ 
+     Reference<data::XDataSource> xDataSource(
+@@ -111,6 +137,7 @@ OUString lcl_getDataPointValueText( const Reference< XDataSeries >& xSeries, sal
+ 
+     rtl::OUString aX, aY, aY_Min, aY_Max, aY_First, aY_Last;
+     double fValue = 0;
++    bool bIncludeHiddenCells = lcl_isHiddenCellsIncluded(xChartModel);
+ 
+     uno::Reference< util::XNumberFormatsSupplier > xNumberFormatsSupplier( xChartModel, uno::UNO_QUERY );
+     NumberFormatterWrapper aNumberFormatterWrapper( xNumberFormatsSupplier );
+@@ -130,6 +157,14 @@ OUString lcl_getDataPointValueText( const Reference< XDataSeries >& xSeries, sal
+ 	    {
+ 		    try
+ 		    {
++                if (!bIncludeHiddenCells)
++                {
++                    Sequence<sal_Int32> aHiddenValues;
++                    xProp->getPropertyValue( C2U("HiddenValues") ) >>= aHiddenValues;
++                    if (aHiddenValues.getLength())
++                        DataSeriesHelper::removeHiddenDataPoints(aData, aHiddenValues);
++                }
++
+                 uno::Any aARole = xProp->getPropertyValue( C2U( "Role" ) );
+                 rtl::OUString aRole;
+                 aARole >>= aRole;
+@@ -184,7 +219,7 @@ OUString lcl_getDataPointValueText( const Reference< XDataSeries >& xSeries, sal
+ 
+         replaceParamterInString( aCategory
+             , C2U("%CATEGORYVALUE")
+-            , ExplicitCategoriesProvider::getCategoryByIndex( xCooSys, nPointIndex )
++            , ExplicitCategoriesProvider::getCategoryByIndex( xCooSys, nPointIndex, bIncludeHiddenCells )
+             );
+         
+         aRet = aCategory;
+diff --git chart2/source/inc/DataSeriesHelper.hxx chart2/source/inc/DataSeriesHelper.hxx
+index a7e1019..0cf57eb 100644
+--- chart2/source/inc/DataSeriesHelper.hxx
++++ chart2/source/inc/DataSeriesHelper.hxx
+@@ -41,6 +41,7 @@
+ 
+ #include <vector>
+ #include <functional>
++#include <hash_set>
+ 
+ namespace chart
+ {
+@@ -177,6 +178,34 @@ bool hasAttributedDataPointDifferentValue(
+     const ::rtl::OUString& rPropertyName,
+     const ::com::sun::star::uno::Any& rPropertyValue );
+ 
++template<typename T>
++void removeHiddenDataPoints(
++    ::com::sun::star::uno::Sequence<T>& rDataPoints,
++    const ::com::sun::star::uno::Sequence<sal_Int32>& rHiddenIndices )
++{
++    ::std::hash_set<sal_Int32> aIndices;
++    sal_Int32 n = rHiddenIndices.getLength();
++    for (sal_Int32 i = 0; i < n; ++i)
++        aIndices.insert(rHiddenIndices[i]);
++
++    ::std::vector<T> aNewDataVector;
++    n = rDataPoints.getLength();
++    aNewDataVector.reserve(n);
++    for (sal_Int32 i = 0; i < n; ++i)
++    {
++        if (aIndices.count(i))
++            // skip this value.
++            continue;
++
++        aNewDataVector.push_back(rDataPoints[i]);
++    }
++
++    n = aNewDataVector.size();
++    rDataPoints.realloc(n);
++    for (size_t i = 0; i < static_cast<size_t>(n); ++i)
++        rDataPoints[i] = aNewDataVector[i];
++}
++
+ } //  namespace DataSeriesHelper
+ } //  namespace chart
+ 
 diff --git chart2/source/inc/ExplicitCategoriesProvider.hxx chart2/source/inc/ExplicitCategoriesProvider.hxx
-index e6bf4fc..401aa1d 100644
+index e6bf4fc..ad0b21e 100644
 --- chart2/source/inc/ExplicitCategoriesProvider.hxx
 +++ chart2/source/inc/ExplicitCategoriesProvider.hxx
-@@ -58,9 +58,13 @@ public:
+@@ -56,11 +56,15 @@ public:
+     static ::rtl::OUString getCategoryByIndex(
+         const ::com::sun::star::uno::Reference<
              ::com::sun::star::chart2::XCoordinateSystem >& xCooSysModel,
-         sal_Int32 nIndex );
- 
+-        sal_Int32 nIndex );
++        sal_Int32 nIndex, bool bIncludeHiddenCells );
++
 +    void setIncludeHiddenCells(bool b);
 +    bool getIncludeHiddenCells() const;
-+
+ 
  private: //member
      ::com::sun::star::uno::Sequence< ::rtl::OUString > m_aExplicitCategories;
      bool volatile m_bDirty;
@@ -77,11 +209,14 @@ index b7c1eb7..cc6dc2c 100644
      ::chart::PropertyHelper::setPropertyValueDefault< sal_Int32 >( rOutMap, PROP_DIAGRAM_STARTING_ANGLE, 90 );
  }
 diff --git chart2/source/tools/ExplicitCategoriesProvider.cxx chart2/source/tools/ExplicitCategoriesProvider.cxx
-index acd9585..efc130b 100644
+index acd9585..c53a909 100644
 --- chart2/source/tools/ExplicitCategoriesProvider.cxx
 +++ chart2/source/tools/ExplicitCategoriesProvider.cxx
-@@ -34,6 +34,10 @@
+@@ -32,8 +32,13 @@
+ #include "precompiled_chart2.hxx"
+ 
  #include "ExplicitCategoriesProvider.hxx"
++#include "DataSeriesHelper.hxx"
  #include "DiagramHelper.hxx"
  #include "CommonConverters.hxx"
 +#include "macros.hxx"
@@ -91,7 +226,7 @@ index acd9585..efc130b 100644
  
  //.............................................................................
  namespace chart
-@@ -45,9 +49,12 @@ using namespace ::com::sun::star::chart2;
+@@ -45,9 +50,12 @@ using namespace ::com::sun::star::chart2;
  using ::com::sun::star::uno::Reference;
  using ::com::sun::star::uno::Sequence;
  using rtl::OUString;
@@ -104,37 +239,7 @@ index acd9585..efc130b 100644
      , m_xCooSysModel( xCooSysModel )
      , m_xCategories()
  {
-@@ -63,20 +70,75 @@ ExplicitCategoriesProvider::~ExplicitCategoriesProvider()
- {
- }
- 
-+static void lcl_removeHiddenIndices(Sequence<OUString>& rCategories, const Sequence<sal_Int32>& rHiddenValues)
-+{
-+    hash_set<sal_Int32> aIndices;
-+    sal_Int32 n = rHiddenValues.getLength();
-+    for (sal_Int32 i = 0; i < n; ++i)
-+        aIndices.insert(rHiddenValues[i]);
-+
-+    vector<OUString> aNewCatsVector;
-+    n = rCategories.getLength();
-+    aNewCatsVector.reserve(n);
-+    for (sal_Int32 i = 0; i < n; ++i)
-+    {
-+        if (aIndices.count(i))
-+            // skip this value.
-+            continue;
-+
-+        aNewCatsVector.push_back(rCategories[i]);
-+    }
-+
-+    n = aNewCatsVector.size();
-+    rCategories.realloc(n);
-+    for (size_t i = 0; i < n; ++i)
-+        rCategories[i] = aNewCatsVector[i];
-+}
-+
- //XTextualDataSequence
- Sequence< ::rtl::OUString > SAL_CALL ExplicitCategoriesProvider::getTextualData() throw( uno::RuntimeException)
+@@ -68,23 +76,55 @@ Sequence< ::rtl::OUString > SAL_CALL ExplicitCategoriesProvider::getTextualData(
  {
      if( m_bDirty )
      {
@@ -159,7 +264,7 @@ index acd9585..efc130b 100644
 +        {
 +            m_aExplicitCategories = DataSequenceToStringSequence(xValues);
 +            if (!m_bIncludeHiddelCells)
-+                lcl_removeHiddenIndices(m_aExplicitCategories, aHiddenValues);
++                DataSeriesHelper::removeHiddenDataPoints(m_aExplicitCategories, aHiddenValues);
 +
 +            if(!m_aExplicitCategories.getLength())
 +                m_aExplicitCategories = DiagramHelper::generateAutomaticCategories(
@@ -184,6 +289,18 @@ index acd9585..efc130b 100644
  // static
  OUString ExplicitCategoriesProvider::getCategoryByIndex(
          const Reference< XCoordinateSystem >& xCooSysModel,
+-        sal_Int32 nIndex )
++        sal_Int32 nIndex, bool bIncludeHiddenCells )
+ {
+     if( xCooSysModel.is())
+     {
+-        Reference< XTextualDataSequence > xTemp( new ExplicitCategoriesProvider( xCooSysModel ));
++        ExplicitCategoriesProvider* p = new ExplicitCategoriesProvider(xCooSysModel);
++        p->setIncludeHiddenCells(bIncludeHiddenCells);
++        Reference< XTextualDataSequence > xTemp(p);
+         if( xTemp.is())
+         {
+             Sequence< OUString > aCategories( xTemp->getTextualData());
 diff --git chart2/source/tools/UncachedDataSequence.cxx chart2/source/tools/UncachedDataSequence.cxx
 index bcf99f7..1fa3b00 100644
 --- chart2/source/tools/UncachedDataSequence.cxx
@@ -320,11 +437,57 @@ index a16fffd..63075dc 100644
                  pSeries->setGlobalSeriesIndex(nGlobalSeriesIndex);
                  nGlobalSeriesIndex++;
 diff --git chart2/source/view/main/VDataSeries.cxx chart2/source/view/main/VDataSeries.cxx
-index fdee8d7..c0e7f52 100644
+index fdee8d7..c558a00 100644
 --- chart2/source/view/main/VDataSeries.cxx
 +++ chart2/source/view/main/VDataSeries.cxx
-@@ -108,12 +108,11 @@ namespace
-     }
+@@ -37,6 +37,7 @@
+ #include "LabelPositionHelper.hxx"
+ #include "ChartTypeHelper.hxx"
+ #include "ContainerHelper.hxx"
++#include "DataSeriesHelper.hxx"
+ #include "MeanValueRegressionCurveCalculator.hxx"
+ 
+ #include <com/sun/star/chart2/Symbol.hpp>
+@@ -70,50 +71,13 @@ namespace
+             return ( first < second );
+         }
+     };
+-
+-    void lcl_removeIndices( uno::Sequence< double >& rValues, const uno::Sequence< sal_Int32 >& rIndicesToRemove )
+-    {
+-        if( !rIndicesToRemove.getLength() )
+-            return;
+-
+-        ::std::vector< sal_Int32 > aIndicesToRemove( ContainerHelper::SequenceToVector( rIndicesToRemove) );
+-        ::std::sort( aIndicesToRemove.begin(), aIndicesToRemove.end(), lcl_LessIndex() );
+-        
+-        sal_Int32 nTarget=0;
+-        sal_Int32 nR = 0;
+-        sal_Int32 nRemove = aIndicesToRemove[nR];
+-        for( sal_Int32 nSource=0; nSource<rValues.getLength(); nSource++ )
+-        {
+-            if( nSource<nRemove || nRemove==-1 )
+-            {
+-                if( nTarget < nSource )
+-                    rValues[nTarget]=rValues[nSource];
+-                nTarget++;
+-                continue;
+-            }
+-            if( nSource==nRemove )
+-            {
+-                ++nR;
+-                if( nR<static_cast<sal_Int32>(aIndicesToRemove.size()) )
+-                    nRemove = aIndicesToRemove[nR];
+-                else
+-                    nRemove = -1;
+-            }
+-        }
+-
+-        if( nTarget>0 )
+-            rValues.realloc( nTarget );
+-        else
+-            rValues.realloc(0);
+-    }
  }
  
 -void VDataSequence::init( const uno::Reference< data::XDataSequence >& xModel )
@@ -338,7 +501,7 @@ index fdee8d7..c0e7f52 100644
      {
          uno::Reference<beans::XPropertySet> xProp(xModel, uno::UNO_QUERY );
          if( xProp.is())
-@@ -131,10 +130,10 @@ void VDataSequence::init( const uno::Reference< data::XDataSequence >& xModel )
+@@ -131,15 +95,15 @@ void VDataSequence::init( const uno::Reference< data::XDataSequence >& xModel )
      }
  
      Model = xModel;
@@ -351,7 +514,13 @@ index fdee8d7..c0e7f52 100644
      {
          if( bIsHidden )
              Doubles.realloc(0);
-@@ -205,7 +204,7 @@ VDataSeries::VDataSeries()
+         else if( aHiddenValues.getLength() )
+-            lcl_removeIndices( Doubles, aHiddenValues );
++            DataSeriesHelper::removeHiddenDataPoints(Doubles, aHiddenValues);
+     }
+ }
+ 
+@@ -205,7 +169,7 @@ VDataSeries::VDataSeries()
      DBG_ERROR("not implemented");
  }
  
@@ -360,7 +529,7 @@ index fdee8d7..c0e7f52 100644
      : m_nPolygonIndex(0)
      , m_fLogicMinX(0.0)
      , m_fLogicMaxX(0.0)
-@@ -235,6 +234,7 @@ VDataSeries::VDataSeries( const uno::Reference< XDataSeries >& xDataSeries )
+@@ -235,6 +199,7 @@ VDataSeries::VDataSeries( const uno::Reference< XDataSeries >& xDataSeries )
      , m_nAxisIndex(0)
      , m_bConnectBars(sal_False)
      , m_bGroupBarsPerAxis(sal_True)
@@ -368,7 +537,7 @@ index fdee8d7..c0e7f52 100644
      , m_nStartingAngle(90)
  
      , m_aSeriesParticle()
-@@ -278,17 +278,17 @@ VDataSeries::VDataSeries( const uno::Reference< XDataSeries >& xDataSeries )
+@@ -278,17 +243,17 @@ VDataSeries::VDataSeries( const uno::Reference< XDataSeries >& xDataSeries )
                  aARole >>= aRole;
  
                  if( aRole.equals(C2U("values-x")) )
@@ -392,7 +561,7 @@ index fdee8d7..c0e7f52 100644
                  //@todo assign the other roles (+ error for unknown?)
              }
              catch( uno::Exception& e )
-@@ -483,6 +483,16 @@ sal_Bool VDataSeries::getGroupBarsPerAxis() const
+@@ -483,6 +448,16 @@ sal_Bool VDataSeries::getGroupBarsPerAxis() const
      return m_bGroupBarsPerAxis;
  }
  
