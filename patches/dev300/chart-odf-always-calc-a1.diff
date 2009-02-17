@@ -903,7 +903,7 @@ index 763cc1a..8ce104c 100644
          xResult.set(new ScChart2DataSequence(m_pDocument, this, aRangeList));
  
      return xResult;
-@@ -1042,23 +1042,109 @@ rtl::OUString SAL_CALL ScChart2DataProvider::convertRangeToXML( const rtl::OUStr
+@@ -1042,23 +1042,122 @@ rtl::OUString SAL_CALL ScChart2DataProvider::convertRangeToXML( const rtl::OUStr
      if( m_pDocument )
      {
          ScRangeList aList;
@@ -919,18 +919,32 @@ index 763cc1a..8ce104c 100644
  
 +static bool lcl_parseSingleRangeToken(
 +    ScRange& rRange, const rtl::OUString& rToken, ScDocument* pDoc, ScAddress::Convention eConv,
-+    const sal_Unicode cSep, const sal_Unicode cQuote)
++    const sal_Unicode cQuote, bool bOldSyntaxWorkAround)
 +{
 +    sal_Int32 nSepPos = ScRangeStringConverter::IndexOf(rToken, ':', 0, cQuote);
 +    if (nSepPos >= 0)
 +    {
-+        rtl::OUString aStartAddr = rToken.copy(0, nSepPos);
-+        rtl::OUString aEndAddr = rToken.copy(nSepPos+1);
-+        USHORT nRes = rRange.aStart.Parse(aStartAddr, pDoc, eConv);
++        // Cell range
++        rtl::OUString aBeginCell = rToken.copy(0, nSepPos);
++        rtl::OUString aEndCell   = rToken.copy(nSepPos+1);
++
++        if (!aBeginCell.getLength() || !aEndCell.getLength())
++            // both cell addresses must exist for this to work.
++            return false;
++
++        if (bOldSyntaxWorkAround && aEndCell.getStr()[0] == '.')
++        {
++            // workaround for old syntax (probably pre-chart2 age?)
++            // e.g. Sheet1.A1:.B2
++            sal_Int32 nDotPos = ScRangeStringConverter::IndexOf(aBeginCell, sal_Unicode('.'), 0, cQuote);
++            rtl::OUString aTabName = aBeginCell.copy(0, nDotPos);
++            aEndCell = aTabName + aEndCell;
++        }
++        USHORT nRes = rRange.aStart.Parse(aBeginCell, pDoc, eConv);
 +        if ((nRes & SCA_VALID) != SCA_VALID)
 +            return false;
 +
-+        nRes = rRange.aEnd.Parse(aEndAddr, pDoc, eConv);
++        nRes = rRange.aEnd.Parse(aEndCell, pDoc, eConv);
 +        if ((nRes & SCA_VALID) != SCA_VALID)
 +            return false;
 +    }
@@ -972,8 +986,7 @@ index 763cc1a..8ce104c 100644
 +                break;
 +
 +            // Chart always saves ranges using CONV_OOO convention.
-+            sal_Int32 nSepPos = ScRangeStringConverter::IndexOf(aToken, ':', 0, cQuote);
-+            bool bSuccess = lcl_parseSingleRangeToken(aRange, aToken, m_pDocument, ScAddress::CONV_OOO, cSep, cQuote);
++            bool bSuccess = lcl_parseSingleRangeToken(aRange, aToken, m_pDocument, ScAddress::CONV_OOO, cQuote, true);
 +
 +            if (bSuccess)
 +            {
@@ -996,7 +1009,7 @@ index 763cc1a..8ce104c 100644
 +            // regardless of address conventions when stored in ODF.  This means,
 +            // for example, Sheet1!A1:A3 in Excel A1 syntax was expressed as
 +            // Sheet1!A1:Sheet1!A3.
-+            bSuccess = lcl_parseSingleRangeToken(aRange, aToken, m_pDocument, eConvUI, cSep, cQuote);
++            bSuccess = lcl_parseSingleRangeToken(aRange, aToken, m_pDocument, eConvUI, cQuote, false);
 +            if (!bSuccess)
 +                continue;
 +
