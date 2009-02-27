@@ -1,0 +1,120 @@
+diff --git sc/inc/compiler.hxx sc/inc/compiler.hxx
+index bdffc05..56b7cfa 100644
+--- sc/inc/compiler.hxx
++++ sc/inc/compiler.hxx
+@@ -538,6 +538,8 @@ public:
+         return mxSymbolsNative->getSymbol( eOp );
+     }
+ 
++    sal_Unicode GetNativeAddressSymbol( Convention::SpecialSymbolType eType ) const;
++
+     /** Get OpCode for English symbol.
+         Used in XFunctionAccess to create token array.
+         @param rName
+diff --git sc/source/core/tool/compiler.cxx sc/source/core/tool/compiler.cxx
+index f815af9..dd9ab5b 100644
+--- sc/source/core/tool/compiler.cxx
++++ sc/source/core/tool/compiler.cxx
+@@ -6710,3 +6710,8 @@ String GetScCompilerNativeSymbol( OpCode eOp )
+ {
+     return ScCompiler::GetNativeSymbol( eOp );
+ }
++
++sal_Unicode ScCompiler::GetNativeAddressSymbol( Convention::SpecialSymbolType eType ) const
++{
++    return pConv->getSpecialSymbol(eType);
++}
+diff --git sc/source/core/tool/editutil.cxx sc/source/core/tool/editutil.cxx
+index 31dc996..f6eb148 100644
+--- sc/source/core/tool/editutil.cxx
++++ sc/source/core/tool/editutil.cxx
+@@ -64,12 +64,13 @@
+ #include "patattr.hxx"
+ #include "scmod.hxx"
+ #include "inputopt.hxx"
++#include "compiler.hxx"
+ 
+ // STATIC DATA -----------------------------------------------------------
+ 
+ //	Delimiters zusaetzlich zu EditEngine-Default:
+ 
+-const sal_Char __FAR_DATA ScEditUtil::pCalcDelimiters[] = "=();+-*/^&<>";
++const sal_Char __FAR_DATA ScEditUtil::pCalcDelimiters[] = "=()+-*/^&<>";
+ 
+ 
+ //------------------------------------------------------------------------
+@@ -79,6 +80,7 @@ String ScEditUtil::ModifyDelimiters( const String& rOld )
+ 	String aRet = rOld;
+ 	aRet.EraseAllChars( '_' );	// underscore is used in function argument names
+ 	aRet.AppendAscii( RTL_CONSTASCII_STRINGPARAM( pCalcDelimiters ) );
++    aRet.Append(ScCompiler::GetNativeSymbol(ocSep)); // argument separator is localized.
+ 	return aRet;
+ }
+ 
+diff --git sc/source/ui/app/inputhdl.cxx sc/source/ui/app/inputhdl.cxx
+index 6db8043..bd1c1ac 100644
+--- sc/source/ui/app/inputhdl.cxx
++++ sc/source/ui/app/inputhdl.cxx
+@@ -110,14 +110,21 @@ extern USHORT nEditAdjust;		//! Member an ViewData
+ 
+ //==================================================================
+ 
++static sal_Unicode lcl_getSheetSeparator(ScDocument* pDoc)
++{
++    ScCompiler aComp(pDoc, ScAddress(), pDoc->GetGrammar());
++    return aComp.GetNativeAddressSymbol(ScCompiler::Convention::SHEET_SEPARATOR);
++}
++
+ void ScInputHandler::InitRangeFinder( const String& rFormula )
+ {
+ 	DeleteRangeFinder();
++    ScDocShell* pDocSh = pActiveViewSh->GetViewData()->GetDocShell();
++    ScDocument* pDoc = pDocSh->GetDocument();
++    const sal_Unicode cSheetSep = lcl_getSheetSeparator(pDoc);
+ 
+ 	if ( !pActiveViewSh || !SC_MOD()->GetInputOptions().GetRangeFinder() )
+ 		return;
+-	ScDocShell* pDocSh = pActiveViewSh->GetViewData()->GetDocShell();
+-	ScDocument* pDoc = pDocSh->GetDocument();
+ 
+ //	String aDelimiters = pEngine->GetWordDelimiters();
+ 	String aDelimiters = ScEditUtil::ModifyDelimiters(
+@@ -126,7 +133,7 @@ void ScInputHandler::InitRangeFinder( const String& rFormula )
+ 	xub_StrLen nColon = aDelimiters.Search(':');
+ 	if ( nColon != STRING_NOTFOUND )
+ 		aDelimiters.Erase( nColon, 1 );				// Delimiter ohne Doppelpunkt
+-	xub_StrLen nDot = aDelimiters.Search('.');
++	xub_StrLen nDot = aDelimiters.Search(cSheetSep);
+ 	if ( nDot != STRING_NOTFOUND )
+ 		aDelimiters.Erase( nDot, 1 );				// Delimiter ohne Punkt
+ 
+@@ -597,6 +604,9 @@ void ScInputHandler::ShowTip( const String& rText )
+ void ScInputHandler::UseFormulaData()
+ {
+ 	EditView* pActiveView = pTopView ? pTopView : pTableView;
++    ScDocShell* pDocSh = pActiveViewSh->GetViewData()->GetDocShell();
++    const sal_Unicode cSep = ScCompiler::GetNativeSymbol(ocSep).GetChar(0);
++    const sal_Unicode cSheetSep = lcl_getSheetSeparator(pDocSh->GetDocument());
+ 
+ 	//	Formeln duerfen nur 1 Absatz haben
+ 	if ( pActiveView && pFormulaData && pEngine->GetParagraphCount() == 1 )
+@@ -2414,6 +2424,7 @@ BOOL ScInputHandler::IsModalMode( SfxObjectShell* pDocSh )
+ 
+ void ScInputHandler::AddRefEntry()
+ {
++    const sal_Unicode cSep = ScCompiler::GetNativeSymbol(ocSep).GetChar(0);
+ 	UpdateActiveView();
+ 	if (!pTableView && !pTopView)
+ 		return; 							// z.B. FillMode
+@@ -2422,9 +2433,9 @@ void ScInputHandler::AddRefEntry()
+ 
+ 	RemoveSelection();
+ 	if (pTableView)
+-		pTableView->InsertText( ';', FALSE );
++        pTableView->InsertText( cSep, FALSE );
+ 	if (pTopView)
+-		pTopView->InsertText( ';', FALSE );
++        pTopView->InsertText( cSep, FALSE );
+ 
+ 	DataChanged();
+ }
