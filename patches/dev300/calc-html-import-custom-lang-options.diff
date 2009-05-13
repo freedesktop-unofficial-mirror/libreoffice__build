@@ -1,0 +1,631 @@
+diff --git sc/inc/column.hxx sc/inc/column.hxx
+index 1be611e..e505cbb 100644
+--- sc/inc/column.hxx
++++ sc/inc/column.hxx
+@@ -250,7 +250,8 @@ public:
+ 				//	TRUE = Zahlformat gesetzt
+ 	BOOL		SetString( SCROW nRow, SCTAB nTab, const String& rString,
+ 						   ScAddress::Convention conv = ScAddress::CONV_OOO,
+-                           SvNumberFormatter* pFormatter = NULL );
++                           SvNumberFormatter* pFormatter = NULL,
++                           bool bDetectNumberFormat = true );
+ 	void		SetValue( SCROW nRow, const double& rVal);
+ 	void		SetNote( SCROW nRow, const ScPostIt& rNote );
+ 	void		SetError( SCROW nRow, const USHORT nError);
+diff --git sc/inc/document.hxx sc/inc/document.hxx
+index 4b164f6..b9f1a01 100644
+--- sc/inc/document.hxx
++++ sc/inc/document.hxx
+@@ -749,7 +749,8 @@ SC_DLLPUBLIC	ScDBCollection*	GetDBCollection() const;
+ 					//	return TRUE = Zahlformat gesetzt
+ 	//BOOL			SetString( SCCOL nCol, SCROW nRow, SCTAB nTab, const String& rString );
+ 	//for dataform
+-	SC_DLLPUBLIC  BOOL			SetString( SCCOL nCol, SCROW nRow, SCTAB nTab, const String& rString, SvNumberFormatter* pFormatter = NULL );
++	SC_DLLPUBLIC  BOOL			SetString( SCCOL nCol, SCROW nRow, SCTAB nTab, const String& rString, 
++                                           SvNumberFormatter* pFormatter = NULL, bool bDetectNumberFormat = true );
+ 	//end
+ 	void			SetValue( SCCOL nCol, SCROW nRow, SCTAB nTab, const double& rVal );
+ 	void			SetNote( SCCOL nCol, SCROW nRow, SCTAB nTab, const ScPostIt& rNote );
+diff --git sc/inc/eeimport.hxx sc/inc/eeimport.hxx
+index 223bf12..4975ddb 100644
+--- sc/inc/eeimport.hxx
++++ sc/inc/eeimport.hxx
+@@ -63,7 +63,8 @@ public:
+     ScRange             GetRange()      { return maRange; }
+ 	virtual void		WriteToDocument( BOOL bSizeColsRows = FALSE,
+                                          double nOutputFactor = 1.0,
+-                                         SvNumberFormatter* pFormatter = NULL );
++                                         SvNumberFormatter* pFormatter = NULL,
++                                         bool bConvertDate = true );
+ };
+ 
+ 
+diff --git sc/inc/filter.hxx sc/inc/filter.hxx
+index 526b230..8f805ee 100644
+--- sc/inc/filter.hxx
++++ sc/inc/filter.hxx
+@@ -104,7 +104,7 @@ FltError ScImportDif( SvStream&, ScDocument*, const ScAddress& rInsPos,
+ FltError ScImportRTF( SvStream&, const String& rBaseURL, ScDocument*, ScRange& rRange );
+ 
+ FltError ScImportHTML( SvStream&, const String& rBaseURL, ScDocument*, ScRange& rRange, double nOutputFactor = 1.0,
+-                       BOOL bCalcWidthHeight = TRUE, SvNumberFormatter* pFormatter = NULL );
++                       BOOL bCalcWidthHeight = TRUE, SvNumberFormatter* pFormatter = NULL, bool bConvertDate = true );
+ 
+ FltError ScImportQuattroPro( SfxMedium &rMedium, ScDocument *pDoc );
+ // ***********************************************************************
+diff --git sc/inc/htmlimp.hxx sc/inc/htmlimp.hxx
+index 0c47ae4..72ee8f7 100644
+--- sc/inc/htmlimp.hxx
++++ sc/inc/htmlimp.hxx
+@@ -45,7 +45,8 @@ public:
+ 						~ScHTMLImport();
+     const ScHTMLParser* GetParser() const { return (ScHTMLParser*)mpParser; }
+ 
+-	virtual void		WriteToDocument( BOOL bSizeColsRows = FALSE, double nOutputFactor = 1.0, SvNumberFormatter* pFormatter = NULL );
++	virtual void		WriteToDocument( BOOL bSizeColsRows = FALSE, double nOutputFactor = 1.0, 
++                                         SvNumberFormatter* pFormatter = NULL, bool bConvertDate = true );
+ 
+ 	static String		GetHTMLRangeNameList( ScDocument* pDoc, const String& rOrigName );
+ };
+diff --git sc/inc/scabstdlg.hxx sc/inc/scabstdlg.hxx
+index 7c207ae..00ac62f 100644
+--- sc/inc/scabstdlg.hxx
++++ sc/inc/scabstdlg.hxx
+@@ -303,6 +303,7 @@ class AbstractScLangChooserDlg : public VclAbstractDialog //add for ScLangChoose
+ {
+ public:
+     virtual LanguageType GetLanguageType() const = 0;
++    virtual bool IsDateConversionSet() const = 0;
+ };
+ 
+ //-------Scabstract fractory ---------------------------
+diff --git sc/inc/table.hxx sc/inc/table.hxx
+index d625bb6..31d7d4b 100644
+--- sc/inc/table.hxx
++++ sc/inc/table.hxx
+@@ -255,7 +255,8 @@ public:
+ 	void		PutCell( SCCOL nCol, SCROW nRow, ScBaseCell* pCell );
+ 	void		PutCell(SCCOL nCol, SCROW nRow, ULONG nFormatIndex, ScBaseCell* pCell);
+ 				//	TRUE = Zahlformat gesetzt
+-	BOOL		SetString( SCCOL nCol, SCROW nRow, SCTAB nTab, const String& rString, SvNumberFormatter* pFormatter = NULL );
++	BOOL		SetString( SCCOL nCol, SCROW nRow, SCTAB nTab, const String& rString, 
++                           SvNumberFormatter* pFormatter = NULL, bool bDetectNumberFormat = true );
+ 	void		SetValue( SCCOL nCol, SCROW nRow, const double& rVal );
+ 	void		SetNote( SCCOL nCol, SCROW nRow, const ScPostIt& rNote);
+ 	void 		SetError( SCCOL nCol, SCROW nRow, USHORT nError);
+diff --git sc/source/core/data/column3.cxx sc/source/core/data/column3.cxx
+index eeb5a2b..f904137 100644
+--- sc/source/core/data/column3.cxx
++++ sc/source/core/data/column3.cxx
+@@ -53,6 +53,13 @@
+ #include "markdata.hxx"
+ #include "detfunc.hxx"			// fuer Notizen bei DeleteRange
+ #include "postit.hxx"
++#include "rtl/math.hxx"
++
++#include <com/sun/star/i18n/LocaleDataItem.hpp>
++
++using ::com::sun::star::i18n::LocaleDataItem;
++using ::rtl::OUString;
++using ::rtl::OUStringBuffer;
+ 
+ // Err527 Workaround
+ extern const ScFormulaCell* pLastFormulaTreeTop;	// in cellform.cxx
+@@ -1257,10 +1264,82 @@ void ScColumn::StartListeningInArea( SCROW nRow1, SCROW nRow2 )
+ 	}
+ }
+ 
++/** 
++ * Check if a given string is a simple decimal number (e.g. 12.345).  We 
++ * don't do any elaborate parsing here; we only check for the simplest case 
++ * of decimal number format.
++ *
++ * @param rStr 
++ * @param dsep 
++ * @param gsep 
++ * @param rVal 
++ * 
++ * @return true if the string is a valid number, false otherwise.
++ */
++static bool lcl_parseSimpleNumber(const OUString& rStr, sal_Unicode dsep, sal_Unicode gsep, double& rVal)
++{
++    OUStringBuffer aBuf;
++    sal_Int32 n = rStr.getLength();
++    const sal_Unicode* p = rStr.getStr();
++    sal_Int32 nPosDSep = -1, nPosGSep = -1;
++    for (sal_Int32 i = 0; i < n; ++i)
++    {
++        sal_Unicode c = p[i];
++        if (sal_Unicode('0') <= c && c <= sal_Unicode('9'))
++        {
++            // this is a digit.
++            aBuf.append(c);
++        }
++        else if (c == dsep)
++        {
++            // this is a decimal separator.
++
++            if (nPosDSep >= 0)
++                // a second decimal separator -> not a valid number.
++                return false;
++            if (nPosGSep >= 0 && i - nPosGSep != 4)
++                // the number has a group separator and the decimal sep is not
++                // positioned correctly.
++                return false;
++
++            nPosDSep = i;
++            aBuf.append(c);
++        }
++        else if (c == gsep)
++        {
++            // this is a group (thousand) separator.
++            if (i == 0)
++                return false;
++
++            if (nPosGSep >= 0 && i - nPosGSep != 4)
++            {    
++                // this group separator is not positioned correctly relative
++                // to the last group separator.
++                return false;
++            }
++
++            nPosGSep = i;
++        }
++        else if (c == sal_Unicode('-') || c == sal_Unicode('+'))
++        {
++            // A sign must be the first character if it's given.
++            if (i == 0)
++                aBuf.append(c);
++            else
++                return false;
++        }
++        else
++            return false;
++    }
++
++    rVal = aBuf.makeStringAndClear().toDouble();
++    return true;
++}
+ 
+ //	TRUE = Zahlformat gesetzt
+-BOOL ScColumn::SetString( SCROW nRow, SCTAB nTabP, const String& rString,
+-						  ScAddress::Convention eConv, SvNumberFormatter* pFormatter )
++BOOL ScColumn::SetString( 
++    SCROW nRow, SCTAB nTabP, const String& rString, ScAddress::Convention eConv, 
++    SvNumberFormatter* pFormatter, bool bDetectNumberFormat )
+ {
+ 	BOOL bNumFmtSet = FALSE;
+ 	if (VALIDROW(nRow))
+@@ -1340,48 +1419,80 @@ BOOL ScColumn::SetString( SCROW nRow, SCTAB nTabP, const String& rString,
+ 					if ( !bIsText )
+ 						nIndex = nOldIndex = pFormatter->GetStandardIndex();
+ 				}
+-				if ( !bIsText &&
+-						pFormatter->IsNumberFormat(rString, nIndex, nVal) )
+-				{												// Zahl
+-					pNewCell = new ScValueCell( nVal );
+-					if ( nIndex != nOldIndex)
+-					{
+-                        // #i22345# New behavior: Apply the detected number format only if
+-                        // the old one was the default number, date, time or boolean format.
+-                        // Exception: If the new format is boolean, always apply it.
+ 
+-                        BOOL bOverwrite = FALSE;
+-                        const SvNumberformat* pOldFormat = pFormatter->GetEntry( nOldIndex );
+-                        if ( pOldFormat )
++                do
++                {
++                    if (bIsText)
++                        break;
++
++                    if (bDetectNumberFormat)
++                    {
++                        if (!pFormatter->IsNumberFormat(rString, nIndex, nVal))
++                            break;
++
++                        pNewCell = new ScValueCell( nVal );
++                        if ( nIndex != nOldIndex)
+                         {
+-                            short nOldType = pOldFormat->GetType() & ~NUMBERFORMAT_DEFINED;
+-                            if ( nOldType == NUMBERFORMAT_NUMBER || nOldType == NUMBERFORMAT_DATE ||
+-                                 nOldType == NUMBERFORMAT_TIME || nOldType == NUMBERFORMAT_LOGICAL )
++                            // #i22345# New behavior: Apply the detected number format only if
++                            // the old one was the default number, date, time or boolean format.
++                            // Exception: If the new format is boolean, always apply it.
++
++                            BOOL bOverwrite = FALSE;
++                            const SvNumberformat* pOldFormat = pFormatter->GetEntry( nOldIndex );
++                            if ( pOldFormat )
+                             {
+-                                if ( nOldIndex == pFormatter->GetStandardFormat(
+-                                                    nOldType, pOldFormat->GetLanguage() ) )
++                                short nOldType = pOldFormat->GetType() & ~NUMBERFORMAT_DEFINED;
++                                if ( nOldType == NUMBERFORMAT_NUMBER || nOldType == NUMBERFORMAT_DATE ||
++                                     nOldType == NUMBERFORMAT_TIME || nOldType == NUMBERFORMAT_LOGICAL )
+                                 {
+-                                    bOverwrite = TRUE;      // default of these types can be overwritten
++                                    if ( nOldIndex == pFormatter->GetStandardFormat(
++                                                        nOldType, pOldFormat->GetLanguage() ) )
++                                    {
++                                        bOverwrite = TRUE;      // default of these types can be overwritten
++                                    }
+                                 }
+                             }
+-                        }
+-                        if ( !bOverwrite && pFormatter->GetType( nIndex ) == NUMBERFORMAT_LOGICAL )
+-                        {
+-                            bOverwrite = TRUE;              // overwrite anything if boolean was detected
+-                        }
++                            if ( !bOverwrite && pFormatter->GetType( nIndex ) == NUMBERFORMAT_LOGICAL )
++                            {
++                                bOverwrite = TRUE;              // overwrite anything if boolean was detected
++                            }
+ 
+-                        if ( bOverwrite )
+-                        {
+-                            ApplyAttr( nRow, SfxUInt32Item( ATTR_VALUE_FORMAT,
+-                                (UINT32) nIndex) );
+-                            bNumFmtSet = TRUE;
++                            if ( bOverwrite )
++                            {
++                                ApplyAttr( nRow, SfxUInt32Item( ATTR_VALUE_FORMAT,
++                                    (UINT32) nIndex) );
++                                bNumFmtSet = TRUE;
++                            }
+                         }
+-					}
+-				}
+-				else											// Text
+-					pNewCell = new ScStringCell( rString );
+-			}
+-		}
++                    }
++                    else
++                    {
++                        // Only check if the string is a regular number.
++                        const LocaleDataWrapper* pLocale = pFormatter->GetLocaleData();
++                        if (!pLocale)
++                            break;
++                        
++                        LocaleDataItem aLocaleItem = pLocale->getLocaleItem();
++                        const OUString& rDecSep = aLocaleItem.decimalSeparator;
++                        const OUString& rGroupSep = aLocaleItem.thousandSeparator;
++                        if (rDecSep.getLength() != 1 || rGroupSep.getLength() != 1)
++                            break;
++
++                        sal_Unicode dsep = rDecSep.getStr()[0];
++                        sal_Unicode gsep = rGroupSep.getStr()[0];
++
++                        if (!lcl_parseSimpleNumber(rString, dsep, gsep, nVal))
++                            break;
++
++                        pNewCell = new ScValueCell(nVal);
++                    }
++                }
++                while (false);
++
++                if (!pNewCell)
++                    pNewCell = new ScStringCell(rString);
++            }
++        }
+ 
+ 		if ( bIsLoading && (!nCount || nRow > pItems[nCount-1].nRow) )
+ 		{	// Search einsparen und ohne Umweg ueber Insert, Listener aufbauen
+diff --git sc/source/core/data/document.cxx sc/source/core/data/document.cxx
+index 416936d..1aa242f 100644
+--- sc/source/core/data/document.cxx
++++ sc/source/core/data/document.cxx
+@@ -2229,10 +2229,11 @@ void ScDocument::PutCell( const ScAddress& rPos, ScBaseCell* pCell, BOOL bForceT
+ }
+ 
+ 
+-BOOL ScDocument::SetString( SCCOL nCol, SCROW nRow, SCTAB nTab, const String& rString, SvNumberFormatter* pFormatter )
++BOOL ScDocument::SetString( SCCOL nCol, SCROW nRow, SCTAB nTab, const String& rString, 
++                            SvNumberFormatter* pFormatter, bool bDetectNumberFormat )
+ {
+ 	if ( ValidTab(nTab) && pTab[nTab] )
+-		return pTab[nTab]->SetString( nCol, nRow, nTab, rString, pFormatter );
++		return pTab[nTab]->SetString( nCol, nRow, nTab, rString, pFormatter, bDetectNumberFormat );
+ 	else
+ 		return FALSE;
+ }
+diff --git sc/source/core/data/table2.cxx sc/source/core/data/table2.cxx
+index 1f278ee..8d33d50 100644
+--- sc/source/core/data/table2.cxx
++++ sc/source/core/data/table2.cxx
+@@ -838,10 +838,12 @@ void ScTable::PutCell( const ScAddress& rPos, ULONG nFormatIndex, ScBaseCell* pC
+ }
+ 
+ 
+-BOOL ScTable::SetString( SCCOL nCol, SCROW nRow, SCTAB nTabP, const String& rString, SvNumberFormatter* pFormatter )
++BOOL ScTable::SetString( SCCOL nCol, SCROW nRow, SCTAB nTabP, const String& rString, 
++                         SvNumberFormatter* pFormatter, bool bDetectNumberFormat )
+ {
+ 	if (ValidColRow(nCol,nRow))
+-        return aCol[nCol].SetString( nRow, nTabP, rString, pDocument->GetAddressConvention(), pFormatter );
++        return aCol[nCol].SetString( 
++            nRow, nTabP, rString, pDocument->GetAddressConvention(), pFormatter, bDetectNumberFormat );
+ 	else
+ 		return FALSE;
+ }
+diff --git sc/source/filter/html/htmlimp.cxx sc/source/filter/html/htmlimp.cxx
+index e42bb72..2d7e98b 100644
+--- sc/source/filter/html/htmlimp.cxx
++++ sc/source/filter/html/htmlimp.cxx
+@@ -62,13 +62,14 @@
+ //------------------------------------------------------------------------
+ 
+ FltError ScImportHTML( SvStream &rStream, const String& rBaseURL, ScDocument *pDoc,
+-		ScRange& rRange, double nOutputFactor, BOOL bCalcWidthHeight, SvNumberFormatter* pFormatter )
++		ScRange& rRange, double nOutputFactor, BOOL bCalcWidthHeight, SvNumberFormatter* pFormatter,
++        bool bConvertDate )
+ {
+     ScHTMLImport aImp( pDoc, rBaseURL, rRange, bCalcWidthHeight );
+     FltError nErr = (FltError) aImp.Read( rStream, rBaseURL );
+ 	ScRange aR = aImp.GetRange();
+ 	rRange.aEnd = aR.aEnd;
+-	aImp.WriteToDocument( TRUE, nOutputFactor, pFormatter );
++	aImp.WriteToDocument( TRUE, nOutputFactor, pFormatter, bConvertDate );
+ 	return nErr;
+ }
+ 
+@@ -132,9 +133,10 @@ void ScHTMLImport::InsertRangeName( ScDocument* pDoc, const String& rName, const
+ 		delete pRangeData;
+ }
+ 
+-void ScHTMLImport::WriteToDocument( BOOL bSizeColsRows, double nOutputFactor, SvNumberFormatter* pFormatter )
++void ScHTMLImport::WriteToDocument( 
++    BOOL bSizeColsRows, double nOutputFactor, SvNumberFormatter* pFormatter, bool bConvertDate )
+ {
+-	ScEEImport::WriteToDocument( bSizeColsRows, nOutputFactor, pFormatter );
++	ScEEImport::WriteToDocument( bSizeColsRows, nOutputFactor, pFormatter, bConvertDate );
+ 
+     const ScHTMLParser* pParser = GetParser();
+     const ScHTMLTable* pGlobTable = pParser->GetGlobalTable();
+diff --git sc/source/filter/rtf/eeimpars.cxx sc/source/filter/rtf/eeimpars.cxx
+index edfc6a7..517ad34 100644
+--- sc/source/filter/rtf/eeimpars.cxx
++++ sc/source/filter/rtf/eeimpars.cxx
+@@ -129,7 +129,7 @@ ULONG ScEEImport::Read( SvStream& rStream, const String& rBaseURL )
+ }
+ 
+ 
+-void ScEEImport::WriteToDocument( BOOL bSizeColsRows, double nOutputFactor, SvNumberFormatter* pFormatter )
++void ScEEImport::WriteToDocument( BOOL bSizeColsRows, double nOutputFactor, SvNumberFormatter* pFormatter, bool bConvertDate )
+ {
+     ScProgress* pProgress = new ScProgress( mpDoc->GetDocumentShell(),
+         ScGlobal::GetRscString( STR_LOAD_DOC ), mpParser->Count() );
+@@ -381,7 +381,7 @@ void ScEEImport::WriteToDocument( BOOL bSizeColsRows, double nOutputFactor, SvNu
+                     if (bNumbersEnglishUS && !bEnUsRecognized)
+                         mpDoc->PutCell( nCol, nRow, nTab, new ScStringCell( aStr));
+                     else
+-                        mpDoc->SetString( nCol, nRow, nTab, aStr, pFormatter );
++                        mpDoc->SetString( nCol, nRow, nTab, aStr, pFormatter, bConvertDate );
+ 				}
+ 			}
+ 			else
+diff --git sc/source/ui/attrdlg/scdlgfact.cxx sc/source/ui/attrdlg/scdlgfact.cxx
+index eee0395..8a200fd 100644
+--- sc/source/ui/attrdlg/scdlgfact.cxx
++++ sc/source/ui/attrdlg/scdlgfact.cxx
+@@ -591,6 +591,12 @@ LanguageType AbstractScLangChooserDlg_Impl::GetLanguageType() const
+ {
+     return pDlg->getLanguageType();
+ }
++
++bool AbstractScLangChooserDlg_Impl::IsDateConversionSet() const
++{
++    return pDlg->isDateConversionSet();
++}
++
+ //add for AbstractScLangChooserDlg_Impl end
+ 
+ // =========================Factories  for createdialog ===================
+diff --git sc/source/ui/attrdlg/scdlgfact.hxx sc/source/ui/attrdlg/scdlgfact.hxx
+index 66757f7..0d80085 100644
+--- sc/source/ui/attrdlg/scdlgfact.hxx
++++ sc/source/ui/attrdlg/scdlgfact.hxx
+@@ -354,6 +354,7 @@ class AbstractScLangChooserDlg_Impl : public AbstractScLangChooserDlg
+ {
+     DECL_ABSTDLG_BASE( AbstractScLangChooserDlg_Impl, ScLangChooserDlg)
+     virtual LanguageType GetLanguageType() const;
++    virtual bool IsDateConversionSet() const;
+ };
+ 
+ //add for ScAttrDlg , ScHFEditDlg, ScStyleDlg, ScSubTotalDlg, ScCharDlg, ScParagraphDlg, ScValidationDlg, ScSortDlg
+diff --git sc/source/ui/dbgui/langchooser.cxx sc/source/ui/dbgui/langchooser.cxx
+index 6441135..91c4a19 100644
+--- sc/source/ui/dbgui/langchooser.cxx
++++ sc/source/ui/dbgui/langchooser.cxx
+@@ -52,7 +52,9 @@ ScLangChooserDlg::ScLangChooserDlg(Window* pParent) :
+     maFlChooseLang(this, ScResId(FL_CHOOSE_LANG)),
+     maRbAutomatic(this, ScResId(RB_AUTOMATIC)), 
+     maRbCustom(this, ScResId(RB_CUSTOM)),
+-    maLbCustomLang(this, ScResId(LB_CUSTOM_LANG))
++    maLbCustomLang(this, ScResId(LB_CUSTOM_LANG)),
++    maFlOption(this, ScResId(FL_OPTION)),
++    maBtnConvertDate(this, ScResId(BTN_CONVERT_DATE))
+ {
+     init();
+ }
+@@ -74,6 +76,11 @@ LanguageType ScLangChooserDlg::getLanguageType() const
+     return maLbCustomLang.GetSelectLanguage();
+ }
+ 
++bool ScLangChooserDlg::isDateConversionSet() const
++{
++    return maBtnConvertDate.IsChecked();
++}
++
+ void ScLangChooserDlg::init()
+ {
+     Link aLink = LINK( this, ScLangChooserDlg, OKHdl );
+diff --git sc/source/ui/dbgui/langchooser.src sc/source/ui/dbgui/langchooser.src
+index ace6782..1e121de 100644
+--- sc/source/ui/dbgui/langchooser.src
++++ sc/source/ui/dbgui/langchooser.src
+@@ -33,7 +33,7 @@
+ ModalDialog RID_SCDLG_LANG_CHOOSER
+ {
+     Text [ en-US ] = "Select Language" ;
+-    Size = MAP_APPFONT ( 190 , 70 ) ;
++    Size = MAP_APPFONT ( 190 , 101 ) ;
+     Moveable = TRUE ;
+     Closeable = TRUE ;
+     OutputSize = TRUE ;
+@@ -91,5 +91,22 @@ ModalDialog RID_SCDLG_LANG_CHOOSER
+         DropDown = TRUE ;
+         Sort = TRUE ;
+     };
++
++    FixedLine FL_OPTION
++    {
++	Pos = MAP_APPFONT( 6, 70 );
++	Size = MAP_APPFONT( 125, 14 );
++
++	Text [ en-US ] = "Options" ;
++    };
++
++    CheckBox BTN_CONVERT_DATE
++    {
++    	Pos = MAP_APPFONT( 12, 86 );
++	Size = MAP_APPFONT( 125, 10 );
++	TabStop = TRUE ;
++
++	Text [ en-US ] = "Detect special numbers (such as dates)." ;
++    };
+ };
+ 
+diff --git sc/source/ui/docshell/docsh.cxx sc/source/ui/docshell/docsh.cxx
+index 9eaef84..fa7d232 100644
+--- sc/source/ui/docshell/docsh.cxx
++++ sc/source/ui/docshell/docsh.cxx
+@@ -136,6 +136,8 @@ using namespace com::sun::star;
+ using namespace com::sun::star::document::VbaEventId;
+ 
+ using namespace com::sun::star;
++using ::rtl::OUString;
++using ::rtl::OUStringBuffer;
+ 
+ // STATIC DATA -----------------------------------------------------------
+ 
+@@ -1128,6 +1130,34 @@ BOOL __EXPORT ScDocShell::LoadFrom( SfxMedium& rMedium )
+ 	return bRet;
+ }
+ 
++static void lcl_parseHtmlFilterOption(const OUString& rOption, LanguageType& rLang, bool& rDateConvert)
++{
++    OUStringBuffer aBuf;
++    OUString aTokens[2];
++    sal_Int32 n = rOption.getLength();
++    const sal_Unicode* p = rOption.getStr();
++    sal_Int32 nTokenId = 0;
++    for (sal_Int32 i = 0; i < n; ++i)
++    {
++        const sal_Unicode c = p[i];
++        if (c == sal_Unicode(' '))
++        {
++            if (aBuf.getLength())
++                aTokens[nTokenId++] = aBuf.makeStringAndClear();
++        }
++        else
++            aBuf.append(c);
++
++        if (nTokenId >= 2)
++            break;
++    }
++
++    if (aBuf.getLength())
++        aTokens[nTokenId] = aBuf.makeStringAndClear();
++
++    rLang = static_cast<LanguageType>(aTokens[0].toInt32());
++    rDateConvert = static_cast<bool>(aTokens[1].toInt32());
++}
+ 
+ BOOL __EXPORT ScDocShell::ConvertFrom( SfxMedium& rMedium )
+ {
+@@ -1501,13 +1531,14 @@ BOOL __EXPORT ScDocShell::ConvertFrom( SfxMedium& rMedium )
+ 				if (pInStream)
+ 				{
+                     LanguageType eLang = LANGUAGE_SYSTEM;
++                    bool bDateConvert = false;
+                     SfxItemSet*	 pSet = rMedium.GetItemSet();
+                     const SfxPoolItem* pItem;
+                     if ( pSet && SFX_ITEM_SET ==
+                          pSet->GetItemState( SID_FILE_FILTEROPTIONS, TRUE, &pItem ) )
+                     {
+                         String aFilterOption = (static_cast<const SfxStringItem*>(pItem))->GetValue();
+-                        eLang = static_cast<LanguageType>(aFilterOption.ToInt32());
++                        lcl_parseHtmlFilterOption(aFilterOption, eLang, bDateConvert);
+                     }
+ 
+ 					pInStream->Seek( 0 );
+@@ -1516,7 +1547,7 @@ BOOL __EXPORT ScDocShell::ConvertFrom( SfxMedium& rMedium )
+ 					CalcOutputFactor();
+                     SvNumberFormatter aNumFormatter(aDocument.GetServiceManager(), eLang);
+                     eError = ScImportHTML( *pInStream, rMedium.GetBaseURL(), &aDocument, aRange,
+-                                           GetOutputFactor(), !bWebQuery, &aNumFormatter );
++                                           GetOutputFactor(), !bWebQuery, &aNumFormatter, bDateConvert );
+ 					if (eError != eERR_OK)
+ 					{
+ 						if (!GetError())
+diff --git sc/source/ui/inc/langchooser.hrc sc/source/ui/inc/langchooser.hrc
+index fb0be37..eb981c1 100644
+--- sc/source/ui/inc/langchooser.hrc
++++ sc/source/ui/inc/langchooser.hrc
+@@ -38,4 +38,5 @@
+ #define RB_AUTOMATIC             5
+ #define RB_CUSTOM                6
+ #define LB_CUSTOM_LANG           7
+-
++#define FL_OPTION                8
++#define BTN_CONVERT_DATE         9
+diff --git sc/source/ui/inc/langchooser.hxx sc/source/ui/inc/langchooser.hxx
+index 7c63973..7106ab2 100644
+--- sc/source/ui/inc/langchooser.hxx
++++ sc/source/ui/inc/langchooser.hxx
+@@ -46,6 +46,7 @@ public:
+     virtual short Execute();
+ 
+     LanguageType getLanguageType() const;
++    bool isDateConversionSet() const;
+ 
+ private:
+     void init();
+@@ -62,7 +63,9 @@ private:
+ 
+     SvxLanguageBox  maLbCustomLang;
+ 
+-    String          maString;
++    FixedLine       maFlOption;
++
++    CheckBox        maBtnConvertDate;
+ 
+     DECL_LINK( OKHdl, OKButton* );
+ 
+diff --git sc/source/ui/unoobj/filtuno.cxx sc/source/ui/unoobj/filtuno.cxx
+index 99c1045..b119cda 100644
+--- sc/source/ui/unoobj/filtuno.cxx
++++ sc/source/ui/unoobj/filtuno.cxx
+@@ -56,6 +56,7 @@
+ #include <memory>
+ 
+ using namespace ::com::sun::star;
++using ::rtl::OUStringBuffer;
+ 
+ //------------------------------------------------------------------------
+ 
+@@ -193,7 +194,12 @@ sal_Int16 SAL_CALL ScFilterOptionsObj::execute() throw(uno::RuntimeException)
+         if (pDlg->Execute() == RET_OK)
+         {
+             LanguageType eLang = pDlg->GetLanguageType();
+-            aFilterOptions = String::CreateFromInt32(static_cast<sal_Int32>(eLang));
++            OUStringBuffer aBuf;
++
++            aBuf.append(String::CreateFromInt32(static_cast<sal_Int32>(eLang)));
++            aBuf.append(sal_Unicode(' '));
++            aBuf.append(pDlg->IsDateConversionSet() ? sal_Unicode('1') : sal_Unicode('0'));
++            aFilterOptions = aBuf.makeStringAndClear();
+             nRet = ui::dialogs::ExecutableDialogResults::OK;
+         }
+     }
