@@ -1,5 +1,5 @@
 diff --git sc/inc/document.hxx sc/inc/document.hxx
-index 1ac6e73..7a2d275 100644
+index 2b1c371..8d419ef 100644
 --- sc/inc/document.hxx
 +++ sc/inc/document.hxx
 @@ -47,6 +47,7 @@
@@ -128,7 +128,7 @@ index 1bd2d98..b0cd5d7 100644
  	void		ExtendHidden( SCCOL& rX1, SCROW& rY1, SCCOL& rX2, SCROW& rY2 );
  
 diff --git sc/source/core/data/document.cxx sc/source/core/data/document.cxx
-index 11af993..c2f8009 100644
+index 412272b..e882403 100644
 --- sc/source/core/data/document.cxx
 +++ sc/source/core/data/document.cxx
 @@ -54,6 +54,7 @@
@@ -253,10 +253,10 @@ index 11af993..c2f8009 100644
  SCROW ScDocument::GetLastFlaggedRow( SCTAB nTab ) const
  {
 diff --git sc/source/core/data/table2.cxx sc/source/core/data/table2.cxx
-index 2804e60..58ec94d 100644
+index 0bddc24..a1b421b 100644
 --- sc/source/core/data/table2.cxx
 +++ sc/source/core/data/table2.cxx
-@@ -2539,7 +2539,7 @@ SCROW ScTable::GetLastFlaggedRow() const
+@@ -2553,7 +2553,7 @@ SCROW ScTable::GetLastFlaggedRow() const
  	if ( !pRowFlags )
  		return 0;
  
@@ -265,7 +265,7 @@ index 2804e60..58ec94d 100644
  	return ValidRow(nLastFound) ? nLastFound : 0;
  }
  
-@@ -2551,7 +2551,7 @@ SCCOL ScTable::GetLastChangedCol() const
+@@ -2565,7 +2565,7 @@ SCCOL ScTable::GetLastChangedCol() const
  
  	SCCOL nLastFound = 0;
  	for (SCCOL nCol = 1; nCol <= MAXCOL; nCol++)
@@ -274,7 +274,7 @@ index 2804e60..58ec94d 100644
  			nLastFound = nCol;
  
  	return nLastFound;
-@@ -2563,7 +2563,7 @@ SCROW ScTable::GetLastChangedRow() const
+@@ -2577,7 +2577,7 @@ SCROW ScTable::GetLastChangedRow() const
  	if ( !pRowFlags )
  		return 0;
  
@@ -308,7 +308,7 @@ index 5fca4bc..95f68fc 100644
  					if (bSpaceLeft)
  					{
 diff --git sc/source/core/data/table5.cxx sc/source/core/data/table5.cxx
-index 328a2fd..531c116 100644
+index 513464d..36544b5 100644
 --- sc/source/core/data/table5.cxx
 +++ sc/source/core/data/table5.cxx
 @@ -53,8 +53,13 @@
@@ -436,7 +436,7 @@ index 328a2fd..531c116 100644
              }
  			bRowFound = TRUE;
  		}
-@@ -241,41 +243,192 @@ void ScTable::UpdatePageBreaks( const ScRange* pUserArea )
+@@ -241,43 +243,205 @@ void ScTable::UpdatePageBreaks( const ScRange* pUserArea )
  
  	if (nEndCol < MAXCOL)
  	{
@@ -459,22 +459,13 @@ index 328a2fd..531c116 100644
  
  void ScTable::RemoveManualBreaks()
  {
--	if (pColFlags)
--		for (SCCOL nCol = 0; nCol <= MAXCOL; nCol++)
--			pColFlags[nCol] &= ~CR_MANUALBREAK;
--
--	if (pRowFlags)
--        pRowFlags->AndValue( 0, MAXROW, sal::static_int_cast<BYTE>(~CR_MANUALBREAK) );
 +    maRowManualBreaks.clear();
 +    maColManualBreaks.clear();
- }
- 
- BOOL ScTable::HasManualBreaks() const
- {
--	if (pColFlags)
--		for (SCCOL nCol = 0; nCol <= MAXCOL; nCol++)
--			if ( pColFlags[nCol] & CR_MANUALBREAK )
--				return TRUE;
+     InvalidatePageBreaks();
++}
++
++BOOL ScTable::HasManualBreaks() const
++{
 +    return !maRowManualBreaks.empty() || !maColManualBreaks.empty();
 +}
 +
@@ -489,21 +480,31 @@ index 328a2fd..531c116 100644
 +        copy(maRowManualBreaks.begin(), maRowManualBreaks.end(), inserter(rBreaks, rBreaks.begin()));
 +    }
 +}
-+
+ 
+-	if (pColFlags)
+-		for (SCCOL nCol = 0; nCol <= MAXCOL; nCol++)
+-			pColFlags[nCol] &= ~CR_MANUALBREAK;
 +void ScTable::GetAllColBreaks(set<SCCOL>& rBreaks, bool bPage, bool bManual) const
 +{
 +    if (bPage)
 +        rBreaks = maColPageBreaks;
-+
+ 
+-	if (pRowFlags)
+-        pRowFlags->AndValue( 0, MAXROW, sal::static_int_cast<BYTE>(~CR_MANUALBREAK) );
 +    if (bManual)
 +    {
 +        using namespace std;
 +        copy(maColManualBreaks.begin(), maColManualBreaks.end(), inserter(rBreaks, rBreaks.begin()));
 +    }
-+}
-+
+ }
+ 
+-BOOL ScTable::HasManualBreaks() const
 +bool ScTable::HasRowPageBreak(SCROW nRow) const
-+{
+ {
+-	if (pColFlags)
+-		for (SCCOL nCol = 0; nCol <= MAXCOL; nCol++)
+-			if ( pColFlags[nCol] & CR_MANUALBREAK )
+-				return TRUE;
 +    if (!ValidRow(nRow))
 +        return false;
 +
@@ -550,12 +551,19 @@ index 328a2fd..531c116 100644
 +{
 +    if (!ValidRow(nRow))
 +        return;
-+
+ 
+-	if (pRowFlags)
+-        if (ValidRow( pRowFlags->GetLastAnyBitAccess( 0, CR_MANUALBREAK)))
+-            return TRUE;
 +    if (bPage)
 +        maRowPageBreaks.erase(nRow);
-+
+ 
+-	return FALSE;
 +    if (bManual)
++    {    
 +        maRowManualBreaks.erase(nRow);
++        InvalidatePageBreaks();
++    }
 +}
 +
 +void ScTable::RemoveColBreak(SCCOL nCol, bool bPage, bool bManual)
@@ -567,7 +575,10 @@ index 328a2fd..531c116 100644
 +        maColPageBreaks.erase(nCol);
 +
 +    if (bManual)
++    {    
 +        maColManualBreaks.erase(nCol);
++        InvalidatePageBreaks();
++    }
 +}
 +
 +void ScTable::SetRowBreak(SCROW nRow, bool bPage, bool bManual)
@@ -579,23 +590,25 @@ index 328a2fd..531c116 100644
 +        maRowPageBreaks.insert(nRow);
 +
 +    if (bManual)
++    {    
 +        maRowManualBreaks.insert(nRow);
++        InvalidatePageBreaks();
++    }
 +}
 +
 +void ScTable::SetColBreak(SCCOL nCol, bool bPage, bool bManual)
 +{
 +    if (!ValidCol(nCol))
 +        return;
- 
--	if (pRowFlags)
--        if (ValidRow( pRowFlags->GetLastAnyBitAccess( 0, CR_MANUALBREAK)))
--            return TRUE;
++
 +    if (bPage)
 +        maColPageBreaks.insert(nCol);
- 
--	return FALSE;
++
 +    if (bManual)
++    {    
 +        maColManualBreaks.insert(nCol);
++        InvalidatePageBreaks();
++    }
 +}
 +
 +Sequence<TablePageBreakData> ScTable::GetRowBreakData() const
@@ -854,10 +867,10 @@ index 7916833..42bc5b0 100644
  								    if (xTableColumns.is())
  								    {
 diff --git sc/source/ui/docshell/docfunc.cxx sc/source/ui/docshell/docfunc.cxx
-index 0d98486..1e0e96b 100644
+index 29b4b23..1477025 100644
 --- sc/source/ui/docshell/docfunc.cxx
 +++ sc/source/ui/docshell/docfunc.cxx
-@@ -3033,20 +3033,21 @@ BOOL ScDocFunc::InsertPageBreak( BOOL bColumn, const ScAddress& rPos,
+@@ -3033,20 +3033,20 @@ BOOL ScDocFunc::InsertPageBreak( BOOL bColumn, const ScAddress& rPos,
  	if (nPos == 0)
  		return FALSE;					// erste Spalte / Zeile
  
@@ -884,11 +897,10 @@ index 0d98486..1e0e96b 100644
 +        pDoc->SetColBreak(static_cast<SCCOL>(nPos), nTab, false, true);
 +    else
 +        pDoc->SetRowBreak(static_cast<SCROW>(nPos), nTab, false, true);
-+
- 	pDoc->UpdatePageBreaks( nTab );
  
- 	if (bColumn)
-@@ -3089,21 +3090,24 @@ BOOL ScDocFunc::RemovePageBreak( BOOL bColumn, const ScAddress& rPos,
+     pDoc->InvalidatePageBreaks(nTab);
+ 	pDoc->UpdatePageBreaks( nTab );
+@@ -3091,22 +3091,25 @@ BOOL ScDocFunc::RemovePageBreak( BOOL bColumn, const ScAddress& rPos,
  
      SCCOLROW nPos = bColumn ? static_cast<SCCOLROW>(rPos.Col()) :
          static_cast<SCCOLROW>(rPos.Row());
@@ -915,14 +927,15 @@ index 0d98486..1e0e96b 100644
 -		pDoc->SetColFlags( static_cast<SCCOL>(nPos), nTab, nFlags );
 -	else
 -		pDoc->SetRowFlags( static_cast<SCROW>(nPos), nTab, nFlags );
--	pDoc->UpdatePageBreaks( nTab );
 +    if (bColumn)
 +        pDoc->RemoveColBreak(static_cast<SCCOL>(nPos), nTab, false, true);
 +    else
 +        pDoc->RemoveRowBreak(static_cast<SCROW>(nPos), nTab, false, true);
  
+-    pDoc->InvalidatePageBreaks(nTab);
+ 	pDoc->UpdatePageBreaks( nTab );
+ 
  	if (bColumn)
- 	{
 diff --git sc/source/ui/unoobj/cellsuno.cxx sc/source/ui/unoobj/cellsuno.cxx
 index d4cfb42..53f0d52 100644
 --- sc/source/ui/unoobj/cellsuno.cxx
