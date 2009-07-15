@@ -1,71 +1,193 @@
 diff --git basic/source/classes/sbunoobj.cxx basic/source/classes/sbunoobj.cxx
-index 89bd7c8..1873d26 100644
+index 18e1cce..ccf20e6 100644
 --- basic/source/classes/sbunoobj.cxx
 +++ basic/source/classes/sbunoobj.cxx
-@@ -3218,6 +3218,44 @@ SbxVariable* getVBAConstant( const String& rName )
- 	return pConst;
- }
+@@ -3170,11 +3170,16 @@ getTypeDescriptorEnumeration( const ::rtl::OUString& sSearchRoot,
  
-+typedef std::vector< rtl::OUString > VBAConstantsVector;
-+bool isVBAConstant( const String& rName )
+ typedef std::hash_map< ::rtl::OUString, Any, ::rtl::OUStringHash, ::std::equal_to< ::rtl::OUString > > VBAConstantsHash;
+ 
+-SbxVariable* getVBAConstant( const String& rName )
++VBAConstantHelper&
++VBAConstantHelper::instance()
 +{
++    static VBAConstantHelper aHelper;
++    return aHelper;
++}
++
++void
++VBAConstantHelper::init()
+ {
+-    SbxVariable* pConst = NULL;
+-    static VBAConstantsHash aConstCache;
+-    static bool isInited = false;
+     if ( !isInited )
+     {
+         Sequence< TypeClass > types(1);
+@@ -3182,39 +3187,77 @@ SbxVariable* getVBAConstant( const String& rName )
+         Reference< XTypeDescriptionEnumeration > xEnum = getTypeDescriptorEnumeration( defaultNameSpace, types, TypeDescriptionSearchDepth_INFINITE  );
+ 
+         if ( !xEnum.is() )
+-            return NULL;
++            return; //NULL;
+ 
+         while ( xEnum->hasMoreElements() )
+         {
+             Reference< XConstantsTypeDescription > xConstants( xEnum->nextElement(), UNO_QUERY );
+             if ( xConstants.is() )
+             {
++                // store constant group name 
++                ::rtl::OUString sFullName = xConstants->getName();
++                sal_Int32 indexLastDot = sFullName.lastIndexOf('.');
++                ::rtl::OUString sLeafName( sFullName );
++                if ( indexLastDot > -1 )
++                    sLeafName = sFullName.copy( indexLastDot + 1);
++                aConstCache.push_back( sLeafName ); // assume constant group names are unique
+                 Sequence< Reference< XConstantTypeDescription > > aConsts = xConstants->getConstants();
+                 Reference< XConstantTypeDescription >* pSrc = aConsts.getArray();
+                 sal_Int32 nLen = aConsts.getLength();
+                 for ( sal_Int32 index =0;  index<nLen; ++pSrc, ++index )
+                 {
++                    // store constant member name
+                     Reference< XConstantTypeDescription >& rXConst =
+                         *pSrc;
+-                    ::rtl::OUString sFullName = rXConst->getName();
+-                    sal_Int32 indexLastDot = sFullName.lastIndexOf('.');
+-                    ::rtl::OUString sLeafName;
++                    sFullName = rXConst->getName();
++                    indexLastDot = sFullName.lastIndexOf('.');
++                    sLeafName = sFullName;
+                     if ( indexLastDot > -1 )
+                         sLeafName = sFullName.copy( indexLastDot + 1);
+-                    aConstCache[ sLeafName.toAsciiLowerCase() ] = rXConst->getConstantValue();
++                    aConstHash[ sLeafName.toAsciiLowerCase() ] = rXConst->getConstantValue();
+                 }
+             }
+         }
+         isInited = true;
+     }
++}
++
++bool
++VBAConstantHelper::isVBAConstantType( const String& rName )
++{
++    init();
 +    bool bConstant = false;
-+	static VBAConstantsVector aContantsCache;
-+	static bool isInited = false;
-+	if ( !isInited )
-+	{
-+		Sequence< TypeClass > types(1);
-+		types[ 0 ] = TypeClass_CONSTANTS;
-+		Reference< XTypeDescriptionEnumeration > xEnum = getTypeDescriptorEnumeration( defaultNameSpace, types, TypeDescriptionSearchDepth_INFINITE  );
++    ::rtl::OUString sKey( rName );
++    VBAConstantsVector::const_iterator it = aConstCache.begin();
 +
-+		if ( !xEnum.is() )
-+			return NULL;
-+
-+		while ( xEnum->hasMoreElements() )
-+		{
-+			Reference< XConstantsTypeDescription > xConstants( xEnum->nextElement(), UNO_QUERY );
-+			if ( xConstants.is() )
-+			{
-+                aContantsCache.push_back( xConstants->getName() );
-+			}
-+		}
-+		isInited = true;
-+	}
-+	::rtl::OUString sKey( defaultNameSpace );
-+    sKey = sKey.concat( rtl::OUString( sal_Unicode('.') ) ).concat( rName );
-+	VBAConstantsVector::const_iterator it = aContantsCache.begin();
-+    for( ; it != aContantsCache.end(); it++ )
-+	{
++    for( ; it != aConstCache.end(); it++ )
++    {
 +        if( sKey.equalsIgnoreAsciiCase( *it ) )
 +        {
 +            bConstant = true;
 +            break;
 +        }
-+	}
-+	return bConstant;
++    }
++    return bConstant; 
 +}
- // Funktion, um einen globalen Bezeichner im
- // UnoScope zu suchen und fuer Sbx zu wrappen
- SbxVariable* findUnoClass( const String& rName )
++
++SbxVariable* 
++VBAConstantHelper::getVBAConstant( const String& rName )
++{
++    SbxVariable* pConst = NULL;
++    init();
++
+     ::rtl::OUString sKey( rName );
+-    VBAConstantsHash::const_iterator it = aConstCache.find( sKey.toAsciiLowerCase() );
+-    if ( it != aConstCache.end() )
++
++    VBAConstantsHash::const_iterator it = aConstHash.find( sKey.toAsciiLowerCase() );
++
++    if ( it != aConstHash.end() )
+     {
+         pConst = new SbxVariable( SbxVARIANT );
+         pConst->SetName( rName );
+         unoToSbxValue( pConst, it->second );
+     }
++
+     return pConst;
+ }
+ 
 diff --git basic/source/comp/dim.cxx basic/source/comp/dim.cxx
-index b37ff96..ca7a28d 100644
+index d23175e..b8b6a54 100644
 --- basic/source/comp/dim.cxx
 +++ basic/source/comp/dim.cxx
-@@ -33,6 +33,8 @@
+@@ -32,6 +32,8 @@
+ #include "precompiled_basic.hxx"
  #include <basic/sbx.hxx>
  #include "sbcomp.hxx"
- 
-+bool isVBAConstant( const String& rName );
++#include "sbunoobj.hxx"
 +
+ 
  // Deklaration einer Variablen
  // Bei Fehlern wird bis zum Komma oder Newline geparst.
- // Returnwert: eine neue Instanz, die eingefuegt und dann geloescht wird.
 @@ -147,7 +149,7 @@ void SbiParser::TypeDecl( SbiSymDef& rDef, BOOL bAsNewAlreadyParsed )
- 							}
- 						}
- 					}
+                             }
+                         }
+                     }
 -					else if( rEnumArray->Find( aCompleteName, SbxCLASS_OBJECT ) )
-+					else if( rEnumArray->Find( aCompleteName, SbxCLASS_OBJECT ) || ( IsVBASupportOn() && isVBAConstant( aCompleteName ) ) )
- 					{
- 						eType = SbxLONG;
- 						break;
++					else if( rEnumArray->Find( aCompleteName, SbxCLASS_OBJECT ) || ( IsVBASupportOn() && VBAConstantHelper::instance().isVBAConstantType( aCompleteName ) ) )
+                     {
+                         eType = SbxLONG;
+                         break;
+diff --git basic/source/inc/sbunoobj.hxx basic/source/inc/sbunoobj.hxx
+index dc2cfef..6fff986 100644
+--- basic/source/inc/sbunoobj.hxx
++++ basic/source/inc/sbunoobj.hxx
+@@ -44,6 +44,7 @@
+ #include <com/sun/star/script/XInvocation.hpp>
+ #include <com/sun/star/reflection/XIdlClass.hpp>
+ #include <rtl/ustring.hxx>
++#include <hash_map>
+ 
+ class SbUnoObject: public SbxObject
+ {
+@@ -256,6 +257,26 @@ public:
+     virtual void Clear();
+ };
+ 
++typedef std::hash_map< ::rtl::OUString, ::com::sun::star::uno::Any, ::rtl::OUStringHash, ::std::equal_to< ::rtl::OUString > > VBAConstantsHash;
++
++typedef std::vector< rtl::OUString > VBAConstantsVector;
++
++class VBAConstantHelper
++{
++private:
++
++    VBAConstantsVector aConstCache;
++    VBAConstantsHash aConstHash;
++    bool isInited;
++    VBAConstantHelper():isInited( false ) {}
++    VBAConstantHelper(const VBAConstantHelper&);
++    void init();
++public:    
++    static VBAConstantHelper& instance(); 
++    SbxVariable* getVBAConstant( const String& rName );
++    bool isVBAConstantType( const String& rName );
++};
++
+ #endif
+ 
+ 
+diff --git basic/source/runtime/step2.cxx basic/source/runtime/step2.cxx
+index 89b02c0..571e8cd 100644
+--- basic/source/runtime/step2.cxx
++++ basic/source/runtime/step2.cxx
+@@ -54,8 +54,6 @@ using namespace com::sun::star::script;
+ 
+ using com::sun::star::uno::Reference;
+ 
+-SbxVariable* getVBAConstant( const String& rName );
+-
+ // Suchen eines Elements
+ // Die Bits im String-ID:
+ // 0x8000 - Argv ist belegt
+@@ -144,7 +142,7 @@ SbxVariable* SbiRuntime::FindElement
+                     if ( pElem )
+                         bSetName = false; // don't overwrite uno name
+                     else
+-                        pElem = getVBAConstant( aName );
++                        pElem = VBAConstantHelper::instance().getVBAConstant( aName );
+                 }
+                 // #72382 VORSICHT! Liefert jetzt wegen unbekannten
+                 // Modulen IMMER ein Ergebnis!
