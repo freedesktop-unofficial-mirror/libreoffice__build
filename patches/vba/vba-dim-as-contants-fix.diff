@@ -1,0 +1,71 @@
+diff --git basic/source/classes/sbunoobj.cxx basic/source/classes/sbunoobj.cxx
+index 89bd7c8..1873d26 100644
+--- basic/source/classes/sbunoobj.cxx
++++ basic/source/classes/sbunoobj.cxx
+@@ -3218,6 +3218,44 @@ SbxVariable* getVBAConstant( const String& rName )
+ 	return pConst;
+ }
+ 
++typedef std::vector< rtl::OUString > VBAConstantsVector;
++bool isVBAConstant( const String& rName )
++{
++    bool bConstant = false;
++	static VBAConstantsVector aContantsCache;
++	static bool isInited = false;
++	if ( !isInited )
++	{
++		Sequence< TypeClass > types(1);
++		types[ 0 ] = TypeClass_CONSTANTS;
++		Reference< XTypeDescriptionEnumeration > xEnum = getTypeDescriptorEnumeration( defaultNameSpace, types, TypeDescriptionSearchDepth_INFINITE  );
++
++		if ( !xEnum.is() )
++			return NULL;
++
++		while ( xEnum->hasMoreElements() )
++		{
++			Reference< XConstantsTypeDescription > xConstants( xEnum->nextElement(), UNO_QUERY );
++			if ( xConstants.is() )
++			{
++                aContantsCache.push_back( xConstants->getName() );
++			}
++		}
++		isInited = true;
++	}
++	::rtl::OUString sKey( defaultNameSpace );
++    sKey = sKey.concat( rtl::OUString( sal_Unicode('.') ) ).concat( rName );
++	VBAConstantsVector::const_iterator it = aContantsCache.begin();
++    for( ; it != aContantsCache.end(); it++ )
++	{
++        if( sKey.equalsIgnoreAsciiCase( *it ) )
++        {
++            bConstant = true;
++            break;
++        }
++	}
++	return bConstant;
++}
+ // Funktion, um einen globalen Bezeichner im
+ // UnoScope zu suchen und fuer Sbx zu wrappen
+ SbxVariable* findUnoClass( const String& rName )
+diff --git basic/source/comp/dim.cxx basic/source/comp/dim.cxx
+index b37ff96..ca7a28d 100644
+--- basic/source/comp/dim.cxx
++++ basic/source/comp/dim.cxx
+@@ -33,6 +33,8 @@
+ #include <basic/sbx.hxx>
+ #include "sbcomp.hxx"
+ 
++bool isVBAConstant( const String& rName );
++
+ // Deklaration einer Variablen
+ // Bei Fehlern wird bis zum Komma oder Newline geparst.
+ // Returnwert: eine neue Instanz, die eingefuegt und dann geloescht wird.
+@@ -147,7 +149,7 @@ void SbiParser::TypeDecl( SbiSymDef& rDef, BOOL bAsNewAlreadyParsed )
+ 							}
+ 						}
+ 					}
+-					else if( rEnumArray->Find( aCompleteName, SbxCLASS_OBJECT ) )
++					else if( rEnumArray->Find( aCompleteName, SbxCLASS_OBJECT ) || ( IsVBASupportOn() && isVBAConstant( aCompleteName ) ) )
+ 					{
+ 						eType = SbxLONG;
+ 						break;
