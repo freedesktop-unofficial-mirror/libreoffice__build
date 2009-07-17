@@ -1,0 +1,489 @@
+diff --git sc/source/filter/excel/excform.cxx sc/source/filter/excel/excform.cxx
+index e412270..e71c60e 100644
+--- sc/source/filter/excel/excform.cxx
++++ sc/source/filter/excel/excform.cxx
+@@ -136,7 +136,7 @@ void ImportExcel::Formula( const XclAddress& rXclPos,
+             bConvert = TRUE;
+ 
+         if( bConvert )
+-            eErr = pFormConv->Convert( pErgebnis, maStrm, nFormLen, true, FT_CellFormula);
++            eErr = pFormConv->Convert( pErgebnis, maStrm, nFormLen, ExcelToSc::ConvertParam(), FT_CellFormula);
+ 
+         ScFormulaCell*		pZelle = NULL;
+ 
+@@ -201,7 +201,8 @@ void ExcelToSc::GetDummy( const ScTokenArray*& pErgebnis )
+ // if bAllowArrays is false stream seeks to first byte after <nFormulaLen>
+ // otherwise it will seek to the first byte after the additional content (eg
+ // inline arrays) following <nFormulaLen>
+-ConvErr ExcelToSc::Convert( const ScTokenArray*& pErgebnis, XclImpStream& aIn, sal_Size nFormulaLen, bool bAllowArrays, const FORMULA_TYPE eFT )
++ConvErr ExcelToSc::Convert( const ScTokenArray*& pErgebnis, XclImpStream& aIn, sal_Size nFormulaLen, 
++                            const ConvertParam& rParam, const FORMULA_TYPE eFT )
+ {
+     RootData&       rR = GetOldRoot();
+     BYTE			nOp, nLen, nByte;
+@@ -472,7 +473,7 @@ ConvErr ExcelToSc::Convert( const ScTokenArray*& pErgebnis, XclImpStream& aIn, s
+             case 0x20: // Array Constant						[317 268]
+                 aIn >> nByte >> nUINT16;
+                 aIn.Ignore( (meBiff == EXC_BIFF2) ? 3 : 4 );
+-                if( bAllowArrays )
++                if( rParam.mbAllowArrays )
+                 {
+                     SCSIZE nC = nByte ? nByte : 256;
+                     SCSIZE nR = nUINT16;
+diff --git sc/source/filter/excel/excform8.cxx sc/source/filter/excel/excform8.cxx
+index 4edef1a..27ded11 100644
+--- sc/source/filter/excel/excform8.cxx
++++ sc/source/filter/excel/excform8.cxx
+@@ -97,7 +97,8 @@ bool ExcelToSc8::Read3DTabReference( UINT16 nIxti, SCTAB& rFirstTab, SCTAB& rLas
+ 
+ // if bAllowArrays is false stream seeks to first byte after <nFormulaLen>
+ // otherwise it will seek to the first byte past additional content after <nFormulaLen>
+-ConvErr ExcelToSc8::Convert( const ScTokenArray*& rpTokArray, XclImpStream& aIn, sal_Size nFormulaLen, bool bAllowArrays, const FORMULA_TYPE eFT )
++ConvErr ExcelToSc8::Convert( const ScTokenArray*& rpTokArray, XclImpStream& aIn, sal_Size nFormulaLen, 
++                             const ConvertParam& rParam, const FORMULA_TYPE eFT )
+ {
+     BYTE					nOp, nLen, nByte;
+     UINT16                  nUINT16;
+@@ -393,12 +394,9 @@ ConvErr ExcelToSc8::Convert( const ScTokenArray*& rpTokArray, XclImpStream& aIn,
+             case 0x20: // Array Constant						[317 268]
+                 aIn >> nByte >> nUINT16;
+                 aIn.Ignore( 4 );
+-                if( bAllowArrays )
++                if (rParam.mbAllowArrays)
+                 {
+-                    SCSIZE nC = nByte + 1;
+-                    SCSIZE nR = nUINT16 + 1;
+-
+-                    aStack << aPool.StoreMatrix( nC, nR );
++                    aStack << aPool.StoreMatrix(rParam.mnArrayColSize, rParam.mnArrayRowSize);
+                     aExtensions.push_back( EXTENSION_ARRAY );
+                 }
+                 else
+diff --git sc/source/filter/excel/frmbase.cxx sc/source/filter/excel/frmbase.cxx
+index 42f9037..a808a96 100644
+--- sc/source/filter/excel/frmbase.cxx
++++ sc/source/filter/excel/frmbase.cxx
+@@ -258,6 +258,12 @@ void ExcelConverterBase::Reset()
+     aEingPos.Set( 0, 0, 0 );
+ }
+ 
++ExcelConverterBase::ConvertParam::ConvertParam() :
++    mbAllowArrays(true),
++    mnArrayColSize(0),
++    mnArrayRowSize(0)
++{
++}
+ 
+ 
+ 
+diff --git sc/source/filter/excel/impop.cxx sc/source/filter/excel/impop.cxx
+index b936e00..c8f397a 100644
+--- sc/source/filter/excel/impop.cxx
++++ sc/source/filter/excel/impop.cxx
+@@ -498,7 +498,9 @@ void ImportExcel::Array25( void )
+ 
+         pFormConv->Reset( ScAddress( static_cast<SCCOL>(nFirstCol),
+                     static_cast<SCROW>(nFirstRow), GetCurrScTab() ) );
+-        pFormConv->Convert( pErgebnis, maStrm, nFormLen, true, FT_CellFormula);
++        ExcelConverterBase::ConvertParam aParam;
++        aParam.mbAllowArrays = true;
++        pFormConv->Convert( pErgebnis, maStrm, nFormLen, aParam, FT_CellFormula);
+ 
+         DBG_ASSERT( pErgebnis, "*ImportExcel::Array25(): ScTokenArray ist NULL!" );
+ 
+@@ -797,7 +799,9 @@ void ImportExcel::Shrfmla( void )
+     const ScTokenArray*	pErgebnis;
+ 
+     pFormConv->Reset();
+-    pFormConv->Convert( pErgebnis, maStrm, nLenExpr, true, FT_SharedFormula );
++    ExcelConverterBase::ConvertParam aParam;
++    aParam.mbAllowArrays = true;
++    pFormConv->Convert( pErgebnis, maStrm, nLenExpr, aParam, FT_SharedFormula );
+ 
+ 
+     DBG_ASSERT( pErgebnis, "+ImportExcel::Shrfmla(): ScTokenArray ist NULL!" );
+@@ -969,10 +973,14 @@ void ImportExcel::Array34( void )
+     {
+         // jetzt steht Lesemarke auf Formel, Laenge in nFormLen
+         const ScTokenArray*	pErgebnis;
++        ExcelConverterBase::ConvertParam aParam;
++        aParam.mbAllowArrays = true;
++        aParam.mnArrayColSize = nLastCol - nFirstCol + 1;
++        aParam.mnArrayRowSize = nLastRow - nFirstRow + 1;
+ 
+         pFormConv->Reset( ScAddress( static_cast<SCCOL>(nFirstCol),
+                     static_cast<SCROW>(nFirstRow), GetCurrScTab() ) );
+-        pFormConv->Convert( pErgebnis, maStrm, nFormLen, true, FT_CellFormula);
++        pFormConv->Convert( pErgebnis, maStrm, nFormLen, aParam, FT_CellFormula);
+ 
+         DBG_ASSERT( pErgebnis, "+ImportExcel::Array34(): ScTokenArray ist NULL!" );
+ 
+diff --git sc/source/filter/excel/xicontent.cxx sc/source/filter/excel/xicontent.cxx
+index 3aa1cc0..cfe65b4 100644
+--- sc/source/filter/excel/xicontent.cxx
++++ sc/source/filter/excel/xicontent.cxx
+@@ -616,12 +616,15 @@ void XclImpCondFormat::ReadCF( XclImpStream& rStrm )
+     const ScAddress& rPos = maRanges.GetObject( 0 )->aStart;    // assured above that maRanges is not empty
+     ExcelToSc& rFmlaConv = GetOldFmlaConverter();
+ 
++    ExcelConverterBase::ConvertParam aParam;
++    aParam.mbAllowArrays = false;
++
+     ::std::auto_ptr< ScTokenArray > xTokArr1;
+     if( nFmlaSize1 > 0 )
+     {
+         const ScTokenArray* pTokArr = 0;
+         rFmlaConv.Reset( rPos );
+-        rFmlaConv.Convert( pTokArr, rStrm, nFmlaSize1, false, FT_RangeName );
++        rFmlaConv.Convert( pTokArr, rStrm, nFmlaSize1, aParam, FT_RangeName );
+         // formula converter owns pTokArr -> create a copy of the token array
+         if( pTokArr )
+             xTokArr1.reset( pTokArr->Clone() );
+@@ -632,7 +635,7 @@ void XclImpCondFormat::ReadCF( XclImpStream& rStrm )
+     {
+         const ScTokenArray* pTokArr = 0;
+         rFmlaConv.Reset( rPos );
+-        rFmlaConv.Convert( pTokArr, rStrm, nFmlaSize2, false, FT_RangeName );
++        rFmlaConv.Convert( pTokArr, rStrm, nFmlaSize2, aParam, FT_RangeName );
+         // formula converter owns pTokArr -> create a copy of the token array
+         if( pTokArr )
+             pTokArr2.reset( pTokArr->Clone() );
+@@ -740,6 +743,9 @@ void XclImpValidation::ReadDV( XclImpStream& rStrm )
+     String aErrorMessage(  rStrm.ReadUniString() );
+     rStrm.SetNulSubstChar();    // back to default
+ 
++    ExcelConverterBase::ConvertParam aParam;
++    aParam.mbAllowArrays = false;
++
+     // formula(s)
+     if( rStrm.GetRecLeft() > 8 )
+     {
+@@ -755,7 +761,7 @@ void XclImpValidation::ReadDV( XclImpStream& rStrm )
+         {
+             const ScTokenArray* pTokArr = 0;
+             rFmlaConv.Reset();
+-            rFmlaConv.Convert( pTokArr, rStrm, nLen, false, FT_RangeName );
++            rFmlaConv.Convert( pTokArr, rStrm, nLen, aParam, FT_RangeName );
+             // formula converter owns pTokArr -> create a copy of the token array
+             if( pTokArr )
+                 xTokArr1.reset( pTokArr->Clone() );
+@@ -770,7 +776,7 @@ void XclImpValidation::ReadDV( XclImpStream& rStrm )
+         {
+             const ScTokenArray* pTokArr = 0;
+             rFmlaConv.Reset();
+-            rFmlaConv.Convert( pTokArr, rStrm, nLen, false, FT_RangeName );
++            rFmlaConv.Convert( pTokArr, rStrm, nLen, aParam, FT_RangeName );
+             // formula converter owns pTokArr -> create a copy of the token array
+             if( pTokArr )
+                 xTokArr2.reset( pTokArr->Clone() );
+diff --git sc/source/filter/excel/xiformula.cxx sc/source/filter/excel/xiformula.cxx
+index 240358e..41ace53 100644
+--- sc/source/filter/excel/xiformula.cxx
++++ sc/source/filter/excel/xiformula.cxx
+@@ -97,7 +97,9 @@ const ScTokenArray* XclImpFmlaCompImpl::CreateFormula(
+     aFmlaStrm.StartNextRecord();
+     const ScTokenArray* pArray = NULL;
+     GetOldFmlaConverter().Reset();
+-    GetOldFmlaConverter().Convert(pArray, aFmlaStrm, aFmlaStrm.GetRecSize(), true);
++    ExcelToSc::ConvertParam aParam;
++    aParam.mbAllowArrays = true;
++    GetOldFmlaConverter().Convert(pArray, aFmlaStrm, aFmlaStrm.GetRecSize(), aParam);
+     return pArray;
+ }
+ 
+diff --git sc/source/filter/excel/xiname.cxx sc/source/filter/excel/xiname.cxx
+index 72f4701..0ad70d5 100644
+--- sc/source/filter/excel/xiname.cxx
++++ sc/source/filter/excel/xiname.cxx
+@@ -180,7 +180,9 @@ XclImpName::XclImpName( XclImpStream& rStrm, sal_uInt16 nXclNameIdx ) :
+         // --- name formula ---
+         // JEG : double check this.  It is clearly false for normal names
+         //  but some of the builtins (sheettitle?) might be able to handle arrays
+-        rFmlaConv.Convert( pTokArr, rStrm, nFmlaSize, false, FT_RangeName );
++        ExcelConverterBase::ConvertParam aParam;
++        aParam.mbAllowArrays = false;
++        rFmlaConv.Convert( pTokArr, rStrm, nFmlaSize, aParam, FT_RangeName );
+ 
+         // --- auto or advanced filter ---
+         if( (GetBiff() == EXC_BIFF8) && pTokArr && bBuiltIn )
+@@ -208,7 +210,9 @@ XclImpName::XclImpName( XclImpStream& rStrm, sal_uInt16 nXclNameIdx ) :
+     else if( nFmlaSize > 0 )
+     {
+         // regular defined name
+-        rFmlaConv.Convert( pTokArr, rStrm, nFmlaSize, true, FT_RangeName );
++        ExcelConverterBase::ConvertParam aParam;
++        aParam.mbAllowArrays = true;
++        rFmlaConv.Convert( pTokArr, rStrm, nFmlaSize, aParam, FT_RangeName );
+     }
+ 
+     // 4) *** create a defined name in the Calc document *** ------------------
+diff --git sc/source/filter/inc/excform.hxx sc/source/filter/inc/excform.hxx
+index e80d67c..790174b 100644
+--- sc/source/filter/inc/excform.hxx
++++ sc/source/filter/inc/excform.hxx
+@@ -62,7 +62,8 @@ public:
+                         ExcelToSc( const XclImpRoot& rRoot );
+     virtual				~ExcelToSc();
+     virtual ConvErr     Convert( const ScTokenArray*&, XclImpStream& rStrm, sal_Size nFormulaLen,
+-                                 bool bAllowArrays, const FORMULA_TYPE eFT = FT_CellFormula );
++                                 const ConvertParam& rParam,
++                                 const FORMULA_TYPE eFT = FT_CellFormula );
+ 
+     virtual ConvErr     Convert( _ScRangeListTabs&, XclImpStream& rStrm, sal_Size nFormulaLen, SCsTAB nTab, const FORMULA_TYPE eFT = FT_CellFormula );
+ 
+@@ -138,7 +139,8 @@ public:
+                         ExcelToSc8( const XclImpRoot& rRoot );
+     virtual				~ExcelToSc8();
+ 
+-    virtual ConvErr     Convert( const ScTokenArray*& rpTokArray, XclImpStream& rStrm, sal_Size nFormulaLen, bool bAllowArrays, const FORMULA_TYPE eFT = FT_CellFormula );
++    virtual ConvErr     Convert( const ScTokenArray*& rpTokArray, XclImpStream& rStrm, sal_Size nFormulaLen, 
++                                 const ConvertParam& rParam, const FORMULA_TYPE eFT = FT_CellFormula );
+ 
+     virtual ConvErr     Convert( _ScRangeListTabs&, XclImpStream& rStrm, sal_Size nFormulaLen, SCsTAB nTab, const FORMULA_TYPE eFT = FT_CellFormula );
+ 
+diff --git sc/source/filter/inc/formel.hxx sc/source/filter/inc/formel.hxx
+index 5d3f196..58aa2f4 100644
+--- sc/source/filter/inc/formel.hxx
++++ sc/source/filter/inc/formel.hxx
+@@ -214,8 +214,17 @@ public:
+     void	 			Reset();
+     void                Reset( const ScAddress& rEingPos );
+ 
++    struct ConvertParam
++    {
++        bool    mbAllowArrays;
++        SCSIZE  mnArrayColSize;
++        SCSIZE  mnArrayRowSize;
++
++        ConvertParam();
++    };
++
+     virtual ConvErr     Convert( const ScTokenArray*& rpErg, XclImpStream& rStrm, sal_Size nFormulaLen,
+-                                 bool bAllowArrays, const FORMULA_TYPE eFT = FT_CellFormula ) = 0;
++                                 const ConvertParam& rParam, const FORMULA_TYPE eFT = FT_CellFormula ) = 0;
+     virtual ConvErr     Convert( _ScRangeListTabs&, XclImpStream& rStrm, sal_Size nFormulaLen, SCsTAB nTab,
+                                     const FORMULA_TYPE eFT = FT_CellFormula ) = 0;
+ };
+diff --git sc/source/filter/xcl97/XclImpChangeTrack.cxx sc/source/filter/xcl97/XclImpChangeTrack.cxx
+index 0b6b3e3..c20c8ac 100644
+--- sc/source/filter/xcl97/XclImpChangeTrack.cxx
++++ sc/source/filter/xcl97/XclImpChangeTrack.cxx
+@@ -210,7 +210,9 @@ void XclImpChangeTrack::ReadFormula( ScTokenArray*& rpTokenArray, const ScAddres
+     // read the formula, 3D tab refs from extended data
+     const ScTokenArray* pArray = NULL;
+     aFmlConv.Reset( rPosition );
+-    BOOL bOK = (aFmlConv.Convert( pArray, aFmlaStrm, nFmlSize, false, FT_CellFormula) == ConvOK);	// JEG : Check This
++    ExcelConverterBase::ConvertParam aParam;
++    aParam.mbAllowArrays = false;
++    BOOL bOK = (aFmlConv.Convert( pArray, aFmlaStrm, nFmlSize, aParam, FT_CellFormula) == ConvOK);	// JEG : Check This
+     rpTokenArray = (bOK && pArray) ? new ScTokenArray( *pArray ) : NULL;
+     pStrm->Ignore( 1 );
+ }
+diff --git sc/source/filter/xlsx/xlsx-excform.cxx sc/source/filter/xlsx/xlsx-excform.cxx
+index b6cf22c..9b6fcc5 100644
+--- sc/source/filter/xlsx/xlsx-excform.cxx
++++ sc/source/filter/xlsx/xlsx-excform.cxx
+@@ -139,7 +139,11 @@ void ImportExcel::Formula( const XclAddress& rXclPos,
+ 			bConvert = TRUE;
+ 
+ 		if( bConvert )
+-            eErr = pFormConv->Convert( pErgebnis, maStrm, nFormLen, true, FT_CellFormula);
++        {
++            ExcelConverterBase::ConvertParam aParam;
++            aParam.mbAllowArrays = true;    
++            eErr = pFormConv->Convert( pErgebnis, maStrm, nFormLen, aParam, FT_CellFormula);
++        }
+ 
+ 		ScFormulaCell*		pZelle = NULL;
+ 
+@@ -204,7 +208,8 @@ void ExcelToSc::GetDummy( const ScTokenArray*& pErgebnis )
+ // if bAllowArrays is false stream seeks to first byte after <nFormulaLen>
+ // otherwise it will seek to the first byte after the additional content (eg
+ // inline arrays) following <nFormulaLen>
+-ConvErr ExcelToSc::Convert( const ScTokenArray*& pErgebnis, XclImpStream& aIn, sal_Size nFormulaLen, bool bAllowArrays, const FORMULA_TYPE eFT )
++ConvErr ExcelToSc::Convert( const ScTokenArray*& pErgebnis, XclImpStream& aIn, sal_Size nFormulaLen, 
++                            const ConvertParam& rParam, const FORMULA_TYPE eFT )
+ {
+     RootData&       rR = GetOldRoot();
+ 	BYTE			nOp, nLen, nByte;
+@@ -475,7 +480,7 @@ ConvErr ExcelToSc::Convert( const ScTokenArray*& pErgebnis, XclImpStream& aIn, s
+ 			case 0x20: // Array Constant						[317 268]
+                 aIn >> nByte >> nUINT16;
+                 aIn.Ignore( (meBiff == EXC_BIFF2) ? 3 : 4 );
+-                if( bAllowArrays )
++                if( rParam.mbAllowArrays )
+                 {
+                     SCSIZE nC = nByte ? nByte : 256;
+                     SCSIZE nR = nUINT16;
+diff --git sc/source/filter/xlsx/xlsx-excform8.cxx sc/source/filter/xlsx/xlsx-excform8.cxx
+index 24f50b1..8c38417 100644
+--- sc/source/filter/xlsx/xlsx-excform8.cxx
++++ sc/source/filter/xlsx/xlsx-excform8.cxx
+@@ -100,7 +100,8 @@ bool ExcelToSc8::Read3DTabReference( UINT16 nIxti, SCTAB& rFirstTab, SCTAB& rLas
+ 
+ // if bAllowArrays is false stream seeks to first byte after <nFormulaLen>
+ // otherwise it will seek to the first byte past additional content after <nFormulaLen>
+-ConvErr ExcelToSc8::Convert( const ScTokenArray*& rpTokArray, XclImpStream& aIn, sal_Size nFormulaLen, bool bAllowArrays, const FORMULA_TYPE eFT )
++ConvErr ExcelToSc8::Convert( const ScTokenArray*& rpTokArray, XclImpStream& aIn, sal_Size nFormulaLen, 
++                             const ConvertParam& rParam, const FORMULA_TYPE eFT )
+ {
+ 	BYTE					nOp, nLen, nByte;
+     UINT16                  nUINT16;
+@@ -396,7 +397,7 @@ ConvErr ExcelToSc8::Convert( const ScTokenArray*& rpTokArray, XclImpStream& aIn,
+ 			case 0x20: // Array Constant						[317 268]
+                 aIn >> nByte >> nUINT16;
+                 aIn.Ignore( 4 );
+-                if( bAllowArrays )
++                if( rParam.mbAllowArrays )
+                 {
+                     SCSIZE nC = nByte + 1;
+                     SCSIZE nR = nUINT16 + 1;
+diff --git sc/source/filter/xlsx/xlsx-frmbase.cxx sc/source/filter/xlsx/xlsx-frmbase.cxx
+index aef072f..5ac5faa 100644
+--- sc/source/filter/xlsx/xlsx-frmbase.cxx
++++ sc/source/filter/xlsx/xlsx-frmbase.cxx
+@@ -210,7 +210,12 @@ const ScRange* _ScRangeListTabs::Next( void )
+ 		return NULL;
+ }
+ 
+-
++ExcelConverterBase::ConvertParam::ConvertParam() :
++    mbAllowArrays(true),
++    mnArrayColSize(0),
++    mnArrayRowSize(0)
++{
++}
+ 
+ 
+ ConverterBase::ConverterBase( UINT16 nNewBuffer ) :
+diff --git sc/source/filter/xlsx/xlsx-impop.cxx sc/source/filter/xlsx/xlsx-impop.cxx
+index 35fb4fc..f466ef7 100644
+--- sc/source/filter/xlsx/xlsx-impop.cxx
++++ sc/source/filter/xlsx/xlsx-impop.cxx
+@@ -501,7 +501,8 @@ void ImportExcel::Array25( void )
+ 
+         pFormConv->Reset( ScAddress( static_cast<SCCOL>(nFirstCol),
+                     static_cast<SCROW>(nFirstRow), GetCurrScTab() ) );
+-        pFormConv->Convert( pErgebnis, maStrm, nFormLen, true, FT_CellFormula);
++        ExcelConverterBase::ConvertParam aParam;
++        pFormConv->Convert( pErgebnis, maStrm, nFormLen, aParam, FT_CellFormula);
+ 
+ 		DBG_ASSERT( pErgebnis, "*ImportExcel::Array25(): ScTokenArray ist NULL!" );
+ 
+@@ -800,7 +801,8 @@ void ImportExcel::Shrfmla( void )
+ 	const ScTokenArray*	pErgebnis;
+ 
+ 	pFormConv->Reset();
+-    pFormConv->Convert( pErgebnis, maStrm, nLenExpr, true, FT_SharedFormula );
++    ExcelConverterBase::ConvertParam aParam;
++    pFormConv->Convert( pErgebnis, maStrm, nLenExpr, aParam, FT_SharedFormula );
+ 
+ 
+ 	DBG_ASSERT( pErgebnis, "+ImportExcel::Shrfmla(): ScTokenArray ist NULL!" );
+@@ -975,7 +977,8 @@ void ImportExcel::Array34( void )
+ 
+         pFormConv->Reset( ScAddress( static_cast<SCCOL>(nFirstCol),
+                     static_cast<SCROW>(nFirstRow), GetCurrScTab() ) );
+-        pFormConv->Convert( pErgebnis, maStrm, nFormLen, true, FT_CellFormula);
++        ExcelConverterBase::ConvertParam aParam;
++        pFormConv->Convert( pErgebnis, maStrm, nFormLen, aParam, FT_CellFormula);
+ 
+ 		DBG_ASSERT( pErgebnis, "+ImportExcel::Array34(): ScTokenArray ist NULL!" );
+ 
+diff --git sc/source/filter/xlsx/xlsx-xicontent.cxx sc/source/filter/xlsx/xlsx-xicontent.cxx
+index a6f1dad..9dd8ebf 100644
+--- sc/source/filter/xlsx/xlsx-xicontent.cxx
++++ sc/source/filter/xlsx/xlsx-xicontent.cxx
+@@ -599,13 +599,15 @@ void XclImpCondFormat::ReadCF( XclImpStream& rStrm )
+ 
+     const ScAddress& rPos = maRanges.GetObject( 0 )->aStart;    // assured above that maRanges is not empty
+     ExcelToSc& rFmlaConv = GetOldFmlaConverter();
++    ExcelConverterBase::ConvertParam aParam;
++    aParam.mbAllowArrays = false;
+ 
+     ::std::auto_ptr< ScTokenArray > xTokArr1;
+     if( nFmlaSize1 > 0 )
+     {
+         const ScTokenArray* pTokArr = 0;
+         rFmlaConv.Reset( rPos );
+-        rFmlaConv.Convert( pTokArr, rStrm, nFmlaSize1, false, FT_RangeName );
++        rFmlaConv.Convert( pTokArr, rStrm, nFmlaSize1, aParam, FT_RangeName );
+         // formula converter owns pTokArr -> create a copy of the token array
+         if( pTokArr )
+             xTokArr1.reset( pTokArr->Clone() );
+@@ -616,7 +618,7 @@ void XclImpCondFormat::ReadCF( XclImpStream& rStrm )
+     {
+         const ScTokenArray* pTokArr = 0;
+         rFmlaConv.Reset( rPos );
+-        rFmlaConv.Convert( pTokArr, rStrm, nFmlaSize2, false, FT_RangeName );
++        rFmlaConv.Convert( pTokArr, rStrm, nFmlaSize2, aParam, FT_RangeName );
+         // formula converter owns pTokArr -> create a copy of the token array
+         if( pTokArr )
+             pTokArr2.reset( pTokArr->Clone() );
+@@ -709,6 +711,8 @@ void XclImpValidation::ReadDV( XclImpStream& rStrm )
+     ScDocument& rDoc = rRoot.GetDoc();
+     SCTAB nScTab = rRoot.GetCurrScTab();
+     ExcelToSc& rFmlaConv = rRoot.GetOldFmlaConverter();
++    ExcelConverterBase::ConvertParam aParam;
++    aParam.mbAllowArrays = false;
+ 
+     // flags
+     sal_uInt32 nFlags;
+@@ -739,7 +743,7 @@ void XclImpValidation::ReadDV( XclImpStream& rStrm )
+         {
+             const ScTokenArray* pTokArr = 0;
+             rFmlaConv.Reset();
+-            rFmlaConv.Convert( pTokArr, rStrm, nLen, false, FT_RangeName );
++            rFmlaConv.Convert( pTokArr, rStrm, nLen, aParam, FT_RangeName );
+             // formula converter owns pTokArr -> create a copy of the token array
+             if( pTokArr )
+                 xTokArr1.reset( pTokArr->Clone() );
+@@ -754,7 +758,7 @@ void XclImpValidation::ReadDV( XclImpStream& rStrm )
+         {
+             const ScTokenArray* pTokArr = 0;
+             rFmlaConv.Reset();
+-            rFmlaConv.Convert( pTokArr, rStrm, nLen, false, FT_RangeName );
++            rFmlaConv.Convert( pTokArr, rStrm, nLen, aParam, FT_RangeName );
+             // formula converter owns pTokArr -> create a copy of the token array
+             if( pTokArr )
+                 xTokArr2.reset( pTokArr->Clone() );
+diff --git sc/source/filter/xlsx/xlsx-xiformula.cxx sc/source/filter/xlsx/xlsx-xiformula.cxx
+index 5ae34f1..66d7619 100644
+--- sc/source/filter/xlsx/xlsx-xiformula.cxx
++++ sc/source/filter/xlsx/xlsx-xiformula.cxx
+@@ -99,7 +99,8 @@ const ScTokenArray* XclImpFmlaCompImpl::CreateFormula(
+     aFmlaStrm.StartNextRecord();
+     const ScTokenArray* pArray = NULL;
+     GetOldFmlaConverter().Reset();
+-    GetOldFmlaConverter().Convert(pArray, aFmlaStrm, aFmlaStrm.GetRecSize(), true);
++    ExcelConverterBase::ConvertParam aParam;
++    GetOldFmlaConverter().Convert(pArray, aFmlaStrm, aFmlaStrm.GetRecSize(), aParam);
+     return pArray;
+ }
+ 
+diff --git sc/source/filter/xlsx/xlsx-xiname.cxx sc/source/filter/xlsx/xlsx-xiname.cxx
+index 84e8098..946a3a4 100644
+--- sc/source/filter/xlsx/xlsx-xiname.cxx
++++ sc/source/filter/xlsx/xlsx-xiname.cxx
+@@ -183,7 +183,9 @@ XclImpName::XclImpName( XclImpStream& rStrm, sal_uInt16 nXclNameIdx ) :
+         // --- name formula ---
+         // JEG : double check this.  It is clearly false for normal names
+         //  but some of the builtins (sheettitle?) might be able to handle arrays
+-        rFmlaConv.Convert( pTokArr, rStrm, nFmlaSize, false, FT_RangeName );
++        ExcelConverterBase::ConvertParam aParam;
++        aParam.mbAllowArrays = false;
++        rFmlaConv.Convert( pTokArr, rStrm, nFmlaSize, aParam, FT_RangeName );
+ 
+         // --- auto or advanced filter ---
+         if( (GetBiff() == EXC_BIFF8) && pTokArr && bBuiltIn )
+@@ -211,7 +213,9 @@ XclImpName::XclImpName( XclImpStream& rStrm, sal_uInt16 nXclNameIdx ) :
+     else if( nFmlaSize > 0 )
+     {
+         // regular defined name
+-        rFmlaConv.Convert( pTokArr, rStrm, nFmlaSize, true, FT_RangeName );
++        ExcelConverterBase::ConvertParam aParam;
++        aParam.mbAllowArrays = true;
++        rFmlaConv.Convert( pTokArr, rStrm, nFmlaSize, aParam, FT_RangeName );
+     }
+ 
+     // 4) *** create a defined name in the Calc document *** ------------------
