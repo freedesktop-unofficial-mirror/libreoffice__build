@@ -1,0 +1,178 @@
+diff --git sc/source/ui/inc/gridwin.hxx sc/source/ui/inc/gridwin.hxx
+index 2b62bc5..7a3da99 100644
+--- sc/source/ui/inc/gridwin.hxx
++++ sc/source/ui/inc/gridwin.hxx
+@@ -122,6 +122,7 @@ namespace sdr
+         private:
+             ScOverlayType   mePaintType;
+             RangeVector     maRectangles;
++            bool mbShow;
+ 
+             virtual void drawGeometry(OutputDevice& rOutputDevice);
+             virtual void createBaseRange(OutputDevice& rOutputDevice);
+@@ -129,6 +130,7 @@ namespace sdr
+         public:
+             OverlayObjectCell( ScOverlayType eType, const Color& rColor, const RangeVector& rRects);
+             virtual ~OverlayObjectCell();
++            virtual void Trigger(sal_uInt32 nTime);
+ 
+             virtual void transform(const basegfx::B2DHomMatrix& rMatrix);
+         };
+@@ -148,6 +150,7 @@ private:
+     ::sdr::overlay::OverlayObjectList*				mpOOCursors;
+     ::sdr::overlay::OverlayObjectList*              mpOOSelection;
+     ::sdr::overlay::OverlayObjectList*              mpOOSelectionBorder;
++    ::sdr::overlay::OverlayObjectList*              mpOOSelectionBorder2;
+     ::sdr::overlay::OverlayObjectList*              mpOOAutoFill;
+     ::sdr::overlay::OverlayObjectList*              mpOODragRect;
+     ::sdr::overlay::OverlayObjectList*              mpOOHeader;
+@@ -356,7 +359,6 @@ private:
+                         sdr::overlay::OverlayObjectCell::RangeVector* pRanges,
+                         const MapMode& rDrawMode,
+                         const RectangleConverter *pConverter = NULL);
+-    void            UpdateCopySourceOverlay(const MapMode& rDrawMode);
+ 
+ protected:
+     using Window::Resize;
+@@ -458,6 +460,8 @@ public:
+     void CursorChanged();
+     void DrawLayerCreated();
+ 
++    void            DeleteCopySourceOverlay();
++    void            UpdateCopySourceOverlay(const MapMode& rDrawMode);
+     void            DeleteCursorOverlay();
+     void            UpdateCursorOverlay();
+     void            DeleteSelectionOverlay();
+diff --git sc/source/ui/view/gridwin.cxx sc/source/ui/view/gridwin.cxx
+index 8713b06..5c254d6 100644
+--- sc/source/ui/view/gridwin.cxx
++++ sc/source/ui/view/gridwin.cxx
+@@ -415,6 +415,7 @@ ScGridWindow::ScGridWindow( Window* pParent, ScViewData* pData, ScSplitPos eWhic
+             mpOOCursors( NULL ),
+             mpOOSelection( NULL ),
+             mpOOSelectionBorder( NULL ),
++            mpOOSelectionBorder2( NULL ),
+             mpOOAutoFill( NULL ),
+             mpOODragRect( NULL ),
+             mpOOHeader( NULL ),
+@@ -5160,6 +5161,7 @@ void ScGridWindow::ImpCreateOverlayObjects()
+ void ScGridWindow::ImpDestroyOverlayObjects()
+ {
+     DeleteCursorOverlay();
++    DeleteCopySourceOverlay();
+     DeleteSelectionOverlay();
+     DeleteAutoFillOverlay();
+     DeleteDragRectOverlay();
+@@ -5178,7 +5180,6 @@ void ScGridWindow::UpdateAllOverlays()
+ void ScGridWindow::DeleteCursorOverlay()
+ {
+     DELETEZ( mpOOCursors );
+-    DELETEZ( mpOOSelectionBorder );
+ }
+ 
+ void ScGridWindow::ConvertPixelRectsToRangeVector( const ::std::vector< Rectangle >& rPixelRects, 
+@@ -5202,6 +5203,12 @@ void ScGridWindow::ConvertPixelRectsToRangeVector( const ::std::vector< Rectangl
+     }
+ }
+ 
++void ScGridWindow::DeleteCopySourceOverlay()
++{
++    DELETEZ( mpOOSelectionBorder );
++    DELETEZ( mpOOSelectionBorder2 );
++}
++
+ void ScGridWindow::UpdateCopySourceOverlay( const MapMode& rDrawMode )
+ {
+     if (!pViewData->ShowPasteSource())
+@@ -5272,6 +5279,7 @@ void ScGridWindow::UpdateCursorOverlay()
+     // For now, just re-create them.
+ 
+     DeleteCursorOverlay();
++    DeleteCopySourceOverlay();
+ 
+     UpdateCopySourceOverlay( aDrawMode );
+ 
+@@ -5827,16 +5835,36 @@ namespace sdr
+         OverlayObjectCell::OverlayObjectCell( ScOverlayType eType, const Color& rColor, const RangeVector& rRects )
+         :	OverlayObject( rColor ),
+             mePaintType( eType ),
+-            maRectangles( rRects )
++            maRectangles( rRects ),
++            mbShow(true)
+         {
++            mbAllowsAnimation = true;
+         }
+ 
+         OverlayObjectCell::~OverlayObjectCell()
+         {
+         }
+ 
++        void OverlayObjectCell::Trigger(sal_uInt32 nTime)
++        {
++            fprintf(stdout, "OverlayObjectCell::Trigger:   called (time = %ld)\n", nTime);
++
++            OverlayManager* pMgr = getOverlayManager();
++            if (pMgr)
++            {
++                SetTime(nTime + 500);
++                pMgr->InsertEvent(this);
++                mbShow = !mbShow;
++                objectChange();
++            }
++        }
++
+         void OverlayObjectCell::drawGeometry(OutputDevice& rOutputDevice)
+         {
++            fprintf(stdout, "OverlayObjectCell::drawGeometry:   called\n");
++            if (!mbShow)
++                return;
++
+             // safe original AA and switch off for selection
+             const sal_uInt16 nOriginalAA(rOutputDevice.GetAntialiasing());
+             rOutputDevice.SetAntialiasing(0);
+diff --git sc/source/ui/view/gridwin4.cxx sc/source/ui/view/gridwin4.cxx
+index a3bf178..f2b8693 100644
+--- sc/source/ui/view/gridwin4.cxx
++++ sc/source/ui/view/gridwin4.cxx
+@@ -427,6 +427,7 @@ void __EXPORT ScGridWindow::Paint( const Rectangle& rRect )
+ 
+ void ScGridWindow::Draw( SCCOL nX1, SCROW nY1, SCCOL nX2, SCROW nY2, ScUpdateMode eMode )
+ {
++    fprintf(stdout, "ScGridWindow::Draw:   (%ld,%ld) - (%ld,%ld)\n", nX1, nY1, nX2, nY2);
+     ScModule* pScMod = SC_MOD();
+     BOOL bTextWysiwyg = pScMod->GetInputOptions().GetTextWysiwyg();
+     BOOL bGridFirst = TRUE;		//! entscheiden!!!
+diff --git sc/source/ui/view/tabview3.cxx sc/source/ui/view/tabview3.cxx
+index 7130fba..ff7c2cf 100644
+--- sc/source/ui/view/tabview3.cxx
++++ sc/source/ui/view/tabview3.cxx
+@@ -1810,6 +1810,7 @@ void ScTabView::MakeEditView( ScEditEngineDefaulter* pEngine, SCCOL nCol, SCROW
+                     pGridWin[i]->HideCursor();
+ 
+                     pGridWin[i]->DeleteCursorOverlay();
++                    pGridWin[i]->DeleteCopySourceOverlay();
+                     pGridWin[i]->DeleteAutoFillOverlay();
+ 
+                     // flush OverlayManager before changing MapMode to text edit
+diff --git svx/inc/svx/sdr/animation/scheduler.hxx svx/inc/svx/sdr/animation/scheduler.hxx
+index 6ee3e41..3dd8871 100644
+--- svx/inc/svx/sdr/animation/scheduler.hxx
++++ svx/inc/svx/sdr/animation/scheduler.hxx
+@@ -61,7 +61,7 @@ namespace sdr
+ 
+             // get/set time
+             sal_uInt32 GetTime() const;
+-            void SetTime(sal_uInt32 nNew);
++            void SVX_DLLPUBLIC SetTime(sal_uInt32 nNew);
+ 
+             // execute event
+             virtual void Trigger(sal_uInt32 nTime) = 0;
+@@ -145,7 +145,7 @@ namespace sdr
+             void checkTimeout();
+ 
+             // insert/remove events, wrapper to EventList methods
+-            void InsertEvent(Event* pNew);
++            void SVX_DLLPUBLIC InsertEvent(Event* pNew);
+             void RemoveEvent(Event* pOld);
+ 
+             // get/set pause
