@@ -29,10 +29,10 @@ index 2b62bc5..a6210f1 100644
      void            DeleteSelectionOverlay();
 diff --git sc/source/ui/inc/overlayobject.hxx sc/source/ui/inc/overlayobject.hxx
 new file mode 100644
-index 0000000..7c6cd2f
+index 0000000..5c3e774
 --- /dev/null
 +++ sc/source/ui/inc/overlayobject.hxx
-@@ -0,0 +1,55 @@
+@@ -0,0 +1,58 @@
 +/*************************************************************************
 + *
 + * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
@@ -69,27 +69,30 @@ index 0000000..7c6cd2f
 +#include "svx/sdr/overlay/overlayobject.hxx"
 +
 +class OutputDevice;
++class Window;
 +
 +class ScOverlayDashedBorder : public ::sdr::overlay::OverlayObject
 +{
 +public:
-+    ScOverlayDashedBorder(const ::basegfx::B2DRange& rRange, const Color& rColor);
++    ScOverlayDashedBorder(const ::basegfx::B2DRange& rRange, const Color& rColor, Window* pWin);
 +    virtual ~ScOverlayDashedBorder();
 +
 +    virtual void Trigger(sal_uInt32 nTime);
 +    virtual void transform(const ::basegfx::B2DHomMatrix& rMatrix);
++    virtual void zoomHasChanged();
 +
 +private:
 +    virtual void drawGeometry(OutputDevice& rOutputDevice);
 +    virtual void createBaseRange(OutputDevice& rOutputDevice);
 +
 +private:
++    Window* mpParent;
 +    bool mbToggle;
 +};
 +
 +#endif
 diff --git sc/source/ui/view/gridwin.cxx sc/source/ui/view/gridwin.cxx
-index 8713b06..4d15d4e 100644
+index 8713b06..9460b2d 100644
 --- sc/source/ui/view/gridwin.cxx
 +++ sc/source/ui/view/gridwin.cxx
 @@ -122,6 +122,8 @@
@@ -148,8 +151,40 @@ index 8713b06..4d15d4e 100644
      for (ScRange* p = rClipParam.maRanges.First(); p; p = rClipParam.maRanges.Next())
      {
          if (p->aStart.Tab() != nCurTab)
-@@ -5254,10 +5264,16 @@ void ScGridWindow::UpdateCopySourceOverlay( const MapMode& rDrawMode )
-         ScOverlayType eType = SC_OVERLAY_BORDER_TRANSPARENT;
+@@ -5236,28 +5246,36 @@ void ScGridWindow::UpdateCopySourceOverlay( const MapMode& rDrawMode )
+         long nSizeXPix = aClipEndScrPos.X() - aClipStartScrPos.X();
+         long nSizeYPix = aClipEndScrPos.Y() - aClipStartScrPos.Y();
+     
+-        aClipStartScrPos.X() -= 2;
+-        aClipStartScrPos.Y() -= 2;
++//      aClipStartScrPos.X() -= 2;
++//      aClipStartScrPos.Y() -= 2;
+     
+-        Rectangle aRect( aClipStartScrPos, Size( nSizeXPix + 3, nSizeYPix + 3 ) );
++//      Rectangle aRect( aClipStartScrPos, Size( nSizeXPix + 3, nSizeYPix + 3 ) );
++        Rectangle aRect( aClipStartScrPos, Size(nSizeXPix, nSizeYPix) );
+     
+-        std::vector<Rectangle> aPixelRects;
+-    
+-        aPixelRects.push_back(Rectangle( aRect.Left(), aRect.Top(), aRect.Left()+2, aRect.Bottom() ));
+-        aPixelRects.push_back(Rectangle( aRect.Right()-2, aRect.Top(), aRect.Right(), aRect.Bottom() ));
+-        aPixelRects.push_back(Rectangle( aRect.Left()+3, aRect.Top(), aRect.Right()-3, aRect.Top()+2 ));
+-        aPixelRects.push_back(Rectangle( aRect.Left()+3, aRect.Bottom()-2, aRect.Right()-3, aRect.Bottom() ));
++//      std::vector<Rectangle> aPixelRects;
++//
++//      aPixelRects.push_back(Rectangle( aRect.Left(), aRect.Top(), aRect.Left()+2, aRect.Bottom() ));
++//      aPixelRects.push_back(Rectangle( aRect.Right()-2, aRect.Top(), aRect.Right(), aRect.Bottom() ));
++//      aPixelRects.push_back(Rectangle( aRect.Left()+3, aRect.Top(), aRect.Right()-3, aRect.Top()+2 ));
++//      aPixelRects.push_back(Rectangle( aRect.Left()+3, aRect.Bottom()-2, aRect.Right()-3, aRect.Bottom() ));
++//
++//      sdr::overlay::OverlayObjectCell::RangeVector aRanges;
++//      ConvertPixelRectsToRangeVector( aPixelRects, &aRanges, rDrawMode );
+     
+-        sdr::overlay::OverlayObjectCell::RangeVector aRanges;
+-        ConvertPixelRectsToRangeVector( aPixelRects, &aRanges, rDrawMode );
+-    
+-        ScOverlayType eType = SC_OVERLAY_BORDER_TRANSPARENT;
++//      ScOverlayType eType = SC_OVERLAY_BORDER_TRANSPARENT;
      
          Color aHighlight = GetSettings().GetStyleSettings().GetHighlightColor();
 -        sdr::overlay::OverlayObjectCell* pOverlay = new sdr::overlay::OverlayObjectCell( eType, aHighlight, aRanges );
@@ -163,13 +198,14 @@ index 8713b06..4d15d4e 100644
 +
 +        Rectangle aLogic = PixelToLogic(aRect, rDrawMode);
 +        ::basegfx::B2DRange aRange(aLogic.Left(), aLogic.Top(), aLogic.Right(), aLogic.Bottom());
-+        ScOverlayDashedBorder* pDashedBorder = new ScOverlayDashedBorder(aRange, aHighlight);
++        aHighlight = COL_BLACK;
++        ScOverlayDashedBorder* pDashedBorder = new ScOverlayDashedBorder(aRange, aHighlight, this);
 +        pOverlayManager->add(*pDashedBorder);
 +        mpOOSelectionBorder2->append(*pDashedBorder);
      }
  }
  
-@@ -5272,6 +5288,7 @@ void ScGridWindow::UpdateCursorOverlay()
+@@ -5272,6 +5290,7 @@ void ScGridWindow::UpdateCursorOverlay()
      // For now, just re-create them.
  
      DeleteCursorOverlay();
@@ -199,10 +235,10 @@ index 312929c..9003498 100644
      $(SLO)$/cellsh1.obj \
 diff --git sc/source/ui/view/overlayobject.cxx sc/source/ui/view/overlayobject.cxx
 new file mode 100644
-index 0000000..d8e0c86
+index 0000000..0081358
 --- /dev/null
 +++ sc/source/ui/view/overlayobject.cxx
-@@ -0,0 +1,223 @@
+@@ -0,0 +1,157 @@
 +/*************************************************************************
 + *
 + * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
@@ -240,7 +276,10 @@ index 0000000..d8e0c86
 +#include "vcl/outdev.hxx"
 +#include "vcl/lineinfo.hxx"
 +#include "vcl/salbtype.hxx"
++#include "vcl/window.hxx"
++#include "tools/fract.hxx"
 +#include "basegfx/range/b2drange.hxx"
++#include "basegfx/polygon/b2dpolygon.hxx"
 +#include "svx/sdr/overlay/overlaymanager.hxx"
 +
 +using ::sdr::overlay::OverlayObject;
@@ -284,79 +323,10 @@ index 0000000..d8e0c86
 +}
 +
 +#define DASH_UPDATE_INTERVAL 180    // in msec
-+#define DASH_SEGMENT_LENGTH  100
-+#define DASH_SEGMENT_WIDTH   0
 +
-+namespace {
-+
-+struct DashLineParam
-+{
-+    long mnInterval;
-+    long mnInterval0;
-+    long mnOffset;
-+    bool mbStartWithLine;
-+
-+    DashLineParam() :
-+        mnInterval(0),
-+        mnInterval0(0),
-+        mnOffset(0),
-+        mbStartWithLine(true)
-+    {
-+    }
-+};
-+
-+void drawDashLine(OutputDevice& rOutDev, const Point& aStart, const Point& aEnd, DashLineParam& rParam)
-+{
-+    bool bHor = (aEnd.getX() - aStart.getX()) > 0;
-+    bool bVer = (aEnd.getY() - aStart.getY()) > 0;
-+
-+    Point p1, p2;
-+    if (rParam.mbStartWithLine)
-+    {
-+        p1 = aStart;
-+        p2 = p1 + Point(bHor*rParam.mnInterval0, bVer*rParam.mnInterval0);
-+    }
-+    else
-+    {
-+        p1 = aStart + Point(bHor*rParam.mnInterval0, bVer*rParam.mnInterval0);
-+        p2 = p1 + Point(bHor*rParam.mnInterval, bVer*rParam.mnInterval);
-+    }
-+
-+    LineInfo aInfo(LINE_SOLID, DASH_SEGMENT_WIDTH);
-+    do
-+    {
-+        if (p1.getX() > aEnd.getX() || p1.getY() > aEnd.getY())
-+        {
-+            // Last line is entirely outside the range.
-+            rParam.mnInterval0 = (p1.getX() - aEnd.getX()) + (p1.getY() - aEnd.getY());
-+            rParam.mbStartWithLine = false;
-+            return;
-+        }
-+
-+        if (p2.getX() > aEnd.getX() || p2.getY() > aEnd.getY())
-+        {
-+            // Last line is too long.
-+            rParam.mnInterval0 = (p2.getX() - aEnd.getX()) + (p2.getY() - aEnd.getY());
-+            rParam.mbStartWithLine = true;
-+            p2 = aEnd;
-+            rOutDev.DrawLine(p1, p2, aInfo);
-+            return;
-+        }
-+
-+//      Rectangle aRect(p1.getX()-10, p1.getY()-10, p2.getX()-10, p2.getY()+10);
-+//      rOutDev.DrawRect(aRect);
-+        rOutDev.DrawLine(p1, p2, aInfo);
-+        p1 = p2 + Point(bHor*rParam.mnInterval, bVer*rParam.mnInterval);
-+        p2 = p1 + Point(bHor*rParam.mnInterval, bVer*rParam.mnInterval);
-+    }
-+    while (true);
-+}
-+
-+}
-+
-+
-+ScOverlayDashedBorder::ScOverlayDashedBorder(const ::basegfx::B2DRange& rRange, const Color& rColor) :
++ScOverlayDashedBorder::ScOverlayDashedBorder(const ::basegfx::B2DRange& rRange, const Color& rColor, Window* pWin) :
 +    OverlayObject(rColor),
++    mpParent(pWin),
 +    mbToggle(true)
 +{
 +    mbAllowsAnimation = true;
@@ -383,40 +353,40 @@ index 0000000..d8e0c86
 +{
 +}
 +
++void ScOverlayDashedBorder::zoomHasChanged()
++{
++}
++
 +void ScOverlayDashedBorder::drawGeometry(OutputDevice& rOutputDevice)
 +{
-+    // safe original AA and switch off for selection
++    using ::basegfx::B2DPoint;
++    using ::basegfx::B2DPolygon;
++
++    OverlayManager* pMgr = getOverlayManager();
++    if (!pMgr)
++        return;
++
++    // save original AA and switch off for selection
 +    const sal_uInt16 nOriginalAA(rOutputDevice.GetAntialiasing());
 +    rOutputDevice.SetAntialiasing(0);
 +
-+    rOutputDevice.SetLineColor(getBaseColor());
-+    rOutputDevice.SetFillColor(getBaseColor());
-+
-+    DashLineParam aDashParam;
-+    aDashParam.mnInterval = DASH_SEGMENT_LENGTH;
-+    aDashParam.mnInterval0 = DASH_SEGMENT_LENGTH;
-+    aDashParam.mbStartWithLine = mbToggle;
-+
-+    Point p1, p2;
-+    p1.setX(FRound(maBaseRange.getMinX()));
-+    p1.setY(FRound(maBaseRange.getMinY()));
-+    p2.setX(FRound(maBaseRange.getMaxX()));
-+    p2.setY(FRound(maBaseRange.getMinY()));
-+    drawDashLine(rOutputDevice, p1, p2, aDashParam);
-+
-+    p2.setX(FRound(maBaseRange.getMinX()));
-+    p2.setY(FRound(maBaseRange.getMaxY()));
-+    drawDashLine(rOutputDevice, p1, p2, aDashParam);
-+
-+    p1.setX(FRound(maBaseRange.getMinX()));
-+    p1.setY(FRound(maBaseRange.getMaxY()));
-+    p2.setX(FRound(maBaseRange.getMaxX()));
-+    p2.setY(FRound(maBaseRange.getMaxY()));
-+    drawDashLine(rOutputDevice, p1, p2, aDashParam);
-+
-+    p1.setX(FRound(maBaseRange.getMaxX()));
-+    p1.setY(FRound(maBaseRange.getMinY()));
-+    drawDashLine(rOutputDevice, p1, p2, aDashParam);
++    if (mbToggle)
++    {    
++        pMgr->setStripeColorA(getBaseColor());
++        pMgr->setStripeColorB(COL_WHITE);
++    }
++    else
++    {
++        pMgr->setStripeColorA(COL_WHITE);
++        pMgr->setStripeColorB(getBaseColor());
++    }
++    B2DPolygon aPoly;
++    aPoly.append(B2DPoint(maBaseRange.getMinX(), maBaseRange.getMinY()));
++    aPoly.append(B2DPoint(maBaseRange.getMaxX(), maBaseRange.getMinY()));
++    aPoly.append(B2DPoint(maBaseRange.getMaxX(), maBaseRange.getMaxY()));
++    aPoly.append(B2DPoint(maBaseRange.getMinX(), maBaseRange.getMaxY()));
++    aPoly.append(B2DPoint(maBaseRange.getMinX(), maBaseRange.getMinY()));
++    ImpDrawPolygonStriped(rOutputDevice, aPoly);
 +
 +    // restore original AA
 +    rOutputDevice.SetAntialiasing(nOriginalAA);
