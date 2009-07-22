@@ -1,24 +1,8 @@
 diff --git sc/source/ui/inc/gridwin.hxx sc/source/ui/inc/gridwin.hxx
-index 2b62bc5..7a3da99 100644
+index 2b62bc5..a6210f1 100644
 --- sc/source/ui/inc/gridwin.hxx
 +++ sc/source/ui/inc/gridwin.hxx
-@@ -122,6 +122,7 @@ namespace sdr
-         private:
-             ScOverlayType   mePaintType;
-             RangeVector     maRectangles;
-+            bool mbShow;
- 
-             virtual void drawGeometry(OutputDevice& rOutputDevice);
-             virtual void createBaseRange(OutputDevice& rOutputDevice);
-@@ -129,6 +130,7 @@ namespace sdr
-         public:
-             OverlayObjectCell( ScOverlayType eType, const Color& rColor, const RangeVector& rRects);
-             virtual ~OverlayObjectCell();
-+            virtual void Trigger(sal_uInt32 nTime);
- 
-             virtual void transform(const basegfx::B2DHomMatrix& rMatrix);
-         };
-@@ -148,6 +150,7 @@ private:
+@@ -148,6 +148,7 @@ private:
      ::sdr::overlay::OverlayObjectList*				mpOOCursors;
      ::sdr::overlay::OverlayObjectList*              mpOOSelection;
      ::sdr::overlay::OverlayObjectList*              mpOOSelectionBorder;
@@ -26,7 +10,7 @@ index 2b62bc5..7a3da99 100644
      ::sdr::overlay::OverlayObjectList*              mpOOAutoFill;
      ::sdr::overlay::OverlayObjectList*              mpOODragRect;
      ::sdr::overlay::OverlayObjectList*              mpOOHeader;
-@@ -356,7 +359,6 @@ private:
+@@ -356,7 +357,6 @@ private:
                          sdr::overlay::OverlayObjectCell::RangeVector* pRanges,
                          const MapMode& rDrawMode,
                          const RectangleConverter *pConverter = NULL);
@@ -34,7 +18,7 @@ index 2b62bc5..7a3da99 100644
  
  protected:
      using Window::Resize;
-@@ -458,6 +460,8 @@ public:
+@@ -458,6 +458,8 @@ public:
      void CursorChanged();
      void DrawLayerCreated();
  
@@ -43,11 +27,81 @@ index 2b62bc5..7a3da99 100644
      void            DeleteCursorOverlay();
      void            UpdateCursorOverlay();
      void            DeleteSelectionOverlay();
+diff --git sc/source/ui/inc/overlayobject.hxx sc/source/ui/inc/overlayobject.hxx
+new file mode 100644
+index 0000000..7c6cd2f
+--- /dev/null
++++ sc/source/ui/inc/overlayobject.hxx
+@@ -0,0 +1,55 @@
++/*************************************************************************
++ *
++ * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
++ * 
++ * Copyright 2008 by Sun Microsystems, Inc.
++ *
++ * OpenOffice.org - a multi-platform office productivity suite
++ *
++ * $RCSfile: gridwin.hxx,v $
++ * $Revision: 1.30 $
++ *
++ * This file is part of OpenOffice.org.
++ *
++ * OpenOffice.org is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU Lesser General Public License version 3
++ * only, as published by the Free Software Foundation.
++ *
++ * OpenOffice.org is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU Lesser General Public License version 3 for more details
++ * (a copy is included in the LICENSE file that accompanied this code).
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * version 3 along with OpenOffice.org.  If not, see
++ * <http://www.openoffice.org/license.html>
++ * for a copy of the LGPLv3 License.
++ *
++ ************************************************************************/
++
++#ifndef __SC_OVERLAYOBJECT_HXX__
++#define __SC_OVERLAYOBJECT_HXX__
++
++#include "svx/sdr/overlay/overlayobject.hxx"
++
++class OutputDevice;
++
++class ScOverlayDashedBorder : public ::sdr::overlay::OverlayObject
++{
++public:
++    ScOverlayDashedBorder(const ::basegfx::B2DRange& rRange, const Color& rColor);
++    virtual ~ScOverlayDashedBorder();
++
++    virtual void Trigger(sal_uInt32 nTime);
++    virtual void transform(const ::basegfx::B2DHomMatrix& rMatrix);
++
++private:
++    virtual void drawGeometry(OutputDevice& rOutputDevice);
++    virtual void createBaseRange(OutputDevice& rOutputDevice);
++
++private:
++    bool mbToggle;
++};
++
++#endif
 diff --git sc/source/ui/view/gridwin.cxx sc/source/ui/view/gridwin.cxx
-index 8713b06..5c254d6 100644
+index 8713b06..4d15d4e 100644
 --- sc/source/ui/view/gridwin.cxx
 +++ sc/source/ui/view/gridwin.cxx
-@@ -415,6 +415,7 @@ ScGridWindow::ScGridWindow( Window* pParent, ScViewData* pData, ScSplitPos eWhic
+@@ -122,6 +122,8 @@
+ #include "tabprotection.hxx"
+ #include "clipparam.hxx"
+ #include "dpcontrol.hxx"
++#include "overlayobject.hxx"
++#include "basegfx/range/b2drange.hxx"
+ 
+ // #114409#
+ #include <vcl/salbtype.hxx>		// FRound
+@@ -415,6 +417,7 @@ ScGridWindow::ScGridWindow( Window* pParent, ScViewData* pData, ScSplitPos eWhic
              mpOOCursors( NULL ),
              mpOOSelection( NULL ),
              mpOOSelectionBorder( NULL ),
@@ -55,7 +109,7 @@ index 8713b06..5c254d6 100644
              mpOOAutoFill( NULL ),
              mpOODragRect( NULL ),
              mpOOHeader( NULL ),
-@@ -5160,6 +5161,7 @@ void ScGridWindow::ImpCreateOverlayObjects()
+@@ -5160,6 +5163,7 @@ void ScGridWindow::ImpCreateOverlayObjects()
  void ScGridWindow::ImpDestroyOverlayObjects()
  {
      DeleteCursorOverlay();
@@ -63,7 +117,7 @@ index 8713b06..5c254d6 100644
      DeleteSelectionOverlay();
      DeleteAutoFillOverlay();
      DeleteDragRectOverlay();
-@@ -5178,7 +5180,6 @@ void ScGridWindow::UpdateAllOverlays()
+@@ -5178,7 +5182,6 @@ void ScGridWindow::UpdateAllOverlays()
  void ScGridWindow::DeleteCursorOverlay()
  {
      DELETEZ( mpOOCursors );
@@ -71,7 +125,7 @@ index 8713b06..5c254d6 100644
  }
  
  void ScGridWindow::ConvertPixelRectsToRangeVector( const ::std::vector< Rectangle >& rPixelRects, 
-@@ -5202,6 +5203,12 @@ void ScGridWindow::ConvertPixelRectsToRangeVector( const ::std::vector< Rectangl
+@@ -5202,6 +5205,12 @@ void ScGridWindow::ConvertPixelRectsToRangeVector( const ::std::vector< Rectangl
      }
  }
  
@@ -84,7 +138,38 @@ index 8713b06..5c254d6 100644
  void ScGridWindow::UpdateCopySourceOverlay( const MapMode& rDrawMode )
  {
      if (!pViewData->ShowPasteSource())
-@@ -5272,6 +5279,7 @@ void ScGridWindow::UpdateCursorOverlay()
+@@ -5219,7 +5228,8 @@ void ScGridWindow::UpdateCopySourceOverlay( const MapMode& rDrawMode )
+     SCTAB nCurTab = pViewData->GetCurPos().Tab();
+ 
+     ScClipParam& rClipParam = pClipDoc->GetClipParam();
+-    mpOOSelectionBorder = new ::sdr::overlay::OverlayObjectList;
++//  mpOOSelectionBorder = new ::sdr::overlay::OverlayObjectList;
++    mpOOSelectionBorder2 = new ::sdr::overlay::OverlayObjectList;
+     for (ScRange* p = rClipParam.maRanges.First(); p; p = rClipParam.maRanges.Next())
+     {
+         if (p->aStart.Tab() != nCurTab)
+@@ -5254,10 +5264,16 @@ void ScGridWindow::UpdateCopySourceOverlay( const MapMode& rDrawMode )
+         ScOverlayType eType = SC_OVERLAY_BORDER_TRANSPARENT;
+     
+         Color aHighlight = GetSettings().GetStyleSettings().GetHighlightColor();
+-        sdr::overlay::OverlayObjectCell* pOverlay = new sdr::overlay::OverlayObjectCell( eType, aHighlight, aRanges );
+-    
+-        pOverlayManager->add(*pOverlay);
+-        mpOOSelectionBorder->append(*pOverlay);
++//      sdr::overlay::OverlayObjectCell* pOverlay = new sdr::overlay::OverlayObjectCell( eType, aHighlight, aRanges );
++//
++//      pOverlayManager->add(*pOverlay);
++//      mpOOSelectionBorder->append(*pOverlay);
++
++        Rectangle aLogic = PixelToLogic(aRect, rDrawMode);
++        ::basegfx::B2DRange aRange(aLogic.Left(), aLogic.Top(), aLogic.Right(), aLogic.Bottom());
++        ScOverlayDashedBorder* pDashedBorder = new ScOverlayDashedBorder(aRange, aHighlight);
++        pOverlayManager->add(*pDashedBorder);
++        mpOOSelectionBorder2->append(*pDashedBorder);
+     }
+ }
+ 
+@@ -5272,6 +5288,7 @@ void ScGridWindow::UpdateCursorOverlay()
      // For now, just re-create them.
  
      DeleteCursorOverlay();
@@ -92,56 +177,255 @@ index 8713b06..5c254d6 100644
  
      UpdateCopySourceOverlay( aDrawMode );
  
-@@ -5827,16 +5835,36 @@ namespace sdr
-         OverlayObjectCell::OverlayObjectCell( ScOverlayType eType, const Color& rColor, const RangeVector& rRects )
-         :	OverlayObject( rColor ),
-             mePaintType( eType ),
--            maRectangles( rRects )
-+            maRectangles( rRects ),
-+            mbShow(true)
-         {
-+            mbAllowsAnimation = true;
-         }
- 
-         OverlayObjectCell::~OverlayObjectCell()
-         {
-         }
- 
-+        void OverlayObjectCell::Trigger(sal_uInt32 nTime)
-+        {
-+            fprintf(stdout, "OverlayObjectCell::Trigger:   called (time = %ld)\n", nTime);
+diff --git sc/source/ui/view/makefile.mk sc/source/ui/view/makefile.mk
+index 312929c..9003498 100644
+--- sc/source/ui/view/makefile.mk
++++ sc/source/ui/view/makefile.mk
+@@ -98,6 +98,7 @@ SLOFILES =  \
+         $(SLO)$/output.obj \
+         $(SLO)$/output2.obj \
+         $(SLO)$/output3.obj \
++        $(SLO)$/overlayobject.obj \
+         $(SLO)$/gridmerg.obj \
+         $(SLO)$/invmerge.obj \
+         $(SLO)$/cellmergeoption.obj \
+@@ -155,6 +156,7 @@ EXCEPTIONSFILES= \
+     $(SLO)$/gridwin.obj \
+     $(SLO)$/invmerge.obj \
+     $(SLO)$/output2.obj \
++    $(SLO)$/overlayobject.obj \
+     $(SLO)$/pfuncache.obj \
+     $(SLO)$/spelldialog.obj \
+     $(SLO)$/cellsh1.obj \
+diff --git sc/source/ui/view/overlayobject.cxx sc/source/ui/view/overlayobject.cxx
+new file mode 100644
+index 0000000..d8e0c86
+--- /dev/null
++++ sc/source/ui/view/overlayobject.cxx
+@@ -0,0 +1,223 @@
++/*************************************************************************
++ *
++ * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
++ * 
++ * Copyright 2008 by Sun Microsystems, Inc.
++ *
++ * OpenOffice.org - a multi-platform office productivity suite
++ *
++ * $RCSfile: gridwin.hxx,v $
++ * $Revision: 1.30 $
++ *
++ * This file is part of OpenOffice.org.
++ *
++ * OpenOffice.org is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU Lesser General Public License version 3
++ * only, as published by the Free Software Foundation.
++ *
++ * OpenOffice.org is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU Lesser General Public License version 3 for more details
++ * (a copy is included in the LICENSE file that accompanied this code).
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * version 3 along with OpenOffice.org.  If not, see
++ * <http://www.openoffice.org/license.html>
++ * for a copy of the LGPLv3 License.
++ *
++ ************************************************************************/
 +
-+            OverlayManager* pMgr = getOverlayManager();
-+            if (pMgr)
-+            {
-+                SetTime(nTime + 500);
-+                pMgr->InsertEvent(this);
-+                mbShow = !mbShow;
-+                objectChange();
-+            }
++// MARKER(update_precomp.py): autogen include statement, do not remove
++#include "precompiled_sc.hxx"
++
++#include "overlayobject.hxx"
++#include "vcl/outdev.hxx"
++#include "vcl/lineinfo.hxx"
++#include "vcl/salbtype.hxx"
++#include "basegfx/range/b2drange.hxx"
++#include "svx/sdr/overlay/overlaymanager.hxx"
++
++using ::sdr::overlay::OverlayObject;
++using ::sdr::overlay::OverlayManager;
++
++
++#include <stdio.h>
++#include <string>
++#include <sys/time.h>
++
++namespace {
++
++class StackPrinter
++{
++public:
++    explicit StackPrinter(const char* msg) :
++        msMsg(msg)
++    {
++        fprintf(stdout, "%s: --begin\n", msMsg.c_str());
++        mfStartTime = getTime();
++    }
++
++    ~StackPrinter()
++    {
++        double fEndTime = getTime();
++        fprintf(stdout, "%s: --end (duration: %g sec)\n", msMsg.c_str(), (fEndTime-mfStartTime));
++    }
++
++private:
++    double getTime() const
++    {
++        timeval tv;
++        gettimeofday(&tv, NULL);
++        return tv.tv_sec + tv.tv_usec / 1000000.0;
++    }
++
++    ::std::string msMsg;
++    double mfStartTime;
++};
++
++}
++
++#define DASH_UPDATE_INTERVAL 180    // in msec
++#define DASH_SEGMENT_LENGTH  100
++#define DASH_SEGMENT_WIDTH   0
++
++namespace {
++
++struct DashLineParam
++{
++    long mnInterval;
++    long mnInterval0;
++    long mnOffset;
++    bool mbStartWithLine;
++
++    DashLineParam() :
++        mnInterval(0),
++        mnInterval0(0),
++        mnOffset(0),
++        mbStartWithLine(true)
++    {
++    }
++};
++
++void drawDashLine(OutputDevice& rOutDev, const Point& aStart, const Point& aEnd, DashLineParam& rParam)
++{
++    bool bHor = (aEnd.getX() - aStart.getX()) > 0;
++    bool bVer = (aEnd.getY() - aStart.getY()) > 0;
++
++    Point p1, p2;
++    if (rParam.mbStartWithLine)
++    {
++        p1 = aStart;
++        p2 = p1 + Point(bHor*rParam.mnInterval0, bVer*rParam.mnInterval0);
++    }
++    else
++    {
++        p1 = aStart + Point(bHor*rParam.mnInterval0, bVer*rParam.mnInterval0);
++        p2 = p1 + Point(bHor*rParam.mnInterval, bVer*rParam.mnInterval);
++    }
++
++    LineInfo aInfo(LINE_SOLID, DASH_SEGMENT_WIDTH);
++    do
++    {
++        if (p1.getX() > aEnd.getX() || p1.getY() > aEnd.getY())
++        {
++            // Last line is entirely outside the range.
++            rParam.mnInterval0 = (p1.getX() - aEnd.getX()) + (p1.getY() - aEnd.getY());
++            rParam.mbStartWithLine = false;
++            return;
 +        }
 +
-         void OverlayObjectCell::drawGeometry(OutputDevice& rOutputDevice)
-         {
-+            fprintf(stdout, "OverlayObjectCell::drawGeometry:   called\n");
-+            if (!mbShow)
-+                return;
++        if (p2.getX() > aEnd.getX() || p2.getY() > aEnd.getY())
++        {
++            // Last line is too long.
++            rParam.mnInterval0 = (p2.getX() - aEnd.getX()) + (p2.getY() - aEnd.getY());
++            rParam.mbStartWithLine = true;
++            p2 = aEnd;
++            rOutDev.DrawLine(p1, p2, aInfo);
++            return;
++        }
 +
-             // safe original AA and switch off for selection
-             const sal_uInt16 nOriginalAA(rOutputDevice.GetAntialiasing());
-             rOutputDevice.SetAntialiasing(0);
-diff --git sc/source/ui/view/gridwin4.cxx sc/source/ui/view/gridwin4.cxx
-index a3bf178..f2b8693 100644
---- sc/source/ui/view/gridwin4.cxx
-+++ sc/source/ui/view/gridwin4.cxx
-@@ -427,6 +427,7 @@ void __EXPORT ScGridWindow::Paint( const Rectangle& rRect )
- 
- void ScGridWindow::Draw( SCCOL nX1, SCROW nY1, SCCOL nX2, SCROW nY2, ScUpdateMode eMode )
- {
-+    fprintf(stdout, "ScGridWindow::Draw:   (%ld,%ld) - (%ld,%ld)\n", nX1, nY1, nX2, nY2);
-     ScModule* pScMod = SC_MOD();
-     BOOL bTextWysiwyg = pScMod->GetInputOptions().GetTextWysiwyg();
-     BOOL bGridFirst = TRUE;		//! entscheiden!!!
++//      Rectangle aRect(p1.getX()-10, p1.getY()-10, p2.getX()-10, p2.getY()+10);
++//      rOutDev.DrawRect(aRect);
++        rOutDev.DrawLine(p1, p2, aInfo);
++        p1 = p2 + Point(bHor*rParam.mnInterval, bVer*rParam.mnInterval);
++        p2 = p1 + Point(bHor*rParam.mnInterval, bVer*rParam.mnInterval);
++    }
++    while (true);
++}
++
++}
++
++
++ScOverlayDashedBorder::ScOverlayDashedBorder(const ::basegfx::B2DRange& rRange, const Color& rColor) :
++    OverlayObject(rColor),
++    mbToggle(true)
++{
++    mbAllowsAnimation = true;
++    maBaseRange = rRange;
++}
++
++ScOverlayDashedBorder::~ScOverlayDashedBorder()
++{
++}
++
++void ScOverlayDashedBorder::Trigger(sal_uInt32 nTime)
++{
++    OverlayManager* pMgr = getOverlayManager();
++    if (pMgr)
++    {
++        SetTime(nTime + DASH_UPDATE_INTERVAL);
++        mbToggle = !mbToggle;
++        pMgr->InsertEvent(this);
++        objectChange();
++    }
++}
++
++void ScOverlayDashedBorder::transform(const ::basegfx::B2DHomMatrix& /*rMatrix*/)
++{
++}
++
++void ScOverlayDashedBorder::drawGeometry(OutputDevice& rOutputDevice)
++{
++    // safe original AA and switch off for selection
++    const sal_uInt16 nOriginalAA(rOutputDevice.GetAntialiasing());
++    rOutputDevice.SetAntialiasing(0);
++
++    rOutputDevice.SetLineColor(getBaseColor());
++    rOutputDevice.SetFillColor(getBaseColor());
++
++    DashLineParam aDashParam;
++    aDashParam.mnInterval = DASH_SEGMENT_LENGTH;
++    aDashParam.mnInterval0 = DASH_SEGMENT_LENGTH;
++    aDashParam.mbStartWithLine = mbToggle;
++
++    Point p1, p2;
++    p1.setX(FRound(maBaseRange.getMinX()));
++    p1.setY(FRound(maBaseRange.getMinY()));
++    p2.setX(FRound(maBaseRange.getMaxX()));
++    p2.setY(FRound(maBaseRange.getMinY()));
++    drawDashLine(rOutputDevice, p1, p2, aDashParam);
++
++    p2.setX(FRound(maBaseRange.getMinX()));
++    p2.setY(FRound(maBaseRange.getMaxY()));
++    drawDashLine(rOutputDevice, p1, p2, aDashParam);
++
++    p1.setX(FRound(maBaseRange.getMinX()));
++    p1.setY(FRound(maBaseRange.getMaxY()));
++    p2.setX(FRound(maBaseRange.getMaxX()));
++    p2.setY(FRound(maBaseRange.getMaxY()));
++    drawDashLine(rOutputDevice, p1, p2, aDashParam);
++
++    p1.setX(FRound(maBaseRange.getMaxX()));
++    p1.setY(FRound(maBaseRange.getMinY()));
++    drawDashLine(rOutputDevice, p1, p2, aDashParam);
++
++    // restore original AA
++    rOutputDevice.SetAntialiasing(nOriginalAA);
++}
++
++void ScOverlayDashedBorder::createBaseRange(OutputDevice& /*rOutputDevice*/)
++{
++}
++
 diff --git sc/source/ui/view/tabview3.cxx sc/source/ui/view/tabview3.cxx
 index 7130fba..ff7c2cf 100644
 --- sc/source/ui/view/tabview3.cxx
