@@ -1,16 +1,8 @@
 diff --git sc/source/ui/inc/gridwin.hxx sc/source/ui/inc/gridwin.hxx
-index 2b62bc5..a6210f1 100644
+index 2b62bc5..3ab93fd 100644
 --- sc/source/ui/inc/gridwin.hxx
 +++ sc/source/ui/inc/gridwin.hxx
-@@ -148,6 +148,7 @@ private:
-     ::sdr::overlay::OverlayObjectList*				mpOOCursors;
-     ::sdr::overlay::OverlayObjectList*              mpOOSelection;
-     ::sdr::overlay::OverlayObjectList*              mpOOSelectionBorder;
-+    ::sdr::overlay::OverlayObjectList*              mpOOSelectionBorder2;
-     ::sdr::overlay::OverlayObjectList*              mpOOAutoFill;
-     ::sdr::overlay::OverlayObjectList*              mpOODragRect;
-     ::sdr::overlay::OverlayObjectList*              mpOOHeader;
-@@ -356,7 +357,6 @@ private:
+@@ -356,7 +356,6 @@ private:
                          sdr::overlay::OverlayObjectCell::RangeVector* pRanges,
                          const MapMode& rDrawMode,
                          const RectangleConverter *pConverter = NULL);
@@ -18,12 +10,12 @@ index 2b62bc5..a6210f1 100644
  
  protected:
      using Window::Resize;
-@@ -458,6 +458,8 @@ public:
+@@ -458,6 +457,8 @@ public:
      void CursorChanged();
      void DrawLayerCreated();
  
 +    void            DeleteCopySourceOverlay();
-+    void            UpdateCopySourceOverlay(const MapMode& rDrawMode);
++    void            UpdateCopySourceOverlay();
      void            DeleteCursorOverlay();
      void            UpdateCursorOverlay();
      void            DeleteSelectionOverlay();
@@ -91,8 +83,48 @@ index 0000000..5c3e774
 +};
 +
 +#endif
+diff --git sc/source/ui/inc/tabview.hxx sc/source/ui/inc/tabview.hxx
+index 1c9d508..0288469 100644
+--- sc/source/ui/inc/tabview.hxx
++++ sc/source/ui/inc/tabview.hxx
+@@ -441,6 +441,7 @@ public:
+ 
+     void			CreateAnchorHandles(SdrHdlList& rHdl, const ScAddress& rAddress);
+ 
++    void            UpdateCopySourceOverlay();
+     void            UpdateSelectionOverlay();
+     void            UpdateShrinkOverlay();
+     void            UpdateAllOverlays();
+diff --git sc/source/ui/view/cellsh1.cxx sc/source/ui/view/cellsh1.cxx
+index 8950395..eee4c62 100644
+--- sc/source/ui/view/cellsh1.cxx
++++ sc/source/ui/view/cellsh1.cxx
+@@ -1167,11 +1167,13 @@ void ScCellShell::ExecuteEdit( SfxRequest& rReq )
+ 
+         case SID_COPY:				// fuer Grafiken in DrawShell
+             {
+-                WaitObject aWait( GetViewData()->GetDialogParent() );
++                ScViewData* pViewData = GetViewData();
++                WaitObject aWait( pViewData->GetDialogParent() );
+                 pTabViewShell->CopyToClip( NULL, FALSE, FALSE, TRUE );
+                 rReq.Done();
+-				GetViewData()->SetPasteMode( (ScPasteFlags) (SC_PASTE_MODE | SC_PASTE_BORDER) );
++				pViewData->SetPasteMode( (ScPasteFlags) (SC_PASTE_MODE | SC_PASTE_BORDER) );
+ 				pTabViewShell->ShowCursor();
++                pTabViewShell->UpdateCopySourceOverlay();
+             }
+             break;
+ 
+@@ -1181,6 +1183,7 @@ void ScCellShell::ExecuteEdit( SfxRequest& rReq )
+                 pTabViewShell->CutToClip( NULL, TRUE );
+                 rReq.Done();
+ 				GetViewData()->SetPasteMode( SC_PASTE_MODE );
++                pTabViewShell->UpdateCopySourceOverlay();
+             }
+             break;
+ 
 diff --git sc/source/ui/view/gridwin.cxx sc/source/ui/view/gridwin.cxx
-index 8713b06..9460b2d 100644
+index 8713b06..93a674e 100644
 --- sc/source/ui/view/gridwin.cxx
 +++ sc/source/ui/view/gridwin.cxx
 @@ -122,6 +122,8 @@
@@ -104,14 +136,32 @@ index 8713b06..9460b2d 100644
  
  // #114409#
  #include <vcl/salbtype.hxx>		// FRound
-@@ -415,6 +417,7 @@ ScGridWindow::ScGridWindow( Window* pParent, ScViewData* pData, ScSplitPos eWhic
-             mpOOCursors( NULL ),
-             mpOOSelection( NULL ),
-             mpOOSelectionBorder( NULL ),
-+            mpOOSelectionBorder2( NULL ),
-             mpOOAutoFill( NULL ),
-             mpOODragRect( NULL ),
-             mpOOHeader( NULL ),
+@@ -3060,7 +3062,7 @@ void __EXPORT ScGridWindow::KeyInput(const KeyEvent& rKEvt)
+ 
+ 		// hide the border around the copy source
+ 		pViewData->SetPasteMode( SC_PASTE_NONE );
+-		UpdateCursorOverlay();
++		UpdateCopySourceOverlay();
+ 		return;
+ 	}
+     // wenn semi-Modeless-SfxChildWindow-Dialog oben, keine KeyInputs:
+@@ -3069,7 +3071,7 @@ void __EXPORT ScGridWindow::KeyInput(const KeyEvent& rKEvt)
+ 		if (rKeyCode.GetCode() == KEY_ESCAPE)
+ 		{
+ 			pViewData->SetPasteMode( SC_PASTE_NONE );
+-			UpdateCursorOverlay();
++            UpdateCopySourceOverlay();
+ 		}
+         //	query for existing note marker before calling ViewShell's keyboard handling
+         //	which may remove the marker
+@@ -5149,6 +5151,7 @@ void ScGridWindow::CursorChanged()
+ void ScGridWindow::ImpCreateOverlayObjects()
+ {
+     UpdateCursorOverlay();
++    UpdateCopySourceOverlay();
+     UpdateSelectionOverlay();
+     UpdateAutoFillOverlay();
+     UpdateDragRectOverlay();
 @@ -5160,6 +5163,7 @@ void ScGridWindow::ImpCreateOverlayObjects()
  void ScGridWindow::ImpDestroyOverlayObjects()
  {
@@ -128,91 +178,83 @@ index 8713b06..9460b2d 100644
  }
  
  void ScGridWindow::ConvertPixelRectsToRangeVector( const ::std::vector< Rectangle >& rPixelRects, 
-@@ -5202,6 +5205,12 @@ void ScGridWindow::ConvertPixelRectsToRangeVector( const ::std::vector< Rectangl
+@@ -5202,8 +5205,20 @@ void ScGridWindow::ConvertPixelRectsToRangeVector( const ::std::vector< Rectangl
      }
  }
  
+-void ScGridWindow::UpdateCopySourceOverlay( const MapMode& rDrawMode )
 +void ScGridWindow::DeleteCopySourceOverlay()
 +{
 +    DELETEZ( mpOOSelectionBorder );
-+    DELETEZ( mpOOSelectionBorder2 );
 +}
 +
- void ScGridWindow::UpdateCopySourceOverlay( const MapMode& rDrawMode )
++void ScGridWindow::UpdateCopySourceOverlay()
  {
++    MapMode aDrawMode = GetDrawMapMode();
++    MapMode aOldMode = GetMapMode();
++    if ( aOldMode != aDrawMode )
++        SetMapMode( aDrawMode );
++
++    DeleteCopySourceOverlay();
++
      if (!pViewData->ShowPasteSource())
-@@ -5219,7 +5228,8 @@ void ScGridWindow::UpdateCopySourceOverlay( const MapMode& rDrawMode )
-     SCTAB nCurTab = pViewData->GetCurPos().Tab();
- 
-     ScClipParam& rClipParam = pClipDoc->GetClipParam();
--    mpOOSelectionBorder = new ::sdr::overlay::OverlayObjectList;
-+//  mpOOSelectionBorder = new ::sdr::overlay::OverlayObjectList;
-+    mpOOSelectionBorder2 = new ::sdr::overlay::OverlayObjectList;
-     for (ScRange* p = rClipParam.maRanges.First(); p; p = rClipParam.maRanges.Next())
-     {
-         if (p->aStart.Tab() != nCurTab)
-@@ -5236,28 +5246,36 @@ void ScGridWindow::UpdateCopySourceOverlay( const MapMode& rDrawMode )
+         return;
+     ::sdr::overlay::OverlayManager* pOverlayManager = getOverlayManager();
+@@ -5232,33 +5247,25 @@ void ScGridWindow::UpdateCopySourceOverlay( const MapMode& rDrawMode )
+     
+         Point aClipStartScrPos = pViewData->GetScrPos( nClipStartX, nClipStartY, eWhich );
+         Point aClipEndScrPos   = pViewData->GetScrPos( nClipEndX + 1, nClipEndY + 1, eWhich );
+-    
++        aClipStartScrPos -= Point(1, 1);
          long nSizeXPix = aClipEndScrPos.X() - aClipStartScrPos.X();
          long nSizeYPix = aClipEndScrPos.Y() - aClipStartScrPos.Y();
      
 -        aClipStartScrPos.X() -= 2;
 -        aClipStartScrPos.Y() -= 2;
-+//      aClipStartScrPos.X() -= 2;
-+//      aClipStartScrPos.Y() -= 2;
-     
--        Rectangle aRect( aClipStartScrPos, Size( nSizeXPix + 3, nSizeYPix + 3 ) );
-+//      Rectangle aRect( aClipStartScrPos, Size( nSizeXPix + 3, nSizeYPix + 3 ) );
 +        Rectangle aRect( aClipStartScrPos, Size(nSizeXPix, nSizeYPix) );
      
+-        Rectangle aRect( aClipStartScrPos, Size( nSizeXPix + 3, nSizeYPix + 3 ) );
+-    
 -        std::vector<Rectangle> aPixelRects;
 -    
 -        aPixelRects.push_back(Rectangle( aRect.Left(), aRect.Top(), aRect.Left()+2, aRect.Bottom() ));
 -        aPixelRects.push_back(Rectangle( aRect.Right()-2, aRect.Top(), aRect.Right(), aRect.Bottom() ));
 -        aPixelRects.push_back(Rectangle( aRect.Left()+3, aRect.Top(), aRect.Right()-3, aRect.Top()+2 ));
 -        aPixelRects.push_back(Rectangle( aRect.Left()+3, aRect.Bottom()-2, aRect.Right()-3, aRect.Bottom() ));
-+//      std::vector<Rectangle> aPixelRects;
-+//
-+//      aPixelRects.push_back(Rectangle( aRect.Left(), aRect.Top(), aRect.Left()+2, aRect.Bottom() ));
-+//      aPixelRects.push_back(Rectangle( aRect.Right()-2, aRect.Top(), aRect.Right(), aRect.Bottom() ));
-+//      aPixelRects.push_back(Rectangle( aRect.Left()+3, aRect.Top(), aRect.Right()-3, aRect.Top()+2 ));
-+//      aPixelRects.push_back(Rectangle( aRect.Left()+3, aRect.Bottom()-2, aRect.Right()-3, aRect.Bottom() ));
-+//
-+//      sdr::overlay::OverlayObjectCell::RangeVector aRanges;
-+//      ConvertPixelRectsToRangeVector( aPixelRects, &aRanges, rDrawMode );
-     
+-    
 -        sdr::overlay::OverlayObjectCell::RangeVector aRanges;
 -        ConvertPixelRectsToRangeVector( aPixelRects, &aRanges, rDrawMode );
 -    
 -        ScOverlayType eType = SC_OVERLAY_BORDER_TRANSPARENT;
-+//      ScOverlayType eType = SC_OVERLAY_BORDER_TRANSPARENT;
      
          Color aHighlight = GetSettings().GetStyleSettings().GetHighlightColor();
 -        sdr::overlay::OverlayObjectCell* pOverlay = new sdr::overlay::OverlayObjectCell( eType, aHighlight, aRanges );
 -    
 -        pOverlayManager->add(*pOverlay);
 -        mpOOSelectionBorder->append(*pOverlay);
-+//      sdr::overlay::OverlayObjectCell* pOverlay = new sdr::overlay::OverlayObjectCell( eType, aHighlight, aRanges );
-+//
-+//      pOverlayManager->add(*pOverlay);
-+//      mpOOSelectionBorder->append(*pOverlay);
 +
-+        Rectangle aLogic = PixelToLogic(aRect, rDrawMode);
++        Rectangle aLogic = PixelToLogic(aRect, aDrawMode);
 +        ::basegfx::B2DRange aRange(aLogic.Left(), aLogic.Top(), aLogic.Right(), aLogic.Bottom());
 +        aHighlight = COL_BLACK;
 +        ScOverlayDashedBorder* pDashedBorder = new ScOverlayDashedBorder(aRange, aHighlight, this);
 +        pOverlayManager->add(*pDashedBorder);
-+        mpOOSelectionBorder2->append(*pDashedBorder);
++        mpOOSelectionBorder->append(*pDashedBorder);
      }
++
++    if ( aOldMode != aDrawMode )
++        SetMapMode( aOldMode );
  }
  
-@@ -5272,6 +5290,7 @@ void ScGridWindow::UpdateCursorOverlay()
-     // For now, just re-create them.
+ void ScGridWindow::UpdateCursorOverlay()
+@@ -5273,8 +5280,6 @@ void ScGridWindow::UpdateCursorOverlay()
  
      DeleteCursorOverlay();
-+    DeleteCopySourceOverlay();
  
-     UpdateCopySourceOverlay( aDrawMode );
+-    UpdateCopySourceOverlay( aDrawMode );
+-
+     std::vector<Rectangle> aPixelRects;
  
+     //
 diff --git sc/source/ui/view/makefile.mk sc/source/ui/view/makefile.mk
 index 312929c..9003498 100644
 --- sc/source/ui/view/makefile.mk
@@ -235,10 +277,10 @@ index 312929c..9003498 100644
      $(SLO)$/cellsh1.obj \
 diff --git sc/source/ui/view/overlayobject.cxx sc/source/ui/view/overlayobject.cxx
 new file mode 100644
-index 0000000..0081358
+index 0000000..5b16259
 --- /dev/null
 +++ sc/source/ui/view/overlayobject.cxx
-@@ -0,0 +1,157 @@
+@@ -0,0 +1,121 @@
 +/*************************************************************************
 + *
 + * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
@@ -284,43 +326,6 @@ index 0000000..0081358
 +
 +using ::sdr::overlay::OverlayObject;
 +using ::sdr::overlay::OverlayManager;
-+
-+
-+#include <stdio.h>
-+#include <string>
-+#include <sys/time.h>
-+
-+namespace {
-+
-+class StackPrinter
-+{
-+public:
-+    explicit StackPrinter(const char* msg) :
-+        msMsg(msg)
-+    {
-+        fprintf(stdout, "%s: --begin\n", msMsg.c_str());
-+        mfStartTime = getTime();
-+    }
-+
-+    ~StackPrinter()
-+    {
-+        double fEndTime = getTime();
-+        fprintf(stdout, "%s: --end (duration: %g sec)\n", msMsg.c_str(), (fEndTime-mfStartTime));
-+    }
-+
-+private:
-+    double getTime() const
-+    {
-+        timeval tv;
-+        gettimeofday(&tv, NULL);
-+        return tv.tv_sec + tv.tv_usec / 1000000.0;
-+    }
-+
-+    ::std::string msMsg;
-+    double mfStartTime;
-+};
-+
-+}
 +
 +#define DASH_UPDATE_INTERVAL 180    // in msec
 +
@@ -380,6 +385,7 @@ index 0000000..0081358
 +        pMgr->setStripeColorA(COL_WHITE);
 +        pMgr->setStripeColorB(getBaseColor());
 +    }
++
 +    B2DPolygon aPoly;
 +    aPoly.append(B2DPoint(maBaseRange.getMinX(), maBaseRange.getMinY()));
 +    aPoly.append(B2DPoint(maBaseRange.getMaxX(), maBaseRange.getMinY()));
@@ -396,6 +402,24 @@ index 0000000..0081358
 +{
 +}
 +
+diff --git sc/source/ui/view/tabview2.cxx sc/source/ui/view/tabview2.cxx
+index ddb584d..0cd6204 100644
+--- sc/source/ui/view/tabview2.cxx
++++ sc/source/ui/view/tabview2.cxx
+@@ -699,6 +699,13 @@ void ScTabView::ExpandBlockArea(SCsCOL nMovX, SCsROW nMovY)
+     ExpandBlock(nAreaX, nAreaY, eMode);
+ }
+ 
++void ScTabView::UpdateCopySourceOverlay()
++{
++    for (sal_uInt8 i = 0; i < 4; ++i)
++        if (pGridWin[i] && pGridWin[i]->IsVisible())
++            pGridWin[i]->UpdateCopySourceOverlay();
++}
++
+ void ScTabView::UpdateSelectionOverlay()
+ {
+     for (USHORT i=0; i<4; i++)
 diff --git sc/source/ui/view/tabview3.cxx sc/source/ui/view/tabview3.cxx
 index 7130fba..ff7c2cf 100644
 --- sc/source/ui/view/tabview3.cxx
@@ -408,6 +432,22 @@ index 7130fba..ff7c2cf 100644
                      pGridWin[i]->DeleteAutoFillOverlay();
  
                      // flush OverlayManager before changing MapMode to text edit
+diff --git sc/source/ui/view/viewfunc.cxx sc/source/ui/view/viewfunc.cxx
+index 7be076a..92ed34b 100644
+--- sc/source/ui/view/viewfunc.cxx
++++ sc/source/ui/view/viewfunc.cxx
+@@ -1940,7 +1940,10 @@ void ScViewFunc::DeleteMulti( BOOL bRows, BOOL bRecord )
+ 
+ void ScViewFunc::DeleteContents( USHORT nFlags, BOOL bRecord )
+ {
+-	GetViewData()->SetPasteMode( SC_PASTE_NONE );
++    ScViewData* pViewData = GetViewData();
++	pViewData->SetPasteMode( SC_PASTE_NONE );
++    pViewData->GetViewShell()->UpdateCopySourceOverlay();
++
+     // nur wegen Matrix nicht editierbar? Attribute trotzdem ok
+     BOOL bOnlyNotBecauseOfMatrix;
+     BOOL bEditable = SelectionEditable( &bOnlyNotBecauseOfMatrix );
 diff --git svx/inc/svx/sdr/animation/scheduler.hxx svx/inc/svx/sdr/animation/scheduler.hxx
 index 6ee3e41..3dd8871 100644
 --- svx/inc/svx/sdr/animation/scheduler.hxx
