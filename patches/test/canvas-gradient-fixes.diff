@@ -1,0 +1,2769 @@
+canvas gradient fixes
+
+From: Thorsten Behrens <thb@openoffice.org>
+
+
+---
+
+ basegfx/inc/basegfx/numeric/ftools.hxx             |    2 
+ basegfx/inc/basegfx/tools/gradienttools.hxx        |    4 
+ basegfx/inc/basegfx/tools/keystoplerp.hxx          |  100 +++++
+ basegfx/inc/basegfx/tools/lerp.hxx                 |   60 +++
+ basegfx/prj/d.lst                                  |    2 
+ basegfx/source/tools/keystoplerp.cxx               |  104 ++++++
+ basegfx/source/tools/makefile.mk                   |    1 
+ basegfx/test/basegfxtools.cxx                      |  119 ++++++
+ basegfx/test/makefile.mk                           |    1 
+ canvas/inc/canvas/base/graphicdevicebase.hxx       |   86 +----
+ canvas/inc/canvas/canvastools.hxx                  |   22 -
+ canvas/inc/canvas/parametricpolypolygon.hxx        |   40 +-
+ canvas/source/cairo/cairo_canvas.hxx               |    3 
+ canvas/source/cairo/cairo_canvashelper.cxx         |  113 ++++--
+ canvas/source/cairo/cairo_spritecanvas.hxx         |    3 
+ canvas/source/null/null_spritecanvas.hxx           |    4 
+ canvas/source/tools/parametricpolypolygon.cxx      |  110 +++++-
+ canvas/source/vcl/canvas.hxx                       |    3 
+ canvas/source/vcl/canvashelper_texturefill.cxx     |  262 ++++++--------
+ canvas/source/vcl/spritecanvas.hxx                 |    3 
+ cppcanvas/source/mtfrenderer/emfplus.cxx           |   74 ++--
+ cppcanvas/source/mtfrenderer/implrenderer.cxx      |  368 +++++++-------------
+ offapi/com/sun/star/rendering/XGraphicDevice.idl   |   65 +++-
+ offapi/com/sun/star/rendering/makefile.mk          |    1 
+ .../source/engine/activities/activitybase.cxx      |    2 
+ .../activities/continuouskeytimeactivitybase.cxx   |   69 +---
+ .../activities/continuouskeytimeactivitybase.hxx   |    7 
+ .../source/engine/activities/interpolation.hxx     |   21 +
+ slideshow/source/engine/shapes/viewshape.cxx       |    7 
+ slideshow/source/engine/tools.cxx                  |   26 +
+ slideshow/source/inc/lerp.hxx                      |   62 ---
+ 31 files changed, 958 insertions(+), 786 deletions(-)
+ create mode 100644 basegfx/inc/basegfx/tools/keystoplerp.hxx
+ create mode 100644 basegfx/inc/basegfx/tools/lerp.hxx
+ create mode 100644 basegfx/source/tools/keystoplerp.cxx
+ create mode 100644 basegfx/test/basegfxtools.cxx
+ delete mode 100644 slideshow/source/inc/lerp.hxx
+
+
+diff --git basegfx/inc/basegfx/numeric/ftools.hxx basegfx/inc/basegfx/numeric/ftools.hxx
+index 9321745..080695d 100644
+--- basegfx/inc/basegfx/numeric/ftools.hxx
++++ basegfx/inc/basegfx/numeric/ftools.hxx
+@@ -112,7 +112,7 @@ namespace basegfx
+ 
+     /** clamp given value against given minimum and maximum values
+     */
+-    template <class T> const T& clamp(const T& value, const T& minimum, const T& maximum)
++    template <class T> inline const T& clamp(const T& value, const T& minimum, const T& maximum)
+     {
+         if(value < minimum)
+         {
+diff --git basegfx/inc/basegfx/tools/gradienttools.hxx basegfx/inc/basegfx/tools/gradienttools.hxx
+index 1b45aa9..59435f8 100644
+--- basegfx/inc/basegfx/tools/gradienttools.hxx
++++ basegfx/inc/basegfx/tools/gradienttools.hxx
+@@ -37,6 +37,9 @@
+ #include <basegfx/matrix/b2dhommatrix.hxx>
+ #include <basegfx/numeric/ftools.hxx>
+ 
++#include <vector>
++#include <algorithm>
++
+ namespace basegfx
+ {
+     /** Gradient definition as used in ODF 1.2
+@@ -394,7 +397,6 @@ namespace basegfx
+         {
+             return getSquareGradientAlpha(rUV, rGradInfo); // only matrix setup differs
+         }
+-
+     }
+ }
+ 
+diff --git basegfx/inc/basegfx/tools/keystoplerp.hxx basegfx/inc/basegfx/tools/keystoplerp.hxx
+new file mode 100644
+index 0000000..df4d3bb
+--- /dev/null
++++ basegfx/inc/basegfx/tools/keystoplerp.hxx
+@@ -0,0 +1,100 @@
++/*************************************************************************
++ *
++ * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
++ * 
++ * Copyright 2008 by Sun Microsystems, Inc.
++ *
++ * OpenOffice.org - a multi-platform office productivity suite
++ *
++ * $RCSfile: canvastools.hxx,v $
++ * $Revision: 1.10 $
++ *
++ * This file is part of OpenOffice.org.
++ *
++ * OpenOffice.org is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU Lesser General Public License version 3
++ * only, as published by the Free Software Foundation.
++ *
++ * OpenOffice.org is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU Lesser General Public License version 3 for more details
++ * (a copy is included in the LICENSE file that accompanied this code).
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * version 3 along with OpenOffice.org.  If not, see
++ * <http://www.openoffice.org/license.html>
++ * for a copy of the LGPLv3 License.
++ *
++ ************************************************************************/
++
++#ifndef _BGFX_TOOLS_KEYSTOPLERP_HXX
++#define _BGFX_TOOLS_KEYSTOPLERP_HXX
++
++#include <basegfx/numeric/ftools.hxx>
++#include <vector>
++
++namespace com{ namespace sun{ namespace star{ namespace uno {
++    template<typename T> class Sequence;
++}}}}
++
++namespace basegfx
++{
++    namespace tools
++    {
++        /** Lerp in a vector of key stops
++
++            This class holds a key stop vector and provides the
++            functionality to lerp inside it. Useful e.g. for
++            multi-stop gradients, or the SMIL key time activity.
++
++            For those, given a global [0,1] lerp alpha, one need to
++            find the suitable bucket index from key stop vector, and
++            then calculate the relative alpha between the two buckets
++            found.
++         */
++        class KeyStopLerp
++        {
++        public:
++            typedef std::pair<std::ptrdiff_t,double> ResultType;
++
++            /** Create lerper with given vector of stops
++
++                @param rKeyStops
++
++                Vector of stops, must contain at least two elements
++                (though preferrably more, otherwise you probably don't
++                need key stop lerping in the first place). All
++                elements must be of monotonically increasing value.
++             */
++            explicit KeyStopLerp( const std::vector<double>& rKeyStops );
++
++            /** Create lerper with given sequence of stops
++
++                @param rKeyStops
++
++                Sequence of stops, must contain at least two elements
++                (though preferrably more, otherwise you probably don't
++                need key stop lerping in the first place). All
++                elements must be of monotonically increasing value.
++             */
++            explicit KeyStopLerp( const ::com::sun::star::uno::Sequence<double>& rKeyStops );
++
++            /** Find two nearest bucket index & interpolate
++
++                @param fAlpha
++                Find bucket index i, with keyStops[i] < fAlpha <=
++                keyStops[i+1]. Return new alpha value in [0,1),
++                proportional to fAlpha's position between keyStops[i]
++                and keyStops[i+1]
++             */
++            ResultType lerp(double fAlpha) const;
++
++        private:
++            std::vector<double>    maKeyStops;
++            mutable std::ptrdiff_t mnLastIndex;
++        };
++    }
++}
++
++#endif
+diff --git basegfx/inc/basegfx/tools/lerp.hxx basegfx/inc/basegfx/tools/lerp.hxx
+new file mode 100644
+index 0000000..36835f5
+--- /dev/null
++++ basegfx/inc/basegfx/tools/lerp.hxx
+@@ -0,0 +1,60 @@
++/*************************************************************************
++ *
++ * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
++ * 
++ * Copyright 2008 by Sun Microsystems, Inc.
++ *
++ * OpenOffice.org - a multi-platform office productivity suite
++ *
++ * $RCSfile: lerp.hxx,v $
++ * $Revision: 1.6 $
++ *
++ * This file is part of OpenOffice.org.
++ *
++ * OpenOffice.org is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU Lesser General Public License version 3
++ * only, as published by the Free Software Foundation.
++ *
++ * OpenOffice.org is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU Lesser General Public License version 3 for more details
++ * (a copy is included in the LICENSE file that accompanied this code).
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * version 3 along with OpenOffice.org.  If not, see
++ * <http://www.openoffice.org/license.html>
++ * for a copy of the LGPLv3 License.
++ *
++ ************************************************************************/
++
++#ifndef _BGFX_TOOLS_LERP_HXX
++#define _BGFX_TOOLS_LERP_HXX
++
++#include <sal/types.h>
++
++namespace basegfx
++{
++    namespace tools
++    {
++        /** Generic linear interpolator
++
++	        @tpl ValueType
++            Must have operator+ and operator* defined, and should
++            have value semantics.
++
++            @param t
++            As usual, t must be in the [0,1] range
++        */
++        template< typename ValueType > ValueType lerp( const ValueType& 	rFrom, 
++                                                       const ValueType& 	rTo, 
++                                                       double				t )
++        {
++            // This is only to suppress a double->int warning. All other 
++            // types should be okay here.
++            return static_cast<ValueType>( (1.0-t)*rFrom + t*rTo );
++        }
++    }
++}
++
++#endif /* _BGFX_TOOLS_LERP_HXX */
+diff --git basegfx/prj/d.lst basegfx/prj/d.lst
+index a58cd33..1707969 100644
+--- basegfx/prj/d.lst
++++ basegfx/prj/d.lst
+@@ -89,6 +89,8 @@ mkdir: %_DEST%\inc%_EXT%\basegfx\tuple
+ 
+ mkdir: %_DEST%\inc%_EXT%\basegfx\tools
+ ..\inc\basegfx\tools\canvastools.hxx %_DEST%\inc%_EXT%\basegfx\tools\canvastools.hxx
++..\inc\basegfx\tools\keystoplerp.hxx %_DEST%\inc%_EXT%\basegfx\tools\keystoplerp.hxx
++..\inc\basegfx\tools\lerp.hxx %_DEST%\inc%_EXT%\basegfx\tools\lerp.hxx
+ ..\inc\basegfx\tools\unopolypolygon.hxx %_DEST%\inc%_EXT%\basegfx\tools\unopolypolygon.hxx
+ ..\inc\basegfx\tools\rectcliptools.hxx %_DEST%\inc%_EXT%\basegfx\tools\rectcliptools.hxx
+ ..\inc\basegfx\tools\tools.hxx %_DEST%\inc%_EXT%\basegfx\tools\tools.hxx
+diff --git basegfx/source/tools/keystoplerp.cxx basegfx/source/tools/keystoplerp.cxx
+new file mode 100644
+index 0000000..c7a58c2
+--- /dev/null
++++ basegfx/source/tools/keystoplerp.cxx
+@@ -0,0 +1,104 @@
++/*************************************************************************
++ *
++ * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
++ * 
++ * Copyright 2008 by Sun Microsystems, Inc.
++ *
++ * OpenOffice.org - a multi-platform office productivity suite
++ *
++ * $RCSfile: canvastools.hxx,v $
++ * $Revision: 1.10 $
++ *
++ * This file is part of OpenOffice.org.
++ *
++ * OpenOffice.org is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU Lesser General Public License version 3
++ * only, as published by the Free Software Foundation.
++ *
++ * OpenOffice.org is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU Lesser General Public License version 3 for more details
++ * (a copy is included in the LICENSE file that accompanied this code).
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * version 3 along with OpenOffice.org.  If not, see
++ * <http://www.openoffice.org/license.html>
++ * for a copy of the LGPLv3 License.
++ *
++ ************************************************************************/
++
++#include "basegfx/tools/keystoplerp.hxx"
++#include <com/sun/star/uno/Sequence.hxx>
++
++#include <algorithm>
++
++static void validateInput(const std::vector<double>& rKeyStops)
++{
++    (void)rKeyStops;
++#ifdef DBG_UTIL
++    OSL_ENSURE( rKeyStops.size() > 1, 
++                "KeyStopLerp::KeyStopLerp(): key stop vector must have two entries or more" );
++            
++    // rKeyStops must be sorted in ascending order
++    for( ::std::size_t i=1, len=rKeyStops.size(); i<len; ++i )
++    {
++        if( rKeyStops[i-1] > rKeyStops[i] )
++            OSL_ENSURE( false, 
++                        "KeyStopLerp::KeyStopLerp(): time vector is not sorted in ascending order!" );
++    }
++#endif
++}
++
++namespace basegfx
++{
++    namespace tools
++    {
++        KeyStopLerp::KeyStopLerp( const std::vector<double>& rKeyStops ) :
++            maKeyStops(rKeyStops),
++            mnLastIndex(0)
++        {
++            validateInput(maKeyStops);
++        }
++
++        KeyStopLerp::KeyStopLerp( const ::com::sun::star::uno::Sequence<double>& rKeyStops ) :
++            maKeyStops(rKeyStops.getLength()),
++            mnLastIndex(0)            
++        {
++            std::copy( rKeyStops.getConstArray(), 
++                       rKeyStops.getConstArray()+rKeyStops.getLength(), 
++                       maKeyStops.begin() );
++            validateInput(maKeyStops);
++        }
++
++        KeyStopLerp::ResultType KeyStopLerp::lerp(double fAlpha) const
++        {
++            // cached value still okay?
++            if( maKeyStops.at(mnLastIndex) < fAlpha ||
++                maKeyStops.at(mnLastIndex+1) >= fAlpha )
++            {
++                // nope, find new index
++                mnLastIndex = std::min<std::ptrdiff_t>( 
++                    maKeyStops.size()-2,
++                    // range is ensured by max below
++                    std::max<std::ptrdiff_t>(
++                        0,
++                        std::distance( maKeyStops.begin(),
++                                       std::lower_bound( maKeyStops.begin(),
++                                                         maKeyStops.end(),
++                                                         fAlpha )) - 1 ));
++            }
++
++            // lerp between stop and stop+1
++            const double fRawLerp=
++                (fAlpha-maKeyStops.at(mnLastIndex)) / 
++                (maKeyStops.at(mnLastIndex+1) - maKeyStops.at(mnLastIndex));
++
++            // clamp to permissible range (input fAlpha might be
++            // everything)
++            return ResultType(
++                mnLastIndex,
++                clamp(fRawLerp,0.0,1.0));
++        }
++    }
++}
+diff --git basegfx/source/tools/makefile.mk basegfx/source/tools/makefile.mk
+index df75a82..39e63b3 100755
+--- basegfx/source/tools/makefile.mk
++++ basegfx/source/tools/makefile.mk
+@@ -44,6 +44,7 @@ ENABLE_EXCEPTIONS=TRUE
+ SLOFILES= $(SLO)$/canvastools.obj	\
+ 		  $(SLO)$/gradienttools.obj	\
+ 		  $(SLO)$/debugplotter.obj	\
++		  $(SLO)$/keystoplerp.obj	\
+ 		  $(SLO)$/liangbarsky.obj	\
+ 		  $(SLO)$/tools.obj		    \
+ 		  $(SLO)$/unopolypolygon.obj
+diff --git basegfx/test/basegfxtools.cxx basegfx/test/basegfxtools.cxx
+new file mode 100644
+index 0000000..c8e8b88
+--- /dev/null
++++ basegfx/test/basegfxtools.cxx
+@@ -0,0 +1,119 @@
++/*************************************************************************
++ *
++ * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
++ * 
++ * Copyright 2008 by Sun Microsystems, Inc.
++ *
++ * OpenOffice.org - a multi-platform office productivity suite
++ *
++ * $RCSfile: basegfx2d.cxx,v $
++ * $Revision: 1.14 $
++ *
++ * This file is part of OpenOffice.org.
++ *
++ * OpenOffice.org is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU Lesser General Public License version 3
++ * only, as published by the Free Software Foundation.
++ *
++ * OpenOffice.org is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU Lesser General Public License version 3 for more details
++ * (a copy is included in the LICENSE file that accompanied this code).
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * version 3 along with OpenOffice.org.  If not, see
++ * <http://www.openoffice.org/license.html>
++ * for a copy of the LGPLv3 License.
++ *
++ ************************************************************************/
++
++
++// MARKER(update_precomp.py): autogen include statement, do not remove
++#include "precompiled_basegfx.hxx"
++// autogenerated file with codegen.pl
++
++#include <cppunit/simpleheader.hxx>
++
++#include <basegfx/tools/keystoplerp.hxx>
++#include <basegfx/numeric/ftools.hxx>
++
++#include <boost/tuple/tuple.hpp>
++
++using namespace ::basegfx;
++using namespace ::boost::tuples;
++
++namespace basegfxtools
++{
++
++class KeyStopLerpTest : public CppUnit::TestFixture
++{
++    tools::KeyStopLerp maKeyStops;
++
++    static std::vector<double> getTestVector()
++    {
++        std::vector<double> aStops(3);
++        aStops[0] = 0.1;
++        aStops[1] = 0.5;
++        aStops[2] = 0.9;
++        return aStops;
++    }
++
++public:
++    KeyStopLerpTest() :
++        maKeyStops(getTestVector())
++    {}
++
++    void setUp()
++    {}
++
++    void tearDown()
++    {}
++
++    void test()
++    {
++        double fAlpha;
++        std::ptrdiff_t nIndex;
++
++        tie(nIndex,fAlpha) = maKeyStops.lerp(-1.0);
++        CPPUNIT_ASSERT_MESSAGE("-1.0", nIndex==0 && fAlpha==0.0);
++
++        tie(nIndex,fAlpha) = maKeyStops.lerp(0.1);
++        CPPUNIT_ASSERT_MESSAGE("0.1", nIndex==0 && fAlpha==0.0);
++
++        tie(nIndex,fAlpha) = maKeyStops.lerp(0.3);
++        CPPUNIT_ASSERT_MESSAGE("0.3", nIndex==0 && fTools::equal(fAlpha,0.5));
++
++        tie(nIndex,fAlpha) = maKeyStops.lerp(0.5);
++        CPPUNIT_ASSERT_MESSAGE("0.5", nIndex==0 && fTools::equal(fAlpha,1.0));
++
++        tie(nIndex,fAlpha) = maKeyStops.lerp(0.51);
++        CPPUNIT_ASSERT_MESSAGE("0.51", nIndex==1 && fTools::equal(fAlpha,0.025));
++
++        tie(nIndex,fAlpha) = maKeyStops.lerp(0.9);
++        CPPUNIT_ASSERT_MESSAGE("0.51", nIndex==1 && fTools::equal(fAlpha,1.0));
++
++        tie(nIndex,fAlpha) = maKeyStops.lerp(1.0);
++        CPPUNIT_ASSERT_MESSAGE("0.51", nIndex==1 && fAlpha==1.0);
++    }
++
++    // Change the following lines only, if you add, remove or rename 
++    // member functions of the current class, 
++    // because these macros are need by auto register mechanism.
++
++    CPPUNIT_TEST_SUITE(KeyStopLerpTest);
++    CPPUNIT_TEST(test);
++    CPPUNIT_TEST_SUITE_END();
++};
++
++// -----------------------------------------------------------------------------
++CPPUNIT_TEST_SUITE_NAMED_REGISTRATION(basegfxtools::KeyStopLerpTest, "basegfxtools");
++} // namespace basegfxtools
++
++
++// -----------------------------------------------------------------------------
++
++// this macro creates an empty function, which will called by the RegisterAllFunctions()
++// to let the user the possibility to also register some functions by hand.
++// NOADDITIONAL;
++
+diff --git basegfx/test/makefile.mk basegfx/test/makefile.mk
+index 710d194..252c887 100644
+--- basegfx/test/makefile.mk
++++ basegfx/test/makefile.mk
+@@ -46,6 +46,7 @@ SHL1OBJS=  \
+ 	$(SLO)$/basegfx1d.obj \
+ 	$(SLO)$/basegfx2d.obj \
+ 	$(SLO)$/basegfx3d.obj \
++	$(SLO)$/basegfxtools.obj \
+ 	$(SLO)$/testtools.obj	
+ 
+ # linking statically against basegfx parts
+diff --git canvas/inc/canvas/base/graphicdevicebase.hxx canvas/inc/canvas/base/graphicdevicebase.hxx
+index 52bd86c..2dd2967 100644
+--- canvas/inc/canvas/base/graphicdevicebase.hxx
++++ canvas/inc/canvas/base/graphicdevicebase.hxx
+@@ -33,11 +33,11 @@
+ 
+ #include <rtl/ref.hxx>
+ #include <com/sun/star/lang/XServiceInfo.hpp>
++#include <com/sun/star/lang/XMultiServiceFactory.hpp>
+ #include <com/sun/star/beans/XPropertySet.hpp>
+ #include <com/sun/star/util/XUpdatable.hpp>
+ #include <com/sun/star/rendering/XGraphicDevice.hpp>
+ #include <com/sun/star/rendering/XColorSpace.hpp>
+-#include <com/sun/star/rendering/XParametricPolyPolygon2DFactory.hpp>
+ 
+ #include <canvas/parametricpolypolygon.hxx>
+ #include <canvas/propertysethelper.hxx>
+@@ -50,8 +50,7 @@ namespace canvas
+     /** Helper template base class for XGraphicDevice implementations.
+         
+     	This base class provides partial implementations of the
+-    	XGraphicDevice-related interface, such as
+-    	XParametricPolyPolygon2DFactory and XColorSpace.
++    	XGraphicDevice-related interface, such as XColorSpace.
+ 
+         This template basically interposes itself between the full
+         interface you implement (i.e. not restricted to XGraphicDevice
+@@ -249,7 +248,7 @@ namespace canvas
+             return maDeviceHelper.createVolatileAlphaBitmap( this, size );
+         }
+ 
+-        virtual ::com::sun::star::uno::Reference< ::com::sun::star::rendering::XParametricPolyPolygon2DFactory > SAL_CALL getParametricPolyPolygonFactory(  ) throw (::com::sun::star::uno::RuntimeException)
++        virtual ::com::sun::star::uno::Reference< ::com::sun::star::lang::XMultiServiceFactory > SAL_CALL getParametricPolyPolygonFactory(  ) throw (::com::sun::star::uno::RuntimeException)
+         {
+             return this;
+         }
+@@ -268,79 +267,26 @@ namespace canvas
+             return maDeviceHelper.enterFullScreenMode( bEnter );
+         }
+ 
+-        // XParametricPolyPolygon2DFactory
+-        virtual ::com::sun::star::uno::Reference< ::com::sun::star::rendering::XParametricPolyPolygon2D > SAL_CALL createLinearHorizontalGradient( const ::com::sun::star::uno::Sequence< ::com::sun::star::uno::Sequence< double > >& colors, const ::com::sun::star::uno::Sequence< double >& stops ) throw (::com::sun::star::lang::IllegalArgumentException, 
+-                                                                                                                                                                                                                                                                                    ::com::sun::star::uno::RuntimeException)
++        // XMultiServiceFactory
++        virtual ::com::sun::star::uno::Reference< ::com::sun::star::uno::XInterface > SAL_CALL createInstance( const ::rtl::OUString& aServiceSpecifier ) throw (::com::sun::star::uno::Exception, ::com::sun::star::uno::RuntimeException)
+         {
+-            return ::com::sun::star::uno::Reference< ::com::sun::star::rendering::XParametricPolyPolygon2D >( 
+-                ParametricPolyPolygon::createLinearHorizontalGradient( this, 
+-                                                                       colors, 
+-                                                                       stops ) );
++            return ::com::sun::star::uno::Reference< ::com::sun::star::rendering::XParametricPolyPolygon2D >(
++                ParametricPolyPolygon::create(this,
++                                              aServiceSpecifier,
++                                              ::com::sun::star::uno::Sequence< ::com::sun::star::uno::Any >()));
+         }
+ 
+-        virtual ::com::sun::star::uno::Reference< ::com::sun::star::rendering::XParametricPolyPolygon2D > SAL_CALL createAxialHorizontalGradient( const ::com::sun::star::uno::Sequence< ::com::sun::star::uno::Sequence< double > >& colors, const ::com::sun::star::uno::Sequence< double >& stops ) throw (::com::sun::star::lang::IllegalArgumentException, 
+-                                                                                                                                                                                                                                                                                   ::com::sun::star::uno::RuntimeException)
++        virtual ::com::sun::star::uno::Reference< ::com::sun::star::uno::XInterface > SAL_CALL createInstanceWithArguments( const ::rtl::OUString& aServiceSpecifier, const ::com::sun::star::uno::Sequence< ::com::sun::star::uno::Any >& Arguments ) throw (::com::sun::star::uno::Exception, ::com::sun::star::uno::RuntimeException)
+         {
+-            return ::com::sun::star::uno::Reference< ::com::sun::star::rendering::XParametricPolyPolygon2D >( 
+-                ParametricPolyPolygon::createAxialHorizontalGradient( this,
+-                                                                      colors,
+-                                                                      stops ) );
++            return ::com::sun::star::uno::Reference< ::com::sun::star::rendering::XParametricPolyPolygon2D >(
++                ParametricPolyPolygon::create(this,
++                                              aServiceSpecifier, 
++                                              Arguments));
+         }
+ 
+-        virtual ::com::sun::star::uno::Reference< ::com::sun::star::rendering::XParametricPolyPolygon2D > SAL_CALL createEllipticalGradient( const ::com::sun::star::uno::Sequence< ::com::sun::star::uno::Sequence< double > >& colors, const ::com::sun::star::uno::Sequence< double >& stops, const ::com::sun::star::geometry::RealRectangle2D& boundRect ) throw (::com::sun::star::lang::IllegalArgumentException, 
+-                                                                                                                                                                                                                                                                                                                                            ::com::sun::star::uno::RuntimeException)
++        virtual ::com::sun::star::uno::Sequence< ::rtl::OUString > SAL_CALL getAvailableServiceNames(  ) throw (::com::sun::star::uno::RuntimeException)
+         {
+-            return ::com::sun::star::uno::Reference< ::com::sun::star::rendering::XParametricPolyPolygon2D >( 
+-                ParametricPolyPolygon::createEllipticalGradient( this, 
+-                                                                 colors,
+-                                                                 stops,
+-                                                                 boundRect ) );
+-        }
+-
+-        virtual ::com::sun::star::uno::Reference< ::com::sun::star::rendering::XParametricPolyPolygon2D > SAL_CALL createRectangularGradient( const ::com::sun::star::uno::Sequence< ::com::sun::star::uno::Sequence< double > >& colors, const ::com::sun::star::uno::Sequence< double >& stops, const ::com::sun::star::geometry::RealRectangle2D& boundRect ) throw (::com::sun::star::lang::IllegalArgumentException, 
+-                                                                                                                                                                                                                                                                                                                                             ::com::sun::star::uno::RuntimeException)
+-        {
+-            return ::com::sun::star::uno::Reference< ::com::sun::star::rendering::XParametricPolyPolygon2D >( 
+-                ParametricPolyPolygon::createRectangularGradient( this,
+-                                                                  colors,
+-                                                                  stops,
+-                                                                  boundRect ) );
+-        }
+-
+-        virtual ::com::sun::star::uno::Reference< ::com::sun::star::rendering::XParametricPolyPolygon2D > SAL_CALL createVerticalLinesHatch( const ::com::sun::star::uno::Sequence< double >& /*leftColor*/, 
+-                                                                                                                                             const ::com::sun::star::uno::Sequence< double >& /*rightColor*/ ) throw (::com::sun::star::lang::IllegalArgumentException, 
+-                                                                                                                                                                                                                      ::com::sun::star::uno::RuntimeException)
+-        {
+-            // TODO(F1): hatch factory NYI
+-            return ::com::sun::star::uno::Reference< 
+-            			::com::sun::star::rendering::XParametricPolyPolygon2D >();
+-        }
+-
+-        virtual ::com::sun::star::uno::Reference< ::com::sun::star::rendering::XParametricPolyPolygon2D > SAL_CALL createOrthogonalLinesHatch( const ::com::sun::star::uno::Sequence< double >& /*leftTopColor*/, 
+-                                                                                                                                               const ::com::sun::star::uno::Sequence< double >& /*rightBottomColor*/ ) throw (::com::sun::star::lang::IllegalArgumentException, 
+-                                                                                                                                                                                                                              ::com::sun::star::uno::RuntimeException)
+-        {
+-            // TODO(F1): hatch factory NYI
+-            return ::com::sun::star::uno::Reference< 
+-            			::com::sun::star::rendering::XParametricPolyPolygon2D >();
+-        }
+-
+-        virtual ::com::sun::star::uno::Reference< ::com::sun::star::rendering::XParametricPolyPolygon2D > SAL_CALL createThreeCrossingLinesHatch( const ::com::sun::star::uno::Sequence< double >& /*startColor*/, 
+-                                                                                                                                                  const ::com::sun::star::uno::Sequence< double >& /*endColor*/ ) throw (::com::sun::star::lang::IllegalArgumentException, 
+-                                                                                                                                                                                                                         ::com::sun::star::uno::RuntimeException)
+-        {
+-            // TODO(F1): hatch factory NYI
+-            return ::com::sun::star::uno::Reference< 
+-            			::com::sun::star::rendering::XParametricPolyPolygon2D >();
+-        }
+-
+-        virtual ::com::sun::star::uno::Reference< ::com::sun::star::rendering::XParametricPolyPolygon2D > SAL_CALL createFourCrossingLinesHatch( const ::com::sun::star::uno::Sequence< double >& /*startColor*/, 
+-                                                                                                                                                 const ::com::sun::star::uno::Sequence< double >& /*endColor*/ ) throw (::com::sun::star::lang::IllegalArgumentException, 
+-                                                                                                                                                                                                                        ::com::sun::star::uno::RuntimeException)
+-        {
+-            // TODO(F1): hatch factory NYI
+-            return ::com::sun::star::uno::Reference< 
+-            			::com::sun::star::rendering::XParametricPolyPolygon2D >();
++            return ParametricPolyPolygon::getAvailableServiceNames();
+         }
+ 
+ 
+diff --git canvas/inc/canvas/canvastools.hxx canvas/inc/canvas/canvastools.hxx
+index 3b1e827..0a1275c 100644
+--- canvas/inc/canvas/canvastools.hxx
++++ canvas/inc/canvas/canvastools.hxx
+@@ -417,28 +417,6 @@ namespace canvas
+          */
+         ::basegfx::B2IRange spritePixelAreaFromB2DRange( const ::basegfx::B2DRange& rRange );
+ 
+-        /** This method clamps the given value to the specified range
+-
+-        	@param val
+-            The value to clamp
+-
+-            @param minVal
+-            The minimal value val is allowed to attain
+-
+-            @param maxVal
+-            The maximal value val is allowed to attain
+-
+-            @return the clamped value
+-         */
+-        template< typename T > T clamp( T  val,
+-                                        T  minVal,
+-                                        T  maxVal )
+-        {
+-            return ::std::max( minVal,
+-                               ::std::min( maxVal, 
+-                                           val ) );
+-        }
+-
+         /** Retrieve various internal properties of the actual canvas implementation.
+ 			
+         	This method retrieves a bunch of internal, implementation-
+diff --git canvas/inc/canvas/parametricpolypolygon.hxx canvas/inc/canvas/parametricpolypolygon.hxx
+index e88028b..c9aa9bf 100644
+--- canvas/inc/canvas/parametricpolypolygon.hxx
++++ canvas/inc/canvas/parametricpolypolygon.hxx
+@@ -33,7 +33,7 @@
+ 
+ #include <com/sun/star/lang/XServiceInfo.hpp>
+ #include <com/sun/star/rendering/XGraphicDevice.hpp>
+-#include <com/sun/star/rendering/XParametricPolyPolygon2DFactory.hpp>
++#include <com/sun/star/rendering/XParametricPolyPolygon2D.hpp>
+ #include <cppuhelper/compbase2.hxx>
+ #include <comphelper/broadcasthelper.hxx>
+ #include <basegfx/polygon/b2dpolygon.hxx>
+@@ -62,7 +62,6 @@ namespace canvas
+         enum GradientType
+         {
+             GRADIENT_LINEAR,
+-            GRADIENT_AXIAL,
+             GRADIENT_ELLIPTICAL,
+             GRADIENT_RECTANGULAR
+         };
+@@ -103,24 +102,11 @@ namespace canvas
+             const GradientType									meType;
+         };
+ 
+-        static ParametricPolyPolygon* createLinearHorizontalGradient( const ::com::sun::star::uno::Reference< 
+-                                                                      	::com::sun::star::rendering::XGraphicDevice >& 	rDevice,  
+-                                                                      const ::com::sun::star::uno::Sequence< ::com::sun::star::uno::Sequence< double > >& 	colors, 
+-                                                                      const ::com::sun::star::uno::Sequence< double >& 	stops );
+-        static ParametricPolyPolygon* createAxialHorizontalGradient( const ::com::sun::star::uno::Reference< 
+-                                                                      	::com::sun::star::rendering::XGraphicDevice >& 	rDevice,  
+-                                                                      const ::com::sun::star::uno::Sequence< ::com::sun::star::uno::Sequence< double > >& 	colors, 
+-                                                                      const ::com::sun::star::uno::Sequence< double >& 	stops );
+-        static ParametricPolyPolygon* createEllipticalGradient( const ::com::sun::star::uno::Reference< 
+-                                                                ::com::sun::star::rendering::XGraphicDevice >& 	rDevice,  
+-                                                                const ::com::sun::star::uno::Sequence< ::com::sun::star::uno::Sequence< double > >& 	colors, 
+-                                                                const ::com::sun::star::uno::Sequence< double >& 	stops,
+-                                                                const ::com::sun::star::geometry::RealRectangle2D&		boundRect );
+-        static ParametricPolyPolygon* createRectangularGradient( const ::com::sun::star::uno::Reference< 
+-                                                                 ::com::sun::star::rendering::XGraphicDevice >& 	rDevice,  
+-                                                                 const ::com::sun::star::uno::Sequence< ::com::sun::star::uno::Sequence< double > >& 	colors, 
+-                                                                 const ::com::sun::star::uno::Sequence< double >& 	stops,
+-                                                                 const ::com::sun::star::geometry::RealRectangle2D&		boundRect );
++        static ::com::sun::star::uno::Sequence< ::rtl::OUString > getAvailableServiceNames();
++        static ParametricPolyPolygon* create( 
++            const ::com::sun::star::uno::Reference< ::com::sun::star::rendering::XGraphicDevice >& rDevice,
++            const ::rtl::OUString& rServiceName,
++            const ::com::sun::star::uno::Sequence< ::com::sun::star::uno::Any >& rArgs );
+ 
+         /// Dispose all internal references
+         virtual void SAL_CALL disposing();
+@@ -143,6 +129,20 @@ namespace canvas
+         ~ParametricPolyPolygon(); // we're a ref-counted UNO class. _We_ destroy ourselves.
+ 
+     private:
++        static ParametricPolyPolygon* createLinearHorizontalGradient( const ::com::sun::star::uno::Reference< 
++                                                                         ::com::sun::star::rendering::XGraphicDevice >& rDevice,  
++                                                                      const ::com::sun::star::uno::Sequence< ::com::sun::star::uno::Sequence< double > >& colors, 
++                                                                      const ::com::sun::star::uno::Sequence< double >& stops );
++        static ParametricPolyPolygon* createEllipticalGradient( const ::com::sun::star::uno::Reference< 
++                                                                   ::com::sun::star::rendering::XGraphicDevice >& rDevice,  
++                                                                const ::com::sun::star::uno::Sequence< ::com::sun::star::uno::Sequence< double > >& colors,
++                                                                const ::com::sun::star::uno::Sequence< double >& stops,
++                                                                double fAspect );
++        static ParametricPolyPolygon* createRectangularGradient( const ::com::sun::star::uno::Reference< 
++                                                                    ::com::sun::star::rendering::XGraphicDevice >& rDevice,  
++                                                                 const ::com::sun::star::uno::Sequence< ::com::sun::star::uno::Sequence< double > >& colors,
++                                                                 const ::com::sun::star::uno::Sequence< double >& stops,
++                                                                 double fAspect );
+ 
+         /// Private, because objects can only be created from the static factories
+         ParametricPolyPolygon( const ::com::sun::star::uno::Reference< 
+diff --git canvas/source/cairo/cairo_canvas.hxx canvas/source/cairo/cairo_canvas.hxx
+index 62185d4..7528e2f 100644
+--- canvas/source/cairo/cairo_canvas.hxx
++++ canvas/source/cairo/cairo_canvas.hxx
+@@ -44,7 +44,6 @@
+ #include <com/sun/star/rendering/XIntegerBitmap.hpp>
+ #include <com/sun/star/rendering/XGraphicDevice.hpp>
+ #include <com/sun/star/rendering/XBufferController.hpp>
+-#include <com/sun/star/rendering/XParametricPolyPolygon2DFactory.hpp>
+ 
+ #include <cppuhelper/compbase7.hxx>
+ #include <comphelper/uno3.hxx>
+@@ -68,7 +67,7 @@ namespace cairocanvas
+     typedef ::cppu::WeakComponentImplHelper7< ::com::sun::star::rendering::XBitmapCanvas,
+                                                 ::com::sun::star::rendering::XIntegerBitmap,
+                                                 ::com::sun::star::rendering::XGraphicDevice,
+-                                                ::com::sun::star::rendering::XParametricPolyPolygon2DFactory,
++                                                ::com::sun::star::lang::XMultiServiceFactory,
+                                                 ::com::sun::star::util::XUpdatable,
+                                                 ::com::sun::star::beans::XPropertySet,
+                                                 ::com::sun::star::lang::XServiceName >	GraphicDeviceBase_Base;
+diff --git canvas/source/cairo/cairo_canvashelper.cxx canvas/source/cairo/cairo_canvashelper.cxx
+index 5ca2a96..e05ba73 100644
+--- canvas/source/cairo/cairo_canvashelper.cxx
++++ canvas/source/cairo/cairo_canvashelper.cxx
+@@ -665,7 +665,6 @@ namespace cairocanvas
+                 double alpha = rColor[3];
+                 // cairo expects premultiplied alpha
+                 cairo_pattern_add_color_stop_rgba( pPattern, stop, rColor[0]*alpha, rColor[1]*alpha, rColor[2]*alpha, alpha );
+-                //cairo_pattern_add_color_stop_rgba( pPattern, stop, rColor[0], rColor[1], rColor[2], alpha );
+             }
+         }
+     }
+@@ -691,9 +690,7 @@ namespace cairocanvas
+ 	    addColorStops( pPattern, aValues.maColors, aValues.maStops );
+ 	    break;
+ 
+-	// FIXME: NYI
+ 	case ::canvas::ParametricPolyPolygon::GRADIENT_RECTANGULAR:
+-	case ::canvas::ParametricPolyPolygon::GRADIENT_AXIAL:
+ 	    x0 = 0;
+ 	    y0 = 0;
+ 	    x1 = 1;
+@@ -708,7 +705,7 @@ namespace cairocanvas
+ 	    r0 = 0;
+ 	    r1 = 0.5;
+ 
+-	    pPattern = cairo_pattern_create_radial( cx, cy, r0, cx, cy, r1 );
++	    pPattern = cairo_pattern_create_radial( cx, cy, r0, cy, cy, r1 );
+ 	    addColorStops( pPattern, aValues.maColors, aValues.maStops, true );
+ 	    break;
+ 	}
+@@ -1171,12 +1168,12 @@ namespace cairocanvas
+ 																					   const rendering::ViewState&      viewState,
+ 																					   const rendering::RenderState&    renderState,
+ 																					   const geometry::IntegerSize2D&   rSize,
+-																					   bool /*bModulateColors*/,
++																					   bool bModulateColors,
+ 																					   bool bHasAlpha )
+     {
+         SurfaceSharedPtr pSurface=pInputSurface;
+ 		uno::Reference< rendering::XCachedPrimitive > rv = uno::Reference< rendering::XCachedPrimitive >(NULL);
+-                geometry::IntegerSize2D aBitmapSize = rSize;
++        geometry::IntegerSize2D aBitmapSize = rSize;
+ 
+ 		if( mpCairo ) {
+ 			cairo_save( mpCairo.get() );
+@@ -1198,38 +1195,38 @@ namespace cairocanvas
+ 				::rtl::math::approxEqual( aMatrix.y0, 0 ) &&
+ 				basegfx::fround( rSize.Width * aMatrix.xx ) > 8 &&
+ 				basegfx::fround( rSize.Height* aMatrix.yy ) > 8 )
+-				{
+-					double dWidth, dHeight;
+-
+-					dWidth = basegfx::fround( rSize.Width * aMatrix.xx );
+-					dHeight = basegfx::fround( rSize.Height* aMatrix.yy );
+-                    aBitmapSize.Width = static_cast<sal_Int32>( dWidth );
+-                    aBitmapSize.Height = static_cast<sal_Int32>( dHeight );
+-
+-					SurfaceSharedPtr pScaledSurface = mpSurfaceProvider->createSurface( 
+-                        ::basegfx::B2ISize( aBitmapSize.Width, aBitmapSize.Height ),
+-                        bHasAlpha ? CAIRO_CONTENT_COLOR_ALPHA : CAIRO_CONTENT_COLOR );
+-					CairoSharedPtr pCairo = pScaledSurface->getCairo();
+-
+-					cairo_set_operator( pCairo.get(), CAIRO_OPERATOR_SOURCE );
+-                    // add 0.5px to size to avoid rounding errors in cairo, leading sometimes to random data on the image right/bottom borders
+-					cairo_scale( pCairo.get(), (dWidth+0.5)/rSize.Width, (dHeight+0.5)/rSize.Height );
+-					cairo_set_source_surface( pCairo.get(), pSurface->getCairoSurface().get(), 0, 0 );
+-					cairo_paint( pCairo.get() );
+-
+-					pSurface = pScaledSurface;
+-
+-					aMatrix.xx = aMatrix.yy = 1;
+-					cairo_set_matrix( mpCairo.get(), &aMatrix );
+-
+-					rv = uno::Reference< rendering::XCachedPrimitive >( 
+-                        new CachedBitmap( pSurface, viewState, renderState, 
+-                                          // cast away const, need to   
+-                                          // change refcount (as this is
+-                                          // ~invisible to client code,
+-                                          // still logically const)
+-                                          const_cast< rendering::XCanvas* >(pCanvas)) );
+-				}
++            {
++                double dWidth, dHeight;
++
++                dWidth = basegfx::fround( rSize.Width * aMatrix.xx );
++                dHeight = basegfx::fround( rSize.Height* aMatrix.yy );
++                aBitmapSize.Width = static_cast<sal_Int32>( dWidth );
++                aBitmapSize.Height = static_cast<sal_Int32>( dHeight );
++
++                SurfaceSharedPtr pScaledSurface = mpSurfaceProvider->createSurface( 
++                    ::basegfx::B2ISize( aBitmapSize.Width, aBitmapSize.Height ),
++                    bHasAlpha ? CAIRO_CONTENT_COLOR_ALPHA : CAIRO_CONTENT_COLOR );
++                CairoSharedPtr pCairo = pScaledSurface->getCairo();
++
++                cairo_set_operator( pCairo.get(), CAIRO_OPERATOR_SOURCE );
++                // add 0.5px to size to avoid rounding errors in cairo, leading sometimes to random data on the image right/bottom borders
++                cairo_scale( pCairo.get(), (dWidth+0.5)/rSize.Width, (dHeight+0.5)/rSize.Height );
++                cairo_set_source_surface( pCairo.get(), pSurface->getCairoSurface().get(), 0, 0 );
++                cairo_paint( pCairo.get() );
++
++                pSurface = pScaledSurface;
++
++                aMatrix.xx = aMatrix.yy = 1;
++                cairo_set_matrix( mpCairo.get(), &aMatrix );
++
++                rv = uno::Reference< rendering::XCachedPrimitive >( 
++                    new CachedBitmap( pSurface, viewState, renderState, 
++                                      // cast away const, need to   
++                                      // change refcount (as this is
++                                      // ~invisible to client code,
++                                      // still logically const)
++                                      const_cast< rendering::XCanvas* >(pCanvas)) );
++            }
+ 
+ 			if( !bHasAlpha && mbHaveAlpha )
+             {
+@@ -1270,7 +1267,11 @@ namespace cairocanvas
+  				cairo_set_operator( mpCairo.get(), CAIRO_OPERATOR_SOURCE );
+ 			cairo_rectangle( mpCairo.get(), 0, 0, aBitmapSize.Width, aBitmapSize.Height );
+ 			cairo_clip( mpCairo.get() );
+-			cairo_paint( mpCairo.get() );
++
++            if( bModulateColors )
++                cairo_paint_with_alpha( mpCairo.get(), renderState.DeviceColor[3] );
++            else
++                cairo_paint( mpCairo.get() );
+ 			cairo_restore( mpCairo.get() );
+ 		} else
+ 			OSL_TRACE ("CanvasHelper called after it was disposed");
+@@ -1309,15 +1310,35 @@ namespace cairocanvas
+ 	return rv;
+     }
+ 
+-    uno::Reference< rendering::XCachedPrimitive > CanvasHelper::drawBitmapModulated( const rendering::XCanvas* 						, 
+-                                                                                     const uno::Reference< rendering::XBitmap >& 	/*xBitmap*/, 
+-                                                                                     const rendering::ViewState& 					/*viewState*/, 
+-                                                                                     const rendering::RenderState& 					/*renderState*/ )
++    uno::Reference< rendering::XCachedPrimitive > CanvasHelper::drawBitmapModulated( const rendering::XCanvas* 						pCanvas, 
++                                                                                     const uno::Reference< rendering::XBitmap >& 	xBitmap, 
++                                                                                     const rendering::ViewState& 					viewState, 
++                                                                                     const rendering::RenderState& 					renderState )
+     {
+-        // TODO(F3): Implement modulated bitmap!
++#ifdef CAIRO_CANVAS_PERF_TRACE
++        struct timespec aTimer;
++        mxDevice->startPerfTrace( &aTimer );
++#endif
+ 
+-        // TODO(P1): Provide caching here.
+-        return uno::Reference< rendering::XCachedPrimitive >(NULL);
++        uno::Reference< rendering::XCachedPrimitive > rv;
++        unsigned char* data = NULL;
++        bool bHasAlpha = false;
++        SurfaceSharedPtr pSurface = surfaceFromXBitmap( xBitmap, mpSurfaceProvider, data, bHasAlpha );
++        geometry::IntegerSize2D aSize = xBitmap->getSize();
++
++        if( pSurface ) {
++            rv = implDrawBitmapSurface( pCanvas, pSurface, viewState, renderState, aSize, true, bHasAlpha );
++
++            if( data )
++                free( data );
++        } else
++            rv = uno::Reference< rendering::XCachedPrimitive >(NULL);
++
++#ifdef CAIRO_CANVAS_PERF_TRACE
++        mxDevice->stopPerfTrace( &aTimer, "drawBitmap" );
++#endif
++
++        return rv;
+     }
+ 
+     uno::Reference< rendering::XGraphicDevice > CanvasHelper::getDevice()
+diff --git canvas/source/cairo/cairo_spritecanvas.hxx canvas/source/cairo/cairo_spritecanvas.hxx
+index 86cbf00..f308277 100644
+--- canvas/source/cairo/cairo_spritecanvas.hxx
++++ canvas/source/cairo/cairo_spritecanvas.hxx
+@@ -42,7 +42,6 @@
+ #include <com/sun/star/rendering/XIntegerBitmap.hpp>
+ #include <com/sun/star/rendering/XGraphicDevice.hpp>
+ #include <com/sun/star/rendering/XBufferController.hpp>
+-#include <com/sun/star/rendering/XParametricPolyPolygon2DFactory.hpp>
+ 
+ #include <cppuhelper/compbase9.hxx>
+ #include <comphelper/uno3.hxx>
+@@ -66,7 +65,7 @@ namespace cairocanvas
+     typedef ::cppu::WeakComponentImplHelper9< ::com::sun::star::rendering::XSpriteCanvas,
+                                                 ::com::sun::star::rendering::XIntegerBitmap,
+                                                 ::com::sun::star::rendering::XGraphicDevice,
+-                                                ::com::sun::star::rendering::XParametricPolyPolygon2DFactory,
++                                                ::com::sun::star::lang::XMultiServiceFactory,
+                                                 ::com::sun::star::rendering::XBufferController,
+                                                 ::com::sun::star::awt::XWindowListener,
+                                                 ::com::sun::star::util::XUpdatable,
+diff --git canvas/source/null/null_spritecanvas.hxx canvas/source/null/null_spritecanvas.hxx
+index c65add5..f304b6b 100644
+--- canvas/source/null/null_spritecanvas.hxx
++++ canvas/source/null/null_spritecanvas.hxx
+@@ -41,7 +41,7 @@
+ #include <com/sun/star/rendering/XIntegerBitmap.hpp>
+ #include <com/sun/star/rendering/XGraphicDevice.hpp>
+ #include <com/sun/star/rendering/XBufferController.hpp>
+-#include <com/sun/star/rendering/XParametricPolyPolygon2DFactory.hpp>
++#include <com/sun/star/lang/XMultiServiceFactory.hpp>
+ 
+ #include <cppuhelper/compbase8.hxx>
+ #include <comphelper/uno3.hxx>
+@@ -60,7 +60,7 @@ namespace nullcanvas
+     typedef ::cppu::WeakComponentImplHelper8<  ::com::sun::star::rendering::XSpriteCanvas,
+ 			                         		   ::com::sun::star::rendering::XIntegerBitmap,
+                                      		   ::com::sun::star::rendering::XGraphicDevice,
+-                                               ::com::sun::star::rendering::XParametricPolyPolygon2DFactory,
++                                               ::com::sun::star::lang::XMultiServiceFactory,
+                                                ::com::sun::star::rendering::XBufferController,
+ 											   ::com::sun::star::awt::XWindowListener,
+                                                ::com::sun::star::beans::XPropertySet,
+diff --git canvas/source/tools/parametricpolypolygon.cxx canvas/source/tools/parametricpolypolygon.cxx
+index 134fe2d..97e7d4b 100644
+--- canvas/source/tools/parametricpolypolygon.cxx
++++ canvas/source/tools/parametricpolypolygon.cxx
+@@ -53,42 +53,102 @@ using namespace ::com::sun::star;
+ 
+ namespace canvas
+ {
+-    ParametricPolyPolygon* ParametricPolyPolygon::createLinearHorizontalGradient( 
+-        const uno::Reference< rendering::XGraphicDevice >& 	rDevice,
+-        const uno::Sequence< uno::Sequence< double > >&		colors, 
+-        const uno::Sequence< double >& 						stops )
++    uno::Sequence<rtl::OUString> ParametricPolyPolygon::getAvailableServiceNames()
+     {
+-        // TODO(P2): hold gradient brush statically, and only setup
+-        // the colors
+-        return new ParametricPolyPolygon( rDevice, GRADIENT_LINEAR, colors, stops );
++        uno::Sequence<rtl::OUString> aRet(3);
++        aRet[0] = rtl::OUString::createFromAscii("LinearGradient");
++        aRet[1] = rtl::OUString::createFromAscii("EllipticalGradient");
++        aRet[2] = rtl::OUString::createFromAscii("RectangularGradient");
++
++        return aRet;
++    }
++
++    ParametricPolyPolygon* ParametricPolyPolygon::create( 
++        const uno::Reference< rendering::XGraphicDevice >& rDevice,
++        const ::rtl::OUString& rServiceName,
++        const uno::Sequence< uno::Any >& rArgs )
++    {
++        uno::Sequence< uno::Sequence< double > > colorSequence(2);
++        uno::Sequence< double > colorStops(2);
++        double fAspectRatio=1.0;
++
++        // defaults
++        uno::Sequence< rendering::RGBColor > rgbColors(1);
++        rgbColors[0] = rendering::RGBColor(0,0,0);
++        colorSequence[0] = rDevice->getDeviceColorSpace()->convertFromRGB(rgbColors);
++        rgbColors[0] = rendering::RGBColor(1,1,1);
++        colorSequence[1] = rDevice->getDeviceColorSpace()->convertFromRGB(rgbColors);
++        colorStops[0] = 0;
++        colorStops[1] = 1;
++
++        // extract args
++        for( sal_Int32 i=0; i<rArgs.getLength(); ++i )
++        {
++            beans::PropertyValue aProp;
++            if( (rArgs[i] >>= aProp) )
++            {
++                if( aProp.Name.equalsAscii("Colors") )
++                {
++                    aProp.Value >>= colorSequence;
++                }
++                else if( aProp.Name.equalsAscii("Stops") )
++                {
++                    aProp.Value >>= colorStops;
++                }
++                else if( aProp.Name.equalsAscii("AspectRatio") )
++                {
++                    aProp.Value >>= fAspectRatio;
++                }
++            }
++        }
++
++        if( rServiceName.equalsAscii("LinearGradient") )
++        {
++            return createLinearHorizontalGradient(rDevice, colorSequence, colorStops);
++        }
++        else if( rServiceName.equalsAscii("EllipticalGradient") )
++        {
++            return createEllipticalGradient(rDevice, colorSequence, colorStops, fAspectRatio);
++        }
++        else if( rServiceName.equalsAscii("RectangularGradient") )
++        {
++            return createRectangularGradient(rDevice, colorSequence, colorStops, fAspectRatio);
++        }
++        else if( rServiceName.equalsAscii("VerticalLineHatch") )
++        {
++            // TODO: NYI
++        }
++        else if( rServiceName.equalsAscii("OrthogonalLinesHatch") )
++        {
++            // TODO: NYI
++        }
++        else if( rServiceName.equalsAscii("ThreeCrossingLinesHatch") )
++        {
++            // TODO: NYI
++        }
++        else if( rServiceName.equalsAscii("FourCrossingLinesHatch") )
++        {
++            // TODO: NYI
++        }
++
++        return NULL;
+     }
+ 
+-    ParametricPolyPolygon* ParametricPolyPolygon::createAxialHorizontalGradient( 
++    ParametricPolyPolygon* ParametricPolyPolygon::createLinearHorizontalGradient( 
+         const uno::Reference< rendering::XGraphicDevice >& 	rDevice,
+         const uno::Sequence< uno::Sequence< double > >&		colors, 
+         const uno::Sequence< double >& 						stops )
+     {
+         // TODO(P2): hold gradient brush statically, and only setup
+         // the colors
+-        return new ParametricPolyPolygon( rDevice, GRADIENT_AXIAL, colors, stops );
+-    }
+-
+-    namespace
+-    {
+-        double calcAspectRatio( const geometry::RealRectangle2D& rBoundRect )
+-        {
+-            const double nWidth( rBoundRect.X2 - rBoundRect.X1 );
+-            const double nHeight( rBoundRect.Y2 - rBoundRect.Y1 );
+-
+-            return ::basegfx::fTools::equalZero( nHeight ) ? 1.0 : fabs( nWidth / nHeight );
+-        }
++        return new ParametricPolyPolygon( rDevice, GRADIENT_LINEAR, colors, stops );
+     }
+ 
+     ParametricPolyPolygon* ParametricPolyPolygon::createEllipticalGradient( 
+         const uno::Reference< rendering::XGraphicDevice >& 	rDevice,
+         const uno::Sequence< uno::Sequence< double > >&		colors, 
+         const uno::Sequence< double >& 						stops,
+-        const geometry::RealRectangle2D&					boundRect )
++        double                                              fAspectRatio )
+     {
+         // TODO(P2): hold gradient polygon statically, and only setup
+         // the colors
+@@ -97,14 +157,13 @@ namespace canvas
+             ::basegfx::tools::createPolygonFromCircle( 
+                 ::basegfx::B2DPoint( 0.5, 0.5), 0.5 ),
+             GRADIENT_ELLIPTICAL,
+-            colors, stops,
+-            calcAspectRatio( boundRect ) );
++            colors, stops, fAspectRatio );
+     }
+ 
+     ParametricPolyPolygon* ParametricPolyPolygon::createRectangularGradient( const uno::Reference< rendering::XGraphicDevice >& rDevice,
+                                                                              const uno::Sequence< uno::Sequence< double > >&	colors, 
+                                                                              const uno::Sequence< double >& 					stops,
+-                                                                             const geometry::RealRectangle2D&					boundRect )
++                                                                             double                                             fAspectRatio )
+     {
+         // TODO(P2): hold gradient polygon statically, and only setup
+         // the colors
+@@ -113,8 +172,7 @@ namespace canvas
+             ::basegfx::tools::createPolygonFromRect( 
+                 ::basegfx::B2DRectangle( 0.0, 0.0, 1.0, 1.0 ) ),
+             GRADIENT_RECTANGULAR,
+-            colors, stops,
+-            calcAspectRatio( boundRect ) );
++            colors, stops, fAspectRatio );
+     }
+ 
+     void SAL_CALL ParametricPolyPolygon::disposing()
+diff --git canvas/source/vcl/canvas.hxx canvas/source/vcl/canvas.hxx
+index dcee24e..e80d2fb 100644
+--- canvas/source/vcl/canvas.hxx
++++ canvas/source/vcl/canvas.hxx
+@@ -41,7 +41,6 @@
+ #include <com/sun/star/rendering/XIntegerBitmap.hpp>
+ #include <com/sun/star/rendering/XGraphicDevice.hpp>
+ #include <com/sun/star/rendering/XBufferController.hpp>
+-#include <com/sun/star/rendering/XParametricPolyPolygon2DFactory.hpp>
+ 
+ #include <cppuhelper/compbase7.hxx>
+ #include <comphelper/uno3.hxx>
+@@ -63,7 +62,7 @@ namespace vclcanvas
+     typedef ::cppu::WeakComponentImplHelper7< ::com::sun::star::rendering::XBitmapCanvas,
+                                               ::com::sun::star::rendering::XIntegerBitmap,
+                                      		  ::com::sun::star::rendering::XGraphicDevice,
+-                                              ::com::sun::star::rendering::XParametricPolyPolygon2DFactory,
++                                              ::com::sun::star::lang::XMultiServiceFactory,
+ 											  ::com::sun::star::util::XUpdatable,
+                                               ::com::sun::star::beans::XPropertySet,
+                                               ::com::sun::star::lang::XServiceName >	GraphicDeviceBase_Base;
+diff --git canvas/source/vcl/canvashelper_texturefill.cxx canvas/source/vcl/canvashelper_texturefill.cxx
+index 7c4ad96..dfbaeb7 100644
+--- canvas/source/vcl/canvashelper_texturefill.cxx
++++ canvas/source/vcl/canvashelper_texturefill.cxx
+@@ -57,6 +57,8 @@
+ #include <basegfx/polygon/b2dpolypolygontools.hxx>
+ #include <basegfx/polygon/b2dlinegeometry.hxx>
+ #include <basegfx/tools/tools.hxx>
++#include <basegfx/tools/lerp.hxx>
++#include <basegfx/tools/keystoplerp.hxx>
+ #include <basegfx/tools/canvastools.hxx>
+ #include <basegfx/numeric/ftools.hxx>
+ 
+@@ -65,6 +67,9 @@
+ #include <canvas/canvastools.hxx>
+ #include <canvas/parametricpolypolygon.hxx>
+ 
++#include <boost/bind.hpp>
++#include <boost/tuple/tuple.hpp>
++
+ #include "spritecanvas.hxx"
+ #include "canvashelper.hxx"
+ #include "impltools.hxx"
+@@ -118,17 +123,13 @@ namespace vclcanvas
+         	Since most of the code for linear and axial gradients are
+         	the same, we've a unified method here
+          */
+-        void fillGeneralLinearGradient( OutputDevice&					rOutDev,
+-                                        const ::basegfx::B2DHomMatrix&	rTextureTransform,
+-                                        const ::Rectangle&				rBounds,
+-                                        int								nStepCount,
+-                                        const ::Color& 					rColor1,
+-                                        const ::Color& 					rColor2,
+-                                        bool							bFillNonOverlapping,
+-                                        bool							bAxialGradient )
++        void fillLinearGradient( OutputDevice&					                rOutDev,
++                                 const ::basegfx::B2DHomMatrix&	                rTextureTransform,
++                                 const ::Rectangle&				                rBounds,
++                                 unsigned int								    nStepCount,
++                                 const ::canvas::ParametricPolyPolygon::Values& rValues,
++                                 const std::vector< ::Color >&                  rColors )
+         {
+-            (void)bFillNonOverlapping;
+-
+             // determine general position of gradient in relation to
+             // the bound rect
+             // =====================================================
+@@ -207,36 +208,26 @@ namespace vclcanvas
+             // iteratively render all other strips
+             // -----------------------------------
+             
+-            // ensure that nStepCount is odd, to have a well-defined
+-            // middle index for axial gradients.
+-            if( bAxialGradient && !(nStepCount % 2) )
++            // ensure that nStepCount matches color stop parity, to
++            // have a well-defined middle color e.g. for axial
++            // gradients.
++            if( (rColors.size() % 2) != (nStepCount % 2) )
+                 ++nStepCount;
+ 
+-            const int nStepCountHalved( nStepCount / 2 );
++            basegfx::tools::KeyStopLerp aLerper(rValues.maStops);
+ 
+             // only iterate nStepCount-1 steps, as the last strip is
+             // explicitely painted below
+-            for( int i=0; i<nStepCount-1; ++i )
++            for( unsigned int i=0; i<nStepCount-1; ++i )
+             {
+-                // lerp color
+-                if( bAxialGradient )
+-                {
+-                    // axial gradient has a triangle-like interpolation function
+-                    const int iPrime( i<=nStepCountHalved ? i : nStepCount-i-1);
++                std::ptrdiff_t nIndex;
++                double fAlpha;
++                boost::tuples::tie(nIndex,fAlpha)=aLerper.lerp(double(i)/nStepCount);
+ 
+-                    rOutDev.SetFillColor( 
+-                        Color( (UINT8)(((nStepCountHalved - iPrime)*rColor1.GetRed() + iPrime*rColor2.GetRed())/nStepCountHalved),
+-                               (UINT8)(((nStepCountHalved - iPrime)*rColor1.GetGreen() + iPrime*rColor2.GetGreen())/nStepCountHalved),
+-                               (UINT8)(((nStepCountHalved - iPrime)*rColor1.GetBlue() + iPrime*rColor2.GetBlue())/nStepCountHalved) ) );
+-                }
+-                else
+-                {
+-                    // linear gradient has a plain lerp between start and end color
+-                    rOutDev.SetFillColor( 
+-                        Color( (UINT8)(((nStepCount - i)*rColor1.GetRed() + i*rColor2.GetRed())/nStepCount),
+-                               (UINT8)(((nStepCount - i)*rColor1.GetGreen() + i*rColor2.GetGreen())/nStepCount),
+-                               (UINT8)(((nStepCount - i)*rColor1.GetBlue() + i*rColor2.GetBlue())/nStepCount) ) );
+-                }
++                rOutDev.SetFillColor( 
++                    Color( (UINT8)(basegfx::tools::lerp(rColors[nIndex].GetRed(),rColors[nIndex+1].GetRed(),fAlpha)),
++                           (UINT8)(basegfx::tools::lerp(rColors[nIndex].GetGreen(),rColors[nIndex+1].GetGreen(),fAlpha)),
++                           (UINT8)(basegfx::tools::lerp(rColors[nIndex].GetBlue(),rColors[nIndex+1].GetBlue(),fAlpha)) ));
+ 
+                 // copy right egde of polygon to left edge (and also
+                 // copy the closing point)
+@@ -283,59 +274,18 @@ namespace vclcanvas
+             aTempPoly[3] = ::Point( ::basegfx::fround( rPoint4.getX() ),
+                                     ::basegfx::fround( rPoint4.getY() ) );
+ 
+-            if( bAxialGradient )
+-                rOutDev.SetFillColor( rColor1 );
+-            else
+-                rOutDev.SetFillColor( rColor2 );
++            rOutDev.SetFillColor( rColors.back() );
+ 
+             rOutDev.DrawPolygon( aTempPoly );
+         }
+ 
+-
+-        inline void fillLinearGradient( OutputDevice&							rOutDev,
+-                                        const ::Color&							rColor1,
+-                                        const ::Color&							rColor2, 
+-                                        const ::basegfx::B2DHomMatrix&			rTextureTransform,
+-                                        const ::Rectangle&						rBounds,
+-                                        int										nStepCount,
+-                                        bool									bFillNonOverlapping )
+-        {
+-            fillGeneralLinearGradient( rOutDev,
+-                                       rTextureTransform,
+-                                       rBounds,
+-                                       nStepCount,
+-                                       rColor1,
+-                                       rColor2,
+-                                       bFillNonOverlapping,
+-                                       false );
+-        }
+-
+-        inline void fillAxialGradient( OutputDevice&							rOutDev,
+-                                       const ::Color&							rColor1,
+-                                       const ::Color&							rColor2, 
+-                                       const ::basegfx::B2DHomMatrix&			rTextureTransform,
+-                                       const ::Rectangle&						rBounds,
+-                                       int										nStepCount,
+-                                       bool										bFillNonOverlapping )
+-        {
+-            fillGeneralLinearGradient( rOutDev,
+-                                       rTextureTransform,
+-                                       rBounds,
+-                                       nStepCount,
+-                                       rColor1,
+-                                       rColor2,
+-                                       bFillNonOverlapping,
+-                                       true );
+-        }
+-
+         void fillPolygonalGradient( OutputDevice&                                  rOutDev,
+-                                    const ::canvas::ParametricPolyPolygon::Values& rValues,
+-                                    const ::Color&                                 rColor1,
+-                                    const ::Color&                                 rColor2, 
+                                     const ::basegfx::B2DHomMatrix&                 rTextureTransform,
+                                     const ::Rectangle&                             rBounds,
+-                                    int                                            nStepCount,
+-                                    bool                                           bFillNonOverlapping )
++                                    unsigned int                                   nStepCount,
++                                    bool                                           bFillNonOverlapping,
++                                    const ::canvas::ParametricPolyPolygon::Values& rValues,
++                                    const std::vector< ::Color >&                  rColors )
+         {
+             const ::basegfx::B2DPolygon& rGradientPoly( rValues.maGradientPoly );
+ 
+@@ -406,8 +356,8 @@ namespace vclcanvas
+             aInnerPoly.transform( aInnerPolygonTransformMatrix );
+         
+ 
+-            const sal_Int32			nNumPoints( aOuterPoly.count() );
+-            ::Polygon				aTempPoly( static_cast<USHORT>(nNumPoints+1) );
++            const sal_uInt32 nNumPoints( aOuterPoly.count() );
++            ::Polygon		 aTempPoly( static_cast<USHORT>(nNumPoints+1) );
+         
+             // increase number of steps by one: polygonal gradients have
+             // the outermost polygon rendered in rColor2, and the
+@@ -425,22 +375,28 @@ namespace vclcanvas
+             // color).
+             ++nStepCount;
+ 
++            basegfx::tools::KeyStopLerp aLerper(rValues.maStops);
++
+             if( !bFillNonOverlapping )
+             {
+                 // fill background
+-                rOutDev.SetFillColor( rColor1 );
++                rOutDev.SetFillColor( rColors.front() );
+                 rOutDev.DrawRect( rBounds );
+ 
+                 // render polygon
+                 // ==============
+ 
+-                for( int i=1,p; i<nStepCount; ++i )
++                for( unsigned int i=1,p; i<nStepCount; ++i )
+                 {
++                    std::ptrdiff_t nIndex;
++                    double fAlpha;
++                    boost::tuples::tie(nIndex,fAlpha)=aLerper.lerp(double(i)/nStepCount);
++
+                     // lerp color
+                     rOutDev.SetFillColor( 
+-                        Color( (UINT8)(((nStepCount - i)*rColor1.GetRed() + i*rColor2.GetRed())/nStepCount),
+-                               (UINT8)(((nStepCount - i)*rColor1.GetGreen() + i*rColor2.GetGreen())/nStepCount),
+-                               (UINT8)(((nStepCount - i)*rColor1.GetBlue() + i*rColor2.GetBlue())/nStepCount) ) );
++                        Color( (UINT8)(basegfx::tools::lerp(rColors[nIndex].GetRed(),rColors[nIndex+1].GetRed(),fAlpha)),
++                               (UINT8)(basegfx::tools::lerp(rColors[nIndex].GetGreen(),rColors[nIndex+1].GetGreen(),fAlpha)),
++                               (UINT8)(basegfx::tools::lerp(rColors[nIndex].GetBlue(),rColors[nIndex+1].GetBlue(),fAlpha)) ));
+ 
+                     // scale and render polygon, by interpolating between
+                     // outer and inner polygon. 
+@@ -489,13 +445,17 @@ namespace vclcanvas
+                 aTempPolyPoly.Insert( aTempPoly );
+                 aTempPolyPoly.Insert( aTempPoly2 );
+ 
+-                for( int i=0,p; i<nStepCount; ++i )
++                for( unsigned int i=0,p; i<nStepCount; ++i )
+                 {
++                    std::ptrdiff_t nIndex;
++                    double fAlpha;
++                    boost::tuples::tie(nIndex,fAlpha)=aLerper.lerp(double(i)/nStepCount);
++
+                     // lerp color
+                     rOutDev.SetFillColor( 
+-                        Color( (UINT8)(((nStepCount - i)*rColor1.GetRed() + i*rColor2.GetRed())/nStepCount),
+-                               (UINT8)(((nStepCount - i)*rColor1.GetGreen() + i*rColor2.GetGreen())/nStepCount),
+-                               (UINT8)(((nStepCount - i)*rColor1.GetBlue() + i*rColor2.GetBlue())/nStepCount) ) );
++                        Color( (UINT8)(basegfx::tools::lerp(rColors[nIndex].GetRed(),rColors[nIndex+1].GetRed(),fAlpha)),
++                               (UINT8)(basegfx::tools::lerp(rColors[nIndex].GetGreen(),rColors[nIndex+1].GetGreen(),fAlpha)),
++                               (UINT8)(basegfx::tools::lerp(rColors[nIndex].GetBlue(),rColors[nIndex+1].GetBlue(),fAlpha)) ));
+ 
+ #if defined(VERBOSE) && OSL_DEBUG_LEVEL > 0        
+                     if( i && !(i % 10) )
+@@ -549,46 +509,33 @@ namespace vclcanvas
+ 
+         void doGradientFill( OutputDevice&                                  rOutDev,
+                              const ::canvas::ParametricPolyPolygon::Values&	rValues,
+-                             const ::Color&                                 rColor1,
+-                             const ::Color&                                 rColor2, 
++                             const std::vector< ::Color >&                  rColors,
+                              const ::basegfx::B2DHomMatrix&                 rTextureTransform,
+                              const ::Rectangle&                             rBounds,
+-                             int                                            nStepCount,
++                             unsigned int                                   nStepCount,
+                              bool                                           bFillNonOverlapping )
+         {
+             switch( rValues.meType )
+             {
+                 case ::canvas::ParametricPolyPolygon::GRADIENT_LINEAR:
+                     fillLinearGradient( rOutDev,
+-                                        rColor1,
+-                                        rColor2,
+                                         rTextureTransform,
+                                         rBounds,
+                                         nStepCount,
+-                                        bFillNonOverlapping );
++                                        rValues,
++                                        rColors );
+                     break;
+                
+-                case ::canvas::ParametricPolyPolygon::GRADIENT_AXIAL:
+-                    fillAxialGradient( rOutDev,
+-                                       rColor1,
+-                                       rColor2,
+-                                       rTextureTransform,
+-                                       rBounds,
+-                                       nStepCount,
+-                                       bFillNonOverlapping );
+-                    break;
+-
+                 case ::canvas::ParametricPolyPolygon::GRADIENT_ELLIPTICAL:
+                     // FALLTHROUGH intended
+                 case ::canvas::ParametricPolyPolygon::GRADIENT_RECTANGULAR:
+                     fillPolygonalGradient( rOutDev,
+-                                           rValues,
+-                                           rColor1,
+-                                           rColor2,
+                                            rTextureTransform,
+                                            rBounds,
+                                            nStepCount,
+-                                           bFillNonOverlapping );
++                                           bFillNonOverlapping,
++                                           rValues,
++                                           rColors );
+                     break;
+ 
+                 default:
+@@ -597,11 +544,19 @@ namespace vclcanvas
+             }
+         }
+ 
++        int numColorSteps( const ::Color& rColor1, const ::Color& rColor2 )
++        {
++            return ::std::max( 
++                labs( rColor1.GetRed() - rColor2.GetRed() ),
++                ::std::max(                    
++                    labs( rColor1.GetGreen() - rColor2.GetGreen() ),
++                    labs( rColor1.GetBlue()  - rColor2.GetBlue() ) ) );
++        }
++
+         bool gradientFill( OutputDevice&                                   rOutDev,
+                            OutputDevice*                                   p2ndOutDev,
+                            const ::canvas::ParametricPolyPolygon::Values&  rValues,
+-                           const ::Color&                                  rColor1,
+-                           const ::Color&                                  rColor2, 
++                           const std::vector< ::Color >&                   rColors,
+                            const PolyPolygon&                              rPoly,
+                            const rendering::ViewState&                     viewState, 
+                            const rendering::RenderState&                   renderState,
+@@ -646,12 +601,9 @@ namespace vclcanvas
+ 
+             // calc step size
+             // --------------
+-            const int nColorSteps( 
+-                ::std::max( 
+-                    labs( rColor1.GetRed() - rColor2.GetRed() ),
+-                    ::std::max(                    
+-                        labs( rColor1.GetGreen() - rColor2.GetGreen() ),
+-                        labs( rColor1.GetBlue()  - rColor2.GetBlue() ) ) ) );
++            int nColorSteps = 0;
++            for( size_t i=0; i<rColors.size()-1; ++i )
++                nColorSteps += numColorSteps(rColors[i],rColors[i+1]);
+ 
+             // longest line in gradient bound rect
+             const int nGradientSize( 
+@@ -690,8 +642,7 @@ namespace vclcanvas
+                 rOutDev.IntersectClipRegion( aPolygonDeviceRectOrig );
+                 doGradientFill( rOutDev,
+                                 rValues,
+-                                rColor1,
+-                                rColor2,
++                                rColors,
+                                 aTextureTransform,
+                                 aPolygonDeviceRectOrig,
+                                 nStepCount,
+@@ -704,8 +655,7 @@ namespace vclcanvas
+                     p2ndOutDev->IntersectClipRegion( aPolygonDeviceRectOrig );
+                     doGradientFill( *p2ndOutDev,
+                                     rValues,
+-                                    rColor1,
+-                                    rColor2,
++                                    rColors,
+                                     aTextureTransform,
+                                     aPolygonDeviceRectOrig,
+                                     nStepCount,
+@@ -723,8 +673,7 @@ namespace vclcanvas
+ 
+                 doGradientFill( rOutDev,
+                                 rValues,
+-                                rColor1,
+-                                rColor2,
++                                rColors,
+                                 aTextureTransform,
+                                 aPolygonDeviceRectOrig,
+                                 nStepCount,
+@@ -737,8 +686,7 @@ namespace vclcanvas
+                     p2ndOutDev->SetClipRegion( aPolyClipRegion );
+                     doGradientFill( *p2ndOutDev,
+                                     rValues,
+-                                    rColor1,
+-                                    rColor2,
++                                    rColors,
+                                     aTextureTransform,
+                                     aPolygonDeviceRectOrig,
+                                     nStepCount,
+@@ -753,8 +701,7 @@ namespace vclcanvas
+                 rOutDev.SetRasterOp( ROP_XOR );
+                 doGradientFill( rOutDev,
+                                 rValues,
+-                                rColor1,
+-                                rColor2,
++                                rColors,
+                                 aTextureTransform,
+                                 aPolygonDeviceRectOrig,
+                                 nStepCount,
+@@ -765,8 +712,7 @@ namespace vclcanvas
+                 rOutDev.SetRasterOp( ROP_XOR );
+                 doGradientFill( rOutDev,
+                                 rValues,
+-                                rColor1,
+-                                rColor2,
++                                rColors,
+                                 aTextureTransform,
+                                 aPolygonDeviceRectOrig,
+                                 nStepCount,
+@@ -779,8 +725,7 @@ namespace vclcanvas
+                     p2ndOutDev->SetRasterOp( ROP_XOR );
+                     doGradientFill( *p2ndOutDev,
+                                     rValues,
+-                                    rColor1,
+-                                    rColor2,
++                                    rColors,
+                                     aTextureTransform,
+                                     aPolygonDeviceRectOrig,
+                                     nStepCount,
+@@ -791,8 +736,7 @@ namespace vclcanvas
+                     p2ndOutDev->SetRasterOp( ROP_XOR );
+                     doGradientFill( *p2ndOutDev,
+                                     rValues,
+-                                    rColor1,
+-                                    rColor2,
++                                    rColors,
+                                     aTextureTransform,
+                                     aPolygonDeviceRectOrig,
+                                     nStepCount,
+@@ -855,33 +799,41 @@ namespace vclcanvas
+                 ::canvas::ParametricPolyPolygon* pGradient = 
+                       dynamic_cast< ::canvas::ParametricPolyPolygon* >( textures[0].Gradient.get() );
+ 
+-                if( pGradient )
++                if( pGradient && pGradient->getValues().maColors.getLength() )
+                 {
+                     // copy state from Gradient polypoly locally
+                     // (given object might change!)
+                     const ::canvas::ParametricPolyPolygon::Values& rValues(
+                         pGradient->getValues() );
+ 
+-                    // TODO: use all the colors and place them on given positions/stops
+-                    const ::Color aColor1( 
+-                        ::vcl::unotools::stdColorSpaceSequenceToColor(
+-                            rValues.maColors [0] ) );
+-                    const ::Color aColor2( 
+-                        ::vcl::unotools::stdColorSpaceSequenceToColor(
+-                            rValues.maColors [rValues.maColors.getLength () - 1] ) );
+-
+-                    // TODO(E1): Return value
+-                    // TODO(F1): FillRule
+-                    gradientFill( mpOutDev->getOutDev(),
+-                                  mp2ndOutDev.get() ? &mp2ndOutDev->getOutDev() : (OutputDevice*)NULL,
+-                                  rValues,
+-                                  aColor1,
+-                                  aColor2,
+-                                  aPolyPoly,
+-                                  viewState,
+-                                  renderState,
+-                                  textures[0],
+-                                  nTransparency );
++                    if( rValues.maColors.getLength() < 2 )
++                    {
++                        rendering::RenderState aTempState=renderState;
++                        aTempState.DeviceColor = rValues.maColors[0];
++                        fillPolyPolygon(pCanvas, xPolyPolygon, viewState, aTempState);
++                    }
++                    else
++                    {
++                        std::vector< ::Color > aColors(rValues.maColors.getLength());
++                        std::transform(&rValues.maColors[0],
++                                       &rValues.maColors[0]+rValues.maColors.getLength(),
++                                       aColors.begin(),
++                                       boost::bind(
++                                           &vcl::unotools::stdColorSpaceSequenceToColor,
++                                           _1));
++
++                        // TODO(E1): Return value
++                        // TODO(F1): FillRule
++                        gradientFill( mpOutDev->getOutDev(),
++                                      mp2ndOutDev.get() ? &mp2ndOutDev->getOutDev() : (OutputDevice*)NULL,
++                                      rValues,
++                                      aColors,
++                                      aPolyPoly,
++                                      viewState,
++                                      renderState,
++                                      textures[0],
++                                      nTransparency );
++                    }
+                 }
+                 else
+                 {
+diff --git canvas/source/vcl/spritecanvas.hxx canvas/source/vcl/spritecanvas.hxx
+index 0c56d16..e9e9c8f 100644
+--- canvas/source/vcl/spritecanvas.hxx
++++ canvas/source/vcl/spritecanvas.hxx
+@@ -42,7 +42,6 @@
+ #include <com/sun/star/rendering/XIntegerBitmap.hpp>
+ #include <com/sun/star/rendering/XGraphicDevice.hpp>
+ #include <com/sun/star/rendering/XBufferController.hpp>
+-#include <com/sun/star/rendering/XParametricPolyPolygon2DFactory.hpp>
+ 
+ #include <cppuhelper/compbase9.hxx>
+ #include <comphelper/uno3.hxx>
+@@ -65,7 +64,7 @@ namespace vclcanvas
+     typedef ::cppu::WeakComponentImplHelper9< ::com::sun::star::rendering::XSpriteCanvas,
+                                               ::com::sun::star::rendering::XIntegerBitmap,
+                                               ::com::sun::star::rendering::XGraphicDevice,
+-                                              ::com::sun::star::rendering::XParametricPolyPolygon2DFactory,
++                                              ::com::sun::star::lang::XMultiServiceFactory,
+                                               ::com::sun::star::rendering::XBufferController,
+                                               ::com::sun::star::awt::XWindowListener,
+                                               ::com::sun::star::util::XUpdatable,
+diff --git cppcanvas/source/mtfrenderer/emfplus.cxx cppcanvas/source/mtfrenderer/emfplus.cxx
+index a35dbef..6260df1 100644
+--- cppcanvas/source/mtfrenderer/emfplus.cxx
++++ cppcanvas/source/mtfrenderer/emfplus.cxx
+@@ -15,7 +15,6 @@
+ 
+ #include <com/sun/star/rendering/XCanvas.hpp>
+ #include <com/sun/star/rendering/TexturingMode.hpp>
+-#include <com/sun/star/rendering/XParametricPolyPolygon2DFactory.hpp>
+ 
+ #include <bitmapaction.hxx>
+ #include <implrenderer.hxx>
+@@ -96,7 +95,7 @@ namespace cppcanvas
+         public:
+             EMFPPath (sal_Int32 _nPoints, bool bLines = false)
+             {
+-                if( _nPoints<0 || _nPoints>SAL_MAX_INT32/(2*sizeof(float)) )
++                if( _nPoints<0L || _nPoints>SAL_MAX_INT32/(2*sal_Int32(sizeof(float))) )
+                     _nPoints = SAL_MAX_INT32/(2*sizeof(float));
+                 nPoints = _nPoints;
+                 pPoints = new float [nPoints*2];
+@@ -133,8 +132,6 @@ namespace cppcanvas
+ 
+                 if (pPointTypes)
+                     for (int i = 0; i < nPoints; i ++) {
+-                        UINT8 pathType;
+-
+                         s >> pPointTypes [i];
+                         EMFP_DEBUG (printf ("EMF+\tpoint type: %x\n", pPointTypes [i]));
+                     }
+@@ -149,8 +146,6 @@ namespace cppcanvas
+             ::basegfx::B2DPolyPolygon& GetPolygon (ImplRenderer& rR, bool bMapIt = true)
+             {
+                 ::basegfx::B2DPolygon polygon;
+-                sal_Int32 points = nPoints;
+-
+                 aPolygon.clear ();
+ 
+                 int last_normal = 0, p = 0;
+@@ -240,7 +235,7 @@ namespace cppcanvas
+                 EMFP_DEBUG (printf ("EMF+\theader: 0x%08x parts: %d\n", header, parts));
+ 
+                 if (parts) {
+-                    if( parts<0 || parts>SAL_MAX_INT32/sizeof(sal_Int32) )
++                    if( parts<0 || parts>SAL_MAX_INT32/sal_Int32(sizeof(sal_Int32)) )
+                         parts = SAL_MAX_INT32/sizeof(sal_Int32);
+ 
+                     combineMode = new sal_Int32 [parts];
+@@ -354,7 +349,7 @@ namespace cppcanvas
+                         s >> surroundColorsNumber;
+                         EMFP_DEBUG (printf ("EMF+\tsurround colors: %d\n", surroundColorsNumber));
+ 
+-                        if( surroundColorsNumber<0 || surroundColorsNumber>SAL_MAX_INT32/sizeof(::Color) )
++                        if( surroundColorsNumber<0 || surroundColorsNumber>SAL_MAX_INT32/sal_Int32(sizeof(::Color)) )
+                             surroundColorsNumber = SAL_MAX_INT32/sizeof(::Color);
+ 
+                         surroundColors = new ::Color [surroundColorsNumber];
+@@ -406,7 +401,7 @@ namespace cppcanvas
+                         if (additionalFlags & 0x08) {
+                             s >> blendPoints;
+                             EMFP_DEBUG (printf ("EMF+\tuse blend, points: %d\n", blendPoints));
+-                            if( blendPoints<0 || blendPoints>SAL_MAX_INT32/(2*sizeof(float)) )
++                            if( blendPoints<0 || blendPoints>SAL_MAX_INT32/sal_Int32(2*sizeof(float)) )
+                                 blendPoints = SAL_MAX_INT32/(2*sizeof(float));
+                             blendPositions = new float [2*blendPoints];
+                             blendFactors = blendPositions + blendPoints;
+@@ -423,9 +418,9 @@ namespace cppcanvas
+                         if (additionalFlags & 0x04) {
+                             s >> colorblendPoints;
+                             EMFP_DEBUG (printf ("EMF+\tuse color blend, points: %d\n", colorblendPoints));
+-                            if( colorblendPoints<0 || colorblendPoints>SAL_MAX_INT32/sizeof(float) )
++                            if( colorblendPoints<0 || colorblendPoints>SAL_MAX_INT32/sal_Int32(sizeof(float)) )
+                                 colorblendPoints = SAL_MAX_INT32/sizeof(float);
+-                            if( colorblendPoints>SAL_MAX_INT32/sizeof(::Color) )
++                            if( colorblendPoints>SAL_MAX_INT32/sal_Int32(sizeof(::Color)) )
+                                 colorblendPoints = SAL_MAX_INT32/sizeof(::Color);
+                             colorblendPositions = new float [colorblendPoints];
+                             colorblendColors = new ::Color [colorblendPoints];
+@@ -439,9 +434,9 @@ namespace cppcanvas
+                                 EMFP_DEBUG (printf ("EMF+\tcolor[%d]: 0x%08x\n", i, color));
+                             }
+                         }
+-                        } else
++                        } else {
+                             EMFP_DEBUG (dumpWords (s, 1024));
+-
++                        }
+                         break;
+                     }
+                 // linear gradient
+@@ -481,7 +476,7 @@ namespace cppcanvas
+                         if (additionalFlags & 0x08) {
+                             s >> blendPoints;
+                             EMFP_DEBUG (printf ("EMF+\tuse blend, points: %d\n", blendPoints));
+-                            if( blendPoints<0 || blendPoints>SAL_MAX_INT32/(2*sizeof(float)) )
++                            if( blendPoints<0 || blendPoints>SAL_MAX_INT32/sal_Int32(2*sizeof(float)) )
+                                 blendPoints = SAL_MAX_INT32/(2*sizeof(float));
+                             blendPositions = new float [2*blendPoints];
+                             blendFactors = blendPositions + blendPoints;
+@@ -498,9 +493,9 @@ namespace cppcanvas
+                         if (additionalFlags & 0x04) {
+                             s >> colorblendPoints;
+                             EMFP_DEBUG (printf ("EMF+\tuse color blend, points: %d\n", colorblendPoints));
+-                            if( colorblendPoints<0 || colorblendPoints>SAL_MAX_INT32/sizeof(float) )
++                            if( colorblendPoints<0 || colorblendPoints>SAL_MAX_INT32/sal_Int32(sizeof(float)) )
+                                 colorblendPoints = SAL_MAX_INT32/sizeof(float);
+-                            if( colorblendPoints>SAL_MAX_INT32/sizeof(::Color) )
++                            if( colorblendPoints>SAL_MAX_INT32/sal_Int32(sizeof(::Color)) )
+                                 colorblendPoints = SAL_MAX_INT32/sizeof(::Color);
+                             colorblendPositions = new float [colorblendPoints];
+                             colorblendColors = new ::Color [colorblendPoints];
+@@ -554,7 +549,7 @@ namespace cppcanvas
+                 rStrokeAttributes.StrokeWidth = (rState.mapModeTransform * rR.MapSize (width, 0)).getX ();
+             }
+ 
+-            void Read (SvStream& s, ImplRenderer& rR, sal_Int32 nHDPI, sal_Int32 nVDPI)
++            void Read (SvStream& s, ImplRenderer& rR, sal_Int32 /*nHDPI*/, sal_Int32 /*nVDPI*/)
+             {
+                 UINT32 header, unknown, penFlags, unknown2;
+                 int i;
+@@ -603,7 +598,7 @@ namespace cppcanvas
+ 
+                 if (penFlags & 256) {
+                     s >> dashPatternLen;
+-                    if( dashPatternLen<0 || dashPatternLen>SAL_MAX_INT32/sizeof(float) )
++                    if( dashPatternLen<0 || dashPatternLen>SAL_MAX_INT32/sal_Int32(sizeof(float)) )
+                         dashPatternLen = SAL_MAX_INT32/sizeof(float);
+                     dashPattern = new float [dashPatternLen];
+                     for (i = 0; i < dashPatternLen; i++)
+@@ -618,7 +613,7 @@ namespace cppcanvas
+ 
+                 if (penFlags & 1024) {
+                     s >> compoundArrayLen;
+-                    if( compoundArrayLen<0 || compoundArrayLen>SAL_MAX_INT32/sizeof(float) )
++                    if( compoundArrayLen<0 || compoundArrayLen>SAL_MAX_INT32/sal_Int32(sizeof(float)) )
+                         compoundArrayLen = SAL_MAX_INT32/sizeof(float);
+                     compoundArray = new float [compoundArrayLen];
+                     for (i = 0; i < compoundArrayLen; i++)
+@@ -845,10 +840,7 @@ namespace cppcanvas
+                 ::basegfx::B2DHomMatrix aWorldTransformation;
+                 ::basegfx::B2DHomMatrix aBaseTransformation;
+                 rendering::Texture aTexture;
+-                double nRotation( 0.0 );
+                 const ::basegfx::B2DRectangle aBounds( ::basegfx::tools::getRange( localPolygon ) );
+-                const double nScale( ::basegfx::pruneScaleValue( fabs( aBounds.getHeight()*sin(nRotation) ) + 
+-                                                                 fabs( aBounds.getWidth()*cos(nRotation) )));
+ 
+                 aWorldTransformation.set (0, 0, aWorldTransform.eM11);
+                 aWorldTransformation.set (0, 1, aWorldTransform.eM21);
+@@ -896,7 +888,7 @@ namespace cppcanvas
+                 aTexture.RepeatModeY = rendering::TexturingMode::CLAMP;
+                 aTexture.Alpha = 1.0;
+ 
+-                uno::Reference< rendering::XParametricPolyPolygon2DFactory > xFactory(
++                uno::Reference< lang::XMultiServiceFactory> xFactory(
+                     rParms.mrCanvas->getUNOCanvas()->getDevice()->getParametricPolyPolygonFactory() );
+ 
+                 if( xFactory.is() ) {
+@@ -957,15 +949,26 @@ namespace cppcanvas
+                         }
+                     }
+ 
++                    uno::Sequence<uno::Any> args(2);
++                    beans::PropertyValue aProp;
++                    aProp.Name = rtl::OUString::createFromAscii("Colors");
++                    aProp.Value <<= aColors;
++                    args[0] <<= aProp;
++                    aProp.Name = rtl::OUString::createFromAscii("Stops");
++                    aProp.Value <<= aStops;
++                    args[1] <<= aProp;
++
+                     EMFP_DEBUG (printf ("EMF+\t\tset gradient\n"));
+                     if (brush->type == 4)
+-                        aTexture.Gradient = xFactory->createLinearHorizontalGradient( aColors,
+-                                                                                      aStops );
++                        aTexture.Gradient.set(
++                            xFactory->createInstanceWithArguments( 
++                                rtl::OUString::createFromAscii("LinearGradient"), args),
++                            uno::UNO_QUERY);
+                     else {
+-                        geometry::RealRectangle2D aBoundsRectangle (0, 0, 1, 1);
+-                        aTexture.Gradient = xFactory->createEllipticalGradient( aColors,
+-                                                                                aStops,
+-                                                                                aBoundsRectangle);
++                        aTexture.Gradient.set(
++                            xFactory->createInstanceWithArguments(
++                                rtl::OUString::createFromAscii("EllipticalGradient"), args),
++                            uno::UNO_QUERY);
+                     }
+                 }
+ 
+@@ -995,7 +998,6 @@ namespace cppcanvas
+ 
+         void ImplRenderer::processObjectRecord(SvMemoryStream& rObjectStream, UINT16 flags)
+         {
+-            UINT32 objectLen;
+             sal_uInt32 index;
+ 
+             EMFP_DEBUG (printf ("EMF+ Object slot: %hd flags: %hx\n", flags & 0xff, flags & 0xff00));
+@@ -1078,7 +1080,7 @@ namespace cppcanvas
+ 
+                 EMFP_DEBUG (printf ("EMF+ record size: %d type: %04hx flags: %04hx data size: %d\n", size, type, flags, dataSize));
+ 
+-                if (type == EmfPlusRecordTypeObject && (mbMultipart && flags & 0x7fff == mMFlags & 0x7fff || flags & 0x8000)) {
++                if (type == EmfPlusRecordTypeObject && ((mbMultipart && (flags & 0x7fff) == (mMFlags & 0x7fff)) || flags & 0x8000)) {
+                     if (!mbMultipart) {
+                         mbMultipart = true;
+                         mMFlags = flags;
+@@ -1177,12 +1179,8 @@ namespace cppcanvas
+                     }
+                 case EmfPlusRecordTypeFillPolygon:
+                     {
+-                        sal_uInt8 index = flags & 0xff;
+                         sal_uInt32 brushIndexOrColor;
+-                        sal_Int32 brushIndex;
+                         sal_Int32 points;
+-                        UINT32 color;
+-                        USHORT transparency = 0;
+ 
+                         rMF >> brushIndexOrColor;
+                         rMF >> points;
+@@ -1326,8 +1324,9 @@ namespace cppcanvas
+                             
+                                     rFactoryParms.mrCurrActionIndex += pBmpAction->getActionCount()-1;
+                                 }
+-                            } else
++                            } else {
+                                 EMFP_DEBUG (printf ("EMF+ DrawImagePoints TODO (fixme)\n"));
++                            }
+                         }
+                         break;
+                     }
+@@ -1407,8 +1406,9 @@ namespace cppcanvas
+                     // reset clip
+                     if (region.parts == 0 && region.initialState == EmfPlusRegionInitialStateInfinite) {
+                         updateClipping (::basegfx::B2DPolyPolygon (), rFactoryParms, false);
+-                    } else
++                    } else {
+                         EMFP_DEBUG (printf ("EMF+\tTODO\n"));
++                    }
+                     break;
+                 }
+                 case EmfPlusRecordTypeDrawDriverString:
+diff --git cppcanvas/source/mtfrenderer/implrenderer.cxx cppcanvas/source/mtfrenderer/implrenderer.cxx
+index bf8d831..b33a26c 100644
+--- cppcanvas/source/mtfrenderer/implrenderer.cxx
++++ cppcanvas/source/mtfrenderer/implrenderer.cxx
+@@ -49,7 +49,6 @@
+ 
+ #include <com/sun/star/rendering/XGraphicDevice.hpp>
+ #include <com/sun/star/rendering/TexturingMode.hpp>
+-#include <com/sun/star/rendering/XParametricPolyPolygon2DFactory.hpp>
+ #include <com/sun/star/uno/Sequence.hxx>
+ #include <com/sun/star/geometry/RealPoint2D.hpp>
+ #include <com/sun/star/rendering/ViewState.hpp>
+@@ -61,6 +60,7 @@
+ #include <com/sun/star/rendering/PathJoinType.hpp>
+ 
+ #include <basegfx/tools/canvastools.hxx>
++#include <basegfx/tools/gradienttools.hxx>
+ #include <basegfx/numeric/ftools.hxx>
+ #include <basegfx/polygon/b2dpolypolygontools.hxx>
+ #include <basegfx/polygon/b2dpolygontools.hxx>
+@@ -591,13 +591,12 @@ namespace cppcanvas
+                 // discernible difference should be visible.
+                 nSteps > 64 ) 
+             {
+-                uno::Reference< rendering::XParametricPolyPolygon2DFactory > xFactory(
++                uno::Reference< lang::XMultiServiceFactory> xFactory(
+                     rParms.mrCanvas->getUNOCanvas()->getDevice()->getParametricPolyPolygonFactory() );
+ 
+                 if( xFactory.is() )
+                 {
+-                    ::basegfx::B2DHomMatrix aTextureTransformation;
+-                    rendering::Texture 		aTexture;
++                    rendering::Texture aTexture;
+ 
+                     aTexture.RepeatModeX = rendering::TexturingMode::CLAMP;
+                     aTexture.RepeatModeY = rendering::TexturingMode::CLAMP;
+@@ -632,245 +631,103 @@ namespace cppcanvas
+                     uno::Sequence< uno::Sequence < double > > aColors(2);
+                     uno::Sequence< double > aStops(2);
+                     
+-                    aStops[0] = 0.0;
+-                    aStops[1] = 1.0;
+-                    
+-                    aColors[0] = aStartColor;
+-                    aColors[1] = aEndColor;
+-
++                    if( rGradient.GetStyle() == GRADIENT_AXIAL )
++                    {
++                        aStops.realloc(3);
++                        aColors.realloc(3);
+ 
+-                    // Setup texture transformation
+-                    // ----------------------------
++                        aStops[0] = 0.0;
++                        aStops[1] = 0.5;
++                        aStops[2] = 1.0;
+                     
++                        aColors[0] = aEndColor;
++                        aColors[1] = aStartColor;
++                        aColors[2] = aEndColor;
++                    }
++                    else
++                    {
++                        aStops[0] = 0.0;
++                        aStops[1] = 1.0;
++                    
++                        aColors[0] = aStartColor;
++                        aColors[1] = aEndColor;
++                    }
++
+                     const ::basegfx::B2DRectangle aBounds( 
+                         ::basegfx::tools::getRange(aDevicePoly) );
+-
+-                    // setup rotation angle. VCL rotates
+-                    // counter-clockwise, while canvas transformation
+-                    // rotates clockwise
+-                    double nRotation( -rGradient.GetAngle() * M_PI / 1800.0 );
+-
++                    const ::basegfx::B2DVector aOffset( 
++                        rGradient.GetOfsX() / 100.0,
++                        rGradient.GetOfsY() / 100.0);
++                    const double fRotation( rGradient.GetAngle() * M_PI / 1800.0 );
++                    const double fBorder( rGradient.GetBorder() / 100.0 );
++
++                    basegfx::ODFGradientInfo aGradInfo;
++                    rtl::OUString aGradientService;
+                     switch( rGradient.GetStyle() )
+                     {
+                         case GRADIENT_LINEAR:
+-                            // FALLTHROUGH intended
+-                        case GRADIENT_AXIAL:
+-                        {
+-                            // standard orientation for VCL linear
+-                            // gradient is vertical, thus, rotate 90
+-                            // degrees
+-                            nRotation += M_PI/2.0;
+-
+-                            const double nBorder( 
+-                                ::basegfx::pruneScaleValue(
+-                                    (1.0 - rGradient.GetBorder() / 100.0) ) );
+-
+-                            // shrink texture, to account for border
+-                            // (only in x direction, linear gradient
+-                            // is constant in y direction, anyway)
+-                            aTextureTransformation.scale( nBorder,
+-                                                          1.0 );
+-
+-                            // linear gradients don't respect offsets
+-                            // (they are implicitely assumed to be
+-                            // 50%). linear gradients don't have
+-                            // border on both sides, only on the
+-                            // startColor side, axial gradients have
+-                            // border on both sides. As both gradients
+-                            // are invariant in y direction: leave y
+-                            // offset alone.
+-                            double nOffsetX( rGradient.GetBorder() / 200.0 );
+-
+-                            // determine type of gradient (and necessary
+-                            // transformation matrix, should it be emulated by a
+-                            // generic gradient)
+-                            switch( rGradient.GetStyle() )
+-                            {
+-                                case GRADIENT_LINEAR:
+-                                    nOffsetX = rGradient.GetBorder() / 100.0;
+-                                    aTexture.Gradient = xFactory->createLinearHorizontalGradient( aColors,
+-                                                                                                  aStops );
+-                                    break;
+-
+-                                case GRADIENT_AXIAL:
+-                                    // vcl considers center color as start color
+-                                    ::std::swap(aColors[0],aColors[1]);
+-                                    aTexture.Gradient = xFactory->createAxialHorizontalGradient( aColors,
+-                                                                                                 aStops );
+-                                    break;
+-
+-                                default: // other cases can't happen
+-                                    break;
+-                            }
++                            basegfx::tools::createLinearODFGradientInfo(aGradInfo,
++                                                                        aBounds,
++                                                                        nSteps,
++                                                                        fBorder,
++                                                                        fRotation);
++                            aGradientService = rtl::OUString::createFromAscii("LinearGradient");
++                            break;
+ 
+-                            // apply border offset values
+-                            aTextureTransformation.translate( nOffsetX, 
+-                                                              0.0 );
+-
+-                            // rotate texture according to gradient rotation
+-                            aTextureTransformation.translate( -0.5, -0.5 );
+-                            aTextureTransformation.rotate( nRotation );
+-
+-                            // to let the first strip of a rotated
+-                            // gradient start at the _edge_ of the
+-                            // bound rect (and not, due to rotation,
+-                            // slightly inside), slightly enlarge the
+-                            // gradient:
+-                            // 
+-                            // y/2 sin(alpha) + x/2 cos(alpha)
+-                            //
+-                            // (values to change are not actual
+-                            // gradient scales, but original bound
+-                            // rect dimensions. Since we still want
+-                            // the border setting to apply after that,
+-                            // we multiply with that as above for
+-                            // nScaleX)
+-                            const double nScale( 
+-                                ::basegfx::pruneScaleValue(
+-                                    fabs( aBounds.getHeight()*sin(nRotation) ) + 
+-                                    fabs( aBounds.getWidth()*cos(nRotation) )));
+-
+-                            aTextureTransformation.scale( nScale, nScale );
+-
+-                            // translate back origin to center of
+-                            // primitive
+-                            aTextureTransformation.translate( 0.5*aBounds.getWidth(),
+-                                                              0.5*aBounds.getHeight() );
+-                        }
+-                        break;
++                        case GRADIENT_AXIAL:
++                            basegfx::tools::createAxialODFGradientInfo(aGradInfo,
++                                                                       aBounds,
++                                                                       nSteps,
++                                                                       fBorder,
++                                                                       fRotation);
++                            aGradientService = rtl::OUString::createFromAscii("LinearGradient");
++                            break;
+ 
+                         case GRADIENT_RADIAL:
+-                            // FALLTHROUGH intended
+-                        case GRADIENT_ELLIPTICAL:
+-                            // FALLTHROUGH intended
+-                        case GRADIENT_SQUARE:
+-                            // FALLTHROUGH intended
+-                        case GRADIENT_RECT:
+-                        {
+-                            // determine scale factors for the gradient (must
+-                            // be scaled up from [0,1]x[0,1] rect to object
+-                            // bounds). Will potentially changed in switch
+-                            // statement below.
+-                            // Respect border value, while doing so, the VCL
+-                            // gradient's border will effectively shrink the
+-                            // resulting gradient.
+-                            double nScaleX( aBounds.getWidth() * (1.0 - rGradient.GetBorder() / 100.0) );
+-                            double nScaleY( aBounds.getHeight()* (1.0 - rGradient.GetBorder() / 100.0) );
+-
+-                            // determine offset values. Since the border is
+-                            // divided half-by-half to both sides of the
+-                            // gradient, divide translation offset by an
+-                            // additional 2. Also respect offset here, but
+-                            // since VCL gradients have their center at [0,0]
+-                            // for zero offset, but canvas gradients have
+-                            // their top, left edge aligned with the
+-                            // primitive, and offset of 50% effectively must
+-                            // yield zero shift. Both values will potentially
+-                            // be adapted in switch statement below.
+-                            double nOffsetX( aBounds.getWidth() * 
+-                                             (2.0 * rGradient.GetOfsX() - 100.0 + rGradient.GetBorder()) / 200.0 );
+-                            double nOffsetY( aBounds.getHeight() * 
+-                                             (2.0 * rGradient.GetOfsY() - 100.0 + rGradient.GetBorder()) / 200.0 );
+-
+-                            // determine type of gradient (and necessary
+-                            // transformation matrix, should it be emulated by a
+-                            // generic gradient)
+-                            switch( rGradient.GetStyle() )
+-                            {
+-                                case GRADIENT_RADIAL:
+-                                {
+-                                    // create isotrophic scaling
+-                                    if( nScaleX > nScaleY )
+-                                    {
+-                                        nOffsetY -= (nScaleX - nScaleY) * 0.5;
+-                                        nScaleY = nScaleX;
+-                                    }
+-                                    else
+-                                    {
+-                                        nOffsetX -= (nScaleY - nScaleX) * 0.5;
+-                                        nScaleX = nScaleY;
+-                                    }
+-
+-                                    // enlarge gradient to match bound rect diagonal
+-                                    aTextureTransformation.translate( -0.5, -0.5 );
+-                                    const double nScale( hypot(aBounds.getWidth(), aBounds.getHeight()) / nScaleX );
+-                                    aTextureTransformation.scale( nScale, nScale );
+-                                    aTextureTransformation.translate( 0.5, 0.5 );
+-
+-                                    aTexture.Gradient = xFactory->createEllipticalGradient( aColors,
+-                                                                                            aStops,
+-                                                                                            geometry::RealRectangle2D(0.0,0.0,
+-                                                                                                                    1.0,1.0) );
+-                                }
+-                                break;
+-
+-                                case GRADIENT_ELLIPTICAL:
+-                                {
+-                                    // enlarge gradient slightly
+-                                    aTextureTransformation.translate( -0.5, -0.5 );
+-                                    const double nSqrt2( sqrt(2.0) );
+-                                    aTextureTransformation.scale( nSqrt2,nSqrt2 );
+-                                    aTextureTransformation.translate( 0.5, 0.5 );
+-
+-                                    aTexture.Gradient = xFactory->createEllipticalGradient( 
+-                                        aColors,
+-                                        aStops,
+-                                        ::basegfx::unotools::rectangle2DFromB2DRectangle( 
+-                                            aBounds ));
+-                                }
+-                                break;
+-
+-                                case GRADIENT_SQUARE:
+-                                    // create isotrophic scaling
+-                                    if( nScaleX > nScaleY )
+-                                    {
+-                                        nOffsetY -= (nScaleX - nScaleY) * 0.5;
+-                                        nScaleY = nScaleX;
+-                                    }
+-                                    else
+-                                    {
+-                                        nOffsetX -= (nScaleY - nScaleX) * 0.5;
+-                                        nScaleX = nScaleY;
+-                                    }
+-
+-                                    aTexture.Gradient = xFactory->createRectangularGradient( aColors,
+-                                                                                             aStops,
+-                                                                                             geometry::RealRectangle2D(0.0,0.0,
+-                                                                                                                       1.0,1.0) );
+-                                    break;
+-
+-                                case GRADIENT_RECT:
+-                                    aTexture.Gradient = xFactory->createRectangularGradient( 
+-                                        aColors,
+-                                        aStops,
+-                                        ::basegfx::unotools::rectangle2DFromB2DRectangle( 
+-                                            aBounds ) );
+-                                    break;
+-
+-                                default: // other cases can't happen
+-                                    break;
+-                            }
++                            basegfx::tools::createRadialODFGradientInfo(aGradInfo,
++                                                                        aBounds,
++                                                                        aOffset,
++                                                                        nSteps,
++                                                                        fBorder);
++                            aGradientService = rtl::OUString::createFromAscii("EllipticalGradient");
++                            break;
+ 
+-                            nScaleX = ::basegfx::pruneScaleValue( nScaleX );
+-                            nScaleY = ::basegfx::pruneScaleValue( nScaleY );
++                        case GRADIENT_ELLIPTICAL:
++                            basegfx::tools::createEllipticalODFGradientInfo(aGradInfo,
++                                                                            aBounds,
++                                                                            aOffset,
++                                                                            nSteps,
++                                                                            fBorder,
++                                                                            fRotation);
++                            aGradientService = rtl::OUString::createFromAscii("EllipticalGradient");
++                            break;
+ 
+-                            aTextureTransformation.scale( nScaleX, nScaleY );
++                        case GRADIENT_SQUARE:
++                            basegfx::tools::createSquareODFGradientInfo(aGradInfo,
++                                                                        aBounds,
++                                                                        aOffset,
++                                                                        nSteps,
++                                                                        fBorder,
++                                                                        fRotation);
++                            aGradientService = rtl::OUString::createFromAscii("RectangularGradient");
++                            break;
+ 
+-                            // rotate texture according to gradient rotation
+-                            aTextureTransformation.translate( -0.5*nScaleX, -0.5*nScaleY );
+-                            aTextureTransformation.rotate( nRotation );
+-                            aTextureTransformation.translate( 0.5*nScaleX, 0.5*nScaleY );
+-                            
+-                            aTextureTransformation.translate( nOffsetX, nOffsetY );
+-                        }
+-                        break;
++                        case GRADIENT_RECT:
++                            basegfx::tools::createRectangularODFGradientInfo(aGradInfo,
++                                                                             aBounds,
++                                                                             aOffset,
++                                                                             nSteps,
++                                                                             fBorder,
++                                                                             fRotation);
++                            aGradientService = rtl::OUString::createFromAscii("RectangularGradient");
++                            break;
+ 
+                         default:
+                             ENSURE_OR_THROW( false,
+-                                              "ImplRenderer::createGradientAction(): Unexpected gradient type" );
++                                             "ImplRenderer::createGradientAction(): Unexpected gradient type" );
+                             break;
+                     }
+-
++                    
+                     // As the texture coordinate space is relative to
+                     // the polygon coordinate space (NOT to the
+                     // polygon itself), move gradient to the start of
+@@ -878,31 +735,50 @@ namespace cppcanvas
+                     // gradient will always display at the origin, and
+                     // not within the polygon bound (which might be
+                     // miles away from the origin).
+-                    aTextureTransformation.translate( aBounds.getMinX(), 
+-                                                      aBounds.getMinY() );
++                    aGradInfo.maTextureTransform.translate( aBounds.getMinX(), 
++                                                            aBounds.getMinY() );
+ 
+                     ::basegfx::unotools::affineMatrixFromHomMatrix( aTexture.AffineTransform, 
+-                                                                    aTextureTransformation );
+-
+-                    ActionSharedPtr pPolyAction( 
+-                        internal::PolyPolyActionFactory::createPolyPolyAction( 
+-                            aDevicePoly, 
+-                            rParms.mrCanvas, 
+-                            getState( rParms.mrStates ),
+-                            aTexture ) );
+-
+-                    if( pPolyAction )
++                                                                    aGradInfo.maTextureTransform );
++
++                    uno::Sequence<uno::Any> args(3);
++                    beans::PropertyValue aProp;
++                    aProp.Name = rtl::OUString::createFromAscii("Colors");
++                    aProp.Value <<= aColors;
++                    args[0] <<= aProp;
++                    aProp.Name = rtl::OUString::createFromAscii("Stops");
++                    aProp.Value <<= aStops;
++                    args[1] <<= aProp;
++                    aProp.Name = rtl::OUString::createFromAscii("AspectRatio");
++                    aProp.Value <<= aGradInfo.mfAspectRatio;
++                    args[2] <<= aProp;
++
++                    aTexture.Gradient.set(
++                        xFactory->createInstanceWithArguments(aGradientService,
++                                                              args),
++                        uno::UNO_QUERY);
++                    if( aTexture.Gradient.is() )
+                     {
+-                        maActions.push_back( 
+-                            MtfAction( 
+-                                pPolyAction,
+-                                rParms.mrCurrActionIndex ) );
++                        ActionSharedPtr pPolyAction( 
++                            internal::PolyPolyActionFactory::createPolyPolyAction( 
++                                aDevicePoly, 
++                                rParms.mrCanvas, 
++                                getState( rParms.mrStates ),
++                                aTexture ) );
++
++                        if( pPolyAction )
++                        {
++                            maActions.push_back( 
++                                MtfAction( 
++                                    pPolyAction,
++                                    rParms.mrCurrActionIndex ) );
+                         
+-                        rParms.mrCurrActionIndex += pPolyAction->getActionCount()-1;
+-                    }
++                            rParms.mrCurrActionIndex += pPolyAction->getActionCount()-1;
++                        }
+ 
+-                    // done, using native gradients
+-                    return;
++                        // done, using native gradients
++                        return;
++                    }
+                 }
+             }
+ 
+@@ -1910,7 +1786,7 @@ namespace cppcanvas
+                             if (count == -1) {
+                                 count = 0;
+                                 char *env;
+-                                if (env = getenv ("EMF_PLUS_LIMIT")) {
++                                if( (env=getenv ("EMF_PLUS_LIMIT")) ) {
+                                     limit = atoi (env);
+                                     EMFP_DEBUG (printf ("EMF+ records limit: %d\n", limit));
+                                 }
+diff --git offapi/com/sun/star/rendering/XGraphicDevice.idl offapi/com/sun/star/rendering/XGraphicDevice.idl
+index b94f097..6a46714 100644
+--- offapi/com/sun/star/rendering/XGraphicDevice.idl
++++ offapi/com/sun/star/rendering/XGraphicDevice.idl
+@@ -51,8 +51,8 @@
+ #ifndef __com_sun_star_rendering_XParametricPolyPolygon2DFactory_idl__
+ #include <com/sun/star/rendering/XParametricPolyPolygon2DFactory.idl>
+ #endif
+-#ifndef __com_sun_star_rendering_XColorSpace_idl__
+-#include <com/sun/star/rendering/XColorSpace.idl>
++#ifndef __com_sun_star_lang_XMultiServiceFactory_idl__
++#include <com/sun/star/lang/XMultiServiceFactory.idl>
+ #endif
+ 
+ module com { module sun { module star { module rendering {
+@@ -220,8 +220,67 @@ interface XGraphicDevice : ::com::sun::star::uno::XInterface
+     	this is not advisable: each canvas implementation is free to
+     	internally generate optimized parametric polygons, which can
+     	be used more directly for e.g. texturing operations.
++
++        <pre>
++        Available services (all canvas implementations should provide
++        this minimal set, though are free to add more; just check the
++        getAvailableServiceNames() on the returned interface):
++
++        - Gradients - all gradients need to support two construction
++          parameters, "Colors" being a <type>sequence<Color></type>
++          and "Stops" being a <type>sequence<double></type>. Both must
++          have the same length, and at least two elements. See
++          http://www.w3.org/TR/SVG11/pservers.html#GradientStops for
++          the semantics of gradient stops and colors.
++          Required gradient services:
++
++          * "LinearGradient" - the gradient varies linearly between
++            the given colors. without coordinate system
++            transformation, the color interpolation happens in
++            increasing x direction, and is constant in y
++            direction. Equivalent to svg linear gradient
++            http://www.w3.org/TR/SVG11/pservers.html#LinearGradients
++
++          * "EllipticalGradient" - this gradient has zeroth color
++            index in the middle, and varies linearly between center
++            and final color. The services takes an additional
++            parameter named "AspectRatio" of <type>double</type>
++            (width divided by height), if this aspect ratio is 1, the
++            gradient is circular. If it's not 1, the gradient is
++            elliptical, with the special twist that the aspect ratio
++            is maintained also for the center color: the gradient will
++            not collapse into a single point, but become a line of
++            center color. If "AspectRatio" is missing, or equal to 1,
++            this gradient yields similar results as the svg radial
++            gradient
++            http://www.w3.org/TR/SVG11/pservers.html#RadialGradients
++
++          * "RectangularGradient" - this gradient has zeroth color
++            index in the middle, and varies linearly between center
++            and final color via rectangular boxes
++    		around the center point. The services takes an additional
++            parameter named "AspectRatio" of <type>double</type>
++            (width divided by height), if this aspect ratio is 1, the
++            gradient is quadratic. If it's not 1, the gradient is
++            rectangular, with the special twist that the aspect ratio
++            is maintained also for the center color: the gradient will
++            not collapse into a single point, but become a line of
++            center color.
++
++        - Hatch patterns - Required hatch services:
++
++          * "VerticalLineHatch" - this hatching consists of vertical lines
++          * "OrthogonalLinesHatch" - this hatching consists of
++            crossing vertical and horizontal lines
++          * "ThreeCrossingLinesHatch" - this hatching consists of
++            vertical and horizontal lines plus diagonal lines from
++            left, top to bottom, right.
++          * "FourCrossingLinesHatch" - this hatching consists of
++            vertical and horizontal lines plus diagonal lines in both
++            directions.
++        </pre>     
+ 	 */
+-    XParametricPolyPolygon2DFactory getParametricPolyPolygonFactory();
++    com::sun::star::lang::XMultiServiceFactory getParametricPolyPolygonFactory();
+ 
+ 	//-------------------------------------------------------------------------
+ 
+diff --git offapi/com/sun/star/rendering/makefile.mk offapi/com/sun/star/rendering/makefile.mk
+index 8466a1e..d4979ed 100644
+--- offapi/com/sun/star/rendering/makefile.mk
++++ offapi/com/sun/star/rendering/makefile.mk
+@@ -109,7 +109,6 @@ IDLFILES=\
+ 	XIntegerReadOnlyBitmap.idl \
+ 	XLinePolyPolygon2D.idl \
+ 	XParametricPolyPolygon2D.idl \
+-	XParametricPolyPolygon2DFactory.idl \
+ 	XPolyPolygon2D.idl \
+ 	XSimpleCanvas.idl \
+ 	XSprite.idl \
+diff --git slideshow/source/engine/activities/activitybase.cxx slideshow/source/engine/activities/activitybase.cxx
+index 97eeb6c..b0ca84a 100644
+--- slideshow/source/engine/activities/activitybase.cxx
++++ slideshow/source/engine/activities/activitybase.cxx
+@@ -162,7 +162,7 @@ namespace slideshow
+             // ================================
+ 
+             // clamp nT to permissible [0,1] range
+-            nT = ::canvas::tools::clamp( nT, 0.0, 1.0 );
++            nT = ::basegfx::clamp( nT, 0.0, 1.0 );
+ 
+             // take acceleration/deceleration into account. if the sum
+             // of mnAccelerationFraction and mnDecelerationFraction
+diff --git slideshow/source/engine/activities/continuouskeytimeactivitybase.cxx slideshow/source/engine/activities/continuouskeytimeactivitybase.cxx
+index 4306967..554f1ce 100644
+--- slideshow/source/engine/activities/continuouskeytimeactivitybase.cxx
++++ slideshow/source/engine/activities/continuouskeytimeactivitybase.cxx
+@@ -38,6 +38,7 @@
+ 
+ #include <continuouskeytimeactivitybase.hxx>
+ 
++#include <boost/tuple/tuple.hpp>
+ #include <algorithm>
+ #include <iterator>
+ 
+@@ -48,34 +49,14 @@ namespace slideshow
+     {
+         ContinuousKeyTimeActivityBase::ContinuousKeyTimeActivityBase( const ActivityParameters& rParms ) :
+             SimpleContinuousActivityBase( rParms ),
+-            maKeyTimes( rParms.maDiscreteTimes ),
+-            mnLastIndex( 0 )
++            maLerper( rParms.maDiscreteTimes )
+         {
+-            ENSURE_OR_THROW( maKeyTimes.size() > 1, 
++            ENSURE_OR_THROW( rParms.maDiscreteTimes.size() > 1, 
+                               "ContinuousKeyTimeActivityBase::ContinuousKeyTimeActivityBase(): key times vector must have two entries or more" );
+-
+-#ifdef DBG_UTIL
+-            // check parameters: rKeyTimes must be sorted in
+-            // ascending order, and contain values only from the range
+-            // [0,1]
+-            for( ::std::size_t i=1, len=maKeyTimes.size(); i<len; ++i )
+-            {
+-                if( maKeyTimes[i] < 0.0 ||
+-                    maKeyTimes[i] > 1.0 || 
+-                    maKeyTimes[i-1] < 0.0 ||
+-                    maKeyTimes[i-1] > 1.0 )
+-                {
+-                    ENSURE_OR_THROW( false, "ContinuousKeyTimeActivityBase::ContinuousKeyTimeActivityBase(): time values not within [0,1] range!" );
+-                }
+-
+-                if( maKeyTimes[i-1] > maKeyTimes[i] )
+-                {
+-                    ENSURE_OR_THROW( false, "ContinuousKeyTimeActivityBase::ContinuousKeyTimeActivityBase(): time vector is not sorted in ascending order!" );
+-                }
+-            }
+-
+-            // TODO(E2): check this also in production code?
+-#endif
++            ENSURE_OR_THROW( rParms.maDiscreteTimes.front() == 0.0,
++                              "ContinuousKeyTimeActivityBase::ContinuousKeyTimeActivityBase(): key times vector first entry must be zero" );
++            ENSURE_OR_THROW( rParms.maDiscreteTimes.back() <= 1.0,
++                              "ContinuousKeyTimeActivityBase::ContinuousKeyTimeActivityBase(): key times vector last entry must be less or equal 1" );
+         }
+ 
+         void ContinuousKeyTimeActivityBase::simplePerform( double 		nSimpleTime, 
+@@ -84,40 +65,14 @@ namespace slideshow
+             // calc simple time from global time - sweep through the
+             // array multiple times for repeated animations (according to 
+             // SMIL spec).
+-            const double nT( calcAcceleratedTime( nSimpleTime ) );
+-
+-            // determine position within key times vector from 
+-            // current simple time
+-
+-            // shortcut: cached value still okay?
+-            if( maKeyTimes[ mnLastIndex   ] < nT ||
+-                maKeyTimes[ mnLastIndex+1 ] >= nT  )
+-            {
+-                // nope, find new index
+-                mnLastIndex = ::std::min< ::std::ptrdiff_t >( 
+-                    maKeyTimes.size()-2,
+-                    // range is ensured by max below
+-                    ::std::max< ::std::ptrdiff_t >(
+-                        0,
+-                        ::std::distance( maKeyTimes.begin(),
+-                                         ::std::lower_bound( maKeyTimes.begin(),
+-                                                             maKeyTimes.end(),
+-                                                             nT ) ) - 1 ) );
+-            }
+-
+-            OSL_ENSURE( mnLastIndex+1 < maKeyTimes.size(),
+-                        "ContinuousKeyTimeActivityBase::simplePerform(): index out of range" );
+-
+-            // mnLastIndex is now valid and up-to-date
++            double fAlpha( calcAcceleratedTime( nSimpleTime ) );
++            std::ptrdiff_t nIndex;
+ 
+-            // calc current simple time, as a fractional value ([0,1] range).
+-            // I.e. the relative position between the two index times.
+-            const double nCurrFractionalSimplTime( (nT - maKeyTimes[ mnLastIndex ]) /
+-                                                   (maKeyTimes[ mnLastIndex+1 ] - maKeyTimes[ mnLastIndex ]) );
++            boost::tuples::tie(nIndex,fAlpha) = maLerper.lerp(fAlpha);
+ 
+             perform( 
+-                mnLastIndex,
+-                nCurrFractionalSimplTime,
++                nIndex,
++                fAlpha,
+                 nRepeatCount );
+         }
+     }
+diff --git slideshow/source/engine/activities/continuouskeytimeactivitybase.hxx slideshow/source/engine/activities/continuouskeytimeactivitybase.hxx
+index 9d767ea..4e06ec1 100644
+--- slideshow/source/engine/activities/continuouskeytimeactivitybase.hxx
++++ slideshow/source/engine/activities/continuouskeytimeactivitybase.hxx
+@@ -32,6 +32,8 @@
+ #define INCLUDED_SLIDESHOW_CONTINUOUSKEYTIMEACTIVITYBASE_HXX
+ 
+ #include "simplecontinuousactivitybase.hxx"
++
++#include <basegfx/tools/keystoplerp.hxx>
+ #include <vector>
+ 
+ 
+@@ -76,10 +78,7 @@ namespace slideshow
+                                         sal_uInt32 	nRepeatCount ) const;
+ 
+         private:
+-            const ::std::vector< double >	maKeyTimes;
+-
+-            /// last active index in maKeyTimes (to avoid frequent searching)
+-            mutable ::std::size_t			mnLastIndex;
++            const ::basegfx::tools::KeyStopLerp maLerper;
+         };
+     }
+ }
+diff --git slideshow/source/engine/activities/interpolation.hxx slideshow/source/engine/activities/interpolation.hxx
+index 5327c4a..5c4289b 100644
+--- slideshow/source/engine/activities/interpolation.hxx
++++ slideshow/source/engine/activities/interpolation.hxx
+@@ -31,11 +31,11 @@
+ #ifndef INCLUDED_SLIDESHOW_INTERPOLATION_HXX
+ #define INCLUDED_SLIDESHOW_INTERPOLATION_HXX
+ 
+-#include "lerp.hxx"
++#include <basegfx/tools/lerp.hxx>
+ 
+-namespace slideshow
++namespace basegfx
+ {
+-    namespace internal
++    namespace tools
+     {
+         // Interpolator specializations
+         // ============================
+@@ -45,9 +45,10 @@ namespace slideshow
+         // not-straight-forward-interpolatable types
+ 
+         /// Specialization for RGBColor, to employ color-specific interpolator
+-		template<> RGBColor lerp< RGBColor >( const RGBColor&	rFrom, 
+-                                              const RGBColor& 	rTo, 
+-                                              double			t		   )
++		template<> ::slideshow::internal::RGBColor lerp< ::slideshow::internal::RGBColor >( 
++            const ::slideshow::internal::RGBColor& rFrom, 
++            const ::slideshow::internal::RGBColor& rTo, 
++            double			                       t	 )
+         {
+             return interpolate( rFrom, rTo, t );
+         }
+@@ -81,14 +82,20 @@ namespace slideshow
+                         "lerp<bool> called" );
+             return rTo;
+         }
++    }
++}
+         
++namespace slideshow
++{
++    namespace internal
++    {
+         template< typename ValueType > struct Interpolator
+         {
+             ValueType operator()( const ValueType& 	rFrom, 
+                                   const ValueType& 	rTo, 
+                                   double			t ) const
+             {
+-                return lerp( rFrom, rTo, t );
++                return basegfx::tools::lerp( rFrom, rTo, t );
+             }
+         };
+         
+diff --git slideshow/source/engine/shapes/viewshape.cxx slideshow/source/engine/shapes/viewshape.cxx
+index 61e07ed..84094db 100644
+--- slideshow/source/engine/shapes/viewshape.cxx
++++ slideshow/source/engine/shapes/viewshape.cxx
+@@ -59,7 +59,6 @@
+ 
+ #include "viewshape.hxx"
+ #include "tools.hxx"
+-#include "lerp.hxx"
+ 
+ #include <boost/bind.hpp>
+ 
+@@ -463,9 +462,9 @@ namespace slideshow
+             if( mbForceUpdate || (nUpdateFlags & ALPHA) )
+             {
+                 mpSprite->setAlpha( (pAttr && pAttr->isAlphaValid()) ?
+-                                    ::canvas::tools::clamp(pAttr->getAlpha(), 
+-                                                           0.0, 
+-                                                           1.0) :
++                                    ::basegfx::clamp(pAttr->getAlpha(), 
++                                                     0.0, 
++                                                     1.0) :
+                                     1.0 );
+             }
+             if( mbForceUpdate || (nUpdateFlags & CLIP) )
+diff --git slideshow/source/engine/tools.cxx slideshow/source/engine/tools.cxx
+index b4caa0a..ecac060 100644
+--- slideshow/source/engine/tools.cxx
++++ slideshow/source/engine/tools.cxx
+@@ -51,10 +51,10 @@
+ #include <basegfx/vector/b2ivector.hxx>
+ #include <basegfx/matrix/b2dhommatrix.hxx>
+ #include <basegfx/numeric/ftools.hxx>
++#include <basegfx/tools/lerp.hxx>
+ 
+ #include <cppcanvas/basegfxfactory.hxx>
+ 
+-#include "lerp.hxx"
+ #include "unoview.hxx"
+ #include "smilfunctionparser.hxx"
+ #include "tools.hxx"
+@@ -641,18 +641,18 @@ namespace slideshow
+                                                     const ::basegfx::B2DRange&		rShapeBounds )
+         {
+             return ::basegfx::B2DRectangle(
+-                lerp( rShapeBounds.getMinX(),
+-                      rShapeBounds.getMaxX(),
+-                      rUnitBounds.getMinX() ),
+-                lerp( rShapeBounds.getMinY(),
+-                      rShapeBounds.getMaxY(),
+-                      rUnitBounds.getMinY() ),
+-                lerp( rShapeBounds.getMinX(),
+-                      rShapeBounds.getMaxX(),
+-                      rUnitBounds.getMaxX() ),
+-                lerp( rShapeBounds.getMinY(),
+-                      rShapeBounds.getMaxY(),
+-                      rUnitBounds.getMaxY() ) );
++                basegfx::tools::lerp( rShapeBounds.getMinX(),
++                                      rShapeBounds.getMaxX(),
++                                      rUnitBounds.getMinX() ),
++                basegfx::tools::lerp( rShapeBounds.getMinY(),
++                                      rShapeBounds.getMaxY(),
++                                      rUnitBounds.getMinY() ),
++                basegfx::tools::lerp( rShapeBounds.getMinX(),
++                                      rShapeBounds.getMaxX(),
++                                      rUnitBounds.getMaxX() ),
++                basegfx::tools::lerp( rShapeBounds.getMinY(),
++                                      rShapeBounds.getMaxY(),
++                                      rUnitBounds.getMaxY() ) );
+         }
+         
+         ::basegfx::B2DRectangle getShapePosSize( const ::basegfx::B2DRectangle&			rOrigBounds,
+diff --git slideshow/source/inc/lerp.hxx slideshow/source/inc/lerp.hxx
+deleted file mode 100644
+index 83f3da0..0000000
+--- slideshow/source/inc/lerp.hxx
++++ /dev/null
+@@ -1,62 +0,0 @@
+-/*************************************************************************
+- *
+- * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+- * 
+- * Copyright 2008 by Sun Microsystems, Inc.
+- *
+- * OpenOffice.org - a multi-platform office productivity suite
+- *
+- * $RCSfile: lerp.hxx,v $
+- * $Revision: 1.6 $
+- *
+- * This file is part of OpenOffice.org.
+- *
+- * OpenOffice.org is free software: you can redistribute it and/or modify
+- * it under the terms of the GNU Lesser General Public License version 3
+- * only, as published by the Free Software Foundation.
+- *
+- * OpenOffice.org is distributed in the hope that it will be useful,
+- * but WITHOUT ANY WARRANTY; without even the implied warranty of
+- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+- * GNU Lesser General Public License version 3 for more details
+- * (a copy is included in the LICENSE file that accompanied this code).
+- *
+- * You should have received a copy of the GNU Lesser General Public License
+- * version 3 along with OpenOffice.org.  If not, see
+- * <http://www.openoffice.org/license.html>
+- * for a copy of the LGPLv3 License.
+- *
+- ************************************************************************/
+-
+-#ifndef INCLUDED_SLIDESHOW_LERP_HXX
+-#define INCLUDED_SLIDESHOW_LERP_HXX
+-
+-#include <sal/types.h>
+-
+-namespace slideshow
+-{
+-    namespace internal
+-    {
+-
+-        /** Generic linear interpolator
+-
+-	        @tpl ValueType
+-            Must have operator+ and operator* defined, and should
+-            have value semantics.
+-
+-            @param t
+-            As usual, t must be in the [0,1] range
+-        */
+-        template< typename ValueType > ValueType lerp( const ValueType& 	rFrom, 
+-                                                       const ValueType& 	rTo, 
+-                                                       double				t )
+-        {
+-            // This is only to suppress a double->int warning. All other 
+-            // types should be okay here.
+-            return static_cast<ValueType>( (1.0-t)*rFrom + t*rTo );
+-        }
+-
+-    }
+-}
+-
+-#endif /* INCLUDED_SLIDESHOW_LERP_HXX */
