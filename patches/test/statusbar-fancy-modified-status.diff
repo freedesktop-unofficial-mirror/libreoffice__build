@@ -1,0 +1,259 @@
+diff --git sc/uiconfig/scalc/statusbar/statusbar.xml sc/uiconfig/scalc/statusbar/statusbar.xml
+index 1ddff7a..28dfaf4 100644
+--- sc/uiconfig/scalc/statusbar/statusbar.xml
++++ sc/uiconfig/scalc/statusbar/statusbar.xml
+@@ -5,7 +5,7 @@
+  <statusbar:statusbaritem xlink:href=".uno:StatusPageStyle" statusbar:align="left" statusbar:autosize="true" statusbar:width="83" statusbar:helpid="helpid:26115"/>
+  <statusbar:statusbaritem xlink:href=".uno:InsertMode" statusbar:align="center" statusbar:width="41" statusbar:helpid="helpid:10221"/>
+  <statusbar:statusbaritem xlink:href=".uno:StatusSelectionMode" statusbar:align="center" statusbar:width="34" statusbar:helpid="helpid:26116"/>
+- <statusbar:statusbaritem xlink:href=".uno:ModifiedStatus" statusbar:align="center" statusbar:width="18" statusbar:helpid="helpid:5584"/>
++ <statusbar:statusbaritem xlink:href=".uno:ModifiedStatus" statusbar:align="center" statusbar:ownerdraw="true" statusbar:width="18" statusbar:helpid="helpid:5584"/>
+  <statusbar:statusbaritem xlink:href=".uno:Signature" statusbar:align="center" statusbar:ownerdraw="true" statusbar:width="16" statusbar:helpid="helpid:5699"/>
+  <statusbar:statusbaritem xlink:href=".uno:Size" statusbar:align="center" statusbar:autosize="true" statusbar:ownerdraw="true" statusbar:width="212" statusbar:helpid="helpid:10224"/>
+  <statusbar:statusbaritem xlink:href=".uno:ZoomSlider" statusbar:align="center" statusbar:ownerdraw="true" statusbar:width="140" statusbar:helpid="helpid:11065"/>
+diff --git sfx2/sdi/sfx.sdi sfx2/sdi/sfx.sdi
+index 41e1df9..dcce53b 100644
+--- sfx2/sdi/sfx.sdi
++++ sfx2/sdi/sfx.sdi
+@@ -4336,7 +4336,7 @@ SfxBoolItem Modified SID_MODIFIED
+ ]
+ 
+ //--------------------------------------------------------------------------
+-SfxStringItem ModifiedStatus SID_DOC_MODIFIED
++SfxBoolItem ModifiedStatus SID_DOC_MODIFIED
+ 
+ [
+     /* flags: */
+diff --git sfx2/source/doc/objserv.cxx sfx2/source/doc/objserv.cxx
+index 1ee9eb6..9e0936a 100644
+--- sfx2/source/doc/objserv.cxx
++++ sfx2/source/doc/objserv.cxx
+@@ -1060,7 +1060,7 @@ void SfxObjectShell::GetState_Impl(SfxItemSet &rSet)
+ 
+             case SID_DOC_MODIFIED:
+             {
+-                rSet.Put( SfxStringItem( SID_DOC_MODIFIED, IsModified() ? '*' : ' ' ) );
++                rSet.Put( SfxBoolItem( SID_DOC_MODIFIED, IsModified() ) );
+                 break;
+             }
+ 
+diff --git svx/inc/modctrl.hxx svx/inc/modctrl.hxx
+index e1f41a8..5941e89 100644
+--- svx/inc/modctrl.hxx
++++ svx/inc/modctrl.hxx
+@@ -35,6 +35,8 @@
+ #include <sfx2/stbitem.hxx>
+ #include "svx/svxdllapi.h"
+ 
++#include <boost/shared_ptr.hpp>
++
+ // class SvxModifyControl ------------------------------------------------
+ 
+ class SVX_DLLPUBLIC SvxModifyControl : public SfxStatusBarControl
+@@ -42,7 +44,7 @@ class SVX_DLLPUBLIC SvxModifyControl : public SfxStatusBarControl
+ public:
+     virtual void	StateChanged( USHORT nSID, SfxItemState eState,
+                                   const SfxPoolItem* pState );
+-    virtual void    Paint( const UserDrawEvent& rEvt );
++    virtual void    Paint( const UserDrawEvent& rUsrEvt );
+ 
+     SFX_DECL_STATUSBAR_CONTROL();
+ 
+@@ -51,11 +53,8 @@ public:
+     static	ULONG	GetDefItemWidth(const StatusBar& rStb);
+ 
+ private:
+-    BOOL	bState;
+-
+-#ifdef _SVX_MODCTRL_CXX
+-    SVX_DLLPRIVATE void	DrawItemText_Impl();
+-#endif
++    struct ImplData;
++    ::boost::shared_ptr<ImplData> mpImpl;
+ };
+ 
+ 
+diff --git svx/inc/svx/dialogs.hrc svx/inc/svx/dialogs.hrc
+index 57e4e9f..0a1f152 100644
+--- svx/inc/svx/dialogs.hrc
++++ svx/inc/svx/dialogs.hrc
+@@ -191,6 +191,8 @@
+ #define RID_SVXBMP_SLIDERBUTTON_HC              (RID_SVX_START +  70)
+ #define RID_SVXBMP_SLIDERDECREASE_HC            (RID_SVX_START +  71)
+ #define RID_SVXBMP_SLIDERINCREASE_HC            (RID_SVX_START +  72)
++#define RID_SVXBMP_DOC_MODIFIED_YES             (RID_SVX_START +  73)
++#define RID_SVXBMP_DOC_MODIFIED_NO              (RID_SVX_START +  74)
+ 
+ // Alignment-TabPage
+ #define RID_SVXPAGE_ALIGNMENT               (RID_SVX_START +  90)
+diff --git svx/source/stbctrls/makefile.mk svx/source/stbctrls/makefile.mk
+index 7a6fad6..e5bff5a 100644
+--- svx/source/stbctrls/makefile.mk
++++ svx/source/stbctrls/makefile.mk
+@@ -59,6 +59,7 @@ SLOFILES=	\
+                 $(SLO)$/zoomsliderctrl.obj
+ 
+ EXCEPTIONSFILES= \
++    $(SLO)$/modctrl.obj \
+     $(SLO)$/zoomsliderctrl.obj
+ 
+ HXX1TARGET=stbctrls
+diff --git svx/source/stbctrls/modctrl.cxx svx/source/stbctrls/modctrl.cxx
+index 843c845..3db5f2d 100644
+--- svx/source/stbctrls/modctrl.cxx
++++ svx/source/stbctrls/modctrl.cxx
+@@ -33,29 +33,44 @@
+ 
+ // include ---------------------------------------------------------------
+ 
+-#ifndef _STATUS_HXX //autogen
++#include "modctrl.hxx"
++
+ #include <vcl/status.hxx>
+-#endif
++#include <vcl/image.hxx>
+ #include <svtools/eitem.hxx>
+ #include <sfx2/app.hxx>
+ 
+-#define _SVX_MODCTRL_CXX
+ 
+ #include <svx/dialogs.hrc>
+-
+-#include "modctrl.hxx"
+ #include <svx/dialmgr.hxx>
+ 
++using ::rtl::OUString;
++
+ SFX_IMPL_STATUSBAR_CONTROL(SvxModifyControl, SfxBoolItem);
+ 
+ // class SvxModifyControl ------------------------------------------------
+ 
++struct SvxModifyControl::ImplData
++{
++    Image maModifiedButton;
++    Image maNonModifiedButton;
++
++    bool mbState;
++
++    ImplData() :
++        maModifiedButton( SVX_RES(RID_SVXBMP_DOC_MODIFIED_YES) ),
++        maNonModifiedButton( SVX_RES(RID_SVXBMP_DOC_MODIFIED_NO) ),
++        mbState(false)
++    {
++    }
++};
++
+ SvxModifyControl::SvxModifyControl( USHORT _nSlotId,
+                                     USHORT _nId,
+                                     StatusBar& rStb ) :
+ 
+     SfxStatusBarControl( _nSlotId, _nId, rStb ),
+-    bState( TRUE )
++    mpImpl(new ImplData)
+ {
+ }
+ 
+@@ -64,33 +79,61 @@ SvxModifyControl::SvxModifyControl( USHORT _nSlotId,
+ void SvxModifyControl::StateChanged( USHORT, SfxItemState eState,
+                                      const SfxPoolItem* pState )
+ {
++    StackPrinter __stack_printer__("SvxModifyControl::StateChanged");
+     if ( SFX_ITEM_AVAILABLE != eState )
+-        GetStatusBar().SetItemText( GetId(), String() );
+-    else
+-    {
+-        DBG_ASSERT( pState->ISA( SfxBoolItem ), "invalid item type" );
+-        SfxBoolItem* pItem = (SfxBoolItem*)pState;
+-        bState = pItem->GetValue();
+-        DrawItemText_Impl();
+-    }
+-}
++        return;
+ 
+-// -----------------------------------------------------------------------
++    DBG_ASSERT( pState->ISA( SfxBoolItem ), "invalid item type" );
++    SfxBoolItem* pItem = (SfxBoolItem*)pState;
++    mpImpl->mbState = pItem->GetValue();
++    fprintf(stdout, "SvxModifyControl::StateChanged:   state = %d\n", mpImpl->mbState);
+ 
+-void SvxModifyControl::Paint( const UserDrawEvent& )
+-{
+-    DrawItemText_Impl();
++    if ( GetStatusBar().AreItemsVisible() )
++        GetStatusBar().SetItemData( GetId(), 0 );    // force repaint
+ }
+ 
+ // -----------------------------------------------------------------------
+ 
+-void SvxModifyControl::DrawItemText_Impl()
++namespace {
++
++/** 
++ * Given a bounding rectangle and an image, determine the top-left position 
++ * of the image so that the image would look centered both horizontally and 
++ * vertically. 
++ *
++ * @param rBoundingRect bounding rectangle
++ * @param rImg image
++ * 
++ * @return Point top-left corner of the centered image position
++ */
++Point centerImage(const Rectangle& rBoundingRect, const Image& rImg)
+ {
+-    String sMode;
++    Size aImgSize = rImg.GetSizePixel();
++    Size aRectSize = rBoundingRect.GetSize();
++    long nXOffset = (aRectSize.getWidth() - aImgSize.getWidth())/2;
++    long nYOffset = (aRectSize.getHeight() - aImgSize.getHeight())/2;
++    Point aPt = rBoundingRect.TopLeft();
++    aPt += Point(nXOffset, nYOffset);
++    return aPt;
++}
+ 
+-    if ( bState )
+-        sMode = '*';
+-    GetStatusBar().SetItemText( GetId(), sMode );
++}
++void SvxModifyControl::Paint( const UserDrawEvent& rUsrEvt )
++{
++    const Rectangle     aControlRect = getControlRect();
++    OutputDevice*       pDev =  rUsrEvt.GetDevice();
++    Rectangle           aRect = rUsrEvt.GetRect();
++
++    if (mpImpl->mbState)
++    {    
++        Point aPt = centerImage(aRect, mpImpl->maModifiedButton);
++        pDev->DrawImage(aPt, mpImpl->maModifiedButton);
++    }
++    else
++    {
++        Point aPt = centerImage(aRect, mpImpl->maNonModifiedButton);
++        pDev->DrawImage(aPt, mpImpl->maNonModifiedButton);
++    }
+ }
+ 
+ ULONG SvxModifyControl::GetDefItemWidth(const StatusBar& rStb)
+diff --git svx/source/stbctrls/stbctrls.src svx/source/stbctrls/stbctrls.src
+index b4dac87..98d9d74 100644
+--- svx/source/stbctrls/stbctrls.src
++++ svx/source/stbctrls/stbctrls.src
+@@ -323,3 +323,19 @@ Image RID_SVXBMP_SLIDERINCREASE_HC
+     MaskColor = STD_MASKCOLOR;
+ };
+ 
++Image RID_SVXBMP_DOC_MODIFIED_YES
++{
++    ImageBitmap = Bitmap
++    {
++        File = "slidezoomin_11.png" ;
++    };
++    MaskColor = STD_MASKCOLOR;
++};
++Image RID_SVXBMP_DOC_MODIFIED_NO
++{
++    ImageBitmap = Bitmap
++    {
++        File = "slidezoomout_11.png" ;
++    };
++    MaskColor = STD_MASKCOLOR;
++};
