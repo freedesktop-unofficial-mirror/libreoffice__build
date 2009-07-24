@@ -1,0 +1,67 @@
+#!/bin/bash 
+
+#
+# run convwatch for all files given in ooo-build/test (or below -d <dir>)
+#
+
+# check for required gs
+which gs >/dev/null 2>&1 || { 
+	echo "need gs"; exit 1 
+}
+
+# check for required imagemagick tools
+which composite >/dev/null 2>&1 || { 
+	echo "need imagemagick's composite"; exit 1 
+}
+which identify >/dev/null 2>&1 || { 
+	echo "need imagemagick's identify"; exit 1 
+}
+
+usage ()
+{
+echo "Usage: $0 [options]"
+echo "Options:"
+echo "-d    Specify the directory to read the test docs from (will be"
+echo "      scanned recursively)"
+echo "-c    Create reference output next to input docs. Careful,"
+echo "      overwrites what's there!"
+echo "-h    This help information"
+}
+
+# default test file dir in ooo-build tree
+DIR="$SRC_ROOT/../../test"
+
+# Parse command line options
+while getopts d:ch opt ; do
+	case "$opt" in
+		d) DIR="$OPTARG" ;;
+		c) CREATE_REFS=y ;;
+		h) usage; exit ;;
+		?) usage; exit ;;
+	esac
+done
+
+shift $(($OPTIND - 1))
+
+# craft ini file for java tests
+cat > props.ini <<EOF
+DOC_COMPARATOR_INPUT_PATH=$DIR
+DOC_COMPARATOR_REFERENCE_PATH=/tmp
+DOC_COMPARATOR_OUTPUT_PATH=/tmp
+ConnectionString=pipe,name=none
+EOF
+echo "AppExecutionCommand=`pwd`/soffice -norestore -nocrashreport -headless -accept=pipe,name=none;urp;" >> props.ini
+
+if [ "$CREATE_REFS" = "y" ]; then
+	echo "DOC_COMPARATOR_OVERWRITE_REFERENCE=true" >> props.ini
+fi
+
+# fake environment
+OOORUNNER=`echo $SRC_ROOT/solver/*/*/bin`
+JARFILES=$OOORUNNER/ridl.jar:$OOORUNNER/unoil.jar:$OOORUNNER/jurt.jar:$OOORUNNER/juh.jar:$OOORUNNER/java_uno.jar:$OOORUNNER/OOoRunnerLight.jar
+
+# start reference build
+LD_LIBRARY_PATH=`pwd`/../ure/lib java -cp $JARFILES org.openoffice.Runner -tb java_complex -ini props.ini -o convwatch.ReferenceBuilder
+
+# start the graphical document compare
+LD_LIBRARY_PATH=`pwd`/../ure/lib java -cp $JARFILES org.openoffice.Runner -tb java_complex -ini props.ini -o convwatch.ConvWatchStarter
