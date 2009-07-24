@@ -5,12 +5,15 @@ From: Thorsten Behrens <thb@openoffice.org>
 
 ---
 
+ basegfx/inc/basegfx/matrix/b2dhommatrixtools.hxx   |    6 
  basegfx/inc/basegfx/numeric/ftools.hxx             |    2 
- basegfx/inc/basegfx/tools/gradienttools.hxx        |    4 
+ basegfx/inc/basegfx/tools/gradienttools.hxx        |   18 +
  basegfx/inc/basegfx/tools/keystoplerp.hxx          |  100 +++++
  basegfx/inc/basegfx/tools/lerp.hxx                 |   60 +++
  basegfx/prj/d.lst                                  |    2 
- basegfx/source/tools/keystoplerp.cxx               |  104 ++++++
+ basegfx/source/matrix/b2dhommatrixtools.cxx        |   28 +
+ basegfx/source/tools/gradienttools.cxx             |   85 ++--
+ basegfx/source/tools/keystoplerp.cxx               |  104 +++++
  basegfx/source/tools/makefile.mk                   |    1 
  basegfx/test/basegfxtools.cxx                      |  119 ++++++
  basegfx/test/makefile.mk                           |    1 
@@ -18,16 +21,23 @@ From: Thorsten Behrens <thb@openoffice.org>
  canvas/inc/canvas/canvastools.hxx                  |   22 -
  canvas/inc/canvas/parametricpolypolygon.hxx        |   40 +-
  canvas/source/cairo/cairo_canvas.hxx               |    3 
- canvas/source/cairo/cairo_canvashelper.cxx         |  113 ++++--
+ canvas/source/cairo/cairo_canvashelper.cxx         |  272 ++++++++++----
  canvas/source/cairo/cairo_spritecanvas.hxx         |    3 
  canvas/source/null/null_spritecanvas.hxx           |    4 
- canvas/source/tools/parametricpolypolygon.cxx      |  110 +++++-
+ canvas/source/tools/parametricpolypolygon.cxx      |  114 +++++-
  canvas/source/vcl/canvas.hxx                       |    3 
- canvas/source/vcl/canvashelper_texturefill.cxx     |  262 ++++++--------
+ canvas/source/vcl/canvashelper_texturefill.cxx     |  286 ++++++---------
  canvas/source/vcl/spritecanvas.hxx                 |    3 
  cppcanvas/source/mtfrenderer/emfplus.cxx           |   74 ++--
- cppcanvas/source/mtfrenderer/implrenderer.cxx      |  368 +++++++-------------
- offapi/com/sun/star/rendering/XGraphicDevice.idl   |   65 +++-
+ cppcanvas/source/mtfrenderer/implrenderer.cxx      |  379 +++++++-------------
+ .../source/primitive2d/fillgradientprimitive2d.cxx |   26 +
+ .../source/primitive2d/fillhatchprimitive2d.cxx    |    6 
+ .../source/primitive3d/hatchtextureprimitive3d.cxx |    6 
+ drawinglayer/source/processor2d/vclprocessor2d.cxx |    2 
+ .../source/processor3d/defaultprocessor3d.cxx      |   10 -
+ drawinglayer/source/texture/texture.cxx            |  126 +------
+ drawinglayer/source/texture/texture3d.cxx          |    2 
+ offapi/com/sun/star/rendering/XGraphicDevice.idl   |   65 +++
  offapi/com/sun/star/rendering/makefile.mk          |    1 
  .../source/engine/activities/activitybase.cxx      |    2 
  .../activities/continuouskeytimeactivitybase.cxx   |   69 +---
@@ -36,7 +46,7 @@ From: Thorsten Behrens <thb@openoffice.org>
  slideshow/source/engine/shapes/viewshape.cxx       |    7 
  slideshow/source/engine/tools.cxx                  |   26 +
  slideshow/source/inc/lerp.hxx                      |   62 ---
- 31 files changed, 958 insertions(+), 786 deletions(-)
+ 41 files changed, 1237 insertions(+), 1016 deletions(-)
  create mode 100644 basegfx/inc/basegfx/tools/keystoplerp.hxx
  create mode 100644 basegfx/inc/basegfx/tools/lerp.hxx
  create mode 100644 basegfx/source/tools/keystoplerp.cxx
@@ -44,6 +54,30 @@ From: Thorsten Behrens <thb@openoffice.org>
  delete mode 100644 slideshow/source/inc/lerp.hxx
 
 
+diff --git basegfx/inc/basegfx/matrix/b2dhommatrixtools.hxx basegfx/inc/basegfx/matrix/b2dhommatrixtools.hxx
+index 1597de8..31b503f 100644
+--- basegfx/inc/basegfx/matrix/b2dhommatrixtools.hxx
++++ basegfx/inc/basegfx/matrix/b2dhommatrixtools.hxx
+@@ -36,6 +36,8 @@
+ #include <basegfx/matrix/b2dhommatrix.hxx>
+ #include <basegfx/vector/b2dvector.hxx>
+ 
++namespace rtl { class OUString; }
++
+ ///////////////////////////////////////////////////////////////////////////////
+ 
+ namespace basegfx
+@@ -79,6 +81,10 @@ namespace basegfx
+         double getRotate() const { const_cast< DecomposedB2DHomMatrixContainer* >(this)->impCheckDecompose(); return mfRotate; }
+         double getShearX() const { const_cast< DecomposedB2DHomMatrixContainer* >(this)->impCheckDecompose(); return mfShearX; }
+     };
++
++    /// Returns a string with svg's "matrix(m00,m10,m01,m11,m02,m12)" representation
++    ::rtl::OUString exportToSvg( const B2DHomMatrix& rMatrix );
++    
+ } // end of namespace basegfx
+ 
+ ///////////////////////////////////////////////////////////////////////////////
 diff --git basegfx/inc/basegfx/numeric/ftools.hxx basegfx/inc/basegfx/numeric/ftools.hxx
 index 9321745..080695d 100644
 --- basegfx/inc/basegfx/numeric/ftools.hxx
@@ -58,7 +92,7 @@ index 9321745..080695d 100644
          if(value < minimum)
          {
 diff --git basegfx/inc/basegfx/tools/gradienttools.hxx basegfx/inc/basegfx/tools/gradienttools.hxx
-index 1b45aa9..59435f8 100644
+index 1b45aa9..48d50bf 100644
 --- basegfx/inc/basegfx/tools/gradienttools.hxx
 +++ basegfx/inc/basegfx/tools/gradienttools.hxx
 @@ -37,6 +37,9 @@
@@ -71,7 +105,49 @@ index 1b45aa9..59435f8 100644
  namespace basegfx
  {
      /** Gradient definition as used in ODF 1.2
-@@ -394,7 +397,6 @@ namespace basegfx
+@@ -78,6 +81,8 @@ namespace basegfx
+     {
+         /** Create matrix for ODF's linear gradient definition
+ 
++            Note that odf linear gradients are varying in y direction.
++
+             @param o_rGradientInfo
+             Receives the calculated texture transformation matrix (for
+             use with standard [0,1]x[0,1] texture coordinates)
+@@ -109,7 +114,7 @@ namespace basegfx
+ 
+             @param rUV
+             Current uv coordinate. Values outside [0,1] will be
+-            clamped.
++            clamped. Assumes gradient color varies along the y axis.
+ 
+             @param rGradInfo
+             Gradient info, for transformation and number of steps
+@@ -129,6 +134,14 @@ namespace basegfx
+ 
+         /** Create matrix for ODF's axial gradient definition
+ 
++            Note that odf axial gradients are varying in y
++            direction. Note further that you can map the axial
++            gradient to a linear gradient (in case you want or need to
++            avoid an extra gradient renderer), by using
++            createLinearODFGradientInfo() instead, shifting the
++            resulting texture transformation by 0.5 to the top and
++            appending the same stop colors again, but mirrored.
++
+             @param o_rGradientInfo
+             Receives the calculated texture transformation matrix (for
+             use with standard [0,1]x[0,1] texture coordinates)
+@@ -160,7 +173,7 @@ namespace basegfx
+ 
+             @param rUV
+             Current uv coordinate. Values outside [0,1] will be
+-            clamped.
++            clamped. Assumes gradient color varies along the y axis.
+ 
+             @param rGradInfo
+             Gradient info, for transformation and number of steps
+@@ -394,7 +407,6 @@ namespace basegfx
          {
              return getSquareGradientAlpha(rUV, rGradInfo); // only matrix setup differs
          }
@@ -264,6 +340,218 @@ index a58cd33..1707969 100644
  ..\inc\basegfx\tools\unopolypolygon.hxx %_DEST%\inc%_EXT%\basegfx\tools\unopolypolygon.hxx
  ..\inc\basegfx\tools\rectcliptools.hxx %_DEST%\inc%_EXT%\basegfx\tools\rectcliptools.hxx
  ..\inc\basegfx\tools\tools.hxx %_DEST%\inc%_EXT%\basegfx\tools\tools.hxx
+diff --git basegfx/source/matrix/b2dhommatrixtools.cxx basegfx/source/matrix/b2dhommatrixtools.cxx
+index d7c844e..ade2a25 100644
+--- basegfx/source/matrix/b2dhommatrixtools.cxx
++++ basegfx/source/matrix/b2dhommatrixtools.cxx
+@@ -33,11 +33,39 @@
+ #include "precompiled_basegfx.hxx"
+ 
+ #include <basegfx/matrix/b2dhommatrixtools.hxx>
++#include <rtl/ustring.hxx>
++#include <rtl/ustrbuf.hxx>
+ 
+ ///////////////////////////////////////////////////////////////////////////////
+ 
+ namespace basegfx
+ {
++    ::rtl::OUString exportToSvg( const B2DHomMatrix& rMatrix )
++    {
++        rtl::OUStringBuffer aStrBuf;
++        aStrBuf.appendAscii("matrix(");
++
++        aStrBuf.append(rMatrix.get(0,0));
++        aStrBuf.appendAscii(", ");
++
++        aStrBuf.append(rMatrix.get(1,0));
++        aStrBuf.appendAscii(", ");
++
++        aStrBuf.append(rMatrix.get(0,1));
++        aStrBuf.appendAscii(", ");
++
++        aStrBuf.append(rMatrix.get(1,1));
++        aStrBuf.appendAscii(", ");
++
++        aStrBuf.append(rMatrix.get(0,2));
++        aStrBuf.appendAscii(", ");
++
++        aStrBuf.append(rMatrix.get(1,2));
++        aStrBuf.appendAscii(")");
++
++        return aStrBuf.makeStringAndClear();
++    }
++
+ } // end of namespace basegfx
+ 
+ ///////////////////////////////////////////////////////////////////////////////
+diff --git basegfx/source/tools/gradienttools.cxx basegfx/source/tools/gradienttools.cxx
+index 9fe7ab6..e08c38f 100644
+--- basegfx/source/tools/gradienttools.cxx
++++ basegfx/source/tools/gradienttools.cxx
+@@ -51,7 +51,9 @@ namespace basegfx
+         o_rGradientInfo.maTextureTransform.identity();
+         o_rGradientInfo.maBackTextureTransform.identity();
+         o_rGradientInfo.mnSteps = nSteps;
+-            
++
++        fAngle = -fAngle;
++
+         double fTargetSizeX(rTargetRange.getWidth());
+         double fTargetSizeY(rTargetRange.getHeight());
+         double fTargetOffsetX(rTargetRange.getMinX());
+@@ -70,7 +72,23 @@ namespace basegfx
+             fTargetSizeY = fNewY;
+         }
+ 
+-        // add object scale before rotate
++        double fSizeWithoutBorder=0;
++        double fTranslateY=0;
++        if( bAxial )
++        {
++            fSizeWithoutBorder = (1.0 - fBorder) * 0.5;
++            fTranslateY = 0.5;
++        }
++        else
++        {
++            fSizeWithoutBorder = 1.0 - fBorder;
++            fTranslateY = fBorder;
++        }
++
++        if(!fTools::equal(fSizeWithoutBorder, 0.0))
++            o_rGradientInfo.maTextureTransform.scale(1.0, fSizeWithoutBorder);
++
++        o_rGradientInfo.maTextureTransform.translate(0.0, fTranslateY);
+         o_rGradientInfo.maTextureTransform.scale(fTargetSizeX, fTargetSizeY);
+ 
+         // add texture rotate after scale to keep perpendicular angles
+@@ -90,24 +108,9 @@ namespace basegfx
+         // prepare aspect for texture
+         o_rGradientInfo.mfAspectRatio = (0.0 != fTargetSizeY) ?  fTargetSizeX / fTargetSizeY : 1.0;
+ 
+-        // build transform from u,v to [0.0 .. 1.0]. As base, use inverse texture transform
++        // build transform from u,v to [0.0 .. 1.0].
+         o_rGradientInfo.maBackTextureTransform = o_rGradientInfo.maTextureTransform;
+         o_rGradientInfo.maBackTextureTransform.invert();
+-
+-        double fSizeWithoutBorder=0;
+-        if( bAxial )
+-        {
+-            fSizeWithoutBorder = (1.0 - fBorder) * 0.5;
+-            o_rGradientInfo.maBackTextureTransform.translate(0.0, -0.5);
+-        }
+-        else
+-        {
+-            fSizeWithoutBorder = 1.0 - fBorder;
+-            o_rGradientInfo.maBackTextureTransform.translate(0.0, -fBorder);
+-        }
+-
+-        if(!fTools::equal(fSizeWithoutBorder, 0.0))
+-            o_rGradientInfo.maBackTextureTransform.scale(1.0, 1.0 / fSizeWithoutBorder);
+     }
+ 
+     /** Most of the setup for radial & ellipsoidal gradient is the same,
+@@ -124,7 +127,9 @@ namespace basegfx
+         o_rGradientInfo.maTextureTransform.identity();
+         o_rGradientInfo.maBackTextureTransform.identity();
+         o_rGradientInfo.mnSteps = nSteps;
+-            
++    
++        fAngle = -fAngle;
++
+         double fTargetSizeX(rTargetRange.getWidth());
+         double fTargetSizeY(rTargetRange.getHeight());
+         double fTargetOffsetX(rTargetRange.getMinX());
+@@ -147,7 +152,11 @@ namespace basegfx
+             fTargetSizeY = 1.4142 * fTargetSizeY;
+         }
+ 
+-        // add object scale before rotate
++        const double fHalfBorder((1.0 - fBorder) * 0.5);
++        if(!fTools::equal(fHalfBorder, 0.0))
++            o_rGradientInfo.maTextureTransform.scale(fHalfBorder, fHalfBorder);
++
++        o_rGradientInfo.maTextureTransform.translate(0.5, 0.5);
+         o_rGradientInfo.maTextureTransform.scale(fTargetSizeX, fTargetSizeY);
+ 
+         if( !bCircular )
+@@ -155,9 +164,8 @@ namespace basegfx
+             // add texture rotate after scale to keep perpendicular angles
+             if(0.0 != fAngle)
+             {
+-                B2DPoint aCenter(0.5, 0.5);
+-                aCenter *= o_rGradientInfo.maTextureTransform;
+-
++                const B2DPoint aCenter(0.5*fTargetSizeX,
++                                       0.5*fTargetSizeY);
+                 o_rGradientInfo.maTextureTransform.translate(-aCenter.getX(), -aCenter.getY());
+                 o_rGradientInfo.maTextureTransform.rotate(fAngle);
+                 o_rGradientInfo.maTextureTransform.translate(aCenter.getX(), aCenter.getY());
+@@ -178,17 +186,9 @@ namespace basegfx
+         // prepare aspect for texture
+         o_rGradientInfo.mfAspectRatio = (0.0 != fTargetSizeY) ?  fTargetSizeX / fTargetSizeY : 1.0;
+ 
+-        // build transform from u,v to [0.0 .. 1.0]. As base, use inverse texture transform
++        // build transform from u,v to [0.0 .. 1.0].
+         o_rGradientInfo.maBackTextureTransform = o_rGradientInfo.maTextureTransform;
+         o_rGradientInfo.maBackTextureTransform.invert();
+-        o_rGradientInfo.maBackTextureTransform.translate(-0.5, -0.5);
+-        const double fHalfBorder((1.0 - fBorder) * 0.5);
+-
+-        if(!fTools::equal(fHalfBorder, 0.0))
+-        {
+-            const double fFactor(1.0 / fHalfBorder);
+-            o_rGradientInfo.maBackTextureTransform.scale(fFactor, fFactor);
+-        }
+     }
+ 
+     /** Setup for rect & square gradient is exactly the same. Factored out
+@@ -205,6 +205,8 @@ namespace basegfx
+         o_rGradientInfo.maBackTextureTransform.identity();
+         o_rGradientInfo.mnSteps = nSteps;
+ 
++        fAngle = -fAngle;
++
+         double fTargetSizeX(rTargetRange.getWidth());
+         double fTargetSizeY(rTargetRange.getHeight());
+         double fTargetOffsetX(rTargetRange.getMinX());
+@@ -223,15 +225,18 @@ namespace basegfx
+             fTargetSizeY = fNewY;
+         }
+ 
+-        // add object scale before rotate
++        const double fHalfBorder((1.0 - fBorder) * 0.5);
++        if(!fTools::equal(fHalfBorder, 0.0))
++            o_rGradientInfo.maTextureTransform.scale(fHalfBorder, fHalfBorder);
++
++        o_rGradientInfo.maTextureTransform.translate(0.5, 0.5);
+         o_rGradientInfo.maTextureTransform.scale(fTargetSizeX, fTargetSizeY);
+ 
+         // add texture rotate after scale to keep perpendicular angles
+         if(0.0 != fAngle)
+         {
+-            B2DPoint aCenter(0.5, 0.5);
+-            aCenter *= o_rGradientInfo.maTextureTransform;
+-
++            const B2DPoint aCenter(0.5*fTargetSizeX, 
++                                   0.5*fTargetSizeY);
+             o_rGradientInfo.maTextureTransform.translate(-aCenter.getX(), -aCenter.getY());
+             o_rGradientInfo.maTextureTransform.rotate(fAngle);
+             o_rGradientInfo.maTextureTransform.translate(aCenter.getX(), aCenter.getY());
+@@ -254,14 +259,6 @@ namespace basegfx
+         // build transform from u,v to [0.0 .. 1.0]. As base, use inverse texture transform
+         o_rGradientInfo.maBackTextureTransform = o_rGradientInfo.maTextureTransform;
+         o_rGradientInfo.maBackTextureTransform.invert();
+-        o_rGradientInfo.maBackTextureTransform.translate(-0.5, -0.5);
+-        const double fHalfBorder((1.0 - fBorder) * 0.5);
+-
+-        if(!fTools::equal(fHalfBorder, 0.0))
+-        {
+-            const double fFactor(1.0 / fHalfBorder);
+-            o_rGradientInfo.maBackTextureTransform.scale(fFactor, fFactor);
+-        }
+     }
+ 
+     namespace tools
 diff --git basegfx/source/tools/keystoplerp.cxx basegfx/source/tools/keystoplerp.cxx
 new file mode 100644
 index 0000000..c7a58c2
@@ -779,10 +1067,80 @@ index 62185d4..7528e2f 100644
                                                  ::com::sun::star::beans::XPropertySet,
                                                  ::com::sun::star::lang::XServiceName >	GraphicDeviceBase_Base;
 diff --git canvas/source/cairo/cairo_canvashelper.cxx canvas/source/cairo/cairo_canvashelper.cxx
-index 5ca2a96..e05ba73 100644
+index 5ca2a96..d24febb 100644
 --- canvas/source/cairo/cairo_canvashelper.cxx
 +++ canvas/source/cairo/cairo_canvashelper.cxx
-@@ -665,7 +665,6 @@ namespace cairocanvas
+@@ -56,6 +56,8 @@
+ #include <basegfx/polygon/b2dpolypolygon.hxx>
+ #include <basegfx/polygon/b2dpolygontools.hxx>
+ #include <basegfx/tools/canvastools.hxx>
++#include <basegfx/tools/keystoplerp.hxx>
++#include <basegfx/tools/lerp.hxx>
+ 
+ #include <comphelper/sequence.hxx>
+ #include <cppuhelper/compbase1.hxx>
+@@ -73,6 +75,7 @@
+ #include "cairo_canvashelper.hxx"
+ #include "cairo_canvasbitmap.hxx"
+ 
++#include <boost/tuple/tuple.hpp>
+ #include <algorithm>
+ 
+ using namespace ::cairo;
+@@ -122,9 +125,29 @@ namespace cairocanvas
+ 		mpCairo = pSurface->getCairo();
+     }
+ 
++    static void setColor( Cairo* pCairo,
++                          const uno::Sequence<double>& rColor )
++    {
++        if( rColor.getLength() > 3 )
++        {
++            const double alpha = rColor[3];
++
++            cairo_set_source_rgba( pCairo,
++                                   alpha*rColor[0],
++                                   alpha*rColor[1],
++                                   alpha*rColor[2],
++                                   alpha );
++        }
++        else if( rColor.getLength() == 3 )
++            cairo_set_source_rgb( pCairo,
++                                  rColor[0],
++                                  rColor[1],
++                                  rColor[2] );
++    }
++
+     void CanvasHelper::useStates( const rendering::ViewState& viewState,
+                                   const rendering::RenderState& renderState,
+-                                  bool setColor )
++                                  bool bSetColor )
+     {
+         Matrix aViewMatrix;
+         Matrix aRenderMatrix;
+@@ -158,19 +181,8 @@ namespace cairocanvas
+             OSL_TRACE ("render clip END");
+         }
+ 
+-        if( setColor ) {
+-            if( renderState.DeviceColor.getLength() > 3 )
+-                cairo_set_source_rgba( mpCairo.get(),
+-                                       renderState.DeviceColor [0],
+-                                       renderState.DeviceColor [1],
+-                                       renderState.DeviceColor [2],
+-                                       renderState.DeviceColor [3] );
+-            else if (renderState.DeviceColor.getLength() == 3)
+-                cairo_set_source_rgb( mpCairo.get(),
+-                                      renderState.DeviceColor [0],
+-                                      renderState.DeviceColor [1],
+-                                      renderState.DeviceColor [2] );
+-        }
++        if( bSetColor )
++            setColor(mpCairo.get(),renderState.DeviceColor);
+ 
+         cairo_operator_t compositingMode( CAIRO_OPERATOR_OVER );
+         switch( renderState.CompositeOperation )
+@@ -665,11 +677,33 @@ namespace cairocanvas
                  double alpha = rColor[3];
                  // cairo expects premultiplied alpha
                  cairo_pattern_add_color_stop_rgba( pPattern, stop, rColor[0]*alpha, rColor[1]*alpha, rColor[2]*alpha, alpha );
@@ -790,26 +1148,186 @@ index 5ca2a96..e05ba73 100644
              }
          }
      }
-@@ -691,9 +690,7 @@ namespace cairocanvas
+ 
++    static uno::Sequence<double> lerp(const uno::Sequence<double>& rLeft, const uno::Sequence<double>& rRight, double fAlpha)
++    {
++        if( rLeft.getLength() == 3 )
++        {
++            uno::Sequence<double> aRes(3);
++            aRes[0] = basegfx::tools::lerp(rLeft[0],rRight[0],fAlpha);
++            aRes[1] = basegfx::tools::lerp(rLeft[1],rRight[1],fAlpha);
++            aRes[2] = basegfx::tools::lerp(rLeft[2],rRight[2],fAlpha);
++            return aRes;
++        }
++        else if( rLeft.getLength() == 4 )
++        {
++            uno::Sequence<double> aRes(4);
++            aRes[0] = basegfx::tools::lerp(rLeft[0],rRight[0],fAlpha);
++            aRes[1] = basegfx::tools::lerp(rLeft[1],rRight[1],fAlpha);
++            aRes[2] = basegfx::tools::lerp(rLeft[2],rRight[2],fAlpha);
++            aRes[3] = basegfx::tools::lerp(rLeft[3],rRight[3],fAlpha);
++            return aRes;
++        }
++
++        return uno::Sequence<double>();
++    }
++
+     static Pattern* patternFromParametricPolyPolygon( ::canvas::ParametricPolyPolygon& rPolygon )
+     {
+ 	Pattern* pPattern = NULL;
+@@ -678,7 +712,6 @@ namespace cairocanvas
+ 
+ // undef macros from vclenum.hxx which conflicts with GradientType enum values
+ #undef GRADIENT_LINEAR
+-#undef GRADIENT_AXIAL
+ #undef GRADIENT_ELLIPTICAL
+ 
+ 	switch( aValues.meType ) {
+@@ -691,26 +724,17 @@ namespace cairocanvas
  	    addColorStops( pPattern, aValues.maColors, aValues.maStops );
  	    break;
  
 -	// FIXME: NYI
- 	case ::canvas::ParametricPolyPolygon::GRADIENT_RECTANGULAR:
+-	case ::canvas::ParametricPolyPolygon::GRADIENT_RECTANGULAR:
 -	case ::canvas::ParametricPolyPolygon::GRADIENT_AXIAL:
- 	    x0 = 0;
- 	    y0 = 0;
- 	    x1 = 1;
-@@ -708,7 +705,7 @@ namespace cairocanvas
+-	    x0 = 0;
+-	    y0 = 0;
+-	    x1 = 1;
+-	    y1 = 0;
+-	    pPattern = cairo_pattern_create_linear( x0, y0, x1, y1 );
+-	    addColorStops( pPattern, aValues.maColors, aValues.maStops );
+-	    break;
+-
+ 	case ::canvas::ParametricPolyPolygon::GRADIENT_ELLIPTICAL:
+-	    cx = 0.5;
+-	    cy = 0.5;
++	    cx = 0;
++	    cy = 0;
  	    r0 = 0;
- 	    r1 = 0.5;
+-	    r1 = 0.5;
++	    r1 = 1;
  
 -	    pPattern = cairo_pattern_create_radial( cx, cy, r0, cx, cy, r1 );
 +	    pPattern = cairo_pattern_create_radial( cx, cy, r0, cy, cy, r1 );
  	    addColorStops( pPattern, aValues.maColors, aValues.maStops, true );
  	    break;
++    default:
++        break;
  	}
-@@ -1171,12 +1168,12 @@ namespace cairocanvas
+ 
+ 	return pPattern;
+@@ -719,7 +743,8 @@ namespace cairocanvas
+     static void doOperation( Operation aOperation,
+                              Cairo* pCairo,
+                              const uno::Sequence< rendering::Texture >* pTextures,
+-                             const SurfaceProviderRef& pDevice )
++                             const SurfaceProviderRef& pDevice,
++                             const basegfx::B2DRange& rBounds )
+     {
+ 	switch( aOperation ) {
+ 	case Fill:
+@@ -790,21 +815,72 @@ namespace cairocanvas
+ 			cairo_matrix_init( &aTextureMatrix,
+ 					   aTransform.m00, aTransform.m10, aTransform.m01,
+ 					   aTransform.m11, aTransform.m02, aTransform.m12);
+-			Pattern* pPattern = patternFromParametricPolyPolygon( *pPolyImpl );
++            if( pPolyImpl->getValues().meType == canvas::ParametricPolyPolygon::GRADIENT_RECTANGULAR )
++            {
++                // no general path gradient yet in cairo; emulate then                
++                cairo_save( pCairo );
++                cairo_clip( pCairo );
++
++                // fill bound rect with start color
++                cairo_rectangle( pCairo, rBounds.getMinX(), rBounds.getMinY(), 
++                                 rBounds.getWidth(), rBounds.getHeight() );
++                setColor(pCairo,pPolyImpl->getValues().maColors[0]);
++                cairo_fill(pCairo);
++
++                cairo_transform( pCairo, &aTextureMatrix );
++
++                // longest line in gradient bound rect
++                const unsigned int nGradientSize( 
++                    static_cast<unsigned int>( 
++                        ::basegfx::B2DVector(rBounds.getMinimum() - rBounds.getMaximum()).getLength() + 1.0 ) );
++
++                // typical number for pixel of the same color (strip size)
++                const unsigned int nStripSize( nGradientSize < 50 ? 2 : 4 );
++
++                // use at least three steps, and at utmost the number of color
++                // steps
++                const unsigned int nStepCount( 
++                    ::std::max( 
++                        3U,
++                        ::std::min( 
++                            nGradientSize / nStripSize,
++                            128U )) + 1 );
++
++                const uno::Sequence<double>* pColors=&pPolyImpl->getValues().maColors[0];
++                basegfx::tools::KeyStopLerp aLerper(pPolyImpl->getValues().maStops);
++                for( unsigned int i=1; i<nStepCount; ++i )
++                {
++                    const double fT( i/double(nStepCount) );            
+ 
+-			if( pPattern ) {
+-			    OSL_TRACE( "filling with pattern" );
++                    std::ptrdiff_t nIndex;
++                    double fAlpha;
++                    boost::tuples::tie(nIndex,fAlpha)=aLerper.lerp(fT);
+ 
+-			    cairo_save( pCairo );
++                    setColor(pCairo, lerp(pColors[nIndex], pColors[nIndex+1], fAlpha));
++                    cairo_rectangle( pCairo, -1+fT, -1+fT, 2-2*fT, 2-2*fT );
++                    cairo_fill(pCairo);
++                }
+ 
+-               cairo_transform( pCairo, &aTextureMatrix );
+-			    cairo_set_source( pCairo, pPattern );
+-			    cairo_fill( pCairo );
+-			    cairo_restore( pCairo );
++                cairo_restore( pCairo );
++            }
++            else
++            {
++                Pattern* pPattern = patternFromParametricPolyPolygon( *pPolyImpl );
+ 
+-			    cairo_pattern_destroy( pPattern );
+-			}
++                if( pPattern ) {
++                    OSL_TRACE( "filling with pattern" );
++
++                    cairo_save( pCairo );
++
++                    cairo_transform( pCairo, &aTextureMatrix );
++                    cairo_set_source( pCairo, pPattern );
++                    cairo_fill( pCairo );
++                    cairo_restore( pCairo );
++
++                    cairo_pattern_destroy( pPattern );
++                }
+ 		    }
++            }
+ 		}
+ 	    } else
+ 		cairo_fill( pCairo );
+@@ -935,7 +1011,7 @@ namespace cairocanvas
+ 
+ 		if( aOperation == Fill && pTextures ) {
+ 		    cairo_set_matrix( pCairo, &aOrigMatrix );
+-		    doOperation( aOperation, pCairo, pTextures, pDevice );
++		    doOperation( aOperation, pCairo, pTextures, pDevice, aPolyPolygon.getB2DRange() );
+ 		    cairo_set_matrix( pCairo, &aIdentityMatrix );
+ 		}
+ 	    } else {
+@@ -948,7 +1024,7 @@ namespace cairocanvas
+ 	    }
+ 	}
+ 	if( bOpToDo && ( aOperation != Fill || !pTextures ) )
+-	    doOperation( aOperation, pCairo, pTextures, pDevice );
++	    doOperation( aOperation, pCairo, pTextures, pDevice, aPolyPolygon.getB2DRange() );
+ 
+ 	cairo_set_matrix( pCairo, &aOrigMatrix );
+ 
+@@ -1171,12 +1247,12 @@ namespace cairocanvas
  																					   const rendering::ViewState&      viewState,
  																					   const rendering::RenderState&    renderState,
  																					   const geometry::IntegerSize2D&   rSize,
@@ -824,7 +1342,7 @@ index 5ca2a96..e05ba73 100644
  
  		if( mpCairo ) {
  			cairo_save( mpCairo.get() );
-@@ -1198,38 +1195,38 @@ namespace cairocanvas
+@@ -1198,38 +1274,38 @@ namespace cairocanvas
  				::rtl::math::approxEqual( aMatrix.y0, 0 ) &&
  				basegfx::fround( rSize.Width * aMatrix.xx ) > 8 &&
  				basegfx::fround( rSize.Height* aMatrix.yy ) > 8 )
@@ -895,7 +1413,7 @@ index 5ca2a96..e05ba73 100644
  
  			if( !bHasAlpha && mbHaveAlpha )
              {
-@@ -1270,7 +1267,11 @@ namespace cairocanvas
+@@ -1270,7 +1346,11 @@ namespace cairocanvas
   				cairo_set_operator( mpCairo.get(), CAIRO_OPERATOR_SOURCE );
  			cairo_rectangle( mpCairo.get(), 0, 0, aBitmapSize.Width, aBitmapSize.Height );
  			cairo_clip( mpCairo.get() );
@@ -908,7 +1426,7 @@ index 5ca2a96..e05ba73 100644
  			cairo_restore( mpCairo.get() );
  		} else
  			OSL_TRACE ("CanvasHelper called after it was disposed");
-@@ -1309,15 +1310,35 @@ namespace cairocanvas
+@@ -1309,15 +1389,35 @@ namespace cairocanvas
  	return rv;
      }
  
@@ -995,10 +1513,10 @@ index c65add5..f304b6b 100644
  											   ::com::sun::star::awt::XWindowListener,
                                                 ::com::sun::star::beans::XPropertySet,
 diff --git canvas/source/tools/parametricpolypolygon.cxx canvas/source/tools/parametricpolypolygon.cxx
-index 134fe2d..97e7d4b 100644
+index 134fe2d..4925cb7 100644
 --- canvas/source/tools/parametricpolypolygon.cxx
 +++ canvas/source/tools/parametricpolypolygon.cxx
-@@ -53,42 +53,102 @@ using namespace ::com::sun::star;
+@@ -53,68 +53,126 @@ using namespace ::com::sun::star;
  
  namespace canvas
  {
@@ -1122,9 +1640,11 @@ index 134fe2d..97e7d4b 100644
      {
          // TODO(P2): hold gradient polygon statically, and only setup
          // the colors
-@@ -97,14 +157,13 @@ namespace canvas
+         return new ParametricPolyPolygon( 
+             rDevice,
              ::basegfx::tools::createPolygonFromCircle( 
-                 ::basegfx::B2DPoint( 0.5, 0.5), 0.5 ),
+-                ::basegfx::B2DPoint( 0.5, 0.5), 0.5 ),
++                ::basegfx::B2DPoint(0,0), 1 ),
              GRADIENT_ELLIPTICAL,
 -            colors, stops,
 -            calcAspectRatio( boundRect ) );
@@ -1139,9 +1659,11 @@ index 134fe2d..97e7d4b 100644
      {
          // TODO(P2): hold gradient polygon statically, and only setup
          // the colors
-@@ -113,8 +172,7 @@ namespace canvas
+         return new ParametricPolyPolygon( 
+             rDevice,
              ::basegfx::tools::createPolygonFromRect( 
-                 ::basegfx::B2DRectangle( 0.0, 0.0, 1.0, 1.0 ) ),
+-                ::basegfx::B2DRectangle( 0.0, 0.0, 1.0, 1.0 ) ),
++                ::basegfx::B2DRectangle( -1, -1, 1, 1 ) ),
              GRADIENT_RECTANGULAR,
 -            colors, stops,
 -            calcAspectRatio( boundRect ) );
@@ -1171,7 +1693,7 @@ index dcee24e..e80d2fb 100644
                                                ::com::sun::star::beans::XPropertySet,
                                                ::com::sun::star::lang::XServiceName >	GraphicDeviceBase_Base;
 diff --git canvas/source/vcl/canvashelper_texturefill.cxx canvas/source/vcl/canvashelper_texturefill.cxx
-index 7c4ad96..dfbaeb7 100644
+index 7c4ad96..be4425d 100644
 --- canvas/source/vcl/canvashelper_texturefill.cxx
 +++ canvas/source/vcl/canvashelper_texturefill.cxx
 @@ -57,6 +57,8 @@
@@ -1332,7 +1854,27 @@ index 7c4ad96..dfbaeb7 100644
          {
              const ::basegfx::B2DPolygon& rGradientPoly( rValues.maGradientPoly );
  
-@@ -406,8 +356,8 @@ namespace vclcanvas
+@@ -369,9 +319,6 @@ namespace vclcanvas
+             // apply scaling (possibly anisotrophic) to inner polygon
+             // ------------------------------------------------------
+ 
+-            // move center of scaling to origin
+-            aInnerPolygonTransformMatrix.translate( -0.5, -0.5 );
+-        
+             // scale inner polygon according to aspect ratio: for
+             // wider-than-tall bounds (nAspectRatio > 1.0), the inner
+             // polygon, representing the gradient focus, must have
+@@ -396,9 +343,6 @@ namespace vclcanvas
+                 aInnerPolygonTransformMatrix.scale( 0.0, 0.0 );
+             }
+ 
+-            // move origin back to former center of polygon
+-            aInnerPolygonTransformMatrix.translate( 0.5, 0.5 );
+-
+             // and finally, add texture transform to it.
+             aInnerPolygonTransformMatrix *= rTextureTransform;
+ 
+@@ -406,8 +350,8 @@ namespace vclcanvas
              aInnerPoly.transform( aInnerPolygonTransformMatrix );
          
  
@@ -1343,7 +1885,7 @@ index 7c4ad96..dfbaeb7 100644
          
              // increase number of steps by one: polygonal gradients have
              // the outermost polygon rendered in rColor2, and the
-@@ -425,22 +375,28 @@ namespace vclcanvas
+@@ -425,37 +369,42 @@ namespace vclcanvas
              // color).
              ++nStepCount;
  
@@ -1362,9 +1904,11 @@ index 7c4ad96..dfbaeb7 100644
 -                for( int i=1,p; i<nStepCount; ++i )
 +                for( unsigned int i=1,p; i<nStepCount; ++i )
                  {
++                    const double fT( i/double(nStepCount) );            
++
 +                    std::ptrdiff_t nIndex;
 +                    double fAlpha;
-+                    boost::tuples::tie(nIndex,fAlpha)=aLerper.lerp(double(i)/nStepCount);
++                    boost::tuples::tie(nIndex,fAlpha)=aLerper.lerp(fT);
 +
                      // lerp color
                      rOutDev.SetFillColor( 
@@ -1377,16 +1921,35 @@ index 7c4ad96..dfbaeb7 100644
  
                      // scale and render polygon, by interpolating between
                      // outer and inner polygon. 
-@@ -489,13 +445,17 @@ namespace vclcanvas
+ 
+-                    // calc interpolation parameter in [0,1] range
+-                    const double nT( (nStepCount-i)/double(nStepCount) );
+-            
+                     for( p=0; p<nNumPoints; ++p )
+                     {
+                         const ::basegfx::B2DPoint& rOuterPoint( aOuterPoly.getB2DPoint(p) );
+                         const ::basegfx::B2DPoint& rInnerPoint( aInnerPoly.getB2DPoint(p) );
+ 
+                         aTempPoly[(USHORT)p] = ::Point( 
+-                            basegfx::fround( (1.0-nT)*rInnerPoint.getX() + nT*rOuterPoint.getX() ),
+-                            basegfx::fround( (1.0-nT)*rInnerPoint.getY() + nT*rOuterPoint.getY() ) );
++                            basegfx::fround( fT*rInnerPoint.getX() + (1-fT)*rOuterPoint.getX() ),
++                            basegfx::fround( fT*rInnerPoint.getY() + (1-fT)*rOuterPoint.getY() ) );
+                     }
+ 
+                     // close polygon explicitely
+@@ -489,13 +438,19 @@ namespace vclcanvas
                  aTempPolyPoly.Insert( aTempPoly );
                  aTempPolyPoly.Insert( aTempPoly2 );
  
 -                for( int i=0,p; i<nStepCount; ++i )
 +                for( unsigned int i=0,p; i<nStepCount; ++i )
                  {
++                    const double fT( (i+1)/double(nStepCount) );
++            
 +                    std::ptrdiff_t nIndex;
 +                    double fAlpha;
-+                    boost::tuples::tie(nIndex,fAlpha)=aLerper.lerp(double(i)/nStepCount);
++                    boost::tuples::tie(nIndex,fAlpha)=aLerper.lerp(fT);
 +
                      // lerp color
                      rOutDev.SetFillColor( 
@@ -1399,7 +1962,27 @@ index 7c4ad96..dfbaeb7 100644
  
  #if defined(VERBOSE) && OSL_DEBUG_LEVEL > 0        
                      if( i && !(i % 10) )
-@@ -549,46 +509,33 @@ namespace vclcanvas
+@@ -506,17 +461,14 @@ namespace vclcanvas
+                     // calculate the inner polygon, which is actually the
+                     // start of the _next_ color strip. Thus, i+1
+ 
+-                    // calc interpolation parameter in [0,1] range
+-                    const double nT( (nStepCount-i-1)/double(nStepCount) );
+-            
+                     for( p=0; p<nNumPoints; ++p )
+                     {
+                         const ::basegfx::B2DPoint& rOuterPoint( aOuterPoly.getB2DPoint(p) );
+                         const ::basegfx::B2DPoint& rInnerPoint( aInnerPoly.getB2DPoint(p) );
+ 
+                         aTempPoly[(USHORT)p] = ::Point( 
+-                            basegfx::fround( (1.0-nT)*rInnerPoint.getX() + nT*rOuterPoint.getX() ),
+-                            basegfx::fround( (1.0-nT)*rInnerPoint.getY() + nT*rOuterPoint.getY() ) );
++                            basegfx::fround( fT*rInnerPoint.getX() + (1-fT)*rOuterPoint.getX() ),
++                            basegfx::fround( fT*rInnerPoint.getY() + (1-fT)*rOuterPoint.getY() ) );
+                     }
+ 
+                     // close polygon explicitely
+@@ -549,46 +501,33 @@ namespace vclcanvas
  
          void doGradientFill( OutputDevice&                                  rOutDev,
                               const ::canvas::ParametricPolyPolygon::Values&	rValues,
@@ -1453,7 +2036,7 @@ index 7c4ad96..dfbaeb7 100644
                      break;
  
                  default:
-@@ -597,11 +544,19 @@ namespace vclcanvas
+@@ -597,11 +536,19 @@ namespace vclcanvas
              }
          }
  
@@ -1475,7 +2058,7 @@ index 7c4ad96..dfbaeb7 100644
                             const PolyPolygon&                              rPoly,
                             const rendering::ViewState&                     viewState, 
                             const rendering::RenderState&                   renderState,
-@@ -646,12 +601,9 @@ namespace vclcanvas
+@@ -646,12 +593,9 @@ namespace vclcanvas
  
              // calc step size
              // --------------
@@ -1491,7 +2074,7 @@ index 7c4ad96..dfbaeb7 100644
  
              // longest line in gradient bound rect
              const int nGradientSize( 
-@@ -690,8 +642,7 @@ namespace vclcanvas
+@@ -690,8 +634,7 @@ namespace vclcanvas
                  rOutDev.IntersectClipRegion( aPolygonDeviceRectOrig );
                  doGradientFill( rOutDev,
                                  rValues,
@@ -1501,7 +2084,7 @@ index 7c4ad96..dfbaeb7 100644
                                  aTextureTransform,
                                  aPolygonDeviceRectOrig,
                                  nStepCount,
-@@ -704,8 +655,7 @@ namespace vclcanvas
+@@ -704,8 +647,7 @@ namespace vclcanvas
                      p2ndOutDev->IntersectClipRegion( aPolygonDeviceRectOrig );
                      doGradientFill( *p2ndOutDev,
                                      rValues,
@@ -1511,7 +2094,7 @@ index 7c4ad96..dfbaeb7 100644
                                      aTextureTransform,
                                      aPolygonDeviceRectOrig,
                                      nStepCount,
-@@ -723,8 +673,7 @@ namespace vclcanvas
+@@ -723,8 +665,7 @@ namespace vclcanvas
  
                  doGradientFill( rOutDev,
                                  rValues,
@@ -1521,7 +2104,7 @@ index 7c4ad96..dfbaeb7 100644
                                  aTextureTransform,
                                  aPolygonDeviceRectOrig,
                                  nStepCount,
-@@ -737,8 +686,7 @@ namespace vclcanvas
+@@ -737,8 +678,7 @@ namespace vclcanvas
                      p2ndOutDev->SetClipRegion( aPolyClipRegion );
                      doGradientFill( *p2ndOutDev,
                                      rValues,
@@ -1531,7 +2114,7 @@ index 7c4ad96..dfbaeb7 100644
                                      aTextureTransform,
                                      aPolygonDeviceRectOrig,
                                      nStepCount,
-@@ -753,8 +701,7 @@ namespace vclcanvas
+@@ -753,8 +693,7 @@ namespace vclcanvas
                  rOutDev.SetRasterOp( ROP_XOR );
                  doGradientFill( rOutDev,
                                  rValues,
@@ -1541,7 +2124,7 @@ index 7c4ad96..dfbaeb7 100644
                                  aTextureTransform,
                                  aPolygonDeviceRectOrig,
                                  nStepCount,
-@@ -765,8 +712,7 @@ namespace vclcanvas
+@@ -765,8 +704,7 @@ namespace vclcanvas
                  rOutDev.SetRasterOp( ROP_XOR );
                  doGradientFill( rOutDev,
                                  rValues,
@@ -1551,7 +2134,7 @@ index 7c4ad96..dfbaeb7 100644
                                  aTextureTransform,
                                  aPolygonDeviceRectOrig,
                                  nStepCount,
-@@ -779,8 +725,7 @@ namespace vclcanvas
+@@ -779,8 +717,7 @@ namespace vclcanvas
                      p2ndOutDev->SetRasterOp( ROP_XOR );
                      doGradientFill( *p2ndOutDev,
                                      rValues,
@@ -1561,7 +2144,7 @@ index 7c4ad96..dfbaeb7 100644
                                      aTextureTransform,
                                      aPolygonDeviceRectOrig,
                                      nStepCount,
-@@ -791,8 +736,7 @@ namespace vclcanvas
+@@ -791,8 +728,7 @@ namespace vclcanvas
                      p2ndOutDev->SetRasterOp( ROP_XOR );
                      doGradientFill( *p2ndOutDev,
                                      rValues,
@@ -1571,7 +2154,7 @@ index 7c4ad96..dfbaeb7 100644
                                      aTextureTransform,
                                      aPolygonDeviceRectOrig,
                                      nStepCount,
-@@ -855,33 +799,41 @@ namespace vclcanvas
+@@ -855,33 +791,41 @@ namespace vclcanvas
                  ::canvas::ParametricPolyPolygon* pGradient = 
                        dynamic_cast< ::canvas::ParametricPolyPolygon* >( textures[0].Gradient.get() );
  
@@ -1899,7 +2482,7 @@ index a35dbef..6260df1 100644
                  }
                  case EmfPlusRecordTypeDrawDriverString:
 diff --git cppcanvas/source/mtfrenderer/implrenderer.cxx cppcanvas/source/mtfrenderer/implrenderer.cxx
-index bf8d831..b33a26c 100644
+index bf8d831..22f6cf1 100644
 --- cppcanvas/source/mtfrenderer/implrenderer.cxx
 +++ cppcanvas/source/mtfrenderer/implrenderer.cxx
 @@ -49,7 +49,6 @@
@@ -1934,7 +2517,7 @@ index bf8d831..b33a26c 100644
  
                      aTexture.RepeatModeX = rendering::TexturingMode::CLAMP;
                      aTexture.RepeatModeY = rendering::TexturingMode::CLAMP;
-@@ -632,245 +631,103 @@ namespace cppcanvas
+@@ -632,245 +631,121 @@ namespace cppcanvas
                      uno::Sequence< uno::Sequence < double > > aColors(2);
                      uno::Sequence< double > aStops(2);
                      
@@ -1970,26 +2553,38 @@ index bf8d831..b33a26c 100644
 +
                      const ::basegfx::B2DRectangle aBounds( 
                          ::basegfx::tools::getRange(aDevicePoly) );
--
++                    const ::basegfx::B2DVector aOffset( 
++                        rGradient.GetOfsX() / 100.0,
++                        rGradient.GetOfsY() / 100.0);
++                    double fRotation( rGradient.GetAngle() * M_PI / 1800.0 );
++                    const double fBorder( rGradient.GetBorder() / 100.0 );
+ 
 -                    // setup rotation angle. VCL rotates
 -                    // counter-clockwise, while canvas transformation
 -                    // rotates clockwise
 -                    double nRotation( -rGradient.GetAngle() * M_PI / 1800.0 );
--
-+                    const ::basegfx::B2DVector aOffset( 
-+                        rGradient.GetOfsX() / 100.0,
-+                        rGradient.GetOfsY() / 100.0);
-+                    const double fRotation( rGradient.GetAngle() * M_PI / 1800.0 );
-+                    const double fBorder( rGradient.GetBorder() / 100.0 );
-+
++                    basegfx::B2DHomMatrix aRot90;
++                    aRot90.rotate(M_PI_2);
+ 
 +                    basegfx::ODFGradientInfo aGradInfo;
 +                    rtl::OUString aGradientService;
                      switch( rGradient.GetStyle() )
                      {
                          case GRADIENT_LINEAR:
 -                            // FALLTHROUGH intended
--                        case GRADIENT_AXIAL:
--                        {
++                            basegfx::tools::createLinearODFGradientInfo(aGradInfo,
++                                                                        aBounds,
++                                                                        nSteps,
++                                                                        fBorder,
++                                                                        fRotation);
++                            // map odf to svg gradient orientation - x
++                            // instead of y direction
++                            aGradInfo.maTextureTransform = aGradInfo.maTextureTransform * aRot90;
++                            aGradientService = rtl::OUString::createFromAscii("LinearGradient");
++                            break;
++
+                         case GRADIENT_AXIAL:
+                         {
 -                            // standard orientation for VCL linear
 -                            // gradient is vertical, thus, rotate 90
 -                            // degrees
@@ -2036,14 +2631,7 @@ index bf8d831..b33a26c 100644
 -                                default: // other cases can't happen
 -                                    break;
 -                            }
-+                            basegfx::tools::createLinearODFGradientInfo(aGradInfo,
-+                                                                        aBounds,
-+                                                                        nSteps,
-+                                                                        fBorder,
-+                                                                        fRotation);
-+                            aGradientService = rtl::OUString::createFromAscii("LinearGradient");
-+                            break;
- 
+-
 -                            // apply border offset values
 -                            aTextureTransformation.translate( nOffsetX, 
 -                                                              0.0 );
@@ -2077,16 +2665,25 @@ index bf8d831..b33a26c 100644
 -                            // primitive
 -                            aTextureTransformation.translate( 0.5*aBounds.getWidth(),
 -                                                              0.5*aBounds.getHeight() );
--                        }
--                        break;
-+                        case GRADIENT_AXIAL:
-+                            basegfx::tools::createAxialODFGradientInfo(aGradInfo,
-+                                                                       aBounds,
-+                                                                       nSteps,
-+                                                                       fBorder,
-+                                                                       fRotation);
++                            basegfx::tools::createLinearODFGradientInfo(aGradInfo,
++                                                                        aBounds,
++                                                                        nSteps,
++                                                                        fBorder,
++                                                                        fRotation);
++                            // map odf to svg gradient orientation - x
++                            // instead of y direction
++                            aGradInfo.maTextureTransform = aGradInfo.maTextureTransform * aRot90;
++
++                            // map odf axial gradient to 3-stop linear
++                            // gradient - shift left by 0.5
++                            basegfx::B2DHomMatrix aShift;
++                            aShift.translate(-0.5,0);
++                            aGradInfo.maTextureTransform = aGradInfo.maTextureTransform * aShift;
++
 +                            aGradientService = rtl::OUString::createFromAscii("LinearGradient");
 +                            break;
+                         }
+-                        break;
  
                          case GRADIENT_RADIAL:
 -                            // FALLTHROUGH intended
@@ -2259,15 +2856,15 @@ index bf8d831..b33a26c 100644
                      // As the texture coordinate space is relative to
                      // the polygon coordinate space (NOT to the
                      // polygon itself), move gradient to the start of
-@@ -878,31 +735,50 @@ namespace cppcanvas
+@@ -878,31 +753,49 @@ namespace cppcanvas
                      // gradient will always display at the origin, and
                      // not within the polygon bound (which might be
                      // miles away from the origin).
 -                    aTextureTransformation.translate( aBounds.getMinX(), 
 -                                                      aBounds.getMinY() );
+-
 +                    aGradInfo.maTextureTransform.translate( aBounds.getMinX(), 
 +                                                            aBounds.getMinY() );
- 
                      ::basegfx::unotools::affineMatrixFromHomMatrix( aTexture.AffineTransform, 
 -                                                                    aTextureTransformation );
 -
@@ -2330,7 +2927,7 @@ index bf8d831..b33a26c 100644
                  }
              }
  
-@@ -1910,7 +1786,7 @@ namespace cppcanvas
+@@ -1910,7 +1803,7 @@ namespace cppcanvas
                              if (count == -1) {
                                  count = 0;
                                  char *env;
@@ -2339,6 +2936,427 @@ index bf8d831..b33a26c 100644
                                      limit = atoi (env);
                                      EMFP_DEBUG (printf ("EMF+ records limit: %d\n", limit));
                                  }
+diff --git drawinglayer/source/primitive2d/fillgradientprimitive2d.cxx drawinglayer/source/primitive2d/fillgradientprimitive2d.cxx
+index 7248f27..311ccf9 100644
+--- drawinglayer/source/primitive2d/fillgradientprimitive2d.cxx
++++ drawinglayer/source/primitive2d/fillgradientprimitive2d.cxx
+@@ -62,16 +62,6 @@ namespace drawinglayer
+ 			basegfx::B2DPolygon aUnitPolygon;
+ 			sal_uInt32 nSteps(maFillGradient.getSteps());
+ 
+-			if(attribute::GRADIENTSTYLE_RADIAL == aGradientStyle || attribute::GRADIENTSTYLE_ELLIPTICAL == aGradientStyle)
+-			{
+-				const basegfx::B2DPoint aCircleCenter(0.5, 0.5);
+-				aUnitPolygon = basegfx::tools::createPolygonFromEllipse(aCircleCenter, 0.5, 0.5);
+-			}
+-			else
+-			{
+-				aUnitPolygon = basegfx::tools::createPolygonFromRect(basegfx::B2DRange(0.0, 0.0, 1.0, 1.0));
+-			}
+-
+ 			// make sure steps is not too high/low
+ 			const basegfx::BColor aStart(maFillGradient.getStartColor());
+ 			const basegfx::BColor aEnd(maFillGradient.getEndColor());
+@@ -96,16 +86,18 @@ namespace drawinglayer
+ 			{
+ 				case attribute::GRADIENTSTYLE_LINEAR:
+ 				{
+-					texture::GeoTexSvxGradientLinear aGradient(getObjectRange(), aStart, aEnd, nSteps, maFillGradient.getBorder(), -maFillGradient.getAngle());
++					texture::GeoTexSvxGradientLinear aGradient(getObjectRange(), aStart, aEnd, nSteps, maFillGradient.getBorder(), maFillGradient.getAngle());
+ 					aGradient.appendTransformations(aMatrices);
+ 					aGradient.appendColors(aColors);
++                    aUnitPolygon = basegfx::tools::createPolygonFromRect(basegfx::B2DRange(0, 0, 1, 1));
+ 					break;
+ 				}
+ 				case attribute::GRADIENTSTYLE_AXIAL:
+ 				{
+-					texture::GeoTexSvxGradientAxial aGradient(getObjectRange(), aStart, aEnd, nSteps, maFillGradient.getBorder(), -maFillGradient.getAngle());
++					texture::GeoTexSvxGradientAxial aGradient(getObjectRange(), aStart, aEnd, nSteps, maFillGradient.getBorder(), maFillGradient.getAngle());
+ 					aGradient.appendTransformations(aMatrices);
+ 					aGradient.appendColors(aColors);
++                    aUnitPolygon = basegfx::tools::createPolygonFromRect(basegfx::B2DRange(-1, -1, 1, 1));
+ 					break;
+ 				}
+ 				case attribute::GRADIENTSTYLE_RADIAL:
+@@ -113,27 +105,31 @@ namespace drawinglayer
+ 					texture::GeoTexSvxGradientRadial aGradient(getObjectRange(), aStart, aEnd, nSteps, maFillGradient.getBorder(), maFillGradient.getOffsetX(), maFillGradient.getOffsetY());
+ 					aGradient.appendTransformations(aMatrices);
+ 					aGradient.appendColors(aColors);
++                    aUnitPolygon = basegfx::tools::createPolygonFromEllipse(basegfx::B2DPoint(0,0), 1, 1);
+ 					break;
+ 				}
+ 				case attribute::GRADIENTSTYLE_ELLIPTICAL:
+ 				{
+-					texture::GeoTexSvxGradientElliptical aGradient(getObjectRange(), aStart, aEnd, nSteps, maFillGradient.getBorder(), maFillGradient.getOffsetX(), maFillGradient.getOffsetY(), -maFillGradient.getAngle());
++					texture::GeoTexSvxGradientElliptical aGradient(getObjectRange(), aStart, aEnd, nSteps, maFillGradient.getBorder(), maFillGradient.getOffsetX(), maFillGradient.getOffsetY(), maFillGradient.getAngle());
+ 					aGradient.appendTransformations(aMatrices);
+ 					aGradient.appendColors(aColors);
++                    aUnitPolygon = basegfx::tools::createPolygonFromEllipse(basegfx::B2DPoint(0,0), 1, 1);
+ 					break;
+ 				}
+ 				case attribute::GRADIENTSTYLE_SQUARE:
+ 				{
+-					texture::GeoTexSvxGradientSquare aGradient(getObjectRange(), aStart, aEnd, nSteps, maFillGradient.getBorder(), maFillGradient.getOffsetX(), maFillGradient.getOffsetY(), -maFillGradient.getAngle());
++					texture::GeoTexSvxGradientSquare aGradient(getObjectRange(), aStart, aEnd, nSteps, maFillGradient.getBorder(), maFillGradient.getOffsetX(), maFillGradient.getOffsetY(), maFillGradient.getAngle());
+ 					aGradient.appendTransformations(aMatrices);
+ 					aGradient.appendColors(aColors);
++                    aUnitPolygon = basegfx::tools::createPolygonFromRect(basegfx::B2DRange(-1, -1, 1, 1));
+ 					break;
+ 				}
+ 				case attribute::GRADIENTSTYLE_RECT:
+ 				{
+-					texture::GeoTexSvxGradientRect aGradient(getObjectRange(), aStart, aEnd, nSteps, maFillGradient.getBorder(), maFillGradient.getOffsetX(), maFillGradient.getOffsetY(), -maFillGradient.getAngle());
++					texture::GeoTexSvxGradientRect aGradient(getObjectRange(), aStart, aEnd, nSteps, maFillGradient.getBorder(), maFillGradient.getOffsetX(), maFillGradient.getOffsetY(), maFillGradient.getAngle());
+ 					aGradient.appendTransformations(aMatrices);
+ 					aGradient.appendColors(aColors);
++                    aUnitPolygon = basegfx::tools::createPolygonFromRect(basegfx::B2DRange(-1, -1, 1, 1));
+ 					break;
+ 				}
+ 			}
+diff --git drawinglayer/source/primitive2d/fillhatchprimitive2d.cxx drawinglayer/source/primitive2d/fillhatchprimitive2d.cxx
+index 4716f35..188c6c9 100644
+--- drawinglayer/source/primitive2d/fillhatchprimitive2d.cxx
++++ drawinglayer/source/primitive2d/fillhatchprimitive2d.cxx
+@@ -59,7 +59,7 @@ namespace drawinglayer
+ 		{
+ 			// create hatch
+ 			const basegfx::BColor aHatchColor(maFillHatch.getColor());
+-			const double fAngle(-maFillHatch.getAngle());
++			const double fAngle(maFillHatch.getAngle());
+ 			::std::vector< basegfx::B2DHomMatrix > aMatrices;
+ 
+ 			// get hatch transformations
+@@ -68,7 +68,7 @@ namespace drawinglayer
+ 				case attribute::HATCHSTYLE_TRIPLE:
+ 				{
+ 					// rotated 45 degrees
+-					texture::GeoTexSvxHatch aHatch(getObjectRange(), maFillHatch.getDistance(), fAngle + F_PI4);
++					texture::GeoTexSvxHatch aHatch(getObjectRange(), maFillHatch.getDistance(), fAngle - F_PI4);
+ 					aHatch.appendTransformations(aMatrices);
+ 
+ 					// fall-through by purpose
+@@ -76,7 +76,7 @@ namespace drawinglayer
+ 				case attribute::HATCHSTYLE_DOUBLE:
+ 				{
+ 					// rotated 90 degrees
+-					texture::GeoTexSvxHatch aHatch(getObjectRange(), maFillHatch.getDistance(), fAngle + F_PI2);
++					texture::GeoTexSvxHatch aHatch(getObjectRange(), maFillHatch.getDistance(), fAngle - F_PI2);
+ 					aHatch.appendTransformations(aMatrices);
+ 
+ 					// fall-through by purpose
+diff --git drawinglayer/source/primitive3d/hatchtextureprimitive3d.cxx drawinglayer/source/primitive3d/hatchtextureprimitive3d.cxx
+index 02a07ac..05f748c 100644
+--- drawinglayer/source/primitive3d/hatchtextureprimitive3d.cxx
++++ drawinglayer/source/primitive3d/hatchtextureprimitive3d.cxx
+@@ -155,7 +155,7 @@ namespace drawinglayer
+ 											// get 2d range of texture coordinates
+ 											const basegfx::B2DRange aOutlineRange(basegfx::tools::getRange(aTexPolyPolygon));
+ 											const basegfx::BColor aHatchColor(getHatch().getColor());
+-											const double fAngle(-getHatch().getAngle());
++											const double fAngle(getHatch().getAngle());
+ 											::std::vector< basegfx::B2DHomMatrix > aMatrices;
+ 
+ 											// get hatch transformations
+@@ -164,13 +164,13 @@ namespace drawinglayer
+ 												case attribute::HATCHSTYLE_TRIPLE:
+ 												{
+ 													// rotated 45 degrees
+-													texture::GeoTexSvxHatch aHatch(aOutlineRange, getHatch().getDistance(), fAngle + F_PI4);
++													texture::GeoTexSvxHatch aHatch(aOutlineRange, getHatch().getDistance(), fAngle - F_PI4);
+ 													aHatch.appendTransformations(aMatrices);
+ 												}
+ 												case attribute::HATCHSTYLE_DOUBLE:
+ 												{
+ 													// rotated 90 degrees
+-													texture::GeoTexSvxHatch aHatch(aOutlineRange, getHatch().getDistance(), fAngle + F_PI2);
++													texture::GeoTexSvxHatch aHatch(aOutlineRange, getHatch().getDistance(), fAngle - F_PI2);
+ 													aHatch.appendTransformations(aMatrices);
+ 												}
+ 												case attribute::HATCHSTYLE_SINGLE:
+diff --git drawinglayer/source/processor2d/vclprocessor2d.cxx drawinglayer/source/processor2d/vclprocessor2d.cxx
+index 54a26b9..a7adce2 100644
+--- drawinglayer/source/processor2d/vclprocessor2d.cxx
++++ drawinglayer/source/processor2d/vclprocessor2d.cxx
+@@ -609,7 +609,7 @@ namespace drawinglayer
+ 				impDrawGradientToOutDev(
+ 					*mpOutputDevice, aLocalPolyPolygon, rGradient.getStyle(), rGradient.getSteps(),
+ 					aStartColor, aEndColor, rGradient.getBorder(),
+-					-rGradient.getAngle(), rGradient.getOffsetX(), rGradient.getOffsetY(), false);
++					rGradient.getAngle(), rGradient.getOffsetX(), rGradient.getOffsetY(), false);
+ 			}
+ 		}
+ 
+diff --git drawinglayer/source/processor3d/defaultprocessor3d.cxx drawinglayer/source/processor3d/defaultprocessor3d.cxx
+index b5f3b3f..5d3fc27 100644
+--- drawinglayer/source/processor3d/defaultprocessor3d.cxx
++++ drawinglayer/source/processor3d/defaultprocessor3d.cxx
+@@ -106,12 +106,12 @@ namespace drawinglayer
+ 					{
+ 						case attribute::GRADIENTSTYLE_LINEAR:
+ 						{
+-							pNewTex = new texture::GeoTexSvxGradientLinear(aOutlineRange, aStart, aEnd, nSteps, rFillGradient.getBorder(), -rFillGradient.getAngle());
++							pNewTex = new texture::GeoTexSvxGradientLinear(aOutlineRange, aStart, aEnd, nSteps, rFillGradient.getBorder(), rFillGradient.getAngle());
+ 							break;
+ 						}
+ 						case attribute::GRADIENTSTYLE_AXIAL:
+ 						{
+-							pNewTex = new texture::GeoTexSvxGradientAxial(aOutlineRange, aStart, aEnd, nSteps, rFillGradient.getBorder(), -rFillGradient.getAngle());
++							pNewTex = new texture::GeoTexSvxGradientAxial(aOutlineRange, aStart, aEnd, nSteps, rFillGradient.getBorder(), rFillGradient.getAngle());
+ 							break;
+ 						}
+ 						case attribute::GRADIENTSTYLE_RADIAL:
+@@ -121,17 +121,17 @@ namespace drawinglayer
+ 						}
+ 						case attribute::GRADIENTSTYLE_ELLIPTICAL:
+ 						{
+-							pNewTex = new texture::GeoTexSvxGradientElliptical(aOutlineRange, aStart, aEnd, nSteps, rFillGradient.getBorder(), rFillGradient.getOffsetX(), rFillGradient.getOffsetY(), -rFillGradient.getAngle());
++							pNewTex = new texture::GeoTexSvxGradientElliptical(aOutlineRange, aStart, aEnd, nSteps, rFillGradient.getBorder(), rFillGradient.getOffsetX(), rFillGradient.getOffsetY(), rFillGradient.getAngle());
+ 							break;
+ 						}
+ 						case attribute::GRADIENTSTYLE_SQUARE:
+ 						{
+-							pNewTex = new texture::GeoTexSvxGradientSquare(aOutlineRange, aStart, aEnd, nSteps, rFillGradient.getBorder(), rFillGradient.getOffsetX(), rFillGradient.getOffsetY(), -rFillGradient.getAngle());
++							pNewTex = new texture::GeoTexSvxGradientSquare(aOutlineRange, aStart, aEnd, nSteps, rFillGradient.getBorder(), rFillGradient.getOffsetX(), rFillGradient.getOffsetY(), rFillGradient.getAngle());
+ 							break;
+ 						}
+ 						case attribute::GRADIENTSTYLE_RECT:
+ 						{
+-							pNewTex = new texture::GeoTexSvxGradientRect(aOutlineRange, aStart, aEnd, nSteps, rFillGradient.getBorder(), rFillGradient.getOffsetX(), rFillGradient.getOffsetY(), -rFillGradient.getAngle());
++							pNewTex = new texture::GeoTexSvxGradientRect(aOutlineRange, aStart, aEnd, nSteps, rFillGradient.getBorder(), rFillGradient.getOffsetX(), rFillGradient.getOffsetY(), rFillGradient.getAngle());
+ 							break;
+ 						}
+ 					}
+diff --git drawinglayer/source/texture/texture.cxx drawinglayer/source/texture/texture.cxx
+index 075699b..00d7a32 100644
+--- drawinglayer/source/texture/texture.cxx
++++ drawinglayer/source/texture/texture.cxx
+@@ -165,15 +165,10 @@ namespace drawinglayer
+ 		{
+ 			if(maGradientInfo.mnSteps)
+ 			{
+-				const double fTop(mfBorder);
+-				const double fStripeWidth((1.0 - fTop) / maGradientInfo.mnSteps);
+-
++				const double fStripeWidth(1.0 / maGradientInfo.mnSteps);
+ 				for(sal_uInt32 a(1L); a < maGradientInfo.mnSteps; a++)
+ 				{
+-					const double fOffsetUpper(fStripeWidth * (double)a);
+-					
+-					// create matrix
+-					const basegfx::B2DRange aRect(0.0, fTop + fOffsetUpper, 1.0, 1.0);
++					const basegfx::B2DRange aRect(0.0, fStripeWidth * a, 1.0, 1.0);
+ 					impAppendMatrix(rMatrices, aRect);
+ 				}
+ 			}
+@@ -225,17 +220,10 @@ namespace drawinglayer
+ 		{
+ 			if(maGradientInfo.mnSteps)
+ 			{
+-				const double fHalfBorder(mfBorder * 0.5);
+-				double fTop(fHalfBorder);
+-				double fBottom(1.0 - fHalfBorder);
+-				const double fStripeWidth((fBottom - fTop) / ((maGradientInfo.mnSteps * 2L) - 1L));
+-
+-				for(sal_uInt32 a(1L); a < maGradientInfo.mnSteps; a++)
++				const double fStripeWidth=1.0 / (maGradientInfo.mnSteps - 1L);
++				for(sal_uInt32 a(maGradientInfo.mnSteps-1L); a != 0; a--)
+ 				{
+-					const double fOffset(fStripeWidth * (double)a);
+-					
+-					// create matrix
+-					const basegfx::B2DRange aRect(0.0, fTop + fOffset, 1.0, fBottom - fOffset);
++					const basegfx::B2DRange aRect(0, 0, 1.0, fStripeWidth * a);
+ 					impAppendMatrix(rMatrices, aRect);
+ 				}
+ 			}
+@@ -287,34 +275,10 @@ namespace drawinglayer
+ 		{
+ 			if(maGradientInfo.mnSteps)
+ 			{
+-				const double fHalfBorder((1.0 - mfBorder) * 0.5);
+-				double fLeft(0.5 - fHalfBorder);
+-				double fTop(0.5 - fHalfBorder);
+-				double fRight(0.5 + fHalfBorder);
+-				double fBottom(0.5 + fHalfBorder);
+-				double fIncrementX, fIncrementY;
+-
+-				if(maGradientInfo.mfAspectRatio > 1.0)
+-				{
+-					fIncrementY = (fBottom - fTop) / (double)(maGradientInfo.mnSteps * 2L);
+-					fIncrementX = fIncrementY / maGradientInfo.mfAspectRatio;
+-				}
+-				else
+-				{
+-					fIncrementX = (fRight - fLeft) / (double)(maGradientInfo.mnSteps * 2L);
+-					fIncrementY = fIncrementX * maGradientInfo.mfAspectRatio;
+-				}
+-
++				const double fStepSize=1.0 / maGradientInfo.mnSteps;
+ 				for(sal_uInt32 a(1L); a < maGradientInfo.mnSteps; a++)
+ 				{
+-					// next step
+-					fLeft += fIncrementX;
+-					fRight -= fIncrementX;
+-					fTop += fIncrementY;
+-					fBottom -= fIncrementY;
+-
+-					// create matrix
+-					const basegfx::B2DRange aRect(fLeft, fTop, fRight, fBottom);
++					const basegfx::B2DRange aRect(0, 0, fStepSize*a, fStepSize*a);
+ 					impAppendMatrix(rMatrices, aRect);
+ 				}
+ 			}
+@@ -359,34 +323,29 @@ namespace drawinglayer
+ 		{
+ 			if(maGradientInfo.mnSteps)
+ 			{
+-				const double fHalfBorder((1.0 - mfBorder) * 0.5);
+-				double fLeft(0.5 - fHalfBorder);
+-				double fTop(0.5 - fHalfBorder);
+-				double fRight(0.5 + fHalfBorder);
+-				double fBottom(0.5 + fHalfBorder);
++				double fWidth(1);
++				double fHeight(1);
+ 				double fIncrementX, fIncrementY;
+ 
+ 				if(maGradientInfo.mfAspectRatio > 1.0)
+ 				{
+-					fIncrementY = (fBottom - fTop) / (double)(maGradientInfo.mnSteps * 2L);
++					fIncrementY = fHeight / maGradientInfo.mnSteps;
+ 					fIncrementX = fIncrementY / maGradientInfo.mfAspectRatio;
+ 				}
+ 				else
+ 				{
+-					fIncrementX = (fRight - fLeft) / (double)(maGradientInfo.mnSteps * 2L);
++					fIncrementX = fWidth / maGradientInfo.mnSteps;
+ 					fIncrementY = fIncrementX * maGradientInfo.mfAspectRatio;
+ 				}
+ 
+ 				for(sal_uInt32 a(1L); a < maGradientInfo.mnSteps; a++)
+ 				{
+ 					// next step
+-					fLeft += fIncrementX;
+-					fRight -= fIncrementX;
+-					fTop += fIncrementY;
+-					fBottom -= fIncrementY;
++					fWidth  -= fIncrementX;
++					fHeight -= fIncrementY;
+ 
+ 					// create matrix
+-					const basegfx::B2DRange aRect(fLeft, fTop, fRight, fBottom);
++					const basegfx::B2DRange aRect(0, 0, fWidth, fHeight);
+ 					impAppendMatrix(rMatrices, aRect);
+ 				}
+ 			}
+@@ -431,42 +390,10 @@ namespace drawinglayer
+ 		{
+ 			if(maGradientInfo.mnSteps)
+ 			{
+-				const double fHalfBorder((1.0 - mfBorder) * 0.5);
+-				double fLeft(0.5 - fHalfBorder);
+-				double fTop(0.5 - fHalfBorder);
+-				double fRight(0.5 + fHalfBorder);
+-				double fBottom(0.5 + fHalfBorder);
+-				double fIncrementX, fIncrementY;
+-
+-				if(maGradientInfo.mfAspectRatio > 1.0)
+-				{
+-					const double fWidth(fRight - fLeft);
+-					const double fHalfAspectExpansion(((maGradientInfo.mfAspectRatio - 1.0) * 0.5) * fWidth);
+-					fTop -= fHalfAspectExpansion;
+-					fBottom += fHalfAspectExpansion;
+-					fIncrementX = fWidth / (double)(maGradientInfo.mnSteps * 2L);
+-					fIncrementY = fIncrementX * maGradientInfo.mfAspectRatio;
+-				}
+-				else
+-				{
+-					const double fHeight(fBottom - fTop);
+-					const double fHalfAspectExpansion((((1.0 / maGradientInfo.mfAspectRatio) - 1.0) * 0.5) * fHeight);
+-					fLeft -= fHalfAspectExpansion;
+-					fRight += fHalfAspectExpansion;
+-					fIncrementY = fHeight / (double)(maGradientInfo.mnSteps * 2L);
+-					fIncrementX = fIncrementY / maGradientInfo.mfAspectRatio;
+-				}
+-
++				const double fStepSize=1.0 / maGradientInfo.mnSteps;
+ 				for(sal_uInt32 a(1L); a < maGradientInfo.mnSteps; a++)
+ 				{
+-					// next step
+-					fLeft += fIncrementX;
+-					fRight -= fIncrementX;
+-					fTop += fIncrementY;
+-					fBottom -= fIncrementY;
+-
+-					// create matrix
+-					const basegfx::B2DRange aRect(fLeft, fTop, fRight, fBottom);
++					const basegfx::B2DRange aRect(0, 0, fStepSize*a, fStepSize*a);
+ 					impAppendMatrix(rMatrices, aRect);
+ 				}
+ 			}
+@@ -511,34 +438,29 @@ namespace drawinglayer
+ 		{
+ 			if(maGradientInfo.mnSteps)
+ 			{
+-				const double fHalfBorder((1.0 - mfBorder) * 0.5);
+-				double fLeft(0.5 - fHalfBorder);
+-				double fTop(0.5 - fHalfBorder);
+-				double fRight(0.5 + fHalfBorder);
+-				double fBottom(0.5 + fHalfBorder);
++				double fWidth(1);
++				double fHeight(1);
+ 				double fIncrementX, fIncrementY;
+ 
+ 				if(maGradientInfo.mfAspectRatio > 1.0)
+ 				{
+-					fIncrementY = (fBottom - fTop) / (double)(maGradientInfo.mnSteps * 2L);
++					fIncrementY = fHeight / maGradientInfo.mnSteps;
+ 					fIncrementX = fIncrementY / maGradientInfo.mfAspectRatio;
+ 				}
+ 				else
+ 				{
+-					fIncrementX = (fRight - fLeft) / (double)(maGradientInfo.mnSteps * 2L);
++					fIncrementX = fWidth / maGradientInfo.mnSteps;
+ 					fIncrementY = fIncrementX * maGradientInfo.mfAspectRatio;
+ 				}
+ 
+ 				for(sal_uInt32 a(1L); a < maGradientInfo.mnSteps; a++)
+ 				{
+ 					// next step
+-					fLeft += fIncrementX;
+-					fRight -= fIncrementX;
+-					fTop += fIncrementY;
+-					fBottom -= fIncrementY;
++					fWidth  -= fIncrementX;
++					fHeight -= fIncrementY;
+ 
+ 					// create matrix
+-					const basegfx::B2DRange aRect(fLeft, fTop, fRight, fBottom);
++					const basegfx::B2DRange aRect(0, 0, fWidth, fHeight);
+ 					impAppendMatrix(rMatrices, aRect);
+ 				}
+ 			}
+@@ -574,6 +496,8 @@ namespace drawinglayer
+ 			double fTargetOffsetX(rTargetRange.getMinX());
+ 			double fTargetOffsetY(rTargetRange.getMinY());
+ 
++            fAngle = -fAngle;
++
+ 			// add object expansion
+ 			if(0.0 != fAngle)
+ 			{
+diff --git drawinglayer/source/texture/texture3d.cxx drawinglayer/source/texture/texture3d.cxx
+index 4b8aa96..89be257 100644
+--- drawinglayer/source/texture/texture3d.cxx
++++ drawinglayer/source/texture/texture3d.cxx
+@@ -198,7 +198,7 @@ namespace drawinglayer
+ 		{
+ 			const attribute::FillHatchAttribute& rHatch(rPrimitive.getHatch());
+ 			const basegfx::B2DRange aOutlineRange(0.0, 0.0, rPrimitive.getTextureSize().getX(), rPrimitive.getTextureSize().getY());
+-			const double fAngleA(-rHatch.getAngle());
++			const double fAngleA(rHatch.getAngle());
+ 			maColor = rHatch.getColor();
+ 			mbFillBackground = rHatch.isFillBackground();
+ 			mp0 = new GeoTexSvxHatch(aOutlineRange, rHatch.getDistance(), fAngleA);
 diff --git offapi/com/sun/star/rendering/XGraphicDevice.idl offapi/com/sun/star/rendering/XGraphicDevice.idl
 index b94f097..6a46714 100644
 --- offapi/com/sun/star/rendering/XGraphicDevice.idl
