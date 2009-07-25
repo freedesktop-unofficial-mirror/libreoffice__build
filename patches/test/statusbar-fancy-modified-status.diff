@@ -98,7 +98,7 @@ index 7d95fbb..33e4e48 100644
  </statusbar:statusbar>
 \ No newline at end of file
 diff --git svx/inc/modctrl.hxx svx/inc/modctrl.hxx
-index e1f41a8..5941e89 100644
+index e1f41a8..94de89b 100644
 --- svx/inc/modctrl.hxx
 +++ svx/inc/modctrl.hxx
 @@ -35,6 +35,8 @@
@@ -110,16 +110,17 @@ index e1f41a8..5941e89 100644
  // class SvxModifyControl ------------------------------------------------
  
  class SVX_DLLPUBLIC SvxModifyControl : public SfxStatusBarControl
-@@ -42,7 +44,7 @@ class SVX_DLLPUBLIC SvxModifyControl : public SfxStatusBarControl
+@@ -42,7 +44,8 @@ class SVX_DLLPUBLIC SvxModifyControl : public SfxStatusBarControl
  public:
      virtual void	StateChanged( USHORT nSID, SfxItemState eState,
                                    const SfxPoolItem* pState );
 -    virtual void    Paint( const UserDrawEvent& rEvt );
 +    virtual void    Paint( const UserDrawEvent& rUsrEvt );
++    virtual void    DoubleClick();
  
      SFX_DECL_STATUSBAR_CONTROL();
  
-@@ -51,11 +53,8 @@ public:
+@@ -51,11 +54,8 @@ public:
      static	ULONG	GetDefItemWidth(const StatusBar& rStb);
  
  private:
@@ -134,18 +135,17 @@ index e1f41a8..5941e89 100644
  
  
 diff --git svx/inc/svx/dialogs.hrc svx/inc/svx/dialogs.hrc
-index 57e4e9f..0a1f152 100644
+index 57e4e9f..53d5aae 100644
 --- svx/inc/svx/dialogs.hrc
 +++ svx/inc/svx/dialogs.hrc
-@@ -191,6 +191,8 @@
- #define RID_SVXBMP_SLIDERBUTTON_HC              (RID_SVX_START +  70)
- #define RID_SVXBMP_SLIDERDECREASE_HC            (RID_SVX_START +  71)
- #define RID_SVXBMP_SLIDERINCREASE_HC            (RID_SVX_START +  72)
-+#define RID_SVXBMP_DOC_MODIFIED_YES             (RID_SVX_START +  73)
-+#define RID_SVXBMP_DOC_MODIFIED_NO              (RID_SVX_START +  74)
+@@ -1568,3 +1568,7 @@
+ #endif
  
- // Alignment-TabPage
- #define RID_SVXPAGE_ALIGNMENT               (RID_SVX_START +  90)
+ #define SID_SC_TP_FORMULA               (SVX_OOO_BUILD_START + 1)
++#define RID_SVXBMP_DOC_MODIFIED_YES     (SVX_OOO_BUILD_START + 2)
++#define RID_SVXBMP_DOC_MODIFIED_NO      (SVX_OOO_BUILD_START + 3)
++#define RID_SVXSTR_DOC_MODIFIED_YES     (SVX_OOO_BUILD_START + 4)
++#define RID_SVXSTR_DOC_MODIFIED_NO      (SVX_OOO_BUILD_START + 5)
 diff --git svx/source/stbctrls/makefile.mk svx/source/stbctrls/makefile.mk
 index 7a6fad6..e5bff5a 100644
 --- svx/source/stbctrls/makefile.mk
@@ -159,10 +159,10 @@ index 7a6fad6..e5bff5a 100644
  
  HXX1TARGET=stbctrls
 diff --git svx/source/stbctrls/modctrl.cxx svx/source/stbctrls/modctrl.cxx
-index 843c845..3bb38df 100644
+index 843c845..42f1d7c 100644
 --- svx/source/stbctrls/modctrl.cxx
 +++ svx/source/stbctrls/modctrl.cxx
-@@ -33,29 +33,44 @@
+@@ -33,29 +33,48 @@
  
  // include ---------------------------------------------------------------
  
@@ -182,6 +182,10 @@ index 843c845..3bb38df 100644
 -#include "modctrl.hxx"
  #include <svx/dialmgr.hxx>
  
++#include <com/sun/star/beans/PropertyValue.hpp>
++
++using ::com::sun::star::uno::Sequence;
++using ::com::sun::star::beans::PropertyValue;
 +using ::rtl::OUString;
 +
  SFX_IMPL_STATUSBAR_CONTROL(SvxModifyControl, SfxBoolItem);
@@ -193,12 +197,12 @@ index 843c845..3bb38df 100644
 +    Image maModifiedButton;
 +    Image maNonModifiedButton;
 +
-+    bool mbState;
++    bool mbModified;
 +
 +    ImplData() :
 +        maModifiedButton( SVX_RES(RID_SVXBMP_DOC_MODIFIED_YES) ),
 +        maNonModifiedButton( SVX_RES(RID_SVXBMP_DOC_MODIFIED_NO) ),
-+        mbState(false)
++        mbModified(false)
 +    {
 +    }
 +};
@@ -213,7 +217,7 @@ index 843c845..3bb38df 100644
  {
  }
  
-@@ -65,32 +80,59 @@ void SvxModifyControl::StateChanged( USHORT, SfxItemState eState,
+@@ -65,32 +84,71 @@ void SvxModifyControl::StateChanged( USHORT, SfxItemState eState,
                                       const SfxPoolItem* pState )
  {
      if ( SFX_ITEM_AVAILABLE != eState )
@@ -225,25 +229,22 @@ index 843c845..3bb38df 100644
 -        bState = pItem->GetValue();
 -        DrawItemText_Impl();
 -    }
--}
 +        return;
- 
--// -----------------------------------------------------------------------
++
 +    DBG_ASSERT( pState->ISA( SfxBoolItem ), "invalid item type" );
 +    SfxBoolItem* pItem = (SfxBoolItem*)pState;
-+    mpImpl->mbState = pItem->GetValue();
-+    fprintf(stdout, "SvxModifyControl::StateChanged:   state = %d\n", mpImpl->mbState);
- 
--void SvxModifyControl::Paint( const UserDrawEvent& )
--{
--    DrawItemText_Impl();
++    mpImpl->mbModified = pItem->GetValue();
++
 +    if ( GetStatusBar().AreItemsVisible() )
 +        GetStatusBar().SetItemData( GetId(), 0 );    // force repaint
++
++    int nResId = mpImpl->mbModified ? RID_SVXSTR_DOC_MODIFIED_YES : RID_SVXSTR_DOC_MODIFIED_NO;
++    GetStatusBar().SetQuickHelpText(GetId(), SVX_RESSTR(nResId));
  }
  
  // -----------------------------------------------------------------------
  
--void SvxModifyControl::DrawItemText_Impl()
+-void SvxModifyControl::Paint( const UserDrawEvent& )
 +namespace {
 +
 +/** 
@@ -258,7 +259,7 @@ index 843c845..3bb38df 100644
 + */
 +Point centerImage(const Rectangle& rBoundingRect, const Image& rImg)
  {
--    String sMode;
+-    DrawItemText_Impl();
 +    Size aImgSize = rImg.GetSizePixel();
 +    Size aRectSize = rBoundingRect.GetSize();
 +    long nXOffset = (aRectSize.getWidth() - aImgSize.getWidth())/2;
@@ -266,11 +267,9 @@ index 843c845..3bb38df 100644
 +    Point aPt = rBoundingRect.TopLeft();
 +    aPt += Point(nXOffset, nYOffset);
 +    return aPt;
-+}
+ }
  
--    if ( bState )
--        sMode = '*';
--    GetStatusBar().SetItemText( GetId(), sMode );
+-// -----------------------------------------------------------------------
 +}
 +void SvxModifyControl::Paint( const UserDrawEvent& rUsrEvt )
 +{
@@ -278,7 +277,7 @@ index 843c845..3bb38df 100644
 +    OutputDevice*       pDev =  rUsrEvt.GetDevice();
 +    Rectangle           aRect = rUsrEvt.GetRect();
 +
-+    if (mpImpl->mbState)
++    if (mpImpl->mbModified)
 +    {    
 +        Point aPt = centerImage(aRect, mpImpl->maModifiedButton);
 +        pDev->DrawImage(aPt, mpImpl->maModifiedButton);
@@ -288,14 +287,46 @@ index 843c845..3bb38df 100644
 +        Point aPt = centerImage(aRect, mpImpl->maNonModifiedButton);
 +        pDev->DrawImage(aPt, mpImpl->maNonModifiedButton);
 +    }
++}
+ 
+-void SvxModifyControl::DrawItemText_Impl()
++void SvxModifyControl::DoubleClick()
+ {
+-    String sMode;
++    if (!mpImpl->mbModified)
++        // document not modified.  nothing to do here.
++        return;
+ 
+-    if ( bState )
+-        sMode = '*';
+-    GetStatusBar().SetItemText( GetId(), sMode );
++    Sequence<PropertyValue> aArgs;
++    execute(OUString::createFromAscii(".uno:Save"), aArgs);
  }
  
  ULONG SvxModifyControl::GetDefItemWidth(const StatusBar& rStb)
 diff --git svx/source/stbctrls/stbctrls.src svx/source/stbctrls/stbctrls.src
-index b4dac87..018af03 100644
+index b4dac87..72b7d1a 100644
 --- svx/source/stbctrls/stbctrls.src
 +++ svx/source/stbctrls/stbctrls.src
-@@ -323,3 +323,19 @@ Image RID_SVXBMP_SLIDERINCREASE_HC
+@@ -87,6 +87,16 @@ String RID_SVXSTR_XMLSEC_NO_SIG
+     Text [ en-US ] = "Digital Signature: The document is not signed.";
+ };
+ 
++String RID_SVXSTR_DOC_MODIFIED_YES
++{
++    Text [ en-US ] = "The document has been modified. Double-click to save the document.";
++};
++
++String RID_SVXSTR_DOC_MODIFIED_NO
++{
++    Text [ en-US ] = "The document has not been modified since the last save.";
++};
++
+  // PopupMenu -------------------------------------------------------------
+ Menu RID_SVXMNU_ZOOM
+ {
+@@ -323,3 +333,19 @@ Image RID_SVXBMP_SLIDERINCREASE_HC
      MaskColor = STD_MASKCOLOR;
  };
  
