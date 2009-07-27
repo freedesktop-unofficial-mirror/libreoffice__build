@@ -1,6 +1,7 @@
 SUBDIRS=piece
 
 script_files = \
+	amt-license-patch \
 	applyflags \
 	a2az.pl \
 	bash-completion.in \
