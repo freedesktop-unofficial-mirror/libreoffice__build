@@ -5,11 +5,20 @@ From: Thorsten Behrens <thb@openoffice.org>
 
 ---
 
+ slideshow/source/engine/shapes/drawshape.cxx |   15 ++++-
+ slideshow/source/engine/shapes/drawshape.hxx |    5 ++
+ slideshow/source/engine/shapes/viewshape.cxx |   84 ++++++++++++++++----------
+ slideshow/source/engine/shapes/viewshape.hxx |   33 ++++++++++
+ slideshow/source/engine/slide/slideimpl.cxx  |    9 ++-
+ slideshow/source/engine/slideshowcontext.cxx |    8 ++
+ slideshow/source/engine/slideshowimpl.cxx    |    3 +
+ slideshow/source/inc/slideshowcontext.hxx    |   14 +++-
+ slideshow/util/makefile.mk                   |    1 
  .../drawinglayer/processor2d/canvasprocessor.hxx   |    4 
  .../source/processor2d/canvasprocessor.cxx         | 1480 ++------------------
  offapi/com/sun/star/graphic/XPrimitive2D.idl       |   21 
  .../com/sun/star/graphic/XPrimitiveFactory2D.idl   |   72 +
- 4 files changed, 252 insertions(+), 1325 deletions(-)
+ 13 files changed, 252 insertions(+), 1325 deletions(-)
 
 
 diff --git drawinglayer/inc/drawinglayer/processor2d/canvasprocessor.hxx drawinglayer/inc/drawinglayer/processor2d/canvasprocessor.hxx
@@ -1772,3 +1781,454 @@ index 8022207..643e7a4 100644
          @return a sequence of primitives, that consists of the
          geometrical representation for the given XDrawPage.
       */
+diff --git slideshow/source/engine/shapes/drawshape.cxx slideshow/source/engine/shapes/drawshape.cxx
+index 8894073..6ddf1e8 100644
+--- slideshow/source/engine/shapes/drawshape.cxx
++++ slideshow/source/engine/shapes/drawshape.cxx
+@@ -350,6 +350,9 @@ namespace slideshow
+                                      										// it does _not_ for MSVC without
+                                      										// the extra mem_fn. WTF.
+                                      _1,
++                                     ::boost::cref( mxShape ),
++                                     ::boost::cref( mxPage ),
++                                     ::boost::cref( mxPrimitives ),
+                                      ::boost::cref( mpCurrMtf ),
+                                      ::boost::cref(
+                                          getViewRenderArgs() ), 
+@@ -563,6 +566,9 @@ namespace slideshow
+             mnAttributeVisibilityState(0),
+             maViewShapes(),
+             mxComponentContext( rContext.mxComponentContext ),
++            mxPrimitives( 
++                rContext.mxPrimitiveFactory->createPrimitivesFromXShape(xShape,
++                                                                        uno::Sequence<beans::PropertyValue>()) ),
+             maHyperlinkIndices(),
+             maHyperlinkRegions(),
+             maSubsetting(),
+@@ -624,6 +630,9 @@ namespace slideshow
+             mnAttributeVisibilityState(0),
+             maViewShapes(),
+             mxComponentContext( rContext.mxComponentContext ),
++            mxPrimitives( 
++                rContext.mxPrimitiveFactory->createPrimitivesFromXShape(xShape,
++                                                                        uno::Sequence<beans::PropertyValue>()) ),
+             maHyperlinkIndices(),
+             maHyperlinkRegions(),
+             maSubsetting(),
+@@ -676,6 +685,7 @@ namespace slideshow
+             mnAttributeVisibilityState(0),
+             maViewShapes(),
+             mxComponentContext( rSrc.mxComponentContext ),
++            mxPrimitives( rSrc.mxPrimitives ),
+             maHyperlinkIndices(),
+             maHyperlinkRegions(),
+             maSubsetting( rTreeNode, mpCurrMtf ),
+@@ -837,7 +847,10 @@ namespace slideshow
+             // render the Shape on the newly added ViewLayer
+             if( bRedrawLayer )
+             {
+-                pNewShape->update( mpCurrMtf, 
++                pNewShape->update( mxShape,
++                                   mxPage,
++                                   mxPrimitives,
++                                   mpCurrMtf,
+                                    getViewRenderArgs(),
+                                    ViewShape::FORCE, 
+                                    isVisible() );
+diff --git slideshow/source/engine/shapes/drawshape.hxx slideshow/source/engine/shapes/drawshape.hxx
+index 4c8fb8d..3d06488 100644
+--- slideshow/source/engine/shapes/drawshape.hxx
++++ slideshow/source/engine/shapes/drawshape.hxx
+@@ -33,6 +33,7 @@
+ 
+ #include <osl/diagnose.hxx>
+ #include <com/sun/star/drawing/XShape.hpp>
++#include <com/sun/star/graphic/XPrimitiveFactory2D.hpp>
+ 
+ #include "attributableshape.hxx"
+ #include "doctreenodesupplier.hxx"
+@@ -347,6 +348,10 @@ namespace slideshow
+             ::com::sun::star::uno::Reference< 
+                 ::com::sun::star::uno::XComponentContext>                           mxComponentContext;
+ 
++            ::com::sun::star::uno::Sequence< 
++                ::com::sun::star::uno::Reference< 
++                    ::com::sun::star::graphic::XPrimitive2D > >                     mxPrimitives;
++
+             /// hyperlink support
+             typedef ::std::pair<sal_Int32 /* mtf start */,
+                                 sal_Int32 /* mtf end */> HyperlinkIndexPair;
+diff --git slideshow/source/engine/shapes/viewshape.cxx slideshow/source/engine/shapes/viewshape.cxx
+index 84094db..5eeb0e5 100644
+--- slideshow/source/engine/shapes/viewshape.cxx
++++ slideshow/source/engine/shapes/viewshape.cxx
+@@ -56,6 +56,7 @@
+ #include <canvas/canvastools.hxx>
+ #include <cppcanvas/vclfactory.hxx>
+ #include <cppcanvas/basegfxfactory.hxx>
++#include <drawinglayer/processor2d/canvasprocessor.hxx>
+ 
+ #include "viewshape.hxx"
+ #include "tools.hxx"
+@@ -194,6 +195,9 @@ namespace slideshow
+         }
+ 
+         bool ViewShape::draw( const ::cppcanvas::CanvasSharedPtr&	rDestinationCanvas,
++                              const uno::Reference<drawing::XShape>&    xShape,
++                              const uno::Reference<drawing::XDrawPage>& xPage,
++                              const uno::Sequence<uno::Reference<graphic::XPrimitive2D> >& xPrimitives,
+                               const GDIMetaFileSharedPtr&			rMtf,
+                               const ShapeAttributeLayerSharedPtr&	rAttr,
+                               const ::basegfx::B2DHomMatrix&		rTransform,
+@@ -202,12 +206,6 @@ namespace slideshow
+         {
+             RTL_LOGFILE_CONTEXT( aLog, "::presentation::internal::ViewShape::draw()" );
+ 
+-            ::cppcanvas::RendererSharedPtr pRenderer( 
+-                getRenderer( rDestinationCanvas, rMtf, rAttr ) );
+-
+-            ENSURE_OR_RETURN( pRenderer, "ViewShape::draw(): Invalid renderer" );
+-
+-            pRenderer->setTransformation( rTransform );
+ #if defined(VERBOSE) && OSL_DEBUG_LEVEL > 0
+             rendering::RenderState aRenderState;
+             ::canvas::tools::initRenderState(aRenderState);
+@@ -235,34 +233,30 @@ namespace slideshow
+                 DBG_UNHANDLED_EXCEPTION();
+             }
+ #endif
++            
++            drawinglayer::geometry::ViewInformation2D aViewInfo(
++				basegfx::B2DHomMatrix(), rTransform,  
++				basegfx::B2DRange(-10000,-10000,10000,10000), // HACK
++				xPage, 0.0, 
++				uno::Sequence<beans::PropertyValue>());
++
++            drawinglayer::processor2d::canvasProcessor2D::canvasProcessor2D aProcessor(
++                aViewInfo,
++                rDestinationCanvas->getUNOCanvas(),
++                rDestinationCanvas->getViewState());
++
++            aProcessor.process(xPrimitives);
++
++#if 0
++            pRenderer->setTransformation( rTransform );
+             if( pClip )
+                 pRenderer->setClip( *pClip );
+             else
+                 pRenderer->setClip();
+ 
+-            if( rSubsets.empty() )
+-            {
+-                return pRenderer->draw();
+-            }
+-            else
+-            {
+-                // render subsets of whole metafile
+-                // --------------------------------
+-
+-                bool bRet(true);
+-                VectorOfDocTreeNodes::const_iterator 		aIter( rSubsets.begin() );
+-                const VectorOfDocTreeNodes::const_iterator	aEnd ( rSubsets.end() );
+-                while( aIter != aEnd )
+-                {
+-                    if( !pRenderer->drawSubset( aIter->getStartIndex(),
+-                                                aIter->getEndIndex() ) )
+-                        bRet = false;
+-
+-                    ++aIter;
+-                }
+-
+-                return bRet;
+-            }
++            return pRenderer->draw();
++#endif
++            return true;
+         }
+ 
+         namespace
+@@ -307,6 +301,9 @@ namespace slideshow
+         }
+ 
+         bool ViewShape::renderSprite( const ViewLayerSharedPtr&             rViewLayer,
++                                      const uno::Reference<drawing::XShape>&    xShape,
++                                      const uno::Reference<drawing::XDrawPage>& xPage,
++                                      const uno::Sequence<uno::Reference<graphic::XPrimitive2D> >& xPrimitives,
+                                       const GDIMetaFileSharedPtr&			rMtf,
+                                       const ::basegfx::B2DRectangle&		rOrigBounds,
+                                       const ::basegfx::B2DRectangle&		rBounds,
+@@ -520,6 +517,9 @@ namespace slideshow
+             ::cppcanvas::CanvasSharedPtr pContentCanvas( mpSprite->getContentCanvas() );
+ 
+             return draw( pContentCanvas,
++                         xShape,
++                         xPage,
++                         xPrimitives,
+                          rMtf,
+                          pAttr,
+                          aShapeTransformation,
+@@ -528,6 +528,9 @@ namespace slideshow
+         }
+ 
+         bool ViewShape::render( const ::cppcanvas::CanvasSharedPtr&	rDestinationCanvas,
++                                const uno::Reference<drawing::XShape>&    xShape,
++                                const uno::Reference<drawing::XDrawPage>& xPage,
++                                const uno::Sequence<uno::Reference<graphic::XPrimitive2D> >& xPrimitives,
+                                 const GDIMetaFileSharedPtr&			rMtf,
+                                 const ::basegfx::B2DRectangle&		rBounds,
+                                 const ::basegfx::B2DRectangle&		rUpdateBounds,
+@@ -689,6 +692,9 @@ namespace slideshow
+ 
+                         // render into this bitmap
+                         if( !draw( pBitmapCanvas,
++                                   xShape,
++                                   xPage,
++                                   xPrimitives,
+                                    rMtf,
+                                    pAttr,
+                                    aTransform,
+@@ -734,6 +740,9 @@ namespace slideshow
+                                         pAttr ) );
+ 
+             return draw( rDestinationCanvas,
++                         xShape,
++                         xPage,
++                         xPrimitives,
+                          rMtf,
+                          pAttr,
+                          aTransform,
+@@ -866,10 +875,13 @@ namespace slideshow
+             mbForceUpdate   = true;
+         }
+ 
+-        bool ViewShape::update( const GDIMetaFileSharedPtr&	rMtf,
+-                                const RenderArgs&			rArgs,
+-                                int							nUpdateFlags,
+-                                bool						bIsVisible ) const
++        bool ViewShape::update( const uno::Reference<drawing::XShape>&    xShape,
++                                const uno::Reference<drawing::XDrawPage>& xPage,
++                                const uno::Sequence<uno::Reference<graphic::XPrimitive2D> >& xPrimitives,
++                                const GDIMetaFileSharedPtr&	              rMtf,
++                                const RenderArgs&			              rArgs,
++                                int							              nUpdateFlags,
++                                bool						              bIsVisible ) const
+         {
+             RTL_LOGFILE_CONTEXT( aLog, "::presentation::internal::ViewShape::update()" );
+             ENSURE_OR_RETURN( mpViewLayer->getCanvas(), "ViewShape::update(): Invalid layer canvas" );
+@@ -877,6 +889,9 @@ namespace slideshow
+             // Shall we render to a sprite, or to a plain canvas?
+             if( isBackgroundDetached() )
+                 return renderSprite( mpViewLayer,
++                                     xShape,
++                                     xPage,
++                                     xPrimitives,
+                                      rMtf,
+                                      rArgs.maOrigBounds,
+                                      rArgs.maBounds,
+@@ -888,6 +903,9 @@ namespace slideshow
+                                      bIsVisible );
+             else
+                 return render( mpViewLayer->getCanvas(),
++                               xShape,
++                               xPage,
++                               xPrimitives,
+                                rMtf,
+                                rArgs.maBounds,
+                                rArgs.maUpdateBounds,
+diff --git slideshow/source/engine/shapes/viewshape.hxx slideshow/source/engine/shapes/viewshape.hxx
+index 684a93a..3c95171 100644
+--- slideshow/source/engine/shapes/viewshape.hxx
++++ slideshow/source/engine/shapes/viewshape.hxx
+@@ -48,6 +48,9 @@
+ 
+ #include <vector>
+ 
++namespace com{ namespace sun{ namespace star{ namespace graphic {
++    class XPrimitive2D;
++}}}}
+ 
+ namespace slideshow
+ {
+@@ -200,7 +203,14 @@ namespace slideshow
+ 
+ 	            @return whether the rendering finished successfully.
+             */
+-            bool update( const GDIMetaFileSharedPtr&	rMtf,
++            bool update( const ::com::sun::star::uno::Reference< 
++                            ::com::sun::star::drawing::XShape >& xShape,
++                         const ::com::sun::star::uno::Reference< 
++                            ::com::sun::star::drawing::XDrawPage >& xPage,
++                         const ::com::sun::star::uno::Sequence< 
++                         ::com::sun::star::uno::Reference< 
++                         ::com::sun::star::graphic::XPrimitive2D > >& xPrimitives,
++                         const GDIMetaFileSharedPtr&	rMtf,
+                          const RenderArgs&				rArgs,
+                          int							nUpdateFlags,
+                          bool							bIsVisible ) const;
+@@ -258,6 +268,13 @@ namespace slideshow
+             	associated canvas (which happens to be mpLastCanvas).
+              */
+             bool draw( const ::cppcanvas::CanvasSharedPtr&	rDestinationCanvas,
++                       const ::com::sun::star::uno::Reference< 
++                       ::com::sun::star::drawing::XShape >& xShape,
++                       const ::com::sun::star::uno::Reference< 
++                       ::com::sun::star::drawing::XDrawPage >& xPage,
++                       const ::com::sun::star::uno::Sequence< 
++                       ::com::sun::star::uno::Reference< 
++                       ::com::sun::star::graphic::XPrimitive2D > >& xPrimitives,
+                        const GDIMetaFileSharedPtr&			rMtf,
+                        const ShapeAttributeLayerSharedPtr&	rAttr,
+                        const ::basegfx::B2DHomMatrix&		rTransform,
+@@ -267,6 +284,13 @@ namespace slideshow
+             /** Render shape to an active sprite
+              */
+             bool renderSprite( const ViewLayerSharedPtr&            rViewLayer,
++                               const ::com::sun::star::uno::Reference< 
++                               ::com::sun::star::drawing::XShape >& xShape,
++                               const ::com::sun::star::uno::Reference< 
++                               ::com::sun::star::drawing::XDrawPage >& xPage,
++                               const ::com::sun::star::uno::Sequence< 
++                               ::com::sun::star::uno::Reference< 
++                               ::com::sun::star::graphic::XPrimitive2D > >& xPrimitives,
+                                const GDIMetaFileSharedPtr&			rMtf,
+                                const ::basegfx::B2DRectangle&		rOrigBounds,
+                                const ::basegfx::B2DRectangle&		rBounds,
+@@ -280,6 +304,13 @@ namespace slideshow
+             /** Render shape to given canvas
+              */
+             bool render( const ::cppcanvas::CanvasSharedPtr&	rDestinationCanvas,
++                         const ::com::sun::star::uno::Reference< 
++                         ::com::sun::star::drawing::XShape >& xShape,
++                         const ::com::sun::star::uno::Reference< 
++                         ::com::sun::star::drawing::XDrawPage >& xPage,
++                         const ::com::sun::star::uno::Sequence< 
++                         ::com::sun::star::uno::Reference< 
++                         ::com::sun::star::graphic::XPrimitive2D > >& xPrimitives,
+                          const GDIMetaFileSharedPtr&			rMtf,
+                          const ::basegfx::B2DRectangle&			rBounds,
+                          const ::basegfx::B2DRectangle&			rUpdateBounds,
+diff --git slideshow/source/engine/slide/slideimpl.cxx slideshow/source/engine/slide/slideimpl.cxx
+index 4cc5b05..aeaecc8 100644
+--- slideshow/source/engine/slide/slideimpl.cxx
++++ slideshow/source/engine/slide/slideimpl.cxx
+@@ -49,6 +49,7 @@
+ #include <com/sun/star/beans/XPropertySet.hpp>
+ #include <com/sun/star/container/XEnumerationAccess.hpp>
+ #include <com/sun/star/awt/Rectangle.hpp>
++#include <com/sun/star/graphic/XPrimitiveFactory2D.hpp>
+ #include <com/sun/star/presentation/ParagraphTarget.hpp>
+ #include <com/sun/star/presentation/EffectNodeType.hpp>
+ #include <com/sun/star/animations/XAnimationNodeSupplier.hpp>
+@@ -374,7 +375,13 @@ SlideImpl::SlideImpl( const uno::Reference< drawing::XDrawPage >&			xDrawPage,
+                rUserEventQueue,
+                *this,
+                rViewContainer,
+-               xComponentContext ),
++               xComponentContext,
++               uno::Reference<com::sun::star::graphic::XPrimitiveFactory2D>(
++                   xComponentContext->getServiceManager()->createInstanceWithContext(
++                       ::rtl::OUString( RTL_CONSTASCII_USTRINGPARAM(
++                                            "com.sun.star.graphic.PrimitiveFactory2D") ),
++                       xComponentContext ), 
++                   uno::UNO_QUERY_THROW ) ),
+     mrCursorManager( rCursorManager ),
+     maAnimations( maContext,
+                   getSlideSizeImpl() ),
+diff --git slideshow/source/engine/slideshowcontext.cxx slideshow/source/engine/slideshowcontext.cxx
+index 2b1b481..90108a7 100644
+--- slideshow/source/engine/slideshowcontext.cxx
++++ slideshow/source/engine/slideshowcontext.cxx
+@@ -31,6 +31,7 @@
+ 
+ #include <com/sun/star/uno/Reference.hxx>
+ #include <com/sun/star/uno/XComponentContext.hpp>
++#include <com/sun/star/graphic/XPrimitiveFactory2D.hpp>
+ 
+ #include "slideshowcontext.hxx"
+ #include "subsettableshapemanager.hxx"
+@@ -58,7 +59,9 @@ SlideShowContext::SlideShowContext( SubsettableShapeManagerSharedPtr& rSubsettab
+                                     CursorManager&                    rCursorManager,
+                                     const UnoViewContainer&           rViewContainer,
+                                     const uno::Reference< 
+-                                          uno::XComponentContext>&    rComponentContext ) :
++                                          uno::XComponentContext>&    rComponentContext,
++                                    const uno::Reference< 
++                                          graphic::XPrimitiveFactory2D>& rPrimitiveFactory ) :
+         mpSubsettableShapeManager( rSubsettableShapeManager ),
+         mrEventQueue( rEventQueue ),
+         mrEventMultiplexer( rEventMultiplexer ),
+@@ -67,7 +70,8 @@ SlideShowContext::SlideShowContext( SubsettableShapeManagerSharedPtr& rSubsettab
+         mrUserEventQueue( rUserEventQueue ),
+         mrCursorManager( rCursorManager ),
+         mrViewContainer( rViewContainer ),
+-        mxComponentContext( rComponentContext )
++        mxComponentContext( rComponentContext ),
++        mxPrimitiveFactory( rPrimitiveFactory )
+     {}
+ 
+ void SlideShowContext::dispose() 
+diff --git slideshow/source/engine/slideshowimpl.cxx slideshow/source/engine/slideshowimpl.cxx
+index dce6f79..ede4b86 100644
+--- slideshow/source/engine/slideshowimpl.cxx
++++ slideshow/source/engine/slideshowimpl.cxx
+@@ -1459,7 +1459,8 @@ sal_Bool SlideShowImpl::setProperty( beans::PropertyValue const& rProperty )
+                     maUserEventQueue,
+                     *this,
+                     maViewContainer,
+-                    mxComponentContext) );
++                    mxComponentContext,
++                    0) );
+         }
+         else if (mpRehearseTimingsActivity) 
+         {
+diff --git slideshow/source/inc/slideshowcontext.hxx slideshow/source/inc/slideshowcontext.hxx
+index 595829b..4995f18 100644
+--- slideshow/source/inc/slideshowcontext.hxx
++++ slideshow/source/inc/slideshowcontext.hxx
+@@ -34,9 +34,11 @@
+ #include <com/sun/star/uno/Reference.hxx>
+ #include <boost/shared_ptr.hpp>
+ 
+-namespace com{ namespace sun{ namespace star{ namespace uno
+-{
+-    class XComponentContext;
++namespace com{ namespace sun{ namespace star{ 
++namespace uno {
++    class XComponentContext; }
++namespace graphic {
++    class XPrimitiveFactory2D;
+ }}}}
+ 
+ 
+@@ -101,7 +103,9 @@ namespace slideshow
+                               CursorManager&                                    rCursorManager,
+                               const UnoViewContainer&                           rViewContainer,
+                               const ::com::sun::star::uno::Reference< 
+-                                  ::com::sun::star::uno::XComponentContext>&    rComponentContext );
++                                  ::com::sun::star::uno::XComponentContext>&    rComponentContext,
++                              const ::com::sun::star::uno::Reference< 
++                                  ::com::sun::star::graphic::XPrimitiveFactory2D>& rPrimitiveFactory );
+             void dispose();
+ 
+             boost::shared_ptr<SubsettableShapeManager>&     mpSubsettableShapeManager;
+@@ -114,6 +118,8 @@ namespace slideshow
+             const UnoViewContainer&                         mrViewContainer;
+             ::com::sun::star::uno::Reference< 
+                 ::com::sun::star::uno::XComponentContext>	mxComponentContext;
++            ::com::sun::star::uno::Reference< 
++                ::com::sun::star::graphic::XPrimitiveFactory2D> mxPrimitiveFactory;
+         };
+     }
+ }
+diff --git slideshow/util/makefile.mk slideshow/util/makefile.mk
+index f3fe923..5ece86f 100644
+--- slideshow/util/makefile.mk
++++ slideshow/util/makefile.mk
+@@ -64,6 +64,7 @@ SHL1STDLIBS= $(TOOLSLIB) \
+ 			 $(COMPHELPERLIB) \
+ 			 $(CPPUHELPERLIB) \
+ 			 $(BASEGFXLIB) \
++             $(DRAWINGLAYERLIB) \
+ 			 $(CANVASTOOLSLIB) \
+ 			 $(CPPCANVASLIB) \
+ 			 $(UNOTOOLSLIB) \
