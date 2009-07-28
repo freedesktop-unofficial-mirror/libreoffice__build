@@ -1,0 +1,296 @@
+in openoffice autotext is implemented by the the service
+"com.sun.star.text.AutoTextContainer"
+
+the autotext entries can exist from 
+a) existing autotext created via the ui ( or api ) 
+b) imported autotext from mso documents
+
+the "com.sun.star.text.AutoTextContainer" is implemented in sw/source/ui/uno/unoatxt.cxx ( it is a singleton ) 
+
+SwXAutoTextContainer::SwXAutoTextContainer()
+  accesses the saved on disk autotext via ::GetGlossaries() ( defined in sw/source/ui/utlui/initui.cxx ) 
+    GetGlossaries sw/source/ui/misc/glosdoc.cxx
+
+
+the autodoc is contained in an xml format ( zipped ) 
+a Group and items withing the groups where the Groups is an special zip file, each item is a directory in that (zip) file.
+
+We need ( I guess ) to be able to create transient Groups that represent the documents currently ( loaded ) and additionally and global templates ( from a specified location ? ) or I guess any template ( we can see ) that is referenced
+
+this looks like quite a bit of work, on start-up I guess we need to import any ( global stuff, like from addins or defined global templates ), sounds doable
+
+when opening a document probably if that document references a template we could could ( maybe ) have a reference counted transient group associated with that in the autotext container too ?
+
+getting a group, container uses ( from sw/source/ui/misc/glosdoc.cxx )
+
+Reference< text::XAutoTextGroup > SwGlossaries::GetAutoTextGroup( const ::rtl::OUString& _rGroupName, bool _bCreate )
+
+
+already cached entries exist in m_aGlossaryGroups, these contain SwXAutoTextGroups ( sw/source/ui/uno/unoatxt.cxx ) objects ( these are the containers/groups for the this individual AutoText objects
+
+on import how are these created :/
+
+( lets debug )
+
+hmm it seems that looking where the uno objects are created doesn't help ( when importing via tha api ) I must have missed the fact that some (existing) internal objects must in fact by wrapped by the uno stuff
+
+... after more searching
+
+the filter parts themselves are more interesting. 
+
+(gdb) up
+#1  0xac16f962 in WW8GlossaryFib::WW8GlossaryFib(SvStream&, unsigned char, SvStream&, WW8Fib const&) () from /media/disk-1/Openoffice-BUILDS/GIT_AGAIN/ooo-build/INSTALL_LINK/basis3.1/program/libmswordli.so
+(gdb) up
+#2  0xac16edfb in WW8Glossary (this=0xbfffd1b0, refStrm=@0xbfffd1c4, nVersion=8 '\b', pStg=0x8e161c8) at /media/disk-1/Openoffice-BUILDS/GIT_AGAIN/ooo-build/build/ooo310-m13/sw/source/filter/ww8/ww8glsy.cxx:70
+(gdb) up
+#3  0xac10de21 in WW8Reader::ReadGlossaries(SwTextBlocks&, unsigned char) const () from /media/disk-1/Openoffice-BUILDS/GIT_AGAIN/ooo-build/INSTALL_LINK/basis3.1/program/libmswordli.so
+(gdb) where
+#0  WW8GlossaryFib::FindGlossaryFibOffset (this=0x8efe318, rTableStrm=@0x8ca8338, rStrm=@0x8dfd348, rFib=@0xbfffceb0) at /media/disk-1/Openoffice-BUILDS/GIT_AGAIN/ooo-build/build/ooo310-m13/sw/source/filter/ww8/ww8glsy.cxx:268
+#1  0xac16f962 in WW8GlossaryFib::WW8GlossaryFib(SvStream&, unsigned char, SvStream&, WW8Fib const&) () from /media/disk-1/Openoffice-BUILDS/GIT_AGAIN/ooo-build/INSTALL_LINK/basis3.1/program/libmswordli.so
+#2  0xac16edfb in WW8Glossary (this=0xbfffd1b0, refStrm=@0xbfffd1c4, nVersion=8 '\b', pStg=0x8e161c8) at /media/disk-1/Openoffice-BUILDS/GIT_AGAIN/ooo-build/build/ooo310-m13/sw/source/filter/ww8/ww8glsy.cxx:70
+#3  0xac10de21 in WW8Reader::ReadGlossaries(SwTextBlocks&, unsigned char) const () from /media/disk-1/Openoffice-BUILDS/GIT_AGAIN/ooo-build/INSTALL_LINK/basis3.1/program/libmswordli.so
+#4  0xacdb1a23 in SwReader::ReadGlossaries (this=0xbfffd230, rOptions=@0x8b8cbe8, rBlocks=@0x890dd80, bSaveRelFiles=0 '\0') at /media/disk-1/Openoffice-BUILDS/GIT_AGAIN/ooo-build/build/ooo310-m13/sw/source/filter/basflt/shellio.cxx:708
+#5  0xacf437bc in SwGlossaryHdl::ImportGlossaries(String const&) () from
+
+
+
+ahh, so... the trick is
+
+a) the import is actually done ww8par.cxx BOOL WW8Reader::ReadGlossaries(SwTextBlocks& rBlocks, BOOL bSaveRelFiles) const
+
+rBlocks actually relates to the glossary container ( associated with the template we are importing into ) e.g. rBlocks could be standard, myautotext ( or something ( e.g. a group ) you have created yourself.
+
+SwTextBlocks ( or the group container ) is created from 
+   SwGlossaries::GetGroupDoc() ( sw/source/ui/misc/glosdoc.cxx )
+      + SwGlossaries::GetGlosDoc()
+          + creates a SwTextBlocks ( for a file url ) 
+              +  create SwXMLTextBlocks.cxx ( for the url )
+
+sw/source/core/swg/SwXMLTextBlocks.cxx
+
+unfortunately it seems that SwXMLTextBlocks doesn't want to play well with a given storage ( e.g. one that might be in memory ( or attached to the document ) )
+
+assuming we can create an SwTextBlocks ( not associated with a hard file ) on the fly what then? 
+
+well, you can create SwXAutoTextGroups from the info ( but really everthing still comes down to hardcoding of use of pGlossaries = ::GetGlossaries(); where pGlossaries is the static list of SwGlossaries.
+
+
+SwXAutoTextContainer uses following public methods (..)
+   pGlossaries->GetGroupCnt();
+   pGlossaries->GetGroupName( static_cast< USHORT >(nIndex) )
+   pGlossaries->GetAutoTextGroup( GroupName, TRUE );
+   String sGroupName( pGlossaries->GetCompleteGroupName( Name ) );
+   pGlossaries->NewGroupDoc(sGroup, sGroup.GetToken(0, GLOS_DELIM));
+   pGlossaries->GetAutoTextGroup( sGroup, true ); ( *** is this all we really need )
+       SwXAutoTextGroup ( requires  a SwGlossaries instance ( I guess to provide the SwTextBlocks from GetGroupDoc/GetGlosDoc )
+   String sGroupName = pGlossaries->GetCompleteGroupName( aGroupName );
+   pGlossaries->DelGroupDoc(sGroupName);
+   
+SwXAutoTextGroup uses the following SwGlossaries public methods
+  * interestingly this class is passed the global glossaries ptr
+   SwTextBlocks* pGlosGroup = pGlossaries ? pGlossaries->GetGroupDoc(m_sGroupName, sal_False) : 0;
+  ( but wouldn't it make more sense to just pass in the associated SwTextBlocks ? ) - looks like we would do that
+
+   pGlossaries->PutGroupDoc( pGlosGroup ); ( insert new named autotext into the group )
+   uno::Reference< text::XAutoTextEntry > xEntry = pGlossaries->GetAutoTextEntry( m_sGroupName, sName, sShortName, true );
+      ( again SwXAutoTextEntry requires a SwGlossaries instance )
+
+SwXAutoTextEntry uses the following SwGlossaries public methods
+
+  xDocSh = pGlossaries->EditGroupDoc ( sGroupName, sEntryName, FALSE );
+  wTextBlocks* pBlock = pGlossaries->GetGroupDoc(sGroupName);
+
+
+maybe we can keep the current setup and use a temp dir to store autoimported autotext. we would need
+
+   o a new accessor for this 'special' autotext stuff ( sw/source/ui/utlui/initui.cxx GetTransientImportedGlossaries() perhaps )
+   o additionally we would need probably need to not use HasGlossaryList() & GetGlossaryList() for those imported transient groups ( and disable handling WID_GROUP_TITLE in unoatxt.cxx )
+   o new SwGlossaries => SwTransientImportedGlossaries
+
+
+this could work. SwGlossaries expects groups with this format
+
+groupname*n
+where '*' is a delimiter
+where n is the offset into the path array ( in our case one should be sufficient )
+
+   
+so, normally when reading a document we have the autotext from
+  a) all active templates
+  b) this document too ( if it is a template )
+  c) Normal.dot
+  d) later on api can add/delete ( ok this will not be reflected in any MSO template :-/, changes would only be done to the local imported format ) 
+
+
+One ( simple ) approach would be to try the idea of importing the content from any referenced( global I suppose ) templates on startup ( importing them into local files in a temp directory ( we could delete the contents of the temp directory on startup ) but.... then, how do we handle importing referenced templates ( and multiple instances of imported templates from documents ) not sure what is the best way around that. I guess each document could reference count the imported autotext document that it has. First cut I guess would be to get things working in a "there only is one document ever open world" and then worry about that.
+
+
+small patch just to start, this just basically provides a static class that inherits from the current glossary/autotext document implementation, it allows just a basic import ( no uno-isation or management of the data/stuff yet )
+
+diff --git sw/source/filter/ww8/ww8par.cxx sw/source/filter/ww8/ww8par.cxx
+index 21a8014..d07ea54 100644
+--- sw/source/filter/ww8/ww8par.cxx
++++ sw/source/filter/ww8/ww8par.cxx
+@@ -160,6 +160,8 @@ using namespace nsHdFtFlags;
+ #include <svx/msvbahelper.hxx>
+ #include <svtools/pathoptions.hxx>
+ #include <com/sun/star/ucb/XSimpleFileAccess.hpp>
++#include "../../ui/inc/glosdoc.hxx"
++
+ 
+ const static String sThisDocument( RTL_CONSTASCII_USTRINGPARAM("ThisDocument"));
+ 
+@@ -4227,6 +4229,11 @@ ULONG SwWW8ImplReader::CoreLoad(WW8Glossary *pGloss, const SwPosition &rPos)
+ 
+             // Read Global templates 
+             ReadGlobalTemplateSettings( sCreatedFrom, xPrjNameCache );
++            #if 0
++            // Import autotext from attached template
++            rtl::OUString sAttachedTemplate = rtl::OUString::createFromAscii("file://datat4/home/npower/swedish-police-mallar/Word/rp_ansta.dot" );
++            SwTransientGlossaries::GetTransientImportedGlossaries()->Import( sAttachedTemplate );
++            #endif 
+ #endif 
+             // Create and insert Word vba Globals
+             uno::Any aGlobs;
+diff --git sw/source/ui/dochdl/gloshdl.cxx sw/source/ui/dochdl/gloshdl.cxx
+index c40ad9f..277ec8e 100644
+--- sw/source/ui/dochdl/gloshdl.cxx
++++ sw/source/ui/dochdl/gloshdl.cxx
+@@ -970,6 +970,9 @@ BOOL SwGlossaryHdl::ImportGlossaries( const String& rName )
+ 		}
+ 		DELETEZ(pMed);
+ 	}
++        OSL_TRACE("Trying my funny import");
++        rtl::OUString sAttachedTemplate = rtl::OUString::createFromAscii("file:///data4/home/npower/swedish-police-mallar/Word/rp_ansta.dot" );
++        SwTransientGlossaries::GetTransientImportedGlossaries()->Import( sAttachedTemplate ); 
+ 	return bRet;
+ }
+ 
+diff --git sw/source/ui/inc/glosdoc.hxx sw/source/ui/inc/glosdoc.hxx
+index ebb7eba..6ca4e52 100644
+--- sw/source/ui/inc/glosdoc.hxx
++++ sw/source/ui/inc/glosdoc.hxx
+@@ -62,6 +62,7 @@ typedef ::std::vector< AutoTextEntryRef > UnoAutoTextEntries;
+ // CLASS -----------------------------------------------------------------
+ class SW_DLLPUBLIC SwGlossaries
+ {
++protected:
+ 	UnoAutoTextGroups       m_aGlossaryGroups;
+ 	UnoAutoTextEntries      m_aGlossaryEntries;
+ 
+@@ -71,6 +72,7 @@ class SW_DLLPUBLIC SwGlossaries
+     SvStrings               *m_pPathArr;
+     SvStrings               *m_pGlosArr;
+     BOOL                    m_bError;
++	void			UpdateGlosPath(BOOL bFull, const String& rPath );
+ 
+ 	SW_DLLPRIVATE SwTextBlocks*	GetGlosDoc(const String &rName, BOOL bCreate = TRUE) const;
+ 	SW_DLLPRIVATE SvStrings	    *GetNameList();
+@@ -81,7 +83,7 @@ class SW_DLLPUBLIC SwGlossaries
+ 
+ public:
+ 	SwGlossaries();
+-	~SwGlossaries();
++	virtual ~SwGlossaries();
+ 
+ 	/** returns the cached AutoTextGroup (if any) for the given group name
+ 
+@@ -147,5 +149,18 @@ public:
+     const SvStrings*    GetPathArray() const {return m_pPathArr;}
+ };
+ 
++class SW_DLLPUBLIC SwTransientGlossaries : public SwGlossaries
++{
++protected:
++	SwTransientGlossaries();
++	~SwTransientGlossaries();
++public:
++        bool Import( const String& sTemplate );
++        static SwTransientGlossaries* GetTransientImportedGlossaries()
++        {
++            static SwTransientGlossaries importedGlossaries;
++            return &importedGlossaries;    
++        }
++};
+ 
+ #endif // _GLOSDOC_HXX
+diff --git sw/source/ui/misc/glosdoc.cxx sw/source/ui/misc/glosdoc.cxx
+index cf5cb88..226fcdd 100644
+--- sw/source/ui/misc/glosdoc.cxx
++++ sw/source/ui/misc/glosdoc.cxx
+@@ -62,7 +62,8 @@
+ #ifndef _GLOBALS_HRC
+ #include <globals.hrc>
+ #endif
+-
++#include <rtl/bootstrap.hxx>
++#include <svx/acorrcfg.hxx>
+ using namespace ::com::sun::star;
+ using namespace ::com::sun::star::uno;
+ 
+@@ -487,6 +488,10 @@ void SwGlossaries::UpdateGlosPath(sal_Bool bFull)
+ {
+ 	SvtPathOptions aPathOpt;
+ 	String aNewPath( aPathOpt.GetAutoTextPath() );
++    UpdateGlosPath( bFull, aNewPath );
++}
++void SwGlossaries::UpdateGlosPath(sal_Bool bFull, const String& aNewPath )
++{
+     sal_Bool bPathChanged = m_aPath != aNewPath;
+ 	if (bFull || bPathChanged)
+ 	{
+@@ -805,5 +810,54 @@ Reference< text::XAutoTextEntry > SwGlossaries::GetAutoTextEntry( const String&
+ 	return xReturn;
+ }
+ 
++SwTransientGlossaries::SwTransientGlossaries() : SwGlossaries()
++{
++    rtl::OUString sTransientPath =  rtl::OUString::createFromAscii("${$BRAND_BASE_DIR/program/") + rtl::OUString::createFromAscii( SAL_CONFIGFILE( "bootstrap" ) ) + rtl::OUString::createFromAscii("::UserInstallation}/user/temp/");
++    rtl::Bootstrap::expandMacros( sTransientPath );
++    OSL_TRACE("******* expanded url is %s", rtl::OUStringToOString( sTransientPath, RTL_TEXTENCODING_UTF8 ).getStr() );  
++    UpdateGlosPath( true, sTransientPath ); 
++}
++
+ 
++SwTransientGlossaries::~SwTransientGlossaries()
++{
++}
+ 
++bool SwTransientGlossaries::Import( const String& sTemplateURL )
++{
++    bool bRet = false;
++    if( sTemplateURL.Len() )
++    {
++        const SfxFilter* pFilter = 0;
++        //std::auto_ptr< SfxMedium > pMed( new SfxMedium( sTemplateURL, STREAM_READ, TRUE, 0, 0 ) );
++        SfxMedium* pMed = new SfxMedium( sTemplateURL, STREAM_READ, TRUE, 0, 0 );
++        SfxFilterMatcher aMatcher( String::CreateFromAscii("swriter") );
++        pMed->UseInteractionHandler( FALSE );
++        if( !aMatcher.GuessFilter( *pMed, &pFilter, FALSE ) )
++        {
++            pMed->SetFilter( pFilter );
++            Reader* pR = SwReaderWriter::GetReader( pFilter->GetUserData() );
++            INetURLObject aURL( sTemplateURL );
++            String sGroupName = aURL.GetLastName();     
++            sGroupName = sGroupName.GetToken( 0, '.' );
++ 
++            sGroupName.AppendAscii("*0");
++            OSL_TRACE("GroupName is %s", rtl::OUStringToOString( sGroupName, RTL_TEXTENCODING_UTF8 ).getStr() );
++
++            SwTextBlocks *pGlossary = GetGroupDoc( sGroupName, true );
++            if( pR && pGlossary )
++            {
++                SwReader aReader( *pMed, sTemplateURL );
++                if( aReader.HasGlossaries( *pR ) )
++                {
++                    const SvxAutoCorrCfg* pCfg = SvxAutoCorrCfg::Get();
++                    bRet = aReader.ReadGlossaries( *pR, *pGlossary,
++                    pCfg->IsSaveRelFile() );
++                }
++            }
++        }
++        DELETEZ(pMed);
++
++    }
++    return bRet;
++}
