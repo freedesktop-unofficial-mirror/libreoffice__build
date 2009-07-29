@@ -67,11 +67,11 @@ index 07394d8..e5eb48a 100644
                      uno::Any aModel = uno::makeAny( pShell->GetModel() );
                      pAppMgr->SetGlobalUNOConstant( "ThisExcelDoc", aModel );
                  }
++#if 0
 +                // see if we have the XCB stream
 +                SvStorageStreamRef xXCB = xRootStrg->OpenSotStream( String( RTL_CONSTASCII_USTRINGPARAM( "XCB" ) ), STREAM_STD_READ | STREAM_NOCREATE  );
 +                if ( xXCB.Is()|| SVSTREAM_OK == xXCB->GetError() )
 +                {
-+#if 0
 +                    CTBWrapper wrapper;
 +                    if ( wrapper.Read( xXCB ) )
 +                    {
@@ -80,8 +80,8 @@ index 07394d8..e5eb48a 100644
 +#endif
 +                        wrapper.ImportCustomToolBar( *pShell );
 +                    }
-+#endif
 +                }
++#endif
  
              }
          }
@@ -111,10 +111,10 @@ index 6ecc0ef..385b552 100644
  
 diff --git sc/source/filter/excel/xltoolbar.cxx sc/source/filter/excel/xltoolbar.cxx
 new file mode 100644
-index 0000000..47b5ee5
+index 0000000..6591539
 --- /dev/null
 +++ sc/source/filter/excel/xltoolbar.cxx
-@@ -0,0 +1,354 @@
+@@ -0,0 +1,365 @@
 +#include "xltoolbar.hxx"
 +#include <rtl/ustrbuf.hxx>
 +#include <stdarg.h>
@@ -242,36 +242,47 @@ index 0000000..47b5ee5
 +bool CTB::ImportCustomToolBar( CustomToolBarImportHelper& helper )
 +{
 +    static rtl::OUString sToolbarPrefix( RTL_CONSTASCII_USTRINGPARAM( "private:resource/toolbar/custom_" ) );
-+    if ( !tb.IsEnabled() )
-+        return true;  // didn't fail, just ignoring
-+    // Create default setting
-+    uno::Reference< container::XIndexContainer > xIndexContainer( helper.getCfgManager()->createSettings(), uno::UNO_QUERY_THROW );
-+    uno::Reference< container::XIndexAccess > xIndexAccess( xIndexContainer, uno::UNO_QUERY_THROW );
-+    uno::Reference< beans::XPropertySet > xProps( xIndexContainer, uno::UNO_QUERY_THROW ); 
-+    WString& name = tb.getName();
-+    // set UI name for toolbar
-+    xProps->setPropertyValue( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM("UIName") ), uno::makeAny( name.getString() ) ); 
-+
-+    rtl::OUString sToolBarName = sToolbarPrefix.concat( name.getString() );
-+    for ( std::vector< TBC >::iterator it =  rTBC.begin(); it != rTBC.end(); ++it )
++    bool bRes = false;
++    try
 +    {
-+        // createToolBar item for control
-+        if ( !it->ImportToolBarControl( xIndexContainer, helper ) )
-+            return false;
-+    }
-+
-+    OSL_TRACE("Name of toolbar :-/ %s", rtl::OUStringToOString( sToolBarName, RTL_TEXTENCODING_UTF8 ).getStr() );
-+
-+    helper.getCfgManager()->insertSettings( sToolBarName, xIndexAccess );
-+    helper.applyIcons();
-+
-+    uno::Reference< ui::XUIConfigurationPersistence > xPersistence( helper.getCfgManager()->getImageManager(), uno::UNO_QUERY_THROW );
-+    xPersistence->store();
-+
-+    xPersistence.set( helper.getCfgManager(), uno::UNO_QUERY_THROW );
-+    xPersistence->store();
++        // #Fixme same issue here as in word, some deleted data
++        // seems to still exist
++        if ( !tb.IsEnabled() )
++            return true;  // didn't fail, just ignoring
++        // Create default setting
++        uno::Reference< container::XIndexContainer > xIndexContainer( helper.getCfgManager()->createSettings(), uno::UNO_QUERY_THROW );
++        uno::Reference< container::XIndexAccess > xIndexAccess( xIndexContainer, uno::UNO_QUERY_THROW );
++        uno::Reference< beans::XPropertySet > xProps( xIndexContainer, uno::UNO_QUERY_THROW ); 
++        WString& name = tb.getName();
++        // set UI name for toolbar
++        xProps->setPropertyValue( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM("UIName") ), uno::makeAny( name.getString() ) ); 
 +    
-+    return true;
++        rtl::OUString sToolBarName = sToolbarPrefix.concat( name.getString() );
++        for ( std::vector< TBC >::iterator it =  rTBC.begin(); it != rTBC.end(); ++it )
++        {
++            // createToolBar item for control
++            if ( !it->ImportToolBarControl( xIndexContainer, helper ) )
++                return false;
++        }
++
++        OSL_TRACE("Name of toolbar :-/ %s", rtl::OUStringToOString( sToolBarName, RTL_TEXTENCODING_UTF8 ).getStr() );
++
++        helper.getCfgManager()->insertSettings( sToolBarName, xIndexAccess );
++        helper.applyIcons();
++
++        uno::Reference< ui::XUIConfigurationPersistence > xPersistence( helper.getCfgManager()->getImageManager(), uno::UNO_QUERY_THROW );
++        xPersistence->store();
++
++        xPersistence.set( helper.getCfgManager(), uno::UNO_QUERY_THROW );
++        xPersistence->store();
++    
++        bRes = true;
++    }
++    catch( uno::Exception& )
++    {
++       bRes = false; 
++    }
++    return bRes;
 +}
 +bool CTBS::Read( SvStream *pS )
 +{
@@ -563,7 +574,7 @@ index 0000000..af986c7
 +
 +#endif //_XLTOOLBAR_HXX
 diff --git svx/inc/svx/mstoolbar.hxx svx/inc/svx/mstoolbar.hxx
-index 5d76eaf..2772f23 100644
+index 5d76eaf..c102ade 100644
 --- svx/inc/svx/mstoolbar.hxx
 +++ svx/inc/svx/mstoolbar.hxx
 @@ -250,6 +250,7 @@ public:
@@ -574,7 +585,7 @@ index 5d76eaf..2772f23 100644
      bool Read(SvStream *pS);
      void Print( FILE* );
      sal_uInt32 getTbct() { return tbct; };
-@@ -267,8 +268,56 @@ public:
+@@ -267,8 +268,57 @@ public:
      ~TBCData(){}
      bool Read(SvStream *pS);
      void Print( FILE* );
@@ -601,6 +612,7 @@ index 5d76eaf..2772f23 100644
 +    sal_Int16 getcCL(){ return cCL; }
 +    WString& getName(){ return name; }
 +    bool IsEnabled();
++    bool NeedsPositioning();
 +};
 +
 +class SVX_DLLPUBLIC SRECT : public TBBase
@@ -633,7 +645,7 @@ index 5d76eaf..2772f23 100644
 +};
  #endif
 diff --git svx/source/msfilter/mstoolbar.cxx svx/source/msfilter/mstoolbar.cxx
-index fa66fe5..8c3934a 100644
+index fa66fe5..1d5c801 100644
 --- svx/source/msfilter/mstoolbar.cxx
 +++ svx/source/msfilter/mstoolbar.cxx
 @@ -25,7 +25,7 @@ void CustomToolBarImportHelper::applyIcons()
@@ -729,7 +741,7 @@ index fa66fe5..8c3934a 100644
  
  }
  
-@@ -611,3 +615,79 @@ void TBCBitMap::Print( FILE* fp )
+@@ -611,3 +615,83 @@ void TBCBitMap::Print( FILE* fp )
      indent_printf(fp, "[ 0x%x ] TBCBitMap -- dump\n", nOffSet );
      indent_printf(fp, "  TBCBitMap size of bitmap data 0x%x\n", static_cast< unsigned int > ( cbDIB ) );
  }
@@ -756,8 +768,12 @@ index fa66fe5..8c3934a 100644
 +
 +bool TB::IsEnabled()
 +{
-+    //return ( bFlags & 0x10 ) != 0x10;
 +    return ( bFlags & 0x01 ) != 0x01;
++}
++
++bool TB::NeedsPositioning()
++{
++    return ( bFlags & 0x10 ) == 0x10;
 +}
 +
 +void TB::Print( FILE* fp )
@@ -823,10 +839,88 @@ index 21a8014..a8a1348 100644
  #endif
      return aTCG.ImportCustomToolBar( *pShell );
 diff --git sw/source/filter/ww8/ww8toolbar.cxx sw/source/filter/ww8/ww8toolbar.cxx
-index bb3fc2e..22ab038 100644
+index bb3fc2e..22581ea 100644
 --- sw/source/filter/ww8/ww8toolbar.cxx
 +++ sw/source/filter/ww8/ww8toolbar.cxx
-@@ -525,38 +525,6 @@ bool CTB::ImportMenu( const css::uno::Reference< css::container::XIndexContainer
+@@ -482,36 +482,49 @@ CTB::Print( FILE* fp )
+ bool CTB::ImportCustomToolBar( CustomToolBarImportHelper& helper )
+ {
+     static rtl::OUString sToolbarPrefix( RTL_CONSTASCII_USTRINGPARAM( "private:resource/toolbar/custom_" ) );
+-    if ( !tb.IsEnabled() )
+-        return true;  // didn't fail, just ignoring
+-    // Create default setting
+-    uno::Reference< container::XIndexContainer > xIndexContainer( helper.getCfgManager()->createSettings(), uno::UNO_QUERY_THROW );
+-    uno::Reference< container::XIndexAccess > xIndexAccess( xIndexContainer, uno::UNO_QUERY_THROW );
+-    uno::Reference< beans::XPropertySet > xProps( xIndexContainer, uno::UNO_QUERY_THROW ); 
+-
+-    // set UI name for toolbar
+-    xProps->setPropertyValue( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM("UIName") ), uno::makeAny( name.getString() ) ); 
+-
+-    rtl::OUString sToolBarName = sToolbarPrefix.concat( name.getString() );
+-    for ( std::vector< TBC >::iterator it =  rTBC.begin(); it != rTBC.end(); ++it )
++    bool bRes = false;
++    try
+     {
+-        // createToolBar item for control
+-        if ( !it->ImportToolBarControl( xIndexContainer, helper ) )
+-            return false;
+-    }
+-
+-    OSL_TRACE("Name of toolbar :-/ %s", rtl::OUStringToOString( sToolBarName, RTL_TEXTENCODING_UTF8 ).getStr() );
+-
+-    helper.getCfgManager()->insertSettings( sToolBarName, xIndexAccess );
+-    helper.applyIcons();
+-
+-    uno::Reference< ui::XUIConfigurationPersistence > xPersistence( helper.getCfgManager()->getImageManager(), uno::UNO_QUERY_THROW );
+-    xPersistence->store();
+-
+-    xPersistence.set( helper.getCfgManager(), uno::UNO_QUERY_THROW );
+-    xPersistence->store();
++        // #FIXME this is a bogus check ( but is seems to work )
++        // the fNeedsPositioning seems always to be set for toolbars that
++        // have been deleted ( sofar I fail to find something else to indicate
++        // not to read them ) - e.g. We can have CTB records which relate to
++        // deleted items ( usually associated with popups )
++        if ( !tb.IsEnabled() || tb.NeedsPositioning() )
++            return true;  // didn't fail, just ignoring
++        // Create default setting
++        uno::Reference< container::XIndexContainer > xIndexContainer( helper.getCfgManager()->createSettings(), uno::UNO_QUERY_THROW );
++        uno::Reference< container::XIndexAccess > xIndexAccess( xIndexContainer, uno::UNO_QUERY_THROW );
++        uno::Reference< beans::XPropertySet > xProps( xIndexContainer, uno::UNO_QUERY_THROW ); 
++        
++        // set UI name for toolbar
++        xProps->setPropertyValue( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM("UIName") ), uno::makeAny( name.getString() ) ); 
+     
+-    return true;
++        rtl::OUString sToolBarName = sToolbarPrefix.concat( name.getString() );
++        for ( std::vector< TBC >::iterator it =  rTBC.begin(); it != rTBC.end(); ++it )
++        {
++            // createToolBar item for control
++            if ( !it->ImportToolBarControl( xIndexContainer, helper ) )
++                return false;
++        }
++    
++        OSL_TRACE("Name of toolbar :-/ %s", rtl::OUStringToOString( sToolBarName, RTL_TEXTENCODING_UTF8 ).getStr() );
++    
++        helper.getCfgManager()->insertSettings( sToolBarName, xIndexAccess );
++        helper.applyIcons();
++    
++        uno::Reference< ui::XUIConfigurationPersistence > xPersistence( helper.getCfgManager()->getImageManager(), uno::UNO_QUERY_THROW );
++        xPersistence->store();
++    
++        xPersistence.set( helper.getCfgManager(), uno::UNO_QUERY_THROW );
++        xPersistence->store();
++        bRes = true;
++    }
++    catch( uno::Exception& )
++    {
++        bRes = false;
++    }
++    return bRes;
+ }
+ 
+ bool CTB::ImportMenu( const css::uno::Reference< css::container::XIndexContainer >& xIndexContainer, CustomToolBarImportHelper& rHelper )
+@@ -525,38 +538,6 @@ bool CTB::ImportMenu( const css::uno::Reference< css::container::XIndexContainer
      return true;
  }
  
@@ -865,7 +959,7 @@ index bb3fc2e..22ab038 100644
  TBC::TBC()
  {
  }
-@@ -655,10 +623,19 @@ TBC::ImportToolBarControl( const css::uno::Reference< css::container::XIndexCont
+@@ -655,10 +636,19 @@ TBC::ImportToolBarControl( const css::uno::Reference< css::container::XIndexCont
              }
           
          }
