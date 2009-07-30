@@ -1,153 +1,81 @@
 diff -Nrup xmloff-m16/source/draw/sdxmlexp.cxx xmloff/source/draw/sdxmlexp.cxx
 --- xmloff-m16/source/draw/sdxmlexp.cxx	2009-07-27 00:38:42.000000000 -0700
-+++ xmloff/source/draw/sdxmlexp.cxx	2009-07-27 00:36:22.000000000 -0700
-@@ -39,6 +39,10 @@
- #include <com/sun/star/lang/ServiceNotRegisteredException.hpp>
- #include <com/sun/star/presentation/XPresentationSupplier.hpp>
- #include <com/sun/star/presentation/XCustomPresentationSupplier.hpp>
++++ xmloff/source/draw/sdxmlexp.cxx	2009-07-29 15:37:06.000000000 -0700
+@@ -47,6 +47,10 @@
+ #include <com/sun/star/drawing/XMasterPagesSupplier.hpp>
+ #include <com/sun/star/presentation/XHandoutMasterSupplier.hpp>
+ #include <com/sun/star/container/XIndexContainer.hpp>
 +#include <com/sun/star/presentation/XLayoutList.hpp>
-+#include <com/sun/star/presentation/UnoAutoLayout.hpp>
++#include <com/sun/star/presentation/AutoLayoutBuiltin.hpp>
 +#include <com/sun/star/awt/Rectangle.hpp>
 +#include <com/sun/star/awt/Size.hpp>
- #include <com/sun/star/task/XStatusIndicatorSupplier.hpp>
- #include <com/sun/star/lang/Locale.hpp>
- #include <com/sun/star/uno/Any.hxx>
-@@ -92,6 +96,8 @@
- 
- using ::rtl::OUString;
- using ::rtl::OUStringBuffer;
-+using ::com::sun::star::presentation::UnoAutoLayout;
-+using ::com::sun::star::presentation::XLayoutList;
- 
- using namespace ::com::sun::star;
- using namespace ::com::sun::star::uno;
-@@ -115,6 +121,7 @@ class ImpXMLEXPPageMasterInfo
- 	view::PaperOrientation		meOrientation;
- 	OUString					msName;
- 	OUString					msMasterPageName;
-+    Reference<XLayoutList>      maLayoutlist;
+ #include <com/sun/star/view/PaperOrientation.hpp>
+ #include <com/sun/star/style/XStyleFamiliesSupplier.hpp>
+ #include <com/sun/star/style/XStyle.hpp>
+@@ -221,7 +225,7 @@ class ImpXMLAutoLayoutInfo
+ 	sal_Int32					mnGapY;
  
  public:
- 	ImpXMLEXPPageMasterInfo(const SdXMLExport& rExp, const Reference<XDrawPage>& xPage);
-@@ -131,6 +138,7 @@ public:
- 	sal_Int32 GetWidth() const { return mnWidth; }
- 	sal_Int32 GetHeight() const { return mnHeight; }
- 	view::PaperOrientation GetOrientation() const { return meOrientation; }
-+    Reference<XLayoutList> GetLayoutList() const { return maLayoutlist; }
- };
+-	ImpXMLAutoLayoutInfo(sal_uInt16 nTyp, ImpXMLEXPPageMasterInfo* pInf);
++	ImpXMLAutoLayoutInfo(sal_uInt16 nTyp, ImpXMLEXPPageMasterInfo* pInf, Reference< XLayoutList > rLList);
  
- ImpXMLEXPPageMasterInfo::ImpXMLEXPPageMasterInfo(
-@@ -148,8 +156,15 @@ ImpXMLEXPPageMasterInfo::ImpXMLEXPPageMa
- 	if(xPropSet.is())
- 	{
- 		Any aAny;
-+        
-+        
+ 	BOOL operator==(const ImpXMLAutoLayoutInfo& rInfo) const;
  
- 		Reference< beans::XPropertySetInfo > xPropsInfo( xPropSet->getPropertySetInfo() );
-+        if( xPropsInfo.is() && xPropsInfo->hasPropertyByName(OUString(RTL_CONSTASCII_USTRINGPARAM("AutoLayoutList") )))
-+		{
-+            aAny = xPropSet->getPropertyValue(OUString(RTL_CONSTASCII_USTRINGPARAM("AutoLayoutList")));
-+			aAny >>= maLayoutlist;
-+        }
- 		if( xPropsInfo.is() && xPropsInfo->hasPropertyByName(OUString(RTL_CONSTASCII_USTRINGPARAM("BorderBottom") )))
- 		{
- 			aAny = xPropSet->getPropertyValue(OUString(RTL_CONSTASCII_USTRINGPARAM("BorderBottom")));
-@@ -240,15 +255,17 @@ public:
- 
- BOOL ImpXMLAutoLayoutInfo::IsCreateNecessary(sal_uInt16 nTyp)
- {
--	if(nTyp == 5 /* AUTOLAYOUT_ORG */
--		|| nTyp == 20 /* AUTOLAYOUT_NONE */
--		|| nTyp >= IMP_AUTOLAYOUT_INFO_MAX)
-+
-+	if( nTyp == (sal_uInt16) UnoAutoLayout_ORG  
-+		|| nTyp == (sal_uInt16) UnoAutoLayout_NONE
-+		|| nTyp >= (sal_uInt16) UnoAutoLayout_NUM_OF_BUILTINS)
- 		return FALSE;
- 	return TRUE;
- }
- 
- BOOL ImpXMLAutoLayoutInfo::operator==(const ImpXMLAutoLayoutInfo& rInfo) const
- {
-+
- 	return ((mnType == rInfo.mnType
+@@ -253,7 +257,7 @@ BOOL ImpXMLAutoLayoutInfo::operator==(co
  		&& mpPageMasterInfo == rInfo.mpPageMasterInfo));
  }
-@@ -257,25 +274,52 @@ ImpXMLAutoLayoutInfo::ImpXMLAutoLayoutIn
+ 
+-ImpXMLAutoLayoutInfo::ImpXMLAutoLayoutInfo(sal_uInt16 nTyp, ImpXMLEXPPageMasterInfo* pInf)
++ImpXMLAutoLayoutInfo::ImpXMLAutoLayoutInfo(sal_uInt16 nTyp, ImpXMLEXPPageMasterInfo* pInf, Reference< XLayoutList > rLList)
  :	mnType(nTyp),
  	mpPageMasterInfo(pInf)
  {
-+    //debug code only
-+    ::awt::Size unopage;
-+    ::awt::Rectangle unotitle;
-+    ::awt::Rectangle unolayout;
-+    
-+    unopage.Width = 1000L;
-+    unopage.Height = 1000L;
-+    
-+    unotitle.X = 10L;
-+    unotitle.Y = 10L;
-+    unolayout.X = 10L;
-+    unolayout.Y = 60L;
-+    unotitle.Width = 800L;
-+    unotitle.Height = 40L;
-+    unolayout.Width = 800L;
-+    unolayout.Height = 940L;
-+    
-+    Reference< XLayoutList > layoutlist(mpPageMasterInfo->GetLayoutList());
-+        
-+    Sequence< ::awt::Rectangle >  rects = layoutlist->getAutoLayoutRectangles((sal_uInt32) 0,
-+                                    unotitle, unolayout, unopage, false);
-+    
-+   // end of debug code.
-+    
- 	// create full info (initialze with typical values)
+@@ -261,6 +265,25 @@ ImpXMLAutoLayoutInfo::ImpXMLAutoLayoutIn
  	Point aPagePos(0,0);
  	Size aPageSize(28000, 21000);
  	Size aPageInnerSize(28000, 21000);
++    
++    if(rLList.is())
++    {
++      ::uno::Sequence< ::awt::Rectangle >  rectlist;
++      ::awt::Rectangle  awtrect;
++      ::awt::Size  awtsize;
++    
++      awtrect.X = 0;
++      awtrect.Y = 0;
++      awtrect.Width = 28000;
++      awtrect.Height = 2100;
++      awtsize.Width = 28000;
++      awtsize.Height = 21000;
++      
++      rectlist = rLList->getAutoLayoutRectangles((sal_uInt32) nTyp, awtrect, awtrect, awtsize, false);
++        
++      sal_uInt32 r = (sal_uInt32) nTyp;
++        
++    }
  
-+
  	if(mpPageMasterInfo)
  	{
-+    
- 		aPagePos = Point(mpPageMasterInfo->GetBorderLeft(), mpPageMasterInfo->GetBorderTop());
- 		aPageSize = Size(mpPageMasterInfo->GetWidth(), mpPageMasterInfo->GetHeight());
- 		aPageInnerSize = aPageSize;
- 		aPageInnerSize.Width() -= mpPageMasterInfo->GetBorderLeft() + mpPageMasterInfo->GetBorderRight();
- 		aPageInnerSize.Height() -= mpPageMasterInfo->GetBorderTop() + mpPageMasterInfo->GetBorderBottom();
-+    
- 	}
+@@ -886,9 +909,21 @@ BOOL SdXMLExport::ImpPrepAutoLayoutInfo(
+ 						}
+ 					}
+ 				}
++                
++                Reference< XLayoutList > llist;
++                
++                Reference< beans::XPropertySetInfo > xPropsInfo( xPropSet->getPropertySetInfo() );
++                if( xPropsInfo.is() )
++		        {
++                    if(xPropsInfo->hasPropertyByName(OUString(RTL_CONSTASCII_USTRINGPARAM("AutoLayoutList") )))
++                    {                
++                       aAny = xPropSet->getPropertyValue(OUString(RTL_CONSTASCII_USTRINGPARAM("AutoLayoutList")));
++                       aAny >>= llist;
++                    }
++                }    
  
- 	// title rectangle aligning
- 	Point aTitlePos(aPagePos);
- 	Size aTitleSize(aPageInnerSize);
--
--	if(mnType == 21 /* AUTOLAYOUT_NOTES */)
-+    
-+	if(mnType == (sal_uInt16) UnoAutoLayout_NOTES)
- 	{
- 		aTitleSize.Height() = (long) (aTitleSize.Height() / 2.5);
- 		Point aPos = aTitlePos;
-@@ -298,10 +342,9 @@ ImpXMLAutoLayoutInfo::ImpXMLAutoLayoutIn
- 		aTitlePos = aPos;
- 		aTitleSize = aSize;
- 	}
--	else if(mnType == 27 || mnType == 28)
-+	else if(mnType == (sal_uInt16) UnoAutoLayout_VERTICAL_TITLE_TEXT_CHART  
-+           || mnType == (sal_uInt16) UnoAutoLayout_VERTICAL_TITLE_VERTICAL_OUTLINE)
- 	{
--		// AUTOLAYOUT_VERTICAL_TITLE_TEXT_CHART or
--		// AUTOLAYOUT_VERTICAL_TITLE_VERTICAL_OUTLINE
- 		Point aClassicTPos(
- 			aTitlePos.X() + long( aTitleSize.Width() * 0.0735 ),
- 			aTitlePos.Y() + long( aTitleSize.Height() * 0.083 ));
-@@ -337,7 +380,7 @@ ImpXMLAutoLayoutInfo::ImpXMLAutoLayoutIn
- 	Point aLayoutPos(aPagePos);
- 	Size aLayoutSize(aPageInnerSize);
+ 				// create entry and look for existance
+-				ImpXMLAutoLayoutInfo* pNew = new ImpXMLAutoLayoutInfo(nType, pInfo);
++				ImpXMLAutoLayoutInfo* pNew = new ImpXMLAutoLayoutInfo(nType, pInfo, llist);
+ 				BOOL bDidExist(FALSE);
  
--	if(mnType == 21 /* AUTOLAYOUT_NOTES */)
-+	if(mnType == (sal_uInt16) UnoAutoLayout_NOTES)
- 	{
- 		aLayoutPos.X() += long( aLayoutSize.Width() * 0.0735 );
- 		aLayoutPos.Y() += long( aLayoutSize.Height() * 0.472 );
+ 				for(sal_uInt32 nCnt = 0L; !bDidExist && nCnt < mpAutoLayoutInfoList->Count(); nCnt++)
