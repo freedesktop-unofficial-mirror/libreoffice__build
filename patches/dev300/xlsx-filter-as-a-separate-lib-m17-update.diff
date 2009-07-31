@@ -1,0 +1,413 @@
+diff --git sc/source/filter/xlsx/xlsx-xichart.cxx sc/source/filter/xlsx/xlsx-xichart.cxx
+index 8364ccf..e48179d 100644
+--- sc/source/filter/xlsx/xlsx-xichart.cxx
++++ sc/source/filter/xlsx/xlsx-xichart.cxx
+@@ -633,8 +633,11 @@ Reference< XLabeledDataSequence > lclCreateLabeledDataSequence(
+ // ----------------------------------------------------------------------------
+ 
+ XclImpChSourceLink::XclImpChSourceLink( const XclImpChRoot& rRoot ) :
+-    XclImpChRoot( rRoot ),
+-    mpTokenArray(static_cast<ScTokenArray*>(NULL))
++    XclImpChRoot( rRoot )
++{
++}
++
++XclImpChSourceLink::~XclImpChSourceLink()
+ {
+ }
+ 
+@@ -645,6 +648,7 @@ void XclImpChSourceLink::ReadChSourceLink( XclImpStream& rStrm )
+             >> maData.mnFlags
+             >> maData.mnNumFmtIdx;
+ 
++    mpTokenArray.reset();
+     if( GetLinkType() == EXC_CHSRCLINK_WORKSHEET )
+     {
+         // read token array
+@@ -686,31 +690,34 @@ sal_uInt16 XclImpChSourceLink::GetCellCount() const
+     using namespace ::formula;
+ 
+     sal_uInt32 nCellCount = 0;
+-    mpTokenArray->Reset();
+-    for (const FormulaToken* p = mpTokenArray->First(); p; p = mpTokenArray->Next())
++    if( mpTokenArray.is() )
+     {
+-        switch (p->GetType())
++        mpTokenArray->Reset();
++        for (const FormulaToken* p = mpTokenArray->First(); p; p = mpTokenArray->Next())
+         {
+-            case svSingleRef:
+-            case svExternalSingleRef:
+-                // single cell
+-                ++nCellCount;
+-            break;
+-            case svDoubleRef:
+-            case svExternalDoubleRef:
++            switch (p->GetType())
+             {
+-                // cell range
+-                const ScComplexRefData& rData = static_cast<const ScToken*>(p)->GetDoubleRef();
+-                const ScSingleRefData& s = rData.Ref1;
+-                const ScSingleRefData& e = rData.Ref2;
+-                SCsTAB nTab = e.nTab - s.nTab;
+-                SCsCOL nCol = e.nCol - s.nCol;
+-                SCsROW nRow = e.nRow - s.nRow;
+-                nCellCount += static_cast<sal_uInt32>(nCol+1) * 
+-                              static_cast<sal_uInt32>(nRow+1) * 
+-                              static_cast<sal_uInt32>(nTab+1);
++                case svSingleRef:
++                case svExternalSingleRef:
++                    // single cell
++                    ++nCellCount;
++                break;
++                case svDoubleRef:
++                case svExternalDoubleRef:
++                {
++                    // cell range
++                    const ScComplexRefData& rData = static_cast<const ScToken*>(p)->GetDoubleRef();
++                    const ScSingleRefData& s = rData.Ref1;
++                    const ScSingleRefData& e = rData.Ref2;
++                    SCsTAB nTab = e.nTab - s.nTab;
++                    SCsCOL nCol = e.nCol - s.nCol;
++                    SCsROW nRow = e.nRow - s.nRow;
++                    nCellCount += static_cast<sal_uInt32>(nCol+1) *
++                                  static_cast<sal_uInt32>(nRow+1) *
++                                  static_cast<sal_uInt32>(nTab+1);
++                }
++                break;
+             }
+-            break;
+         }
+     }
+     return limit_cast<sal_uInt16>(nCellCount);
+@@ -736,25 +743,23 @@ Reference< XDataSequence > XclImpChSourceLink::CreateDataSequence( const OUStrin
+ {
+     Reference< XDataSequence > xDataSeq;
+     Reference< XDataProvider > xDataProv = GetDataProvider();
+-    if( xDataProv.is() )
++    if( xDataProv.is() && mpTokenArray.is() )
+     {
+-        if (mpTokenArray)
++        ScCompiler aComp( GetDocPtr(), ScAddress(), *mpTokenArray );
++        aComp.SetGrammar( ::formula::FormulaGrammar::GRAM_ENGLISH );
++        OUStringBuffer aRangeRep;
++        aComp.CreateStringFromTokenArray( aRangeRep );
++        try
+         {
+-            ScCompiler aComp(GetDocPtr(), ScAddress(), *mpTokenArray);
+-            aComp.SetGrammar(::formula::FormulaGrammar::GRAM_ENGLISH);
+-            OUStringBuffer aBuf;
+-            aComp.CreateStringFromTokenArray(aBuf);
+-            xDataSeq = xDataProv->createDataSequenceByRangeRepresentation(
+-                aBuf.makeStringAndClear());
++            xDataSeq = xDataProv->createDataSequenceByRangeRepresentation( aRangeRep.makeStringAndClear() );
++            // set sequence role
++            ScfPropertySet aSeqProp( xDataSeq );
++            aSeqProp.SetProperty( EXC_CHPROP_ROLE, rRole );
+         }
+-        else
++        catch( Exception& )
+         {
+             DBG_ERRORFILE( "XclImpChSourceLink::CreateDataSequence - cannot create data sequence" );
+         }
+-
+-        // set sequence role
+-        ScfPropertySet aSeqProp( xDataSeq );
+-        aSeqProp.SetProperty( EXC_CHPROP_ROLE, rRole );
+     }
+     return xDataSeq;
+ }
+diff --git sc/source/filter/xlsx/xlsx-xistyle.cxx sc/source/filter/xlsx/xlsx-xistyle.cxx
+index 7f1627e..a83e203 100644
+--- sc/source/filter/xlsx/xlsx-xistyle.cxx
++++ sc/source/filter/xlsx/xlsx-xistyle.cxx
+@@ -1088,26 +1088,25 @@ void XclImpXF::ReadXF( XclImpStream& rStrm )
+     }
+ }
+ 
+-void XclImpXF::SetStyleName( const String& rStyleName )
++void XclImpXF::SetStyleName( const String& rStyleName, bool bBuiltIn, bool bForceCreate )
+ {
+     DBG_ASSERT( IsStyleXF(), "XclImpXF::SetStyleName - not a style XF" );
+-    DBG_ASSERT( rStyleName.Len(), "XclImpXF::SetStyleName - style name empty" );
+-    if( IsStyleXF() && !maStyleName.Len() )
++    DBG_ASSERT( rStyleName.Len() > 0, "XclImpXF::SetStyleName - style name empty" );
++    if( IsStyleXF() && (rStyleName.Len() > 0) )
+     {
+         maStyleName = rStyleName;
+-        mbForceCreate = true;
++        mbWasBuiltIn = bBuiltIn;
++        mbForceCreate = bForceCreate;
+     }
+ }
+ 
+-void XclImpXF::SetBuiltInStyleName( sal_uInt8 nStyleId, sal_uInt8 nLevel )
++void XclImpXF::ChangeStyleName( const String& rStyleName )
+ {
+-    DBG_ASSERT( IsStyleXF(), "XclImpXF::SetStyleName - not a style XF" );
+-    if( IsStyleXF() && !maStyleName.Len() )
+-    {
+-        mbWasBuiltIn = true;
+-        maStyleName = XclTools::GetBuiltInStyleName( nStyleId, nLevel );
+-        mbForceCreate = nStyleId == EXC_STYLE_NORMAL;   // force creation of "Default" style
+-    }
++    DBG_ASSERT( IsStyleXF(), "XclImpXF::ChangeStyleName - not a style XF" );
++    DBG_ASSERT( rStyleName.Len() > 0, "XclImpXF::ChangeStyleName - new style name empty" );
++    DBG_ASSERT( maStyleName.Len() > 0, "XclImpXF::ChangeStyleName - old style name empty" );
++    if( IsStyleXF() && (rStyleName.Len() > 0) )
++        maStyleName = rStyleName;
+ }
+ 
+ void XclImpXF::CreateUserStyle()
+@@ -1239,6 +1238,7 @@ ScStyleSheet* XclImpXF::CreateStyleSheet()
+ {
+     if( !mpStyleSheet && maStyleName.Len() )    // valid name implies style XF
+     {
++        bool bCreatePattern = false;
+         // there may be a user-defined "Default" - test on built-in too!
+         bool bDefStyle = mbWasBuiltIn && (maStyleName == ScGlobal::GetRscString( STR_STYLENAME_STANDARD ));
+         if( bDefStyle )
+@@ -1249,16 +1249,23 @@ ScStyleSheet* XclImpXF::CreateStyleSheet()
+             mpStyleSheet = static_cast< ScStyleSheet* >( GetStyleSheetPool().Find(
+                 ScGlobal::GetRscString( STR_STYLENAME_STANDARD ), SFX_STYLE_FAMILY_PARA ) );
+             DBG_ASSERT( mpStyleSheet, "XclImpXF::CreateStyleSheet - Default style not found" );
++            bCreatePattern = true;
+         }
+         else
+         {
+-            /*  mbWasBuiltIn==true forces renaming of equal-named user defined styles
+-                to be able to re-export built-in styles correctly. */
+-            mpStyleSheet = &ScfTools::MakeCellStyleSheet( GetStyleSheetPool(), maStyleName, mbWasBuiltIn );
++            /*  #i103281# do not create another style sheet of the same name,
++                if it exists already. This is needed to prevent that styles
++                pasted from clipboard get duplicated over and over. */
++            mpStyleSheet = static_cast< ScStyleSheet* >( GetStyleSheetPool().Find( maStyleName, SFX_STYLE_FAMILY_PARA ) );
++            if( !mpStyleSheet )
++            {
++                mpStyleSheet = &static_cast< ScStyleSheet& >( GetStyleSheetPool().Make( maStyleName, SFX_STYLE_FAMILY_PARA, SFXSTYLEBIT_USERDEF ) );
++                bCreatePattern = true;
++            }
+         }
+ 
+         // bDefStyle==true omits default pool items in CreatePattern()
+-        if( mpStyleSheet )
++        if( bCreatePattern && mpStyleSheet )
+             mpStyleSheet->GetItemSet().Put( CreatePattern( bDefStyle ).GetItemSet() );
+     }
+     return mpStyleSheet;
+@@ -1274,6 +1281,16 @@ XclImpXFBuffer::XclImpXFBuffer( const XclImpRoot& rRoot ) :
+ void XclImpXFBuffer::Initialize()
+ {
+     maXFList.Clear();
++    maStyleXFs.clear();
++    /*  Reserve style names that are built-in in Calc. For BIFF4 workbooks
++        which contain a separate list of styles per sheet, reserve all existing
++        names if current sheet is not the first sheet. This will create unique
++        names for styles in different sheets with the same name. */
++    bool bReserveAll = (GetBiff() == EXC_BIFF4) && (GetCurrScTab() > 0);
++    SfxStyleSheetIterator aStyleIter( GetDoc().GetStyleSheetPool(), SFX_STYLE_FAMILY_PARA );
++    for( SfxStyleSheetBase* pStyleSheet = aStyleIter.First(); pStyleSheet; pStyleSheet = aStyleIter.Next() )
++        if( bReserveAll || !pStyleSheet->IsUserDefined() )
++            maStyleXFs[ pStyleSheet->GetName() ] = 0;
+ }
+ 
+ void XclImpXFBuffer::ReadXF( XclImpStream& rStrm )
+@@ -1282,9 +1299,9 @@ void XclImpXFBuffer::ReadXF( XclImpStream& rStrm )
+     pXF->ReadXF( rStrm );
+     maXFList.Append( pXF );
+ 
++    // set the name of the "Default" cell style (always the first XF in an Excel file)
+     if( (GetBiff() >= EXC_BIFF3) && (maXFList.Count() == 1) )
+-        // set the name of the "Default" cell style (always the first XF in an Excel file)
+-        pXF->SetBuiltInStyleName( EXC_STYLE_NORMAL, 0 );
++        CalcStyleName( *pXF, EXC_STYLE_NORMAL, 0 );
+ }
+ 
+ void XclImpXFBuffer::ReadStyle( XclImpStream& rStrm )
+@@ -1301,7 +1318,7 @@ void XclImpXFBuffer::ReadStyle( XclImpStream& rStrm )
+         {
+             sal_uInt8 nStyleId, nLevel;
+             rStrm >> nStyleId >> nLevel;
+-            pXF->SetBuiltInStyleName( nStyleId, nLevel );
++            CalcStyleName( *pXF, nStyleId, nLevel );
+         }
+         else                                                // user-defined styles
+         {
+@@ -1310,8 +1327,20 @@ void XclImpXFBuffer::ReadStyle( XclImpStream& rStrm )
+                 aStyleName = rStrm.ReadByteString( false );    // 8 bit length
+             else
+                 aStyleName = rStrm.ReadUniString();
+-            if( aStyleName.Len() )  // #i1624# #i1768# ignore unnamed styles
+-                pXF->SetStyleName( aStyleName );
++
++            if( aStyleName.Len() > 0 )  // #i1624# #i1768# ignore unnamed styles
++            {
++                // #i103281# check if this is a new built-in style introduced in XL2007
++                bool bBuiltIn = false;
++                if( (GetBiff() == EXC_BIFF8) && (rStrm.GetNextRecId() == EXC_ID_STYLEEXT) && rStrm.StartNextRecord() )
++                {
++                    sal_uInt8 nExtFlags;
++                    rStrm.Ignore( 12 );
++                    rStrm >> nExtFlags;
++                    bBuiltIn = ::get_flag( nExtFlags, EXC_STYLEEXT_BUILTIN );
++                }
++                CalcStyleName( *pXF, aStyleName, bBuiltIn );
++            }
+         }
+     }
+ }
+@@ -1345,6 +1374,49 @@ void XclImpXFBuffer::ApplyPattern(
+     }
+ }
+ 
++void XclImpXFBuffer::CalcStyleName( XclImpXF& rXF, const String& rStyleName, bool bBuiltIn )
++{
++    DBG_ASSERT( rStyleName.Len() > 0, "XclImpXFBuffer::CalcStyleName - style name empty" );
++    if( rStyleName.Len() > 0 )
++    {
++        String aStyleName = bBuiltIn ? XclTools::GetBuiltInStyleName( rStyleName ) : rStyleName;
++        SetStyleName( rXF, aStyleName, bBuiltIn, !bBuiltIn );
++    }
++}
++
++void XclImpXFBuffer::CalcStyleName( XclImpXF& rXF, sal_uInt8 nStyleId, sal_uInt8 nLevel )
++{
++    // force creation of "Default" style
++    SetStyleName( rXF, XclTools::GetBuiltInStyleName( nStyleId, nLevel ), true, nStyleId == EXC_STYLE_NORMAL );
++}
++
++void XclImpXFBuffer::SetStyleName( XclImpXF& rXF, const String& rStyleName, bool bBuiltIn, bool bForceCreate )
++{
++    DBG_ASSERT( rXF.IsStyleXF(), "XclImpXFBuffer::SetStyleName - not a style XF" );
++    if( rXF.IsStyleXF() )
++    {
++        // find an unused name
++        String aUnusedName( rStyleName );
++        sal_Int32 nIndex = 0;
++        while( maStyleXFs.count( aUnusedName ) > 0 )
++            aUnusedName.Assign( rStyleName ).Append( ' ' ).Append( String::CreateFromInt32( ++nIndex ) );
++
++        // move old style to new name, if new style is built-in
++        if( bBuiltIn && (aUnusedName != rStyleName) )
++        {
++            XclImpXF*& rpXF = maStyleXFs[ aUnusedName ];
++            rpXF = maStyleXFs[ rStyleName ];
++            if( rpXF )
++                rpXF->ChangeStyleName( aUnusedName );
++            aUnusedName = rStyleName;
++        }
++
++        // insert new style
++        maStyleXFs[ aUnusedName ] = &rXF;
++        rXF.SetStyleName( aUnusedName, bBuiltIn, bForceCreate );
++    }
++}
++
+ // Buffer for XF indexes in cells =============================================
+ 
+ IMPL_FIXEDMEMPOOL_NEWDEL( XclImpXFRange, 100, 500 )
+diff --git sc/source/filter/xlsx/xlsx-xltools.cxx sc/source/filter/xlsx/xlsx-xltools.cxx
+index ef38a00..a84aaba 100644
+--- sc/source/filter/xlsx/xlsx-xltools.cxx
++++ sc/source/filter/xlsx/xlsx-xltools.cxx
+@@ -511,7 +511,8 @@ sal_Unicode XclTools::GetBuiltInDefNameIndex( const String& rDefName )
+ 
+ // built-in style names -------------------------------------------------------
+ 
+-const String XclTools::maStyleNamePrefix( RTL_CONSTASCII_USTRINGPARAM( "Excel_BuiltIn_" ) );
++const String XclTools::maStyleNamePrefix1( RTL_CONSTASCII_USTRINGPARAM( "Excel_BuiltIn_" ) );
++const String XclTools::maStyleNamePrefix2( RTL_CONSTASCII_USTRINGPARAM( "Excel Built-in " ) );
+ 
+ static const sal_Char* const ppcStyleNames[] =
+ {
+@@ -534,7 +535,7 @@ String XclTools::GetBuiltInStyleName( sal_uInt8 nStyleId, sal_uInt8 nLevel )
+     if( nStyleId == EXC_STYLE_NORMAL )  // "Normal" becomes "Default" style
+         aStyleName = ScGlobal::GetRscString( STR_STYLENAME_STANDARD );
+     else if( nStyleId < STATIC_TABLE_SIZE( ppcStyleNames ) )
+-        aStyleName.Assign( maStyleNamePrefix ).AppendAscii( ppcStyleNames[ nStyleId ] );
++        aStyleName.Assign( maStyleNamePrefix1 ).AppendAscii( ppcStyleNames[ nStyleId ] );
+ 
+     if( (nStyleId == EXC_STYLE_ROWLEVEL) || (nStyleId == EXC_STYLE_COLLEVEL) )
+         aStyleName.Append( String::CreateFromInt32( nLevel + 1 ) );
+@@ -542,6 +543,11 @@ String XclTools::GetBuiltInStyleName( sal_uInt8 nStyleId, sal_uInt8 nLevel )
+     return aStyleName;
+ }
+ 
++String XclTools::GetBuiltInStyleName( const String& rStyleName )
++{
++    return String( maStyleNamePrefix1 ).Append( rStyleName );
++}
++
+ bool XclTools::IsBuiltInStyleName( const String& rStyleName, sal_uInt8* pnStyleId, xub_StrLen* pnNextChar )
+ {
+     // "Default" becomes "Normal"
+@@ -553,10 +559,15 @@ bool XclTools::IsBuiltInStyleName( const String& rStyleName, sal_uInt8* pnStyleI
+     }
+ 
+     // try the other built-in styles
+-    xub_StrLen nPrefixLen = maStyleNamePrefix.Len();
+     sal_uInt8 nFoundId = 0;
+     xub_StrLen nNextChar = 0;
+-    if( rStyleName.EqualsIgnoreCaseAscii( maStyleNamePrefix, 0, nPrefixLen ) )
++
++    xub_StrLen nPrefixLen = 0;
++    if( rStyleName.EqualsIgnoreCaseAscii( maStyleNamePrefix1, 0, maStyleNamePrefix1.Len() ) )
++        nPrefixLen = maStyleNamePrefix1.Len();
++    else if( rStyleName.EqualsIgnoreCaseAscii( maStyleNamePrefix2, 0, maStyleNamePrefix2.Len() ) )
++        nPrefixLen = maStyleNamePrefix2.Len();
++    if( nPrefixLen > 0 )
+     {
+         String aShortName;
+         for( sal_uInt8 nId = 0; nId < STATIC_TABLE_SIZE( ppcStyleNames ); ++nId )
+@@ -583,14 +594,14 @@ bool XclTools::IsBuiltInStyleName( const String& rStyleName, sal_uInt8* pnStyleI
+ 
+     if( pnStyleId ) *pnStyleId = EXC_STYLE_USERDEF;
+     if( pnNextChar ) *pnNextChar = 0;
+-    return false;
++    return nPrefixLen > 0;  // also return true for unknown built-in styles
+ }
+ 
+ bool XclTools::GetBuiltInStyleId( sal_uInt8& rnStyleId, sal_uInt8& rnLevel, const String& rStyleName )
+ {
+     sal_uInt8 nStyleId;
+     xub_StrLen nNextChar;
+-    if( IsBuiltInStyleName( rStyleName, &nStyleId, &nNextChar ) )
++    if( IsBuiltInStyleName( rStyleName, &nStyleId, &nNextChar ) && (nStyleId != EXC_STYLE_USERDEF) )
+     {
+         if( (nStyleId == EXC_STYLE_ROWLEVEL) || (nStyleId == EXC_STYLE_COLLEVEL) )
+         {
+@@ -617,24 +628,25 @@ bool XclTools::GetBuiltInStyleId( sal_uInt8& rnStyleId, sal_uInt8& rnLevel, cons
+ 
+ // conditional formatting style names -----------------------------------------
+ 
+-const String XclTools::maCFStyleNamePrefix( RTL_CONSTASCII_USTRINGPARAM( "Excel_CondFormat_" ) );
++const String XclTools::maCFStyleNamePrefix1( RTL_CONSTASCII_USTRINGPARAM( "Excel_CondFormat_" ) );
++const String XclTools::maCFStyleNamePrefix2( RTL_CONSTASCII_USTRINGPARAM( "ConditionalStyle_" ) );
+ 
+ String XclTools::GetCondFormatStyleName( SCTAB nScTab, sal_Int32 nFormat, sal_uInt16 nCondition )
+ {
+-    return String( maCFStyleNamePrefix ).Append( String::CreateFromInt32( nScTab + 1 ) ).
++    return String( maCFStyleNamePrefix1 ).Append( String::CreateFromInt32( nScTab + 1 ) ).
+                 Append( '_' ).Append( String::CreateFromInt32( nFormat + 1 ) ).
+                 Append( '_' ).Append( String::CreateFromInt32( nCondition + 1 ) );
+ }
+ 
+ bool XclTools::IsCondFormatStyleName( const String& rStyleName, xub_StrLen* pnNextChar )
+ {
+-    xub_StrLen nPrefixLen = maCFStyleNamePrefix.Len();
+-    if( rStyleName.EqualsIgnoreCaseAscii( maCFStyleNamePrefix, 0, nPrefixLen ) )
+-    {
+-        if( pnNextChar ) *pnNextChar = nPrefixLen;
+-        return true;
+-    }
+-    return false;
++    xub_StrLen nPrefixLen = 0;
++    if( rStyleName.EqualsIgnoreCaseAscii( maCFStyleNamePrefix1, 0, maCFStyleNamePrefix1.Len() ) )
++        nPrefixLen = maCFStyleNamePrefix1.Len();
++    else if( rStyleName.EqualsIgnoreCaseAscii( maCFStyleNamePrefix2, 0, maCFStyleNamePrefix2.Len() ) )
++        nPrefixLen = maCFStyleNamePrefix2.Len();
++    if( pnNextChar ) *pnNextChar = nPrefixLen;
++    return nPrefixLen > 0;
+ }
+ 
+ // stream handling ------------------------------------------------------------
