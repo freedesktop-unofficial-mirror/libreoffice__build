@@ -1,0 +1,100 @@
+fix template path bug
+
+From: Thorsten Behrens <thb@openoffice.org>
+
+
+---
+
+ .../officeinstallationdirectories.cxx              |   12 +++----
+ sfx2/source/doc/doctemplates.cxx                   |   35 ++++++++++++++++++++
+ 2 files changed, 41 insertions(+), 6 deletions(-)
+
+
+diff --git comphelper/source/officeinstdir/officeinstallationdirectories.cxx comphelper/source/officeinstdir/officeinstallationdirectories.cxx
+index cd09ff6..bcbae52 100644
+--- comphelper/source/officeinstdir/officeinstallationdirectories.cxx
++++ comphelper/source/officeinstdir/officeinstallationdirectories.cxx
+@@ -207,9 +207,9 @@ OfficeInstallationDirectories::makeRelocatableURL( const rtl::OUString& URL )
+         if ( nIndex  != -1 )
+         {
+             return rtl::OUString(
+-                URL.replaceAt( nIndex,
+-                               m_pOfficeDir->getLength(),
+-                               m_aOfficeDirMacro ) );
++                aCanonicalURL.replaceAt( nIndex,
++                                         m_pOfficeDir->getLength(),
++                                         m_aOfficeDirMacro ) );
+         }
+         else
+         {
+@@ -217,9 +217,9 @@ OfficeInstallationDirectories::makeRelocatableURL( const rtl::OUString& URL )
+             if ( nIndex  != -1 )
+             {
+                 return rtl::OUString(
+-                    URL.replaceAt( nIndex,
+-                                   m_pUserDir->getLength(),
+-                                   m_aUserDirMacro ) );
++                    aCanonicalURL.replaceAt( nIndex,
++                                             m_pUserDir->getLength(),
++                                             m_aUserDirMacro ) );
+             }
+         }
+     }
+diff --git sfx2/source/doc/doctemplates.cxx sfx2/source/doc/doctemplates.cxx
+index c23ef53..63734a5 100644
+--- sfx2/source/doc/doctemplates.cxx
++++ sfx2/source/doc/doctemplates.cxx
+@@ -51,6 +51,7 @@
+ #include <com/sun/star/beans/XPropertySetInfo.hpp>
+ #include <com/sun/star/beans/XPropertyContainer.hpp>
+ #include <com/sun/star/beans/StringPair.hpp>
++#include <com/sun/star/util/XMacroExpander.hpp>
+ #include <com/sun/star/container/XContainerQuery.hpp>
+ #include <com/sun/star/document/XTypeDetection.hpp>
+ #include <com/sun/star/document/XStandaloneDocumentInfo.hpp>
+@@ -601,11 +602,45 @@ void SfxDocTplService_Impl::getDirList()
+ 
+     maTemplateDirs = Sequence< OUString >( nCount );
+ 
++    uno::Reference< XComponentContext > xCtx;
++    uno::Reference< util::XMacroExpander > xExpander;
++    uno::Reference< XPropertySet > xPropSet( mxFactory, UNO_QUERY );
++    const rtl::OUString aPrefix(
++        RTL_CONSTASCII_USTRINGPARAM( "vnd.sun.star.expand:" ) );
++
++    if ( xPropSet.is() )
++    {
++        xPropSet->getPropertyValue(
++            rtl::OUString(
++                RTL_CONSTASCII_USTRINGPARAM( "DefaultContext" ) ) )
++            >>= xCtx;
++    }
++
++    if ( xCtx.is() )
++    {
++        xCtx->getValueByName(
++            rtl::OUString( RTL_CONSTASCII_USTRINGPARAM(
++                               "/singletons/com.sun.star.util.theMacroExpander" ) ) )
++            >>= xExpander;
++
++        OSL_ENSURE( xExpander.is(),
++                    "Unable to obtain macro expander singleton!" );
++    }
++
+     for ( USHORT i=0; i<nCount; i++ )
+     {
+         aURL.SetSmartProtocol( INET_PROT_FILE );
+         aURL.SetURL( aDirs.GetToken( i, C_DELIM ) );
+         maTemplateDirs[i] = aURL.GetMainURL( INetURLObject::NO_DECODE );
++        
++        sal_Int32 nIndex = maTemplateDirs[i].indexOf( aPrefix );
++        if ( nIndex != -1 && xExpander.is() )
++        {
++            maTemplateDirs[i] = maTemplateDirs[i].replaceAt(nIndex,
++                                                            aPrefix.getLength(),
++                                                            rtl::OUString());
++            maTemplateDirs[i] = xExpander->expandMacros( maTemplateDirs[i] );
++        }
+     }
+ 
+     aValue <<= maTemplateDirs;
