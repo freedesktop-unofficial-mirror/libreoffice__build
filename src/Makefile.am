@@ -1,6 +1,7 @@
 SUBDIRS=helpcontent2 icons layout sdf
 
 EXTRA_DIST=\
+	default_images \
 	${wildcard *.dic} \
 	Draft.jpg \
 	banner_go-oo.bmp \
