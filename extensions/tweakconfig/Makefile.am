@@ -1,4 +1,4 @@
-EXTRA_DIST=${wildcard *.xcu} ${wildcard *.xml} 
+EXTRA_DIST=META-INF ${wildcard *.xcu} ${wildcard *.xml} 
 
 tweakconfig : $(BUILDDIR)/bin/tweakconfig.oxt
 
