@@ -1,0 +1,94 @@
+diff --git basic/source/runtime/methods.cxx basic/source/runtime/methods.cxx
+index 2c5dab3..5b239a6 100644
+--- basic/source/runtime/methods.cxx
++++ basic/source/runtime/methods.cxx
+@@ -79,7 +79,8 @@
+ #include <com/sun/star/io/XStream.hpp>
+ #include <com/sun/star/io/XSeekable.hpp>
+ #include <com/sun/star/script/XErrorQuery.hpp>
+-
++#include <ooo/vba/XHelperInterface.hpp>
++#include <com/sun/star/bridge/oleautomation/XAutomationObject.hpp>
+ using namespace comphelper;
+ using namespace osl;
+ using namespace com::sun::star::uno;
+@@ -3670,6 +3671,65 @@ String getBasicTypeName( SbxDataType eType )
+     return aRetStr;
+ }
+ 
++String getObjectTypeName( SbxVariable* pVar )
++{
++    rtl::OUString sRet( RTL_CONSTASCII_USTRINGPARAM("Object") );
++    if ( pVar )
++    {
++        SbxBase* pObj = pVar->GetObject();
++        if( !pObj )
++           sRet = String( RTL_CONSTASCII_USTRINGPARAM("Nothing") );
++        else
++        {
++            SbUnoObject* pUnoObj = PTR_CAST(SbUnoObject,pVar );
++            if ( !pUnoObj )
++            { 
++                if ( SbxBase* pBaseObj = pVar->GetObject() )
++                    pUnoObj = PTR_CAST(SbUnoObject, pBaseObj );
++            }
++            if ( pUnoObj )
++            { 
++                Any aObj = pUnoObj->getUnoAny();
++                // For upstreaming unless we start to build oovbaapi by default
++                // we need to get detect the vba-ness of the object in some
++                // other way        
++                // note: Automation objects do not support XServiceInfo
++                Reference< XServiceInfo > xServInfo( aObj, UNO_QUERY );
++                if ( xServInfo.is() )
++                {
++                    // is this a VBA object ?
++                    Reference< ooo::vba::XHelperInterface > xVBA( aObj, UNO_QUERY );
++                    Sequence< rtl::OUString > sServices = xServInfo->getSupportedServiceNames();
++                    if ( sServices.getLength() )
++                        sRet = sServices[ 0 ];
++                }
++                else
++                {
++                    Reference< com::sun::star::bridge::oleautomation::XAutomationObject > xAutoMation( aObj, UNO_QUERY );
++                    if ( xAutoMation.is() )
++                    {
++                        Reference< XInvocation > xInv( aObj, UNO_QUERY );
++                        if ( xInv.is() )
++                        {
++                            try
++                            {
++                                xInv->getValue( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM("$GetTypeName") ) ) >>= sRet;
++                            }
++                            catch( Exception& )
++                            {
++                            }
++                        }
++                    }
++                }
++                sal_Int32 nDot = sRet.lastIndexOf( '.' );
++                if ( nDot != -1 && nDot < sRet.getLength() )
++                       sRet = sRet.copy( nDot + 1 );
++            }
++        }
++    }         
++    return sRet;
++}
++
+ RTLFUNC(TypeName)
+ {
+     (void)pBasic;
+@@ -3681,7 +3741,12 @@ RTLFUNC(TypeName)
+     {
+         SbxDataType eType = rPar.Get(1)->GetType();
+         BOOL bIsArray = ( ( eType & SbxARRAY ) != 0 );
+-        String aRetStr = getBasicTypeName( eType );
++
++        String aRetStr;
++        if ( SbiRuntime::isVBAEnabled() && eType == SbxOBJECT )
++            aRetStr = getObjectTypeName( rPar.Get(1) );
++        else
++            aRetStr = getBasicTypeName( eType );
+         if( bIsArray )
+             aRetStr.AppendAscii( "()" );
+         rPar.Get(0)->PutString( aRetStr );
