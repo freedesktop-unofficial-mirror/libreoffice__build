@@ -1,0 +1,557 @@
+diff --git sw/inc/docsh.hxx sw/inc/docsh.hxx
+index 9d76217..ac2fb3e 100644
+--- sw/inc/docsh.hxx
++++ sw/inc/docsh.hxx
+@@ -32,6 +32,7 @@
+ 
+ #include <rtl/ref.hxx>
+ #include <com/sun/star/frame/XController.hpp>
++#include <com/sun/star/container/XNamed.hpp>
+ #include <vcl/timer.hxx>
+ #include <sfx2/docfac.hxx>
+ #include <sfx2/objsh.hxx>
+@@ -62,6 +63,12 @@ class IDocumentSettingAccess;
+ class IDocumentTimerAccess;
+ class IDocumentChartDataProviderAccess;
+ 
++class SW_DLLPUBLIC SwImportedAutoText
++{
++    std::vector< ::com::sun::star::uno::Reference< ::com::sun::star::container::XNamed > > mImportedAutotext;    
++public:
++    ::com::sun::star::uno::Reference<   ::com::sun::star::container::XNamed > ImportAutoText( const String& TemplateURL );
++};
+ 
+ class SW_DLLPUBLIC SwDocShell: public SfxObjectShell, public SfxListener
+ {
+@@ -86,6 +93,7 @@ class SW_DLLPUBLIC SwDocShell: public SfxObjectShell, public SfxListener
+     sal_Int16               nUpdateDocMode; // contains the com::sun::star::document::UpdateDocMode
+     bool                    bInUpdateFontList; //prevent nested calls of UpdateFontList
+     bool                    bIsATemplate; //prevent nested calls of UpdateFontList
++    SwImportedAutoText mImportedAutoText;
+     // Methoden fuer den Zugriff aufs Doc
+     SW_DLLPRIVATE void					AddLink();
+     SW_DLLPRIVATE void					RemoveLink();
+@@ -302,6 +310,7 @@ public:
+     SfxInPlaceClient* GetIPClient( const ::svt::EmbeddedObjectRef& xObjRef );
+     SW_DLLPRIVATE sal_Bool IsTemplate() { return bIsATemplate; }
+     SW_DLLPRIVATE void SetIsTemplate( bool bValue ) { bIsATemplate = bValue; }
++    SwImportedAutoText& AutoTextImporter(){ return mImportedAutoText; }
+ };
+ 
+ class Graphic;
+diff --git sw/inc/unoatxt.hxx sw/inc/unoatxt.hxx
+index e54d4b0..a152f56 100644
+--- sw/inc/unoatxt.hxx
++++ sw/inc/unoatxt.hxx
+@@ -75,9 +75,9 @@ class SwXAutoTextContainer : public cppu::WeakImplHelper3
+     ::com::sun::star::container::XIndexAccess
+ >
+ {
+-    SwGlossaries *pGlossaries;
+ 
+ protected:
++    SwGlossaries *pGlossaries;
+     virtual ~SwXAutoTextContainer();	// ref-counted objects are not to be deleted from outside -> protected dtor
+ 
+ public:
+diff --git sw/source/core/swg/SwXMLTextBlocks.cxx sw/source/core/swg/SwXMLTextBlocks.cxx
+index 15e91e7..0386378 100644
+--- sw/source/core/swg/SwXMLTextBlocks.cxx
++++ sw/source/core/swg/SwXMLTextBlocks.cxx
+@@ -92,6 +92,7 @@ SwXMLTextBlocks::SwXMLTextBlocks( const String& rFile )
+     try
+     {
+         refStg  = comphelper::OStorageHelper::GetStorageFromURL( rFile, embed::ElementModes::READWRITE );
++	Touch(); // update creation & modification times ( on slow systems IsFileChanged can fail )
+         bReadOnly = FALSE;
+     }
+     catch( const uno::Exception& )
+diff --git sw/source/filter/ww8/ww8par.cxx sw/source/filter/ww8/ww8par.cxx
+index febac10..fdd7a97 100644
+--- sw/source/filter/ww8/ww8par.cxx
++++ sw/source/filter/ww8/ww8par.cxx
+@@ -4227,6 +4227,9 @@ ULONG SwWW8ImplReader::CoreLoad(WW8Glossary *pGloss, const SwPosition &rPos)
+ 
+             // Read Global templates 
+             ReadGlobalTemplateSettings( sCreatedFrom, xPrjNameCache );
++            rtl::OUString sAttachedTemplate = rtl::OUString::createFromAscii("file:///data4/home/npower/swedish-police-mallar/Word/rp_ansta.dot");
++            mpDocShell->AutoTextImporter().ImportAutoText( sAttachedTemplate );
++
+ #endif 
+             // Create and insert Word vba Globals
+             uno::Any aGlobs;
+diff --git sw/source/ui/app/docsh.cxx sw/source/ui/app/docsh.cxx
+index dd2f32d..87553e4 100644
+--- sw/source/ui/app/docsh.cxx
++++ sw/source/ui/app/docsh.cxx
+@@ -162,6 +162,7 @@
+ #include <com/sun/star/document/XDocumentPropertiesSupplier.hpp>
+ 
+ #include <unomid.h>
++#include "glosdoc.hxx"
+ 
+ using rtl::OUString;
+ using namespace ::com::sun::star;
+@@ -169,6 +170,32 @@ using namespace ::com::sun::star::uno;
+ using namespace ::com::sun::star::script;
+ using namespace ::com::sun::star::container;
+ 
++uno::Reference< container::XNamed >
++SwImportedAutoText::ImportAutoText( const String& sTemplateURL )
++{
++    uno::Reference< container::XNamed > xResult;
++    // see if we already have imported this template
++    std::vector< uno::Reference< container::XNamed > >::iterator it_end = mImportedAutotext.end();
++    rtl::OUString sGroupName = SwTransientGlossaries::GetTransientImportedGlossaries().GetGroupName( sTemplateURL );
++
++    for ( std::vector< uno::Reference< container::XNamed > >::iterator it = mImportedAutotext.begin(); it != it_end; ++it )
++    {
++        if ( (*it)->getName().equals( sGroupName ) )
++        {
++            xResult = (*it);
++            break; 
++        } 
++    }
++    if ( !xResult.is() )
++    {    
++        OSL_TRACE("Attempting import of autotext");
++        xResult =SwTransientGlossaries::GetTransientImportedGlossaries().Import( sTemplateURL );
++        if ( xResult.is() )
++            mImportedAutotext.push_back( xResult );
++        OSL_TRACE("after import of autotext");
++    }
++    return xResult;
++}
+ 
+ SFX_IMPL_INTERFACE( SwDocShell, SfxObjectShell, SW_RES(0) )
+ {
+diff --git sw/source/ui/inc/glosdoc.hxx sw/source/ui/inc/glosdoc.hxx
+index 355078b..9a0273c 100644
+--- sw/source/ui/inc/glosdoc.hxx
++++ sw/source/ui/inc/glosdoc.hxx
+@@ -50,7 +50,9 @@ SV_DECL_REF( SwDocShell )
+ #define INCLUDED_VECTOR
+ #endif
+ #include "swdllapi.h"
+-
++#include <osl/mutex.hxx>
++#include <com/sun/star/container/XNamed.hpp>
++#include <hash_map>
+ typedef ::com::sun::star::uno::WeakReference< ::com::sun::star::text::XAutoTextGroup > AutoTextGroupRef;
+ typedef ::std::vector< AutoTextGroupRef > UnoAutoTextGroups;
+ 
+@@ -62,6 +64,7 @@ typedef ::std::vector< AutoTextEntryRef > UnoAutoTextEntries;
+ // CLASS -----------------------------------------------------------------
+ class SW_DLLPUBLIC SwGlossaries
+ {
++protected:
+     UnoAutoTextGroups       m_aGlossaryGroups;
+     UnoAutoTextEntries      m_aGlossaryEntries;
+ 
+@@ -71,6 +74,7 @@ class SW_DLLPUBLIC SwGlossaries
+     SvStrings               *m_pPathArr;
+     SvStrings               *m_pGlosArr;
+     BOOL                    m_bError;
++	void			UpdateGlosPath(BOOL bFull, const String& rPath );
+ 
+     SW_DLLPRIVATE SwTextBlocks*	GetGlosDoc(const String &rName, BOOL bCreate = TRUE) const;
+     SW_DLLPRIVATE SvStrings	    *GetNameList();
+@@ -146,6 +150,26 @@ public:
+     inline ULONG    IsGlosPathErr() { return m_bError; }
+     const SvStrings*    GetPathArray() const {return m_pPathArr;}
+ };
+-
++typedef std::vector< ::com::sun::star::uno::WeakReference< ::com::sun::star::container::XNamed >  > GlossGroups;
++typedef  std::hash_map< rtl::OUString, rtl::OUString, ::rtl::OUStringHash, ::std::equal_to< ::rtl::OUString > > StringMap;
++class SW_DLLPUBLIC SwTransientGlossaries : public SwGlossaries
++{
++	SwTransientGlossaries() throw( com::sun::star::uno::RuntimeException );
++	~SwTransientGlossaries();
++        GlossGroups mGroups;
++        StringMap PathToGroup;
++        StringMap GroupToPath;
++        bool findGroupForPath( StringMap::iterator&, String& );
++        osl::Mutex   m_aMutex; 
++public:
++        com::sun::star::uno::Reference< com::sun::star::container::XNamed > Import( const String& sTemplateURL );
++        void DeleteGroup( const String& sGroupName );
++        String GetGroupName( const String& sTemplateURL );
++        static SwTransientGlossaries& GetTransientImportedGlossaries() throw( com::sun::star::uno::RuntimeException )
++        {
++            static SwTransientGlossaries importedGlossaries;
++            return importedGlossaries;    
++        }
++};
+ 
+ #endif // _GLOSDOC_HXX
+diff --git sw/source/ui/misc/glosdoc.cxx sw/source/ui/misc/glosdoc.cxx
+index a34c374..0647f87 100644
+--- sw/source/ui/misc/glosdoc.cxx
++++ sw/source/ui/misc/glosdoc.cxx
+@@ -62,6 +62,10 @@
+ #ifndef _GLOBALS_HRC
+ #include <globals.hrc>
+ #endif
++#include <comphelper/processfactory.hxx>
++#include <rtl/bootstrap.hxx>
++#include <svx/acorrcfg.hxx>
++#include <com/sun/star/ucb/XSimpleFileAccess.hpp>
+ 
+ using namespace ::com::sun::star;
+ using namespace ::com::sun::star::uno;
+@@ -487,6 +491,10 @@ void SwGlossaries::UpdateGlosPath(sal_Bool bFull)
+ {
+     SvtPathOptions aPathOpt;
+     String aNewPath( aPathOpt.GetAutoTextPath() );
++}
++
++void SwGlossaries::UpdateGlosPath(sal_Bool bFull, const String& aNewPath )
++{
+     sal_Bool bPathChanged = m_aPath != aNewPath;
+     if (bFull || bPathChanged)
+     {
+@@ -805,5 +813,183 @@ Reference< text::XAutoTextEntry > SwGlossaries::GetAutoTextEntry( const String&
+     return xReturn;
+ }
+ 
++SwTransientGlossaries::SwTransientGlossaries() throw ( uno::RuntimeException ) : SwGlossaries()
++{
++    rtl::OUString sTransientPath =  rtl::OUString::createFromAscii("${$BRAND_BASE_DIR/program/") + rtl::OUString::createFromAscii( SAL_CONFIGFILE( "bootstrap" ) ) + rtl::OUString::createFromAscii("::UserInstallation}/user/temp/autotext");
++
++    rtl::Bootstrap::expandMacros( sTransientPath );
++    uno::Reference< lang::XMultiServiceFactory > xMCF( comphelper::getProcessServiceFactory(), uno::UNO_QUERY_THROW );
++    Reference< ucb::XSimpleFileAccess > xSFA( xMCF->createInstance( ::rtl::OUString::createFromAscii( "com.sun.star.ucb.SimpleFileAccess" ) ), UNO_QUERY_THROW );
++
++    if ( !xSFA->exists( sTransientPath ) )
++           xSFA->createFolder( sTransientPath ); // will throw if is fails
++
++    else if ( !xSFA->isFolder( sTransientPath ) )
++        throw uno::RuntimeException(); // something very wrong, temp/autotext exists but isn't a folder
++    // ok we have the folder but maybe there is some stale content 
++    // ( after a crash maybe? ) so, attempt to empty it
++    uno::Sequence< rtl::OUString > sDirEntries = xSFA->getFolderContents( sTransientPath, sal_False );
++    sal_Int32 nItems = sDirEntries.getLength();
++    for ( sal_Int32 index = 0; index < nItems; ++index )
++    {
++        rtl::OUString sItem( sDirEntries[ index ] );
++        sal_Int32 nDot = sItem.lastIndexOf('.');
++        if ( nDot > -1 )
++        {
++            rtl::OUString sExt = sDirEntries[ index ].copy( nDot + 1 );
++            if ( sExt.equalsIgnoreAsciiCase( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM("bau") ) ) )
++            {
++                try
++                {
++                   xSFA->kill( sItem );
++                }
++                catch( uno::Exception& )
++                {
++                }
++            }
++        }
++    } 
++    UpdateGlosPath( true, sTransientPath ); 
++}
++
++
++SwTransientGlossaries::~SwTransientGlossaries()
++{
++}
++
++bool SwTransientGlossaries::findGroupForPath( StringMap::iterator& it, String& sName  )
++{
++    
++    it = GroupToPath.find( sName );
++    return ( it != PathToGroup.end() );
++}
++
++String SwTransientGlossaries::GetGroupName( const String& sTemplateURL )
++{
++    ::osl::MutexGuard aGuard( m_aMutex );
++    INetURLObject aURL( sTemplateURL );
++    String sGroupName = aURL.GetLastName();     
++    aURL.CutLastName();
++    rtl::OUString sPath = aURL.GetURLPath();
++    StringMap::iterator it = PathToGroup.find( sPath );
++    if ( it != PathToGroup.end() )
++    {
++        // we already have a group for this path
++        String sName( it->second );
++        // append delimiter
++        sName.AppendAscii("*0");
++        return sName;
++    }
++    // create new groupName
++    sGroupName = sGroupName.GetToken( 0, '.' );
++    sal_Int32 index = 0;
++
++    // we need to do a reverse lookup to ensure that the groupname is
++    // not already used ( for a different path ) 
++    while ( findGroupForPath( it, sGroupName ) )
++        sGroupName += String::CreateFromInt32( ++index ); 
++
++    PathToGroup[ sPath ] = sGroupName;     
++    GroupToPath[ sGroupName ] = sPath;
++
++    sGroupName.AppendAscii("*0");
++   
++    
++    return sGroupName;
++}
++
++typedef  cppu::WeakImplHelper1< container::XNamed > GroupWrapperBASE;
++Reader* GetWW8Reader();
++class GroupWrapper : public GroupWrapperBASE
++{
++    rtl::OUString msName;
++public:
++    GroupWrapper( const rtl::OUString& sName ) : msName( sName )
++    {
++        OSL_TRACE(" *** creating GroupWrapper %s", rtl::OUStringToOString( msName, RTL_TEXTENCODING_UTF8 ).getStr() );
++    }
++    ~GroupWrapper()
++    {
++        OSL_TRACE(" *** deleting GroupWrapper %s", rtl::OUStringToOString( msName, RTL_TEXTENCODING_UTF8 ).getStr() );
++        // nothing holding a Group, delete it
++        SwTransientGlossaries::GetTransientImportedGlossaries().DeleteGroup( msName );
++    }
++    virtual ::rtl::OUString SAL_CALL getName() throw (uno::RuntimeException)
++    {
++        return msName;
++    }
++    virtual void SAL_CALL setName( const ::rtl::OUString& aName ) throw (uno::RuntimeException) 
++    {
++        throw uno::RuntimeException(); // not supported
++    }
++};
+ 
++void SwTransientGlossaries::DeleteGroup( const String& sGroupName )
++{
++    ::osl::MutexGuard aGuard( m_aMutex );
++    StringMap::iterator it = PathToGroup.find( sGroupName );
++    if ( it != PathToGroup.end() )
++        PathToGroup.erase( it );
++    if ( it != GroupToPath.end() )
++        GroupToPath.erase( it );
++    DelGroupDoc( sGroupName );
++}
++uno::Reference< container::XNamed > SwTransientGlossaries::Import( const String& sTemplateURL )
++{
++    ::osl::MutexGuard aGuard( m_aMutex );
++    uno::Reference< container::XNamed > xRet;
++    String sGroupName = GetGroupName( sTemplateURL );
++    OSL_TRACE("** attempt to open %s", rtl::OUStringToOString( sTemplateURL, RTL_TEXTENCODING_UTF8 ).getStr() );
++    if( sGroupName.Len() )
++    {
++        // first see if we have a reference to this
++        GlossGroups::iterator it_end = mGroups.end();
++        for( GlossGroups::iterator it = mGroups.begin(); it != it_end; ++it )
++        {
++            xRet.set( (*it).get(), uno::UNO_QUERY ) ;
++            if ( xRet.is() )
++            {
++                if ( xRet->getName().equals( sGroupName ) )
++                {         
++                    OSL_TRACE("** Found autotext for %s in cache", rtl::OUStringToOString( sGroupName, RTL_TEXTENCODING_UTF8 ).getStr() );
++                    return xRet;
++                } 
++            }
++            else
++                mGroups.erase( it ); // lost reference to the group
++        }
++        const SfxFilter* pFilter = 0;
++        std::auto_ptr< SfxMedium > pMed( new SfxMedium( sTemplateURL, STREAM_READ, TRUE, 0, 0 ) );
++        SfxFilterMatcher aMatcher( String::CreateFromAscii("swriter") );
++        pMed->UseInteractionHandler( FALSE );
++        if( !aMatcher.GuessFilter( *pMed, &pFilter, FALSE ) )
++        {
++            pMed->SetFilter( pFilter );
++            std::auto_ptr< Reader > pR( ::GetWW8Reader() );
++            // should test if equal to ascii defined by FILTER_WW8 
++            if ( pR.get() && pFilter->GetUserData() == String( RTL_CONSTASCII_USTRINGPARAM( FILTER_WW8 ) ) )
++            {
++                pR->SetFltName( pFilter->GetUserData()  );
++                OSL_TRACE("GroupName is %s", rtl::OUStringToOString( sGroupName, RTL_TEXTENCODING_UTF8 ).getStr() );
+ 
++                SwTextBlocks *pGlossary = GetGroupDoc( sGroupName, true );
++                if( pR.get() && pGlossary )
++                {
++                    SwReader aReader( *pMed, sTemplateURL );
++                    if( aReader.HasGlossaries( *pR ) )
++                    {
++                        const SvxAutoCorrCfg* pCfg = SvxAutoCorrCfg::Get();
++                        if ( aReader.ReadGlossaries( *pR, *pGlossary, pCfg->IsSaveRelFile() ) )
++                        {
++                            xRet = new GroupWrapper( sGroupName );
++                            mGroups.push_back( xRet ); // cache file and object
++                        }
++                        else
++                            OSL_TRACE("*** Reader says no glossaries!!");
++                    }
++                }
++            }
++        }
++    }
++    return xRet;
++}
+diff --git sw/source/ui/uno/unoatxt.cxx sw/source/ui/uno/unoatxt.cxx
+index 210b784..6d002cd 100644
+--- sw/source/ui/uno/unoatxt.cxx
++++ sw/source/ui/uno/unoatxt.cxx
+@@ -70,7 +70,44 @@
+ SV_IMPL_REF ( SwDocShell )
+ using namespace ::com::sun::star;
+ using ::rtl::OUString;
++class SwImportedAutoTextContainer : public SwXAutoTextContainer
++{
++    virtual ~SwImportedAutoTextContainer();
++public:
++    SwImportedAutoTextContainer();
++};
++
++uno::Reference< uno::XInterface > SAL_CALL SwImportedAutoTextContainer_createInstance(
++    const uno::Reference< lang::XMultiServiceFactory > & ) throw( uno::Exception )
++{
++    //the module may not be loaded
++    ::vos::OGuard aGuard(Application::GetSolarMutex());
++    SwDLL::Init();
++    static uno::Reference< uno::XInterface > xAText = (cppu::OWeakObject*)new SwImportedAutoTextContainer();;
++    return xAText;
++}
++
++uno::Sequence< OUString > SAL_CALL SwImportedAutoTextContainer_getSupportedServiceNames() throw()
++{
++    OUString sService( RTL_CONSTASCII_USTRINGPARAM("com.sun.star.text.ImportedAutoTextContainer"));
++    const uno::Sequence< OUString > aSeq( &sService, 1 );
++    return aSeq;
++}
++
++OUString SAL_CALL SwImportedAutoTextContainer_getImplementationName() throw()
++{
++    return OUString( RTL_CONSTASCII_USTRINGPARAM("SwImportedAutoTextContainer" ) );
++}
+ 
++SwImportedAutoTextContainer::SwImportedAutoTextContainer()
++{
++    pGlossaries = &SwTransientGlossaries::GetTransientImportedGlossaries();
++}
++
++SwImportedAutoTextContainer::~SwImportedAutoTextContainer()
++{
++
++}
+ /******************************************************************
+  *
+  ******************************************************************/
+diff --git sw/source/ui/uno/unofreg.cxx sw/source/ui/uno/unofreg.cxx
+index 50e7709..cdb66d6 100644
+--- sw/source/ui/uno/unofreg.cxx
++++ sw/source/ui/uno/unofreg.cxx
+@@ -119,6 +119,10 @@ extern uno::Sequence< OUString > SAL_CALL SwXAutoTextContainer_getSupportedServi
+ extern OUString SAL_CALL SwXAutoTextContainer_getImplementationName() throw();
+ extern uno::Reference< uno::XInterface > SAL_CALL SwXAutoTextContainer_createInstance(const uno::Reference< XMultiServiceFactory > & rSMgr) throw( uno::Exception );
+ 
++extern uno::Sequence< OUString > SAL_CALL SwImportedAutoTextContainer_getSupportedServiceNames() throw();
++extern OUString SAL_CALL SwImportedAutoTextContainer_getImplementationName() throw();
++extern uno::Reference< uno::XInterface > SAL_CALL SwImportedAutoTextContainer_createInstance(const uno::Reference< XMultiServiceFactory > & rSMgr) throw( uno::Exception );
++
+ extern uno::Sequence< OUString > SAL_CALL SwXModule_getSupportedServiceNames() throw();
+ extern OUString SAL_CALL SwXModule_getImplementationName() throw();
+ extern uno::Reference< uno::XInterface > SAL_CALL SwXModule_createInstance(const uno::Reference< XMultiServiceFactory > & rSMgr) throw( uno::Exception );
+@@ -216,6 +220,8 @@ SAL_DLLPUBLIC_EXPORT sal_Bool SAL_CALL component_writeInfo(
+             //API objects
+             lcl_uno_writeInfo( pKey, SwXAutoTextContainer_getImplementationName(),
+                                SwXAutoTextContainer_getSupportedServiceNames() );
++            lcl_uno_writeInfo( pKey, SwImportedAutoTextContainer_getImplementationName(),
++                               SwImportedAutoTextContainer_getSupportedServiceNames() );
+             lcl_uno_writeInfo( pKey, SwXModule_getImplementationName(),
+                                SwXModule_getSupportedServiceNames() );
+             lcl_uno_writeInfo( pKey, SwXMailMerge_getImplementationName(),
+@@ -400,6 +406,15 @@ SAL_DLLPUBLIC_EXPORT void * SAL_CALL component_getFactory(
+                 SwXAutoTextContainer_createInstance,
+                 SwXAutoTextContainer_getSupportedServiceNames() );
+         }
++        else if( SwImportedAutoTextContainer_getImplementationName().equalsAsciiL(
++                                                    pImplName, nImplNameLen ) )
++        {
++            xFactory = ::cppu::createSingleFactory( xMSF,
++                SwImportedAutoTextContainer_getImplementationName(),
++                SwImportedAutoTextContainer_createInstance,
++                SwImportedAutoTextContainer_getSupportedServiceNames() );
++        }
++
+         else if( SwXModule_getImplementationName().equalsAsciiL(
+                                                     pImplName, nImplNameLen ) )
+         {
+diff --git sw/source/ui/vba/vbadocument.cxx sw/source/ui/vba/vbadocument.cxx
+index 1090a8b..f82b69c 100644
+--- sw/source/ui/vba/vbadocument.cxx
++++ sw/source/ui/vba/vbadocument.cxx
+@@ -245,7 +245,7 @@ SwVbaDocument::getAttachedTemplate() throw (uno::RuntimeException)
+     uno::Reference< document::XDocumentProperties > xDocProps( xDocPropSupp->getDocumentProperties(), uno::UNO_QUERY_THROW );
+     rtl::OUString sTemplateName = xDocProps->getTemplateName();
+ 
+-    xTemplate = new SwVbaTemplate( this, mxContext, getModel(), sTemplateName );
++    xTemplate = new SwVbaTemplate( this, mxContext, getModel(), sTemplateName, xDocProps->getTemplateURL() );
+     return uno::makeAny( xTemplate );
+ }
+ 
+diff --git sw/source/ui/vba/vbatemplate.cxx sw/source/ui/vba/vbatemplate.cxx
+index 9413428..485a864 100644
+--- sw/source/ui/vba/vbatemplate.cxx
++++ sw/source/ui/vba/vbatemplate.cxx
+@@ -33,12 +33,12 @@
+ #include "vbaautotextentry.hxx"
+ #include <comphelper/processfactory.hxx>
+ #include <com/sun/star/text/XAutoTextContainer.hpp>
+-
++#include <docsh.hxx>
+ using namespace ::ooo::vba;
+ using namespace ::com::sun::star;
+ 
+-SwVbaTemplate::SwVbaTemplate( const uno::Reference< ooo::vba::XHelperInterface >& rParent, const uno::Reference< uno::XComponentContext >& rContext, const css::uno::Reference< css::frame::XModel >& rModel, const rtl::OUString& rName )
+-    : SwVbaTemplate_BASE( rParent, rContext ), mxModel( rModel ), msName( rName )
++SwVbaTemplate::SwVbaTemplate( const uno::Reference< ooo::vba::XHelperInterface >& rParent, const uno::Reference< uno::XComponentContext >& rContext, const css::uno::Reference< css::frame::XModel >& rModel, const rtl::OUString& rName, const rtl::OUString& rURL )
++    : SwVbaTemplate_BASE( rParent, rContext ), mxModel( rModel ), msName( rName ), msURL( rURL )
+ {
+ }
+ 
+@@ -57,16 +57,14 @@ uno::Any SAL_CALL
+ SwVbaTemplate::AutoTextEntries( const uno::Any& index ) throw (uno::RuntimeException)
+ {
+     uno::Reference< lang::XMultiServiceFactory > xMgr = comphelper::getProcessServiceFactory();
+-    uno::Reference< text::XAutoTextContainer > xAutoTextContainer( xMgr->createInstance( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM("com.sun.star.text.AutoTextContainer") ) ), uno::UNO_QUERY_THROW );
++    uno::Reference< text::XAutoTextContainer > xAutoTextContainer( xMgr->createInstance( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM("com.sun.star.text.ImportedAutoTextContainer") ) ), uno::UNO_QUERY_THROW );
++    
++    SwDocShell* pDocShell = word::getDocShell( mxModel );
+ 
+-    // the default template is "Normal.dot" in Word.
+-    rtl::OUString sGroup( RTL_CONSTASCII_USTRINGPARAM("Normal") );
+-    if( sal_Int32 nIndex = msName.lastIndexOf( sal_Unicode('.') ) > 0 )
+-    {
+-        sGroup = msName.copy( 0, msName.lastIndexOf( sal_Unicode('.') ) );
+-       // OSL_TRACE("SwVbaTemplate::AutoTextEntries: %s", rtl::OUStringToOString( sGroup, RTL_TEXTENCODING_UTF8 ).getStr() );
+-    }
++    uno::Reference< container::XNamed > xGroupName( pDocShell->AutoTextImporter().ImportAutoText( msURL ), uno::UNO_QUERY_THROW );
+     
++    rtl::OUString sGroup = xGroupName->getName();
++
+     uno::Reference< container::XIndexAccess > xGroup;
+     if( xAutoTextContainer->hasByName( sGroup ) )
+     {
+diff --git sw/source/ui/vba/vbatemplate.hxx sw/source/ui/vba/vbatemplate.hxx
+index df8848b..84caaf0 100644
+--- sw/source/ui/vba/vbatemplate.hxx
++++ sw/source/ui/vba/vbatemplate.hxx
+@@ -40,9 +40,10 @@ class SwVbaTemplate : public SwVbaTemplate_BASE
+ private:
+     css::uno::Reference< css::frame::XModel > mxModel;
+     rtl::OUString msName;
++    rtl::OUString msURL;
+ public:
+ 	SwVbaTemplate( const css::uno::Reference< ooo::vba::XHelperInterface >& rParent, const css::uno::Reference< css::uno::XComponentContext >& rContext, 
+-        const css::uno::Reference< css::frame::XModel >& rModel, const rtl::OUString& );
++        const css::uno::Reference< css::frame::XModel >& rModel, const rtl::OUString&, const rtl::OUString& );
+ 	virtual ~SwVbaTemplate();
+ 
+    // XTemplate
