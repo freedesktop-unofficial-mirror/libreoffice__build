@@ -304,8 +304,6 @@ index ddd1bbb..51c3e5e 100644
  {
  
  	if (bColInfo)
-diff --git sc/source/core/data/table2.cxx sc/source/core/data/table2.cxx
-index 5a78469..151e3d7 100644
 --- sc/source/core/data/table2.cxx
 +++ sc/source/core/data/table2.cxx
 @@ -137,6 +137,8 @@ void ScTable::InsertRow( SCCOL nStartCol, SCCOL nEndCol, SCROW nStartRow, SCSIZE
@@ -345,51 +343,51 @@ index 5a78469..151e3d7 100644
  
  
 @@ -638,29 +646,39 @@ void ScTable::CopyToTable(SCCOL nCol1, SCROW nRow1, SCCOL nCol2, SCROW nRow2,
- 			if (nRow1==0 && nRow2==MAXROW && pColWidth && pDestTab->pColWidth)
- 				for (SCCOL i=nCol1; i<=nCol2; i++)
- 				{
--					BOOL bChange = pCharts &&
--						( pDestTab->pColFlags[i] & CR_HIDDEN ) != ( pColFlags[i] & CR_HIDDEN );
-+                    bool bHiddenChange = ( pDestTab->pColFlags[i] & CR_HIDDEN ) != ( pColFlags[i] & CR_HIDDEN );
-+                    bool bChange = bHiddenChange || (pDestTab->pColWidth[i] != pColWidth[i]);
- 					pDestTab->pColWidth[i] = pColWidth[i];
- 					pDestTab->pColFlags[i] = pColFlags[i];
- 					//!	Aenderungen zusammenfassen?
--					if (bChange)
-+					if (bHiddenChange && pCharts)
- 						pCharts->SetRangeDirty(ScRange( i, 0, nTab, i, MAXROW, nTab ));
+ 				if (bWidth)
+ 					for (SCCOL i=nCol1; i<=nCol2; i++)
+ 					{
+-						BOOL bChange = pCharts &&
+-							( pDestTab->pColFlags[i] & CR_HIDDEN ) != ( pColFlags[i] & CR_HIDDEN );
++						bool bHiddenChange = ( pDestTab->pColFlags[i] & CR_HIDDEN ) != ( pColFlags[i] & CR_HIDDEN );
++						bool bChange = bHiddenChange || (pDestTab->pColWidth[i] != pColWidth[i]);
+ 						pDestTab->pColWidth[i] = pColWidth[i];
+ 						pDestTab->pColFlags[i] = pColFlags[i];
+ 						//!	Aenderungen zusammenfassen?
+-						if (bChange)
++						if (bHiddenChange && pCharts) 
+ 							pCharts->SetRangeDirty(ScRange( i, 0, nTab, i, MAXROW, nTab ));
 +
-+                    if (bChange)
-+                        pDestTab->InvalidatePageBreaks();
- 				}
++						if (bChange)
++							pDestTab->InvalidatePageBreaks();
+ 					}
  
- 			if (nCol1==0 && nCol2==MAXCOL && pRowHeight && pDestTab->pRowHeight)
-             {
-+                bool bChange = pDestTab->pRowHeight->SumValues(nRow1, nRow2) != pRowHeight->SumValues(nRow1, nRow2);
-+
-+                if (bChange)
-+                    pDestTab->InvalidatePageBreaks();
-+
-                 pDestTab->pRowHeight->CopyFrom( *pRowHeight, nRow1, nRow2);
- 				for (SCROW i=nRow1; i<=nRow2; i++)
+ 				if (bHeight)
  				{
-                     // TODO: might need some performance improvement, block
-                     // operations instead of single GetValue()/SetValue() calls.
-                     BYTE nThisRowFlags = pRowFlags->GetValue(i);
--					BOOL bChange = pCharts &&
--                        ( pDestTab->pRowFlags->GetValue(i) & CR_HIDDEN ) != ( nThisRowFlags & CR_HIDDEN );
-+					bool bHiddenChange = ( pDestTab->pRowFlags->GetValue(i) & CR_HIDDEN ) != ( nThisRowFlags & CR_HIDDEN );
-                     pDestTab->pRowFlags->SetValue( i, nThisRowFlags );
- 					//!	Aenderungen zusammenfassen?
--					if (bChange)
-+					if (bHiddenChange && pCharts)
- 						pCharts->SetRangeDirty(ScRange( 0, i, nTab, MAXCOL, i, nTab ));
++					bool bChange = pDestTab->pRowHeight->SumValues(nRow1, nRow2) != pRowHeight->SumValues(nRow1, nRow2);
 +
-+                    if (bHiddenChange)
-+                        pDestTab->InvalidatePageBreaks();
++					if (bChange)
++						pDestTab->InvalidatePageBreaks();
++
+ 					pDestTab->pRowHeight->CopyFrom( *pRowHeight, nRow1, nRow2);
+ 					for (SCROW i=nRow1; i<=nRow2; i++)
+ 					{
+ 						// TODO: might need some performance improvement, block
+ 						// operations instead of single GetValue()/SetValue() calls.
+ 						BYTE nThisRowFlags = pRowFlags->GetValue(i);
+-						BOOL bChange = pCharts &&
+-							( pDestTab->pRowFlags->GetValue(i) & CR_HIDDEN ) != ( nThisRowFlags & CR_HIDDEN );
++						bool bHiddenChange = ( pDestTab->pRowFlags->GetValue(i) & CR_HIDDEN ) != ( nThisRowFlags & CR_HIDDEN );
+ 						pDestTab->pRowFlags->SetValue( i, nThisRowFlags );
+ 						//!	Aenderungen zusammenfassen?
+-						if (bChange)
++						if (bHiddenChange && pCharts)
+ 							pCharts->SetRangeDirty(ScRange( 0, i, nTab, MAXCOL, i, nTab ));
++
++						if (bHiddenChange)
++							pDestTab->InvalidatePageBreaks();
+ 					}
  				}
-             }
- 
+ 				pDestTab->DecRecalcLevel();
 @@ -711,6 +729,16 @@ void ScTable::CopyUpdated( const ScTable* pPosTab, ScTable* pDestTab ) const
  		aCol[i].CopyUpdated( pPosTab->aCol[i], pDestTab->aCol[i] );
  }
@@ -1227,8 +1225,6 @@ index 36bb424..7420660 100644
  
      ScRange aDirtyRange( 0 , aQueryParam.nRow1, nTab,
          MAXCOL, aQueryParam.nRow2, nTab );
-diff --git sc/source/ui/unoobj/cellsuno.cxx sc/source/ui/unoobj/cellsuno.cxx
-index d4cfb42..53f0d52 100644
 --- sc/source/ui/unoobj/cellsuno.cxx
 +++ sc/source/ui/unoobj/cellsuno.cxx
 @@ -7150,7 +7150,7 @@ uno::Sequence<sheet::TablePageBreakData> SAL_CALL ScTableSheetObj::getColumnPage
@@ -1292,14 +1288,14 @@ index d4cfb42..53f0d52 100644
  }
 @@ -8987,13 +8961,13 @@ void ScTableColumnObj::GetOnePropertyValue( const SfxItemPropertyMap* pMap,
  		}
- 		else if ( pMap->nWID == SC_WID_UNO_NEWPAGE )
+         else if ( pEntry->nWID == SC_WID_UNO_NEWPAGE )
  		{
 -			BOOL bBreak = ( 0 != (pDoc->GetColFlags( nCol, nTab ) & (CR_PAGEBREAK|CR_MANUALBREAK)) );
 -			ScUnoHelpFunctions::SetBoolInAny( rAny, bBreak );
 +            ScBreakType nBreak = pDoc->HasColBreak(nCol, nTab);
 +            ScUnoHelpFunctions::SetBoolInAny( rAny, nBreak );
  		}
- 		else if ( pMap->nWID == SC_WID_UNO_MANPAGE )
+         else if ( pEntry->nWID == SC_WID_UNO_MANPAGE )
  		{
 -			BOOL bBreak = ( 0 != (pDoc->GetColFlags( nCol, nTab ) & (CR_MANUALBREAK)) );
 -			ScUnoHelpFunctions::SetBoolInAny( rAny, bBreak );
@@ -1307,17 +1303,17 @@ index d4cfb42..53f0d52 100644
 +            ScUnoHelpFunctions::SetBoolInAny(rAny, (nBreak & BREAK_MANUAL));
  		}
  		else
- 			ScCellRangeObj::GetOnePropertyValue(pMap, rAny);
+             ScCellRangeObj::GetOnePropertyValue(pEntry, rAny);
 @@ -9151,13 +9125,13 @@ void ScTableRowObj::GetOnePropertyValue( const SfxItemPropertyMap* pMap,
  		}
- 		else if ( pMap->nWID == SC_WID_UNO_NEWPAGE )
+         else if ( pEntry->nWID == SC_WID_UNO_NEWPAGE )
  		{
 -			BOOL bBreak = ( 0 != (pDoc->GetRowFlags( nRow, nTab ) & (CR_PAGEBREAK|CR_MANUALBREAK)) );
 -			ScUnoHelpFunctions::SetBoolInAny( rAny, bBreak );
 +            ScBreakType nBreak = pDoc->HasRowBreak(nRow, nTab);
 +            ScUnoHelpFunctions::SetBoolInAny( rAny, nBreak );
  		}
- 		else if ( pMap->nWID == SC_WID_UNO_MANPAGE )
+         else if ( pEntry->nWID == SC_WID_UNO_MANPAGE )
  		{
 -			BOOL bBreak = ( 0 != (pDoc->GetRowFlags( nRow, nTab ) & (CR_MANUALBREAK)) );
 -			ScUnoHelpFunctions::SetBoolInAny( rAny, bBreak );
@@ -1325,7 +1321,7 @@ index d4cfb42..53f0d52 100644
 +            ScUnoHelpFunctions::SetBoolInAny( rAny, nBreak );
  		}
  		else
- 			ScCellRangeObj::GetOnePropertyValue(pMap, rAny);
+             ScCellRangeObj::GetOnePropertyValue(pEntry, rAny);
 diff --git sc/source/ui/unoobj/docuno.cxx sc/source/ui/unoobj/docuno.cxx
 index f14ab4a..f2f1eb5 100644
 --- sc/source/ui/unoobj/docuno.cxx
