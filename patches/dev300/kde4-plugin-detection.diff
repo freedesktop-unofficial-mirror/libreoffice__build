@@ -1,5 +1,11 @@
+diff --git vcl/unx/source/plugadapt/.salplug.cxx.swo vcl/unx/source/plugadapt/.salplug.cxx.swo
+index 03818db..d0e2a30 100644
+Binary files vcl/unx/source/plugadapt/.salplug.cxx.swo and vcl/unx/source/plugadapt/.salplug.cxx.swo differ
+diff --git vcl/unx/source/plugadapt/.salplug.cxx.swp vcl/unx/source/plugadapt/.salplug.cxx.swp
+index 4725229..a28e589 100644
+Binary files vcl/unx/source/plugadapt/.salplug.cxx.swp and vcl/unx/source/plugadapt/.salplug.cxx.swp differ
 diff --git vcl/unx/source/plugadapt/salplug.cxx vcl/unx/source/plugadapt/salplug.cxx
-index e33d05d..a3b60ba 100644
+index e33d05d..afa02f2 100644
 --- vcl/unx/source/plugadapt/salplug.cxx
 +++ vcl/unx/source/plugadapt/salplug.cxx
 @@ -55,13 +55,16 @@ typedef SalInstance*(*salFactoryProc)( oslModule pModule);
@@ -25,58 +31,101 @@ index e33d05d..a3b60ba 100644
  
  static SalInstance* tryInstance( const OUString& rModuleBase )
  {
-@@ -214,15 +217,18 @@ extern "C"
+@@ -214,105 +217,76 @@ extern "C"
      typedef int(* XErrorHandler)(Display*,XErrorEvent*);
  }
  
 -static OUString getNetWMName( Display* pDisplay )
++/// Detect KDE using atoms.  
++///
++/// Returns 0 if not KDE, otherwise the KDE version
 +static int KDEVersion( Display* pDisplay )
  {
 -    OUString aRet;
-+    int nRet = 0;
++    Atom nFullSession = XInternAtom( pDisplay, "KDE_FULL_SESSION", True );
  
 -    Atom nWmCheck	= XInternAtom( pDisplay, "_NET_SUPPORTING_WM_CHECK", True );
 -    Atom nWmName	= XInternAtom( pDisplay, "_NET_WM_NAME", True );
 -    if( nWmName && nWmCheck )
-+    Atom nFullSession = XInternAtom( pDisplay, "KDE_FULL_SESSION", True );
-+    Atom nKDEVersion  = XInternAtom( pDisplay, "KDE_SESSION_VERSION", True );
++    if ( !nFullSession )
++        return 0;
 +
-+    if( nFullSession )
++    Atom            aRealType  = None;
++    int             nFormat    = 8;
++    unsigned long   nItems     = 0;
++    unsigned long   nBytesLeft = 0;
++    unsigned char*  pProperty  = NULL;
++    XGetWindowProperty( pDisplay,
++                        DefaultRootWindow( pDisplay ),
++                        nFullSession,
++                        0, 1,
++                        False,
++                        AnyPropertyType,
++                        &aRealType,
++                        &nFormat,
++                        &nItems,
++                        &nBytesLeft,
++                        &pProperty );
++
++    if ( WasXError() || nItems == 0 || !pProperty )
      {
 -        XLIB_Window			aCheckWin	= None;
-+        if( !nKDEVersion )
-+            return 3;
-+
-         Atom				aRealType	= None;
-         int					nFormat		= 8;
-         unsigned long		nItems		= 0;
-@@ -230,88 +236,65 @@ static OUString getNetWMName( Display* pDisplay )
-         unsigned char*	pProperty	= NULL;
-         XGetWindowProperty( pDisplay,
-                             DefaultRootWindow( pDisplay ),
+-        Atom				aRealType	= None;
+-        int					nFormat		= 8;
+-        unsigned long		nItems		= 0;
+-        unsigned long		nBytesLeft	= 0;
+-        unsigned char*	pProperty	= NULL;
+-        XGetWindowProperty( pDisplay,
+-                            DefaultRootWindow( pDisplay ),
 -                            nWmCheck,
-+                            nKDEVersion,
-                             0, 1,
-                             False,
+-                            0, 1,
+-                            False,
 -                            XA_WINDOW,
-+                            AnyPropertyType,
-                             &aRealType,
-                             &nFormat,
-                             &nItems,
-                             &nBytesLeft,
-                             &pProperty );
+-                            &aRealType,
+-                            &nFormat,
+-                            &nItems,
+-                            &nBytesLeft,
+-                            &pProperty );
 -        if( aRealType == XA_WINDOW && nFormat == 32 && nItems != 0 )
 -            aCheckWin = *(XLIB_Window*)pProperty;
-+        if( !WasXError() && nItems != 0 && pProperty )
-+        {
-+            nRet = *reinterpret_cast< sal_Int32* >( pProperty );                        
-+        }
-         if( pProperty )
-         {
+-        if( pProperty )
+-        {
++        if ( pProperty )
              XFree( pProperty );
-             pProperty = NULL;
-         }
--
+-            pProperty = NULL;
+-        }
++        return 0;
++    }
++    XFree( pProperty );
++
++    // KDE_FULL_SESSION, but no KDE_SESSION_VERSION => KDE3
++    Atom nKDEVersion  = XInternAtom( pDisplay, "KDE_SESSION_VERSION", True );
++    if ( !nKDEVersion )
++        return 3;
++
++    int nVersion = 3;
++
++    aRealType  = None;
++    nFormat    = 8;
++    nItems     = 0;
++    nBytesLeft = 0;
++    pProperty  = NULL;
++    XGetWindowProperty( pDisplay,
++                        DefaultRootWindow( pDisplay ),
++                        nKDEVersion,
++                        0, 1,
++                        False,
++                        AnyPropertyType,
++                        &aRealType,
++                        &nFormat,
++                        &nItems,
++                        &nBytesLeft,
++                        &pProperty );
++    if( !WasXError() && nItems != 0 && pProperty )
++    {
++        nVersion = *reinterpret_cast< long* >( pProperty );                        
++    }
+ 
 -        // see if that window really exists and has the check property set
 -        if( aCheckWin != None )
 -        {
@@ -128,57 +177,30 @@ index e33d05d..a3b60ba 100644
 -                pProperty = NULL;
 -            }
 -        }
++    if( pProperty )
++    {
++        XFree( pProperty );
++        pProperty = NULL;
      }
 -    return aRet;
-+    return nRet;
- }
+-}
  
- static bool is_kde_desktop( Display* pDisplay )
- {
-     if ( NULL != getenv( "KDE_FULL_SESSION" ) )
-+    {
-+        const char *pVer = getenv( "KDE_SESSION_VERSION" );
-+        if ( !pVer || pVer[0] == '0' )
-+		{
-+            return true; // does not exist => KDE3
-+		}
-+
-+        rtl::OUString aVer( RTL_CONSTASCII_USTRINGPARAM( "3" ) );
-+        if ( aVer.equalsIgnoreAsciiCaseAscii( pVer ) )
-+		{
-+            return true;
-+		}
-+    }
-+
-+    if ( KDEVersion( pDisplay ) == 3 )
-         return true;
+-static bool is_kde_desktop( Display* pDisplay )
+-{
+-    if ( NULL != getenv( "KDE_FULL_SESSION" ) )
+-        return true;
 -    
 -    // check for kwin
 -    rtl::OUString aWM = getNetWMName( pDisplay );
 -    if( aWM.equalsIgnoreAsciiCaseAscii( "KWin" ) )
-+
-+    return false;
-+}
-+
-+static bool is_kde4_desktop( Display* pDisplay )
-+{
-+    if ( NULL != getenv( "KDE_FULL_SESSION" ) )
-+    {
-+        rtl::OUString aVer( RTL_CONSTASCII_USTRINGPARAM( "4" ) );
-+
-+        const char *pVer = getenv( "KDE_SESSION_VERSION" );
-+        if ( pVer && aVer.equalsIgnoreAsciiCaseAscii( pVer ) )
-+            return true;
-+    }
-+
-+    if ( KDEVersion( pDisplay ) == 4 )
-         return true;
+-        return true;
 -    
-+
-     return false;
+-    return false;
++    return nVersion;
  }
  
-@@ -344,6 +327,8 @@ static const char * get_desktop_environment()
+ static bool is_cde_desktop( Display* pDisplay )
+@@ -344,6 +318,8 @@ static const char * get_desktop_environment()
              pRet = desktop_strings[DESKTOP_CDE];
          if ( aOver.equalsIgnoreAsciiCase( "kde" ) )
              pRet = desktop_strings[DESKTOP_KDE];
@@ -187,18 +209,20 @@ index e33d05d..a3b60ba 100644
          if ( aOver.equalsIgnoreAsciiCase( "gnome" ) )
              pRet = desktop_strings[DESKTOP_GNOME];
          if ( aOver.equalsIgnoreAsciiCase( "none" ) )
-@@ -384,7 +369,9 @@ static const char * get_desktop_environment()
+@@ -384,7 +360,11 @@ static const char * get_desktop_environment()
              {
                  XErrorHandler pOldHdl = XSetErrorHandler( autodect_error_handler );
              
 -                if ( is_kde_desktop( pDisplay ) )
-+                if ( is_kde4_desktop( pDisplay ) )
++                int nKDEVersion = KDEVersion( pDisplay );
++
++                if ( nKDEVersion == 4 )
 +                    pRet = desktop_strings[DESKTOP_KDE4];
-+                else if ( is_kde_desktop( pDisplay ) )
++                else if ( nKDEVersion == 3 )
                      pRet = desktop_strings[DESKTOP_KDE];
                  else if ( is_gnome_desktop( pDisplay ) )
                      pRet = desktop_strings[DESKTOP_GNOME];
-@@ -417,6 +404,8 @@ static const char* autodetect_plugin()
+@@ -417,6 +397,8 @@ static const char* autodetect_plugin()
          pRet = "gtk";
      else if( desktop == desktop_strings[DESKTOP_KDE] )
          pRet = "kde";
