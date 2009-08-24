@@ -1,266 +1,25 @@
-diff --git a/sfx2/inc/sfx2/sfxsids.hrc b/sfx2/inc/sfx2/sfxsids.hrc
-index dfc1f33..30888a8 100644
---- sfx2/inc/sfx2/sfxsids.hrc
-+++ sfx2/inc/sfx2/sfxsids.hrc
-@@ -1147,6 +1147,8 @@
- #define SID_COMP_BIBLIOGRAPHY               (SID_SVX_START + 880)
- #define SID_ADDRESS_DATA_SOURCE             (SID_SVX_START + 934)
- 
-+#define SID_TEAM                       (SID_SVX_START + 1888)
-+
- #define FID_SVX_START                       (SID_LIB_START + 500)
- #define FID_SEARCH_NOW                      (FID_SVX_START + 2)
- 
-diff --git a/sfx2/inc/sfx2/team.hxx b/sfx2/inc/sfx2/team.hxx
-new file mode 100644
-index 0000000..01bff2b
---- /dev/null
-+++ sfx2/inc/sfx2/team.hxx
-@@ -0,0 +1,40 @@
-+/*
-+ * written by Florian Reuter, (c) Novell Inc 2008
-+ */
-+
-+#ifndef _SFXTEAM_HXX
-+#define _SFXTEAM_HXX
-+
-+
-+#include <sfx2/childwin.hxx>
-+#include <sfx2/dockwin.hxx>
-+
-+class SfxTeamWrapper : public SfxChildWindow
-+{
-+
-+public:
-+    SfxTeamWrapper( Window* pParent ,
-+		    USHORT nId ,
-+		    SfxBindings* pBindings ,
-+		    SfxChildWinInfo* pInfo );
-+    
-+    SFX_DECL_CHILDWINDOW(SfxTeamWrapper);
-+};
-+
-+class SfxTeam : public SfxDockingWindow
-+{
-+	SfxChildWindow*		pWrapper;
-+
-+public:
-+    SfxTeam( SfxBindings* pBindings ,
-+	     SfxChildWindow* pChildWin ,
-+	     Window* pParent ,
-+	     WinBits nBits );
-+    
-+    virtual void 		Resize();
-+    virtual void        Resizing( Size& rSize );
-+    virtual BOOL        Close();
-+};
-+
-+#endif
-+
-diff --git a/sfx2/sdi/frmslots.sdi b/sfx2/sdi/frmslots.sdi
-index 7fc8979..511833d 100644
---- sfx2/sdi/frmslots.sdi
-+++ sfx2/sdi/frmslots.sdi
-@@ -31,6 +31,11 @@ interface Window
- 		ExecMethod = ChildWindowExecute ;
- 		StateMethod = ChildWindowState ;
- 	]
-+	SID_TEAM // status(final|play)
-+	[
-+		ExecMethod = ChildWindowExecute ;
-+		StateMethod = ChildWindowState ;
-+	]
- 	SID_SHOW_BROWSER // ole(no) api(final/play/rec)
- 	[
- 		ExecMethod = ChildWindowExecute ;
-diff --git a/sfx2/sdi/sfx.sdi b/sfx2/sdi/sfx.sdi
-index 77facb1..21b51d0 100644
---- sfx2/sdi/sfx.sdi
-+++ sfx2/sdi/sfx.sdi
-@@ -4406,6 +4406,32 @@ SfxBoolItem Navigator SID_NAVIGATOR
- 	GroupId = GID_NAVIGATOR;
- ]
- //--------------------------------------------------------------------------
-+SfxBoolItem Team SID_TEAM
-+
-+[
-+	/* flags: */
-+	AutoUpdate = TRUE,
-+	Cachable = Cachable,
-+	FastCall = FALSE,
-+	HasCoreId = FALSE,
-+	HasDialog = FALSE,
-+	ReadOnlyDoc = TRUE,
-+	Toggle = FALSE,
-+	Container = FALSE,
-+	RecordAbsolute = FALSE,
-+	RecordPerSet;
-+	Synchron;
-+
-+	Readonly = FALSE,
-+
-+	/* config: */
-+	AccelConfig = TRUE,
-+	MenuConfig = TRUE,
-+	StatusBarConfig = FALSE,
-+	ToolBoxConfig = TRUE,
-+	GroupId = GID_NAVIGATOR;
-+]
-+//--------------------------------------------------------------------------
- SfxVoidItem RestoreEditingView SID_RESTORE_EDITING_VIEW
- 
- [
-diff --git a/sfx2/source/appl/appreg.cxx b/sfx2/source/appl/appreg.cxx
-index 4bf7007..fcb7528 100644
---- sfx2/source/appl/appreg.cxx
-+++ sfx2/source/appl/appreg.cxx
-@@ -58,6 +58,7 @@
- #include <sfx2/objsh.hxx>
- #include <sfx2/viewsh.hxx>
- #include <sfx2/objface.hxx>
-+#include <sfx2/team.hxx>
- 
- //===================================================================
- 
-@@ -76,7 +77,7 @@ void SfxApplication::Registrations_Impl()
- 	SfxNavigatorWrapper::RegisterChildWindow( FALSE, NULL, SFX_CHILDWIN_NEVERHIDE );
- 	SfxPartChildWnd_Impl::RegisterChildWindow();
- 	SfxTemplateDialogWrapper::RegisterChildWindow();
--
-+	SfxTeamWrapper::RegisterChildWindow( FALSE, NULL, SFX_CHILDWIN_NEVERHIDE );
- 	// Controller
- 	SfxToolBoxControl::RegisterControl(SID_REPEAT);
- 	SfxURLToolBoxControl_Impl::RegisterControl(SID_OPENURL);
-diff --git a/sfx2/source/dialog/makefile.mk b/sfx2/source/dialog/makefile.mk
-index 6884ec0..0b81c0d 100644
---- sfx2/source/dialog/makefile.mk
-+++ sfx2/source/dialog/makefile.mk
-@@ -69,6 +69,7 @@ SLOFILES =\
- 		$(SLO)$/mailwindow.obj		\
- 		$(SLO)$/mgetempl.obj		\
- 		$(SLO)$/navigat.obj			\
-+		$(SLO)$/team.obj			\
- 		$(SLO)$/newstyle.obj		\
- 		$(SLO)$/passwd.obj			\
- 		$(SLO)$/printopt.obj		\
-diff --git a/sfx2/source/dialog/team.cxx b/sfx2/source/dialog/team.cxx
-new file mode 100644
-index 0000000..a27df16
---- /dev/null
-+++ sfx2/source/dialog/team.cxx
-@@ -0,0 +1,79 @@
-+/*
-+ * written by Florian Reuter, (c) Novell Inc 2008
-+ */
-+
-+// MARKER(update_precomp.py): autogen include statement, do not remove
-+#include "precompiled_sfx2.hxx"
-+
-+#ifndef GCC
-+#endif
-+
-+#include <sfx2/team.hxx>
-+#include <sfx2/sfx.hrc>
-+#include <sfx2/app.hxx>
-+#include "sfxresid.hxx"
-+#include "helpid.hrc"
-+
-+SFX_IMPL_DOCKINGWINDOW( SfxTeamWrapper , SID_TEAM );
-+
-+SfxTeamWrapper::SfxTeamWrapper( Window* pParentWnd ,
-+				     USHORT nId ,
-+				     SfxBindings* pBindings ,
-+				     SfxChildWinInfo* pInfo )
-+    : SfxChildWindow( pParentWnd , nId )
-+{
-+    printf("SfxTeamWrapper::SfxTeamWrapper\n");
-+    pWindow = new SfxTeam( pBindings, this, pParentWnd,
-+			   WB_STDDOCKWIN | WB_CLIPCHILDREN | WB_SIZEABLE | WB_3DLOOK | WB_ROLLABLE);
-+//    eChildAlignment = SFX_ALIGN_NOALIGNMENT;
-+    eChildAlignment = SFX_ALIGN_RIGHT;
-+    printf("**ALIGN RIGHT**\n");
-+    
-+//    pWindow->SetHelpId ( HID_NAVIGATOR_WINDOW );
-+    pWindow->SetOutputSizePixel( Size( 270, 240 ) );
-+    
-+    ( ( SfxDockingWindow* ) pWindow )->Initialize( pInfo );
-+    SetHideNotDelete( TRUE );
-+}
-+
-+
-+SfxTeam::SfxTeam( SfxBindings* pBind ,
-+		  SfxChildWindow* pChildWin ,
-+		  Window* pParent ,
-+		  WinBits nBits )
-+    : SfxDockingWindow( pBind ,
-+			pChildWin ,
-+			pParent ,
-+			nBits )
-+    , pWrapper( pChildWin )
-+{
-+//    SetText( String( SfxResId( SID_NAVIGATOR ) ) );
-+    SetText( String::CreateFromAscii("Team Window"));
-+}
-+
-+void SfxTeam::Resize()
-+{
-+    SfxDockingWindow::Resize();
-+    if ( pWrapper->GetContextWindow() )
-+        pWrapper->GetContextWindow()->SetSizePixel( GetOutputSizePixel() );
-+}
-+
-+void SfxTeam::Resizing( Size &rSize )
-+{
-+    SfxDockingWindow::Resizing( rSize );
-+    
-+    SfxChildWindowContext *pCon = GetChildWindow_Impl()->GetContext_Impl();
-+    DBG_ASSERT( pCon, "Kein Context!" );
-+    if ( pCon )
-+	pCon->Resizing( rSize );
-+}
-+
-+BOOL SfxTeam::Close()
-+{
-+    SfxChildWindowContext *pCon = GetChildWindow_Impl()->GetContext_Impl();
-+    DBG_ASSERT( pCon, "Kein Context!" );
-+    if ( !pCon || pCon->Close() )
-+	return SfxDockingWindow::Close();
-+    else
-+	return FALSE;
-+}
-diff --git a/sw/source/ui/app/swmodule.cxx b/sw/source/ui/app/swmodule.cxx
-index af24186..bfeddb5 100644
---- sw/source/ui/app/swmodule.cxx
-+++ sw/source/ui/app/swmodule.cxx
-@@ -237,6 +237,7 @@
- #ifndef _NAVIPI_HXX //autogen
+diff -urpBN -x '*.orig' -x unxlngi6.pro ooo310-m17/sw/source/ui/app/swmodule.cxx ooo310-m17.fix/sw/source/ui/app/swmodule.cxx
+--- ooo310-m17/sw/source/ui/app/swmodule.cxx	2009-08-19 10:28:59.000000000 +0200
++++ ooo310-m17.fix/sw/source/ui/app/swmodule.cxx	2009-08-19 09:11:48.000000000 +0200
+@@ -120,6 +120,7 @@
+ #include <wtabsh.hxx>
+ #endif
  #include <navipi.hxx>
- #endif
 +#include <teampi.hxx>
- #ifndef _CHARTINS_HXX //autogen
  #include <chartins.hxx>
- #endif
-@@ -335,6 +336,7 @@ sal_Bool 	bNoInterrupt 	= sal_False;
- 
- #include <unomid.h>
- 
-+
- using namespace com::sun::star;
- 
- 
-@@ -609,6 +611,7 @@ void SwDLL::RegisterControls()
+ #include <inputwin.hxx>
+ #include <usrpref.hxx>
+@@ -454,6 +456,7 @@ void SwDLL::RegisterControls()
      SwFldDataOnlyDlgWrapper::RegisterChildWindow( sal_False, pMod );
- 	SvxContourDlgChildWindow::RegisterChildWindow( sal_False, pMod );
- 	SwNavigationChild::RegisterChildWindowContext( pMod );
-+	SwTeamChild::RegisterChildWindowContext( pMod );
- 	SwInputChild::RegisterChildWindow( sal_False, pMod, SFX_CHILDWIN_FORCEDOCK );
- 	SwRedlineAcceptChild::RegisterChildWindow( sal_False, pMod );
- 	SwSyncChildWin::RegisterChildWindow( sal_True, pMod );
-diff --git a/sw/source/ui/inc/teampi.hxx b/sw/source/ui/inc/teampi.hxx
-new file mode 100644
-index 0000000..78fcc1a
---- /dev/null
-+++ sw/source/ui/inc/teampi.hxx
+     SvxContourDlgChildWindow::RegisterChildWindow( sal_False, pMod );
+     SwNavigationChild::RegisterChildWindowContext( pMod );
++ 	SwTeamChild::RegisterChildWindowContext( pMod );
+     SwInputChild::RegisterChildWindow( sal_False, pMod, SFX_CHILDWIN_FORCEDOCK );
+     SwRedlineAcceptChild::RegisterChildWindow( sal_False, pMod );
+     SwSyncChildWin::RegisterChildWindow( sal_True, pMod );
+diff -urpBN -x '*.orig' -x unxlngi6.pro ooo310-m17/sw/source/ui/inc/teampi.hxx ooo310-m17.fix/sw/source/ui/inc/teampi.hxx
+--- ooo310-m17/sw/source/ui/inc/teampi.hxx	1970-01-01 01:00:00.000000000 +0100
++++ ooo310-m17.fix/sw/source/ui/inc/teampi.hxx	2009-08-19 09:01:51.000000000 +0200
 @@ -0,0 +1,98 @@
 +/*
 + * written by Florian Reuter, (c) Novell Inc 2008
@@ -360,63 +119,58 @@ index 0000000..78fcc1a
 +
 +
 +#endif
-diff --git a/sw/source/ui/uiview/view.cxx b/sw/source/ui/uiview/view.cxx
-index 9a01ee3..f4fbbc9 100644
---- sw/source/ui/uiview/view.cxx
-+++ sw/source/ui/uiview/view.cxx
-@@ -179,6 +179,7 @@
- #ifndef _NAVIPI_HXX
- #include <navipi.hxx>
- #endif
-+#include <teampi.hxx>
- #ifndef _GLOSHDL_HXX
- #include <gloshdl.hxx>
- #endif
-@@ -1169,7 +1170,8 @@ SwView::SwView( SfxViewFrame *_pFrame, SfxViewShell* pOldSh )
- 		SfxBoolItem aNavi(SID_NAVIGATOR, sal_True);
- 		GetDispatcher().Execute(SID_NAVIGATOR, SFX_CALLMODE_ASYNCHRON, &aNavi, 0L);
- 	}
--
-+	SfxBoolItem aNavi(SID_TEAM, sal_True);
-+	GetDispatcher().Execute(SID_TEAM, SFX_CALLMODE_ASYNCHRON, &aNavi, 0L);
- 
-     /*uno::Reference< awt::XWindow >  aTmpRef;
- 	_pFrame->GetFrame()->GetFrameInterface()->setComponent( aTmpRef,
-diff --git a/sw/source/ui/uiview/view0.cxx b/sw/source/ui/uiview/view0.cxx
-index 13160f7..e3063df 100644
---- sw/source/ui/uiview/view0.cxx
-+++ sw/source/ui/uiview/view0.cxx
-@@ -161,6 +161,7 @@ SFX_IMPL_VIEWFACTORY(SwView, SW_RES(STR_NONAME))
+diff -urpBN -x '*.orig' -x unxlngi6.pro ooo310-m17/sw/source/ui/uiview/view0.cxx ooo310-m17.fix/sw/source/ui/uiview/view0.cxx
+--- ooo310-m17/sw/source/ui/uiview/view0.cxx	2009-08-18 15:16:10.000000000 +0200
++++ ooo310-m17.fix/sw/source/ui/uiview/view0.cxx	2009-08-19 09:17:51.000000000 +0200
+@@ -120,6 +120,7 @@ SFX_IMPL_VIEWFACTORY(SwView, SW_RES(STR_
  SFX_IMPL_INTERFACE( SwView, SfxViewShell, SW_RES(RID_TOOLS_TOOLBOX) )
  {
- 	SFX_CHILDWINDOW_CONTEXT_REGISTRATION(SID_NAVIGATOR);
-+	SFX_CHILDWINDOW_CONTEXT_REGISTRATION(SID_TEAM);
- 	SFX_CHILDWINDOW_REGISTRATION(SfxTemplateDialogWrapper::GetChildWindowId());
- 	SFX_CHILDWINDOW_REGISTRATION(SvxSearchDialogWrapper::GetChildWindowId());
+     SFX_CHILDWINDOW_CONTEXT_REGISTRATION(SID_NAVIGATOR);
++ 	SFX_CHILDWINDOW_CONTEXT_REGISTRATION(SID_TEAM);
+     SFX_CHILDWINDOW_REGISTRATION(SfxTemplateDialogWrapper::GetChildWindowId());
+     SFX_CHILDWINDOW_REGISTRATION(SvxSearchDialogWrapper::GetChildWindowId());
      SFX_CHILDWINDOW_REGISTRATION(SwSpellDialogChildWindow::GetChildWindowId());
-diff --git a/sw/source/ui/uiview/view2.cxx b/sw/source/ui/uiview/view2.cxx
-index af8d645..320b9c8 100644
---- sw/source/ui/uiview/view2.cxx
-+++ sw/source/ui/uiview/view2.cxx
-@@ -1567,8 +1567,13 @@ void SwView::ExecuteStatusLine(SfxRequest &rReq)
- 	{
- 		case FN_STAT_PAGE:
- 		{
+diff -urpBN -x '*.orig' -x unxlngi6.pro ooo310-m17/sw/source/ui/uiview/view2.cxx ooo310-m17.fix/sw/source/ui/uiview/view2.cxx
+--- ooo310-m17/sw/source/ui/uiview/view2.cxx	2009-08-19 10:29:04.000000000 +0200
++++ ooo310-m17.fix/sw/source/ui/uiview/view2.cxx	2009-08-19 09:20:38.000000000 +0200
+@@ -1566,8 +1566,13 @@ void SwView::ExecuteStatusLine(SfxReques
+     {
+         case FN_STAT_PAGE:
+         {
 +/*
- 			GetViewFrame()->GetDispatcher()->Execute( SID_NAVIGATOR,
- 									  SFX_CALLMODE_SYNCHRON|SFX_CALLMODE_RECORD );
+             GetViewFrame()->GetDispatcher()->Execute( SID_NAVIGATOR,
+                                       SFX_CALLMODE_SYNCHRON|SFX_CALLMODE_RECORD );
 +*/
-+		    printf("Execute TEAM...\n");
-+			GetViewFrame()->GetDispatcher()->Execute( SID_TEAM,
-+								  SFX_CALLMODE_SYNCHRON|SFX_CALLMODE_RECORD );
- 		}
- 		break;
++ 		    printf("Execute TEAM...\n");
++ 			GetViewFrame()->GetDispatcher()->Execute( SID_TEAM,
++ 								  SFX_CALLMODE_SYNCHRON|SFX_CALLMODE_RECORD );
+         }
+         break;
  
-diff --git a/sw/source/ui/utlui/makefile.mk b/sw/source/ui/utlui/makefile.mk
-index 8faae2d..305ee9c 100644
---- sw/source/ui/utlui/makefile.mk
-+++ sw/source/ui/utlui/makefile.mk
-@@ -46,6 +46,8 @@ TARGET=utlui
+diff -urpBN -x '*.orig' -x unxlngi6.pro ooo310-m17/sw/source/ui/uiview/view.cxx ooo310-m17.fix/sw/source/ui/uiview/view.cxx
+--- ooo310-m17/sw/source/ui/uiview/view.cxx	2009-08-19 10:27:50.000000000 +0200
++++ ooo310-m17.fix/sw/source/ui/uiview/view.cxx	2009-08-19 09:16:42.000000000 +0200
+@@ -113,6 +113,7 @@
+ #include <globdoc.hxx>
+ #endif
+ #include <navipi.hxx>
++#include <teampi.hxx>
+ #include <gloshdl.hxx>
+ #include <usrpref.hxx>
+ #ifndef _SRCVIEW_HXX
+@@ -1147,6 +1148,8 @@ SwView::SwView( SfxViewFrame *_pFrame, S
+         SfxBoolItem aNavi(SID_NAVIGATOR, sal_True);
+         GetDispatcher().Execute(SID_NAVIGATOR, SFX_CALLMODE_ASYNCHRON, &aNavi, 0L);
+     }
++ 	SfxBoolItem aNavi(SID_TEAM, sal_True);
++ 	GetDispatcher().Execute(SID_TEAM, SFX_CALLMODE_ASYNCHRON, &aNavi, 0L);
+ 
+ 
+     /*uno::Reference< awt::XWindow >  aTmpRef;
+diff -urpBN -x '*.orig' -x unxlngi6.pro ooo310-m17/sw/source/ui/utlui/makefile.mk ooo310-m17.fix/sw/source/ui/utlui/makefile.mk
+--- ooo310-m17/sw/source/ui/utlui/makefile.mk	2009-08-18 15:16:10.000000000 +0200
++++ ooo310-m17.fix/sw/source/ui/utlui/makefile.mk	2009-08-19 09:19:12.000000000 +0200
+@@ -42,6 +42,8 @@ TARGET=utlui
  
  # --- Files --------------------------------------------------------
  
@@ -425,19 +179,17 @@ index 8faae2d..305ee9c 100644
  
  SRS1NAME=$(TARGET)
  SRC1FILES =  \
-@@ -69,6 +71,7 @@ SLOFILES =  $(EXCEPTIONSFILES) \
- 		$(SLO)$/glbltree.obj \
- 		$(SLO)$/initui.obj \
- 		$(SLO)$/navipi.obj \
-+		$(SLO)$/teampi.obj \
- 		$(SLO)$/navicfg.obj \
- 		$(SLO)$/numfmtlb.obj \
- 		$(SLO)$/prcntfld.obj \
-diff --git a/sw/source/ui/utlui/teampi.cxx b/sw/source/ui/utlui/teampi.cxx
-new file mode 100644
-index 0000000..8b0845c
---- /dev/null
-+++ sw/source/ui/utlui/teampi.cxx
+@@ -65,6 +67,7 @@ SLOFILES =  $(EXCEPTIONSFILES) \
+         $(SLO)$/glbltree.obj \
+         $(SLO)$/initui.obj \
+         $(SLO)$/navipi.obj \
++        $(SLO)$/teampi.obj \
+         $(SLO)$/navicfg.obj \
+         $(SLO)$/numfmtlb.obj \
+         $(SLO)$/prcntfld.obj \
+diff -urpBN -x '*.orig' -x unxlngi6.pro ooo310-m17/sw/source/ui/utlui/teampi.cxx ooo310-m17.fix/sw/source/ui/utlui/teampi.cxx
+--- ooo310-m17/sw/source/ui/utlui/teampi.cxx	1970-01-01 01:00:00.000000000 +0100
++++ ooo310-m17.fix/sw/source/ui/utlui/teampi.cxx	2009-08-19 09:01:51.000000000 +0200
 @@ -0,0 +1,449 @@
 +/*
 + * written by Florian Reuter, (c) Novell Inc 2008
@@ -888,11 +640,10 @@ index 0000000..8b0845c
 +    printf("SwTeamPI::Deactivate()\n");
 +    Window::Deactivate();
 +}
-diff --git a/vcl/inc/vcl/salinst.hxx b/vcl/inc/vcl/salinst.hxx
-index b392ffa..9ae1276 100644
---- vcl/inc/vcl/salinst.hxx
-+++ vcl/inc/vcl/salinst.hxx
-@@ -110,6 +110,13 @@ public:
+diff -urpBN -x '*.orig' -x unxlngi6.pro ooo310-m17/vcl/inc/vcl/salinst.hxx ooo310-m17.fix/vcl/inc/vcl/salinst.hxx
+--- ooo310-m17/vcl/inc/vcl/salinst.hxx	2009-08-18 15:17:29.000000000 +0200
++++ ooo310-m17.fix/vcl/inc/vcl/salinst.hxx	2009-08-19 09:01:51.000000000 +0200
+@@ -96,6 +96,13 @@ public:
      // Object (System Child Window)
      virtual SalObject*			CreateObject( SalFrame* pParent, SystemWindowData* pWindowData, BOOL bShow = TRUE ) = 0;
      virtual void				DestroyObject( SalObject* pObject ) = 0;
@@ -906,33 +657,30 @@ index b392ffa..9ae1276 100644
  
      // VirtualDevice
      // nDX and nDY in Pixel
-diff --git a/vcl/inc/vcl/salobj.hxx b/vcl/inc/vcl/salobj.hxx
-index 72bf898..421c37c 100644
---- vcl/inc/vcl/salobj.hxx
-+++ vcl/inc/vcl/salobj.hxx
-@@ -84,6 +84,7 @@ public:
- 	virtual void					Show( BOOL bVisible ) = 0;
- 	virtual void					Enable( BOOL nEnable ) = 0;
- 	virtual void					GrabFocus() = 0;
-+        virtual void                                    RemoveFocus() = 0;
+diff -urpBN -x '*.orig' -x unxlngi6.pro ooo310-m17/vcl/inc/vcl/salobj.hxx ooo310-m17.fix/vcl/inc/vcl/salobj.hxx
+--- ooo310-m17/vcl/inc/vcl/salobj.hxx	2009-08-19 10:28:50.000000000 +0200
++++ ooo310-m17.fix/vcl/inc/vcl/salobj.hxx	2009-08-19 09:23:19.000000000 +0200
+@@ -70,6 +70,7 @@ public:
+     virtual void					Show( BOOL bVisible ) = 0;
+     virtual void					Enable( BOOL nEnable ) = 0;
+     virtual void					GrabFocus() = 0;
++    virtual void                    RemoveFocus() = 0;
  
- 	virtual void					SetBackground() = 0;
- 	virtual void					SetBackground( SalColor nSalColor ) = 0;
-@@ -92,6 +93,9 @@ public:
+     virtual void					SetBackground() = 0;
+     virtual void					SetBackground( SalColor nSalColor ) = 0;
+@@ -78,6 +79,9 @@ public:
  
- 	virtual const SystemEnvData*	GetSystemData() const = 0;
+     virtual const SystemEnvData*	GetSystemData() const = 0;
  
-+        virtual void LoadUrl(char *url) = 0;
-+        virtual sal_uInt32 GetSocketId() = 0;
-+
- 	void					SetCallback( void* pInst, SALOBJECTPROC pProc )
++    virtual void LoadUrl(char *url) = 0;
++    virtual sal_uInt32 GetSocketId() = 0;
++ 
+     void					SetCallback( void* pInst, SALOBJECTPROC pProc )
      { m_pInst = pInst; m_pCallback = pProc; }
      long					CallCallback( USHORT nEvent, const void* pEvent )
-diff --git a/vcl/inc/vcl/syschildctrl.hxx b/vcl/inc/vcl/syschildctrl.hxx
-new file mode 100644
-index 0000000..d056ead
---- /dev/null
-+++ vcl/inc/vcl/syschildctrl.hxx
+diff -urpBN -x '*.orig' -x unxlngi6.pro ooo310-m17/vcl/inc/vcl/syschildctrl.hxx ooo310-m17.fix/vcl/inc/vcl/syschildctrl.hxx
+--- ooo310-m17/vcl/inc/vcl/syschildctrl.hxx	1970-01-01 01:00:00.000000000 +0100
++++ ooo310-m17.fix/vcl/inc/vcl/syschildctrl.hxx	2009-08-19 09:01:51.000000000 +0200
 @@ -0,0 +1,58 @@
 +/*
 + * written by Florian Reuter, (c) Novell Inc 2008
@@ -992,11 +740,10 @@ index 0000000..d056ead
 +};
 +
 +#endif
-diff --git a/vcl/inc/vcl/window.hxx b/vcl/inc/vcl/window.hxx
-index 7dc3138..2c65daf 100644
---- vcl/inc/vcl/window.hxx
-+++ vcl/inc/vcl/window.hxx
-@@ -392,6 +392,7 @@ class VCL_DLLPUBLIC Window : public OutputDevice
+diff -urpBN -x '*.orig' -x unxlngi6.pro ooo310-m17/vcl/inc/vcl/window.hxx ooo310-m17.fix/vcl/inc/vcl/window.hxx
+--- ooo310-m17/vcl/inc/vcl/window.hxx	2009-08-19 10:28:58.000000000 +0200
++++ ooo310-m17.fix/vcl/inc/vcl/window.hxx	2009-08-19 09:01:51.000000000 +0200
+@@ -357,6 +357,7 @@ class VCL_DLLPUBLIC Window : public Outp
      friend class PushButton;
      friend class RadioButton;
      friend class SystemChildWindow;
@@ -1004,11 +751,10 @@ index 7dc3138..2c65daf 100644
      friend class ImplBorderWindow;
  
      // TODO: improve missing functionality
-diff --git a/vcl/inc/vcl/wintypes.hxx b/vcl/inc/vcl/wintypes.hxx
-index 9d4d3eb..f1f8244 100644
---- vcl/inc/vcl/wintypes.hxx
-+++ vcl/inc/vcl/wintypes.hxx
-@@ -129,7 +129,8 @@ typedef USHORT WindowType;
+diff -urpBN -x '*.orig' -x unxlngi6.pro ooo310-m17/vcl/inc/vcl/wintypes.hxx ooo310-m17.fix/vcl/inc/vcl/wintypes.hxx
+--- ooo310-m17/vcl/inc/vcl/wintypes.hxx	2009-08-18 15:17:29.000000000 +0200
++++ ooo310-m17.fix/vcl/inc/vcl/wintypes.hxx	2009-08-19 09:01:51.000000000 +0200
+@@ -120,7 +120,8 @@ typedef USHORT WindowType;
  #define WINDOW_INTROWINDOW		    (WINDOW_FIRST + 0x4f)
  #define WINDOW_LISTBOXWINDOW        (WINDOW_FIRST + 0x50)
  #define WINDOW_DOCKINGAREA          (WINDOW_FIRST + 0x51)
@@ -1018,11 +764,10 @@ index 9d4d3eb..f1f8244 100644
  
  
  // ---------------
-diff --git a/vcl/prj/d.lst b/vcl/prj/d.lst
-index d6cb440..8f04d86 100644
---- vcl/prj/d.lst
-+++ vcl/prj/d.lst
-@@ -114,6 +114,7 @@ mkdir: %_DEST%\inc%_EXT%\vcl\plug\vcl
+diff -urpBN -x '*.orig' -x unxlngi6.pro ooo310-m17/vcl/prj/d.lst ooo310-m17.fix/vcl/prj/d.lst
+--- ooo310-m17/vcl/prj/d.lst	2009-08-18 15:17:29.000000000 +0200
++++ ooo310-m17.fix/vcl/prj/d.lst	2009-08-19 09:01:51.000000000 +0200
+@@ -112,6 +112,7 @@ mkdir: %_DEST%\inc%_EXT%\vcl\plug\vcl
  ..\inc\vcl\svapp.hxx %_DEST%\inc%_EXT%\vcl\svapp.hxx
  ..\inc\vcl\symbol.hxx %_DEST%\inc%_EXT%\vcl\symbol.hxx
  ..\inc\vcl\syschild.hxx %_DEST%\inc%_EXT%\vcl\syschild.hxx
@@ -1030,23 +775,20 @@ index d6cb440..8f04d86 100644
  ..\inc\vcl\sysdata.hxx %_DEST%\inc%_EXT%\vcl\sysdata.hxx
  ..\inc\vcl\syswin.hxx %_DEST%\inc%_EXT%\vcl\syswin.hxx
  ..\inc\vcl\tabctrl.hxx %_DEST%\inc%_EXT%\vcl\tabctrl.hxx
-diff --git a/vcl/source/window/makefile.mk b/vcl/source/window/makefile.mk
-index d8fa88f..68769b6 100644
---- vcl/source/window/makefile.mk
-+++ vcl/source/window/makefile.mk
-@@ -78,6 +78,7 @@ SLOFILES= \
- 			$(SLO)$/splitwin.obj	\
- 			$(SLO)$/status.obj		\
- 			$(SLO)$/syschild.obj	\
-+			$(SLO)$/syschildctrl.obj	\
- 			$(SLO)$/javachild.obj	\
- 			$(SLO)$/syswin.obj		\
- 			$(SLO)$/tabdlg.obj		\
-diff --git a/vcl/source/window/syschildctrl.cxx b/vcl/source/window/syschildctrl.cxx
-new file mode 100644
-index 0000000..0859737
---- /dev/null
-+++ vcl/source/window/syschildctrl.cxx
+diff -urpBN -x '*.orig' -x unxlngi6.pro ooo310-m17/vcl/source/window/makefile.mk ooo310-m17.fix/vcl/source/window/makefile.mk
+--- ooo310-m17/vcl/source/window/makefile.mk	2009-08-19 10:27:49.000000000 +0200
++++ ooo310-m17.fix/vcl/source/window/makefile.mk	2009-08-19 09:25:21.000000000 +0200
+@@ -75,6 +75,7 @@ SLOFILES= \
+             $(SLO)$/splitwin.obj	\
+             $(SLO)$/status.obj		\
+             $(SLO)$/syschild.obj	\
++ 			$(SLO)$/syschildctrl.obj	\
+             $(SLO)$/javachild.obj	\
+             $(SLO)$/syswin.obj		\
+             $(SLO)$/tabdlg.obj		\
+diff -urpBN -x '*.orig' -x unxlngi6.pro ooo310-m17/vcl/source/window/syschildctrl.cxx ooo310-m17.fix/vcl/source/window/syschildctrl.cxx
+--- ooo310-m17/vcl/source/window/syschildctrl.cxx	1970-01-01 01:00:00.000000000 +0100
++++ ooo310-m17.fix/vcl/source/window/syschildctrl.cxx	2009-08-19 09:01:51.000000000 +0200
 @@ -0,0 +1,220 @@
 +/*
 + * written by Florian Reuter, (c) Novell Inc 2008
@@ -1268,11 +1010,10 @@ index 0000000..0859737
 +    SalObject *pGtkSalObject = mpWindowImpl->mpSysObj;
 +    return pGtkSalObject->GetSocketId();
 +}
-diff --git a/vcl/unx/gtk/app/gtkinst.cxx b/vcl/unx/gtk/app/gtkinst.cxx
-index f5383a0..4e0899f 100644
---- vcl/unx/gtk/app/gtkinst.cxx
-+++ vcl/unx/gtk/app/gtkinst.cxx
-@@ -223,7 +223,28 @@ SalObject* GtkInstance::CreateObject( SalFrame* pParent, SystemWindowData* pWind
+diff -urpBN -x '*.orig' -x unxlngi6.pro ooo310-m17/vcl/unx/gtk/app/gtkinst.cxx ooo310-m17.fix/vcl/unx/gtk/app/gtkinst.cxx
+--- ooo310-m17/vcl/unx/gtk/app/gtkinst.cxx	2009-08-19 10:27:48.000000000 +0200
++++ ooo310-m17.fix/vcl/unx/gtk/app/gtkinst.cxx	2009-08-19 09:01:51.000000000 +0200
+@@ -204,7 +204,28 @@ SalObject* GtkInstance::CreateObject( Sa
      if( pWindowData )
          return X11SalObject::CreateObject( pParent, pWindowData, bShow );
      
@@ -1302,32 +1043,30 @@ index f5383a0..4e0899f 100644
  }
  
  GtkYieldMutex::GtkYieldMutex()
-diff --git a/vcl/unx/gtk/window/gtkframe.cxx b/vcl/unx/gtk/window/gtkframe.cxx
-index 57c52ba..860223c 100644
---- vcl/unx/gtk/window/gtkframe.cxx
-+++ vcl/unx/gtk/window/gtkframe.cxx
-@@ -2773,7 +2773,15 @@ gboolean GtkSalFrame::signalConfigure( GtkWidget*, GdkEventConfigure* pEvent, gp
+diff -urpBN -x '*.orig' -x unxlngi6.pro ooo310-m17/vcl/unx/gtk/window/gtkframe.cxx ooo310-m17.fix/vcl/unx/gtk/window/gtkframe.cxx
+--- ooo310-m17/vcl/unx/gtk/window/gtkframe.cxx	2009-08-19 10:29:26.000000000 +0200
++++ ooo310-m17.fix/vcl/unx/gtk/window/gtkframe.cxx	2009-08-19 09:34:07.000000000 +0200
+@@ -2948,6 +2948,16 @@ gboolean GtkSalFrame::signalConfigure( G
  gboolean GtkSalFrame::signalKey( GtkWidget*, GdkEventKey* pEvent, gpointer frame )
  {
      GtkSalFrame* pThis = (GtkSalFrame*)frame;
--
 +    if (pThis && pThis->m_pFixedContainer!=NULL && GTK_IS_FIXED(pThis->m_pFixedContainer))
 +    {
-+	GtkFixed *pFixed=GTK_FIXED(pThis->m_pFixedContainer);
-+	GtkWindow *pTopLevel=GTK_WINDOW(gtk_widget_get_toplevel (GTK_WIDGET(pFixed)));
-+	if (pTopLevel!=NULL && pTopLevel->focus_widget!=NULL 
-+	    /* &&  (GTK_IS_SOCKET(pTopLevel->focus_widget) || GTK_IS_MOZ_EMBED(pTopLevel->focus_widget))*/) {
-+	    return FALSE;
-+	}
-+    }
- 	vcl::DeletionListener aDel( pThis );
++        GtkFixed *pFixed=GTK_FIXED(pThis->m_pFixedContainer);
++        GtkWindow *pTopLevel=GTK_WINDOW(gtk_widget_get_toplevel (GTK_WIDGET(pFixed)));
++        if (pTopLevel!=NULL && pTopLevel->focus_widget!=NULL 
++ 	        /* &&  (GTK_IS_SOCKET(pTopLevel->focus_widget) || GTK_IS_MOZ_EMBED(pTopLevel->focus_widget))*/) 
++        {
++ 	        return FALSE;
++        }
++     }
  
-     if( pThis->m_pIMHandler )
-diff --git a/vcl/unx/gtk/window/gtkobject.cxx b/vcl/unx/gtk/window/gtkobject.cxx
-index 1f1d7b5..c83e6f4 100644
---- vcl/unx/gtk/window/gtkobject.cxx
-+++ vcl/unx/gtk/window/gtkobject.cxx
-@@ -41,14 +41,33 @@
+     vcl::DeletionListener aDel( pThis );
+ 
+diff -urpBN -x '*.orig' -x unxlngi6.pro ooo310-m17/vcl/unx/gtk/window/gtkobject.cxx ooo310-m17.fix/vcl/unx/gtk/window/gtkobject.cxx
+--- ooo310-m17/vcl/unx/gtk/window/gtkobject.cxx	2009-08-19 10:28:50.000000000 +0200
++++ ooo310-m17.fix/vcl/unx/gtk/window/gtkobject.cxx	2009-08-19 09:01:51.000000000 +0200
+@@ -36,14 +36,33 @@
  #include <plugins/gtk/gtkdata.hxx>
  #include <plugins/gtk/gtkinst.hxx>
  
@@ -1364,7 +1103,7 @@ index 1f1d7b5..c83e6f4 100644
          Show( bShow );
          // insert into container
          gtk_fixed_put( pParent->getFixedContainer(),
-@@ -60,7 +79,8 @@ GtkSalObject::GtkSalObject( GtkSalFrame* pParent, BOOL bShow )
+@@ -55,7 +74,8 @@ GtkSalObject::GtkSalObject( GtkSalFrame*
  
          // make it transparent; some plugins may not insert
          // their own window here but use the socket window itself
@@ -1374,7 +1113,7 @@ index 1f1d7b5..c83e6f4 100644
  
          //system data
          SalDisplay* pDisp = GetX11SalData()->GetDisplay();
-@@ -77,12 +97,20 @@ GtkSalObject::GtkSalObject( GtkSalFrame* pParent, BOOL bShow )
+@@ -74,12 +94,20 @@ GtkSalObject::GtkSalObject( GtkSalFrame*
  
          g_signal_connect( G_OBJECT(m_pSocket), "button-press-event", G_CALLBACK(signalButton), this );
          g_signal_connect( G_OBJECT(m_pSocket), "button-release-event", G_CALLBACK(signalButton), this );
@@ -1395,7 +1134,7 @@ index 1f1d7b5..c83e6f4 100644
      }
  }
  
-@@ -141,6 +169,7 @@ void GtkSalObject::EndSetClipRegion()
+@@ -138,6 +166,7 @@ void GtkSalObject::EndSetClipRegion()
  
  void GtkSalObject::SetPosSize( long nX, long nY, long nWidth, long nHeight )
  {
@@ -1403,7 +1142,7 @@ index 1f1d7b5..c83e6f4 100644
      if( m_pSocket )
      {
          GtkFixed* pContainer = GTK_FIXED(gtk_widget_get_parent(m_pSocket));
-@@ -199,6 +228,7 @@ gboolean GtkSalObject::signalButton( GtkWidget*, GdkEventButton* pEvent, gpointe
+@@ -196,6 +225,7 @@ gboolean GtkSalObject::signalButton( Gtk
  gboolean GtkSalObject::signalFocus( GtkWidget*, GdkEventFocus* pEvent, gpointer object )
  {
      GtkSalObject* pThis = (GtkSalObject*)object;
@@ -1411,7 +1150,7 @@ index 1f1d7b5..c83e6f4 100644
  
      GTK_YIELD_GRAB();
  
-@@ -207,6 +237,19 @@ gboolean GtkSalObject::signalFocus( GtkWidget*, GdkEventFocus* pEvent, gpointer
+@@ -204,6 +234,19 @@ gboolean GtkSalObject::signalFocus( GtkW
      return FALSE;
  }
  
@@ -1431,7 +1170,7 @@ index 1f1d7b5..c83e6f4 100644
  void GtkSalObject::signalDestroy( GtkObject* pObj, gpointer object )
  {
      GtkSalObject* pThis = (GtkSalObject*)object;
-@@ -224,3 +267,44 @@ void GtkSalObject::SetForwardKey( BOOL bEnable )
+@@ -221,3 +264,44 @@ void GtkSalObject::SetForwardKey( BOOL b
      else
          gtk_widget_set_events( GTK_WIDGET( m_pSocket ), ~(GDK_KEY_PRESS_MASK | GDK_KEY_RELEASE) & gtk_widget_get_events( GTK_WIDGET( m_pSocket ) ) );
  }
@@ -1476,11 +1215,10 @@ index 1f1d7b5..c83e6f4 100644
 +    GTK_YIELD_GRAB();
 +    return gtk_socket_get_id(GTK_SOCKET(m_pSocket));
 +}
-diff --git a/vcl/unx/gtk/window/makefile.mk b/vcl/unx/gtk/window/makefile.mk
-index 01e4fff..f84f2f9 100644
---- vcl/unx/gtk/window/makefile.mk
-+++ vcl/unx/gtk/window/makefile.mk
-@@ -65,6 +65,9 @@ PKGCONFIG_MODULES+= dbus-glib-1
+diff -urpBN -x '*.orig' -x unxlngi6.pro ooo310-m17/vcl/unx/gtk/window/makefile.mk ooo310-m17.fix/vcl/unx/gtk/window/makefile.mk
+--- ooo310-m17/vcl/unx/gtk/window/makefile.mk	2009-08-18 15:17:30.000000000 +0200
++++ ooo310-m17.fix/vcl/unx/gtk/window/makefile.mk	2009-08-19 09:01:51.000000000 +0200
+@@ -61,6 +61,9 @@ PKGCONFIG_MODULES+= dbus-glib-1
  .ENDIF
  .INCLUDE : pkg_config.mk
  
@@ -1490,11 +1228,10 @@ index 01e4fff..f84f2f9 100644
  .IF "$(COM)" == "C52"
  NOOPTFILES=$(SLO)$/gtkframe.obj
  .ENDIF
-diff --git a/vcl/unx/headless/svpdummies.cxx b/vcl/unx/headless/svpdummies.cxx
-index 2b66731..ed184a4 100644
---- vcl/unx/headless/svpdummies.cxx
-+++ vcl/unx/headless/svpdummies.cxx
-@@ -75,9 +75,12 @@ void SvpSalObject::SetPosSize( long, long, long, long ) {}
+diff -urpBN -x '*.orig' -x unxlngi6.pro ooo310-m17/vcl/unx/headless/svpdummies.cxx ooo310-m17.fix/vcl/unx/headless/svpdummies.cxx
+--- ooo310-m17/vcl/unx/headless/svpdummies.cxx	2009-08-18 15:17:30.000000000 +0200
++++ ooo310-m17.fix/vcl/unx/headless/svpdummies.cxx	2009-08-19 09:01:51.000000000 +0200
+@@ -61,9 +61,12 @@ void SvpSalObject::SetPosSize( long, lon
  void SvpSalObject::Show( BOOL ) {}
  void SvpSalObject::Enable( BOOL ) {}
  void SvpSalObject::GrabFocus() {}
@@ -1507,30 +1244,28 @@ index 2b66731..ed184a4 100644
  
  // SalI18NImeStatus
  SvpImeStatus::~SvpImeStatus() {}
-diff --git a/vcl/unx/headless/svpdummies.hxx b/vcl/unx/headless/svpdummies.hxx
-index 929de79..baad302 100644
---- vcl/unx/headless/svpdummies.hxx
-+++ vcl/unx/headless/svpdummies.hxx
-@@ -77,11 +77,13 @@ public:
- 	virtual void					Show( BOOL bVisible );
- 	virtual void					Enable( BOOL nEnable );
- 	virtual void					GrabFocus();
--
-+        virtual void                                    RemoveFocus();
- 	virtual void					SetBackground();
- 	virtual void					SetBackground( SalColor nSalColor );
+diff -urpBN -x '*.orig' -x unxlngi6.pro ooo310-m17/vcl/unx/headless/svpdummies.hxx ooo310-m17.fix/vcl/unx/headless/svpdummies.hxx
+--- ooo310-m17/vcl/unx/headless/svpdummies.hxx	2009-08-18 15:17:30.000000000 +0200
++++ ooo310-m17.fix/vcl/unx/headless/svpdummies.hxx	2009-08-19 09:35:20.000000000 +0200
+@@ -56,11 +56,14 @@ public:
+     virtual void					Show( BOOL bVisible );
+     virtual void					Enable( BOOL nEnable );
+     virtual void					GrabFocus();
++    virtual void                    RemoveFocus();
  
- 	virtual const SystemEnvData*	GetSystemData() const;
-+        virtual void LoadUrl(char *url);
-+        virtual sal_uInt32 GetSocketId();
+     virtual void					SetBackground();
+     virtual void					SetBackground( SalColor nSalColor );
+ 
+     virtual const SystemEnvData*	GetSystemData() const;
++    virtual void                    LoadUrl(char *url);
++    virtual sal_uInt32              GetSocketId();
  };
  
  class SvpImeStatus : public SalI18NImeStatus
-diff --git a/vcl/unx/headless/svpinst.cxx b/vcl/unx/headless/svpinst.cxx
-index fdf743c..184d68e 100644
---- vcl/unx/headless/svpinst.cxx
-+++ vcl/unx/headless/svpinst.cxx
-@@ -255,6 +255,27 @@ void SvpSalInstance::DestroyObject( SalObject* pObject )
+diff -urpBN -x '*.orig' -x unxlngi6.pro ooo310-m17/vcl/unx/headless/svpinst.cxx ooo310-m17.fix/vcl/unx/headless/svpinst.cxx
+--- ooo310-m17/vcl/unx/headless/svpinst.cxx	2009-08-18 15:17:30.000000000 +0200
++++ ooo310-m17.fix/vcl/unx/headless/svpinst.cxx	2009-08-19 09:01:51.000000000 +0200
+@@ -250,6 +250,27 @@ void SvpSalInstance::DestroyObject( SalO
      delete pObject;
  }
  
@@ -1558,11 +1293,10 @@ index fdf743c..184d68e 100644
  SalVirtualDevice* SvpSalInstance::CreateVirtualDevice( SalGraphics*,
                                                         long nDX, long nDY,
                                                         USHORT nBitCount, const SystemGraphicsData* )
-diff --git a/vcl/unx/headless/svpinst.hxx b/vcl/unx/headless/svpinst.hxx
-index 58569f1..634841f 100644
---- vcl/unx/headless/svpinst.hxx
-+++ vcl/unx/headless/svpinst.hxx
-@@ -142,6 +142,14 @@ public:
+diff -urpBN -x '*.orig' -x unxlngi6.pro ooo310-m17/vcl/unx/headless/svpinst.hxx ooo310-m17.fix/vcl/unx/headless/svpinst.hxx
+--- ooo310-m17/vcl/unx/headless/svpinst.hxx	2009-08-18 15:17:30.000000000 +0200
++++ ooo310-m17.fix/vcl/unx/headless/svpinst.hxx	2009-08-19 09:01:51.000000000 +0200
+@@ -139,6 +139,14 @@ public:
      virtual SalObject*		CreateObject( SalFrame* pParent, SystemWindowData* pWindowData, BOOL bShow = TRUE );
      virtual void			DestroyObject( SalObject* pObject );
  
@@ -1577,11 +1311,10 @@ index 58569f1..634841f 100644
      // VirtualDevice
      // nDX and nDY in Pixel
      // nBitCount: 0 == Default(=as window) / 1 == Mono
-diff --git a/vcl/unx/inc/plugins/gtk/gtkinst.hxx b/vcl/unx/inc/plugins/gtk/gtkinst.hxx
-index 2874611..c3e7c24 100644
---- vcl/unx/inc/plugins/gtk/gtkinst.hxx
-+++ vcl/unx/inc/plugins/gtk/gtkinst.hxx
-@@ -96,6 +96,12 @@ public:
+diff -urpBN -x '*.orig' -x unxlngi6.pro ooo310-m17/vcl/unx/inc/plugins/gtk/gtkinst.hxx ooo310-m17.fix/vcl/unx/inc/plugins/gtk/gtkinst.hxx
+--- ooo310-m17/vcl/unx/inc/plugins/gtk/gtkinst.hxx	2009-08-18 15:17:30.000000000 +0200
++++ ooo310-m17.fix/vcl/unx/inc/plugins/gtk/gtkinst.hxx	2009-08-19 09:01:51.000000000 +0200
+@@ -91,6 +91,12 @@ public:
      virtual SalFrame*           CreateChildFrame( SystemParentData* pParent, ULONG nStyle );
      virtual SalObject*			CreateObject( SalFrame* pParent, SystemWindowData* pWindowData, BOOL bShow = TRUE );
      virtual SalSystem*			CreateSalSystem();
@@ -1594,11 +1327,10 @@ index 2874611..c3e7c24 100644
  };
  
  class GtkSalSystem : public X11SalSystem
-diff --git a/vcl/unx/inc/plugins/gtk/gtkobject.hxx b/vcl/unx/inc/plugins/gtk/gtkobject.hxx
-index 5ce3237..c8c65fe 100644
---- vcl/unx/inc/plugins/gtk/gtkobject.hxx
-+++ vcl/unx/inc/plugins/gtk/gtkobject.hxx
-@@ -51,16 +51,28 @@
+diff -urpBN -x '*.orig' -x unxlngi6.pro ooo310-m17/vcl/unx/inc/plugins/gtk/gtkobject.hxx ooo310-m17.fix/vcl/unx/inc/plugins/gtk/gtkobject.hxx
+--- ooo310-m17/vcl/unx/inc/plugins/gtk/gtkobject.hxx	2009-08-19 10:28:50.000000000 +0200
++++ ooo310-m17.fix/vcl/unx/inc/plugins/gtk/gtkobject.hxx	2009-08-19 09:41:29.000000000 +0200
+@@ -38,16 +38,28 @@
  
  class GtkSalObject : public SalObject
  {
@@ -1607,10 +1339,10 @@ index 5ce3237..c8c65fe 100644
 +    static const int SOCKET = 2;
 +    static const int MOZ_EMBEDD = 3;
 +private:
- 	SystemChildData		m_aSystemData;
+     SystemChildData		m_aSystemData;
      GtkWidget*			m_pSocket;
      GdkRegion*			m_pRegion;
-+    int                         mozCount;
++   int                  mozCount;
  
      // signals
      static gboolean		signalButton( GtkWidget*, GdkEventButton*, gpointer );
@@ -1628,32 +1360,30 @@ index 5ce3237..c8c65fe 100644
      virtual ~GtkSalObject();
  
      // overload all pure virtual methods
-@@ -74,6 +86,7 @@ public:
- 	virtual void					Show( BOOL bVisible );
- 	virtual void					Enable( BOOL nEnable );
- 	virtual void					GrabFocus();
-+        virtual void                                    RemoveFocus();
+@@ -61,6 +73,7 @@ public:
+     virtual void					Show( BOOL bVisible );
+     virtual void					Enable( BOOL nEnable );
+     virtual void					GrabFocus();
++    virtual void					RemoveFocus();
  
- 	virtual void					SetBackground();
- 	virtual void					SetBackground( SalColor nSalColor );
-@@ -81,7 +94,9 @@ public:
-         virtual void                                    SetForwardKey( BOOL bEnable );
+     virtual void					SetBackground();
+     virtual void					SetBackground( SalColor nSalColor );
+@@ -69,6 +82,9 @@ public:
  
- 	virtual const SystemEnvData*	GetSystemData() const;
--   
-+    
-+        virtual void LoadUrl(char *url);   
-+        virtual sal_uInt32 GetSocketId();
+     virtual const SystemEnvData*	GetSystemData() const;
+    
++    virtual void                    LoadUrl(char *url);   
++    virtual sal_uInt32              GetSocketId();
++   
  };
  
  #endif // _SV_SALOBJ_H
-diff --git a/vcl/unx/inc/plugins/kde/kdedata.hxx b/vcl/unx/inc/plugins/kde/kdedata.hxx
-index ec252c5..6cedbd9 100644
---- vcl/unx/inc/plugins/kde/kdedata.hxx
-+++ vcl/unx/inc/plugins/kde/kdedata.hxx
-@@ -92,6 +92,12 @@ public:
+diff -urpBN -x '*.orig' -x unxlngi6.pro ooo310-m17/vcl/unx/inc/plugins/kde/kdedata.hxx ooo310-m17.fix/vcl/unx/inc/plugins/kde/kdedata.hxx
+--- ooo310-m17/vcl/unx/inc/plugins/kde/kdedata.hxx	2009-08-18 15:17:30.000000000 +0200
++++ ooo310-m17.fix/vcl/unx/inc/plugins/kde/kdedata.hxx	2009-08-19 09:01:51.000000000 +0200
+@@ -87,6 +87,12 @@ public:
              : X11SalInstance( pMutex ) {}
- 	virtual ~KDESalInstance() {}
+     virtual ~KDESalInstance() {}
      virtual SalFrame* CreateFrame( SalFrame* pParent, ULONG nStyle );
 +
 +    virtual SalObject*			CreateSocket( SalFrame* pParent, BOOL bShow = TRUE);
@@ -1664,11 +1394,10 @@ index ec252c5..6cedbd9 100644
  };
  
  class KDEXLib : public SalXLib
-diff --git a/vcl/unx/inc/salinst.h b/vcl/unx/inc/salinst.h
-index 0823a3d..dc5ae34 100644
---- vcl/unx/inc/salinst.h
-+++ vcl/unx/inc/salinst.h
-@@ -92,6 +92,13 @@ public:
+diff -urpBN -x '*.orig' -x unxlngi6.pro ooo310-m17/vcl/unx/inc/salinst.h ooo310-m17.fix/vcl/unx/inc/salinst.h
+--- ooo310-m17/vcl/unx/inc/salinst.h	2009-08-18 15:17:30.000000000 +0200
++++ ooo310-m17.fix/vcl/unx/inc/salinst.h	2009-08-19 09:01:51.000000000 +0200
+@@ -80,6 +80,13 @@ public:
      virtual SalObject*			CreateObject( SalFrame* pParent, SystemWindowData* pWindowData, BOOL bShow = TRUE );
      virtual void				DestroyObject( SalObject* pObject );
  
@@ -1682,33 +1411,30 @@ index 0823a3d..dc5ae34 100644
      virtual SalVirtualDevice*	CreateVirtualDevice( SalGraphics* pGraphics,
                                                       long nDX, long nDY,
                                                       USHORT nBitCount, const SystemGraphicsData *pData = NULL );
-diff --git a/vcl/unx/inc/salobj.h b/vcl/unx/inc/salobj.h
-index 131824b..b41e2e9 100644
---- vcl/unx/inc/salobj.h
-+++ vcl/unx/inc/salobj.h
-@@ -109,12 +109,14 @@ public:
- 	virtual void					Show( BOOL bVisible );
- 	virtual void					Enable( BOOL nEnable );
- 	virtual void					GrabFocus();
--
-+	virtual void                                    RemoveFocus();
- 	virtual void					SetBackground();
- 	virtual void					SetBackground( SalColor nSalColor );
+diff -urpBN -x '*.orig' -x unxlngi6.pro ooo310-m17/vcl/unx/inc/salobj.h ooo310-m17.fix/vcl/unx/inc/salobj.h
+--- ooo310-m17/vcl/unx/inc/salobj.h	2009-08-18 15:17:30.000000000 +0200
++++ ooo310-m17.fix/vcl/unx/inc/salobj.h	2009-08-19 09:44:19.000000000 +0200
+@@ -95,11 +95,15 @@ public:
+     virtual void					Show( BOOL bVisible );
+     virtual void					Enable( BOOL nEnable );
+     virtual void					GrabFocus();
++    virtual void					RemoveFocus();
  
- 	virtual const SystemEnvData*	GetSystemData() const;
--   
-+	virtual void LoadUrl(char *url);
-+	virtual sal_uInt32 GetSocketId();
-+
+     virtual void					SetBackground();
+     virtual void					SetBackground( SalColor nSalColor );
+ 
+     virtual const SystemEnvData*	GetSystemData() const;
++ 	virtual void LoadUrl(char *url);
++ 	virtual sal_uInt32 GetSocketId();
++ 
+    
  };
  
- #endif // _SV_SALOBJ_H
-diff --git a/vcl/unx/kde/salnativewidgets-kde.cxx b/vcl/unx/kde/salnativewidgets-kde.cxx
-index b6b800f..138ac65 100644
---- vcl/unx/kde/salnativewidgets-kde.cxx
-+++ vcl/unx/kde/salnativewidgets-kde.cxx
-@@ -2090,6 +2090,26 @@ KDESalInstance::CreateFrame( SalFrame *pParent, ULONG nStyle )
- 	return new KDESalFrame( pParent, nStyle );
+diff -urpBN -x '*.orig' -x unxlngi6.pro ooo310-m17/vcl/unx/kde/salnativewidgets-kde.cxx ooo310-m17.fix/vcl/unx/kde/salnativewidgets-kde.cxx
+--- ooo310-m17/vcl/unx/kde/salnativewidgets-kde.cxx	2009-08-18 15:17:30.000000000 +0200
++++ ooo310-m17.fix/vcl/unx/kde/salnativewidgets-kde.cxx	2009-08-19 09:01:51.000000000 +0200
+@@ -2105,6 +2105,26 @@ KDESalInstance::CreateFrame( SalFrame *p
+     return new KDESalFrame( pParent, nStyle );
  }
  
 +
@@ -1734,12 +1460,11 @@ index b6b800f..138ac65 100644
  // -----------------------------------------------------------------------
  // KDESalData pieces
  // -----------------------------------------------------------------------
-diff --git a/vcl/unx/source/window/salobj.cxx b/vcl/unx/source/window/salobj.cxx
-index 3c7c9c8..65f586f 100644
---- vcl/unx/source/window/salobj.cxx
-+++ vcl/unx/source/window/salobj.cxx
-@@ -215,6 +215,24 @@ void X11SalInstance::DestroyObject( SalObject* pObject )
- 	delete pObject;
+diff -urpBN -x '*.orig' -x unxlngi6.pro ooo310-m17/vcl/unx/source/window/salobj.cxx ooo310-m17.fix/vcl/unx/source/window/salobj.cxx
+--- ooo310-m17/vcl/unx/source/window/salobj.cxx	2009-08-18 15:17:30.000000000 +0200
++++ ooo310-m17.fix/vcl/unx/source/window/salobj.cxx	2009-08-19 09:01:51.000000000 +0200
+@@ -199,6 +199,24 @@ void X11SalInstance::DestroyObject( SalO
+     delete pObject;
  }
  
 +SalObject* X11SalInstance::CreateSocket( SalFrame* pParent, BOOL bShow)
@@ -1763,9 +1488,9 @@ index 3c7c9c8..65f586f 100644
  
  // ======================================================================
  // SalClipRegion is a member of SalObject
-@@ -576,3 +594,16 @@ long X11SalObject::Dispatch( XEvent* pEvent )
- 	}
- 	return 0;
+@@ -560,3 +578,16 @@ long X11SalObject::Dispatch( XEvent* pEv
+     }
+     return 0;
  }
 +
 +void X11SalObject::RemoveFocus()
@@ -1780,11 +1505,10 @@ index 3c7c9c8..65f586f 100644
 +{
 +    return 0;
 +}
-diff --git a/vcl/util/makefile.mk b/vcl/util/makefile.mk
-index 512e9c4..6146b6c 100644
---- vcl/util/makefile.mk
-+++ vcl/util/makefile.mk
-@@ -206,6 +206,10 @@ SHL1OBJS=   $(SLO)$/salshl.obj
+diff -urpBN -x '*.orig' -x unxlngi6.pro ooo310-m17/vcl/util/makefile.mk ooo310-m17.fix/vcl/util/makefile.mk
+--- ooo310-m17/vcl/util/makefile.mk	2009-08-19 10:28:58.000000000 +0200
++++ ooo310-m17.fix/vcl/util/makefile.mk	2009-08-19 09:01:51.000000000 +0200
+@@ -211,6 +211,10 @@ SHL1OBJS=   $(SLO)$/salshl.obj
  SHL1RES=    $(RES)$/salsrc.res
  .ENDIF
  
@@ -1795,7 +1519,7 @@ index 512e9c4..6146b6c 100644
  SHL1DEF=    $(MISC)$/$(SHL1TARGET).def
  
  DEF1NAME    =$(SHL1TARGET)
-@@ -318,6 +322,9 @@ PKGCONFIG_MODULES=gtk+-2.0 gthread-2.0
+@@ -331,6 +335,9 @@ PKGCONFIG_MODULES=gtk+-2.0 gthread-2.0
  .IF "$(ENABLE_DBUS)" != ""
  PKGCONFIG_MODULES+= dbus-glib-1
  .ENDIF
@@ -1805,7 +1529,7 @@ index 512e9c4..6146b6c 100644
  .INCLUDE: pkg_config.mk
  
  LIB4TARGET=$(SLB)$/igtk_plug_
-@@ -333,6 +340,7 @@ SHL4LIBS=$(LIB4TARGET)
+@@ -346,6 +353,7 @@ SHL4LIBS=$(LIB4TARGET)
  SHL4DEPN=$(SHL1IMPLIBN) $(SHL1TARGETN) $(SHL2IMPLIBN) $(SHL2TARGETN)
  # libs for gtk plugin
  SHL4STDLIBS+=$(PKGCONFIG_LIBS:s/ -lpangoxft-1.0//)
@@ -1813,3 +1537,223 @@ index 512e9c4..6146b6c 100644
  # hack for faked SO environment
  .IF "$(PKGCONFIG_ROOT)"!=""
  SHL4SONAME+=-z nodefs
+diff -urpBN -x '*.orig' -x unxlngi6.pro ooo310-m17/sfx2/inc/sfx2/sfxsids.hrc ooo310-m17.fix/sfx2/inc/sfx2/sfxsids.hrc
+--- ooo310-m17/sfx2/inc/sfx2/sfxsids.hrc	2009-08-19 10:28:00.000000000 +0200
++++ ooo310-m17.fix/sfx2/inc/sfx2/sfxsids.hrc	2009-08-19 09:01:51.000000000 +0200
+@@ -1186,6 +1186,8 @@
+ #define SID_COMP_BIBLIOGRAPHY               (SID_SVX_START + 880)
+ #define SID_ADDRESS_DATA_SOURCE             (SID_SVX_START + 934)
+ 
++#define SID_TEAM                       (SID_SVX_START + 1888)
++
+ #define FID_SVX_START                       (SID_LIB_START + 500)
+ #define FID_SEARCH_NOW                      (FID_SVX_START + 2)
+ 
+diff -urpBN -x '*.orig' -x unxlngi6.pro ooo310-m17/sfx2/inc/sfx2/team.hxx ooo310-m17.fix/sfx2/inc/sfx2/team.hxx
+--- ooo310-m17/sfx2/inc/sfx2/team.hxx	1970-01-01 01:00:00.000000000 +0100
++++ ooo310-m17.fix/sfx2/inc/sfx2/team.hxx	2009-08-19 09:01:51.000000000 +0200
+@@ -0,0 +1,40 @@
++/*
++ * written by Florian Reuter, (c) Novell Inc 2008
++ */
++
++#ifndef _SFXTEAM_HXX
++#define _SFXTEAM_HXX
++
++
++#include <sfx2/childwin.hxx>
++#include <sfx2/dockwin.hxx>
++
++class SfxTeamWrapper : public SfxChildWindow
++{
++
++public:
++    SfxTeamWrapper( Window* pParent ,
++		    USHORT nId ,
++		    SfxBindings* pBindings ,
++		    SfxChildWinInfo* pInfo );
++    
++    SFX_DECL_CHILDWINDOW(SfxTeamWrapper);
++};
++
++class SfxTeam : public SfxDockingWindow
++{
++	SfxChildWindow*		pWrapper;
++
++public:
++    SfxTeam( SfxBindings* pBindings ,
++	     SfxChildWindow* pChildWin ,
++	     Window* pParent ,
++	     WinBits nBits );
++    
++    virtual void 		Resize();
++    virtual void        Resizing( Size& rSize );
++    virtual BOOL        Close();
++};
++
++#endif
++
+diff -urpBN -x '*.orig' -x unxlngi6.pro ooo310-m17/sfx2/sdi/frmslots.sdi ooo310-m17.fix/sfx2/sdi/frmslots.sdi
+--- ooo310-m17/sfx2/sdi/frmslots.sdi	2009-08-18 15:17:47.000000000 +0200
++++ ooo310-m17.fix/sfx2/sdi/frmslots.sdi	2009-08-19 09:04:28.000000000 +0200
+@@ -59,6 +59,11 @@ interface Window
+         ExecMethod = ChildWindowExecute ;
+         StateMethod = ChildWindowState ;
+     ]
++ 	SID_TEAM // status(final|play)
++ 	[
++ 		ExecMethod = ChildWindowExecute ;
++ 		StateMethod = ChildWindowState ;
++ 	]
+     SID_BROWSER // ole(no) api()
+     [
+         ExecMethod = ChildWindowExecute ;
+diff -urpBN -x '*.orig' -x unxlngi6.pro ooo310-m17/sfx2/sdi/sfx.sdi ooo310-m17.fix/sfx2/sdi/sfx.sdi
+--- ooo310-m17/sfx2/sdi/sfx.sdi	2009-08-19 10:28:59.000000000 +0200
++++ ooo310-m17.fix/sfx2/sdi/sfx.sdi	2009-08-19 09:01:51.000000000 +0200
+@@ -4464,6 +4464,32 @@ SfxBoolItem Navigator SID_NAVIGATOR
+     GroupId = GID_NAVIGATOR;
+ ]
+ //--------------------------------------------------------------------------
++SfxBoolItem Team SID_TEAM
++
++[
++	/* flags: */
++	AutoUpdate = TRUE,
++	Cachable = Cachable,
++	FastCall = FALSE,
++	HasCoreId = FALSE,
++	HasDialog = FALSE,
++	ReadOnlyDoc = TRUE,
++	Toggle = FALSE,
++	Container = FALSE,
++	RecordAbsolute = FALSE,
++	RecordPerSet;
++	Synchron;
++
++	Readonly = FALSE,
++
++	/* config: */
++	AccelConfig = TRUE,
++	MenuConfig = TRUE,
++	StatusBarConfig = FALSE,
++	ToolBoxConfig = TRUE,
++	GroupId = GID_NAVIGATOR;
++]
++//--------------------------------------------------------------------------
+ SfxVoidItem RestoreEditingView SID_RESTORE_EDITING_VIEW
+ 
+ [
+diff -urpBN -x '*.orig' -x unxlngi6.pro ooo310-m17/sfx2/source/appl/appreg.cxx ooo310-m17.fix/sfx2/source/appl/appreg.cxx
+--- ooo310-m17/sfx2/source/appl/appreg.cxx	2009-08-19 10:28:20.000000000 +0200
++++ ooo310-m17.fix/sfx2/source/appl/appreg.cxx	2009-08-19 09:08:26.000000000 +0200
+@@ -53,6 +53,7 @@
+ #include <sfx2/objsh.hxx>
+ #include <sfx2/viewsh.hxx>
+ #include <sfx2/objface.hxx>
++#include <sfx2/team.hxx>
+ 
+ //===================================================================
+ 
+@@ -71,6 +72,7 @@ void SfxApplication::Registrations_Impl(
+     SfxNavigatorWrapper::RegisterChildWindow( FALSE, NULL, SFX_CHILDWIN_NEVERHIDE );
+     SfxPartChildWnd_Impl::RegisterChildWindow();
+ 	SfxTemplateDialogWrapper::RegisterChildWindow();
++    SfxTeamWrapper::RegisterChildWindow( FALSE, NULL, SFX_CHILDWIN_NEVERHIDE );
+     SfxDockingWrapper::RegisterChildWindow();
+ 
+     // Controller
+diff -urpBN -x '*.orig' -x unxlngi6.pro ooo310-m17/sfx2/source/dialog/makefile.mk ooo310-m17.fix/sfx2/source/dialog/makefile.mk
+--- ooo310-m17/sfx2/source/dialog/makefile.mk	2009-08-18 15:17:47.000000000 +0200
++++ ooo310-m17.fix/sfx2/source/dialog/makefile.mk	2009-08-19 09:09:42.000000000 +0200
+@@ -63,6 +63,7 @@ SLOFILES =\
+         $(SLO)$/macropg.obj         \
+         $(SLO)$/mgetempl.obj		\
+         $(SLO)$/navigat.obj			\
++        $(SLO)$/team.obj			\
+         $(SLO)$/newstyle.obj		\
+         $(SLO)$/passwd.obj			\
+         $(SLO)$/printopt.obj		\
+diff -urpBN -x '*.orig' -x unxlngi6.pro ooo310-m17/sfx2/source/dialog/team.cxx ooo310-m17.fix/sfx2/source/dialog/team.cxx
+--- ooo310-m17/sfx2/source/dialog/team.cxx	1970-01-01 01:00:00.000000000 +0100
++++ ooo310-m17.fix/sfx2/source/dialog/team.cxx	2009-08-19 09:01:51.000000000 +0200
+@@ -0,0 +1,79 @@
++/*
++ * written by Florian Reuter, (c) Novell Inc 2008
++ */
++
++// MARKER(update_precomp.py): autogen include statement, do not remove
++#include "precompiled_sfx2.hxx"
++
++#ifndef GCC
++#endif
++
++#include <sfx2/team.hxx>
++#include <sfx2/sfx.hrc>
++#include <sfx2/app.hxx>
++#include "sfxresid.hxx"
++#include "helpid.hrc"
++
++SFX_IMPL_DOCKINGWINDOW( SfxTeamWrapper , SID_TEAM );
++
++SfxTeamWrapper::SfxTeamWrapper( Window* pParentWnd ,
++				     USHORT nId ,
++				     SfxBindings* pBindings ,
++				     SfxChildWinInfo* pInfo )
++    : SfxChildWindow( pParentWnd , nId )
++{
++    printf("SfxTeamWrapper::SfxTeamWrapper\n");
++    pWindow = new SfxTeam( pBindings, this, pParentWnd,
++			   WB_STDDOCKWIN | WB_CLIPCHILDREN | WB_SIZEABLE | WB_3DLOOK | WB_ROLLABLE);
++//    eChildAlignment = SFX_ALIGN_NOALIGNMENT;
++    eChildAlignment = SFX_ALIGN_RIGHT;
++    printf("**ALIGN RIGHT**\n");
++    
++//    pWindow->SetHelpId ( HID_NAVIGATOR_WINDOW );
++    pWindow->SetOutputSizePixel( Size( 270, 240 ) );
++    
++    ( ( SfxDockingWindow* ) pWindow )->Initialize( pInfo );
++    SetHideNotDelete( TRUE );
++}
++
++
++SfxTeam::SfxTeam( SfxBindings* pBind ,
++		  SfxChildWindow* pChildWin ,
++		  Window* pParent ,
++		  WinBits nBits )
++    : SfxDockingWindow( pBind ,
++			pChildWin ,
++			pParent ,
++			nBits )
++    , pWrapper( pChildWin )
++{
++//    SetText( String( SfxResId( SID_NAVIGATOR ) ) );
++    SetText( String::CreateFromAscii("Team Window"));
++}
++
++void SfxTeam::Resize()
++{
++    SfxDockingWindow::Resize();
++    if ( pWrapper->GetContextWindow() )
++        pWrapper->GetContextWindow()->SetSizePixel( GetOutputSizePixel() );
++}
++
++void SfxTeam::Resizing( Size &rSize )
++{
++    SfxDockingWindow::Resizing( rSize );
++    
++    SfxChildWindowContext *pCon = GetChildWindow_Impl()->GetContext_Impl();
++    DBG_ASSERT( pCon, "Kein Context!" );
++    if ( pCon )
++	pCon->Resizing( rSize );
++}
++
++BOOL SfxTeam::Close()
++{
++    SfxChildWindowContext *pCon = GetChildWindow_Impl()->GetContext_Impl();
++    DBG_ASSERT( pCon, "Kein Context!" );
++    if ( !pCon || pCon->Close() )
++	return SfxDockingWindow::Close();
++    else
++	return FALSE;
++}
