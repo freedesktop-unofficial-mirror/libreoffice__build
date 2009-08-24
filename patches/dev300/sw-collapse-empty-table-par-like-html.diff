@@ -1,49 +1,170 @@
-Index: sw/source/core/crsr/callnk.cxx
-===================================================================
-RCS file: /cvs/sw/sw/source/core/crsr/callnk.cxx,v
-retrieving revision 1.10
-diff -u -r1.10 callnk.cxx
---- sw/source/core/crsr/callnk.cxx	16 Sep 2006 20:44:36 -0000	1.10
-+++ sw/source/core/crsr/callnk.cxx	15 Apr 2008 13:13:07 -0000
-@@ -124,6 +124,7 @@
- 	if( !nNdTyp || !rShell.bCallChgLnk )		// siehe ctor
- 		return ;
+diff --git sw/inc/IDocumentSettingAccess.hxx sw/inc/IDocumentSettingAccess.hxx
+index b8db22d..3b90c41 100644
+--- sw/inc/IDocumentSettingAccess.hxx
++++ sw/inc/IDocumentSettingAccess.hxx
+@@ -85,6 +85,7 @@ namespace com { namespace sun { namespace star { namespace i18n { struct Forbidd
+          TAB_AT_LEFT_INDENT_FOR_PARA_IN_LIST,
+          // <--
+ 	 INVERT_BORDER_SPACING,
++         COLLAPSE_EMPTY_CELL_PARA,
+          // COMPATIBILITY FLAGS END
  
-+
- 	// wird ueber Nodes getravellt, Formate ueberpruefen und im neuen
- 	// Node wieder anmelden
- 	SwPaM* pCurCrsr = rShell.IsTableMode() ? rShell.GetTblCrs() : rShell.GetCrsr();
-@@ -131,6 +132,21 @@
- 	if( !pCNd )
- 		return;
+          BROWSE_MODE,
+diff --git sw/inc/doc.hxx sw/inc/doc.hxx
+index 8507a8c..0d54d84 100644
+--- sw/inc/doc.hxx
++++ sw/inc/doc.hxx
+@@ -611,6 +611,7 @@ private:
+     bool mbTabRelativeToIndent                      : 1;   // #i24363# tab stops relative to indent
+     bool mbProtectForm                              : 1;
+     bool mbInvertBorderSpacing                      : 1;
++    bool mbCollapseEmptyCellPara                    : 1;
+     bool mbTabAtLeftIndentForParagraphsInList;             // OD 2008-06-05 #i89181# - see above
  
-+	{
-+	    SwFrm *myFrm=pCNd->GetFrm();
-+	    if (myFrm!=NULL) {
-+		myFrm->InvalidateAll();
-+	    }
+     // #i78591#
+diff --git sw/inc/ndtxt.hxx sw/inc/ndtxt.hxx
+index cf282c3..da1b8fa 100644
+--- sw/inc/ndtxt.hxx
++++ sw/inc/ndtxt.hxx
+@@ -808,6 +808,8 @@ public:
+ 
+     USHORT GetScalingOfSelectedText( xub_StrLen nStt, xub_StrLen nEnd ) const;
+ 
++    bool IsCollapse() const;
 +
-+	    const SwDoc *pDoc=rShell.GetDoc();
-+	    const SwCntntNode *pNode=(pDoc!=NULL?pDoc->GetNodes()[nNode]->GetCntntNode():NULL);
-+	    SwFrm *myFrm2=pNode->GetFrm();
-+	    if (myFrm2!=NULL) {
-+		myFrm2->InvalidateAll();
-+	    }
-+	}
+     DECL_FIXEDMEMPOOL_NEWDEL(SwTxtNode)
+ };
+ 
+diff --git sw/source/core/crsr/callnk.cxx sw/source/core/crsr/callnk.cxx
+index 8aaa93c..410b70e 100644
+--- sw/source/core/crsr/callnk.cxx
++++ sw/source/core/crsr/callnk.cxx
+@@ -46,10 +46,15 @@
+ #include <doc.hxx>
+ #include <frmfmt.hxx>
+ #include <txtfrm.hxx>
++#include <tabfrm.hxx>
++#include <rowfrm.hxx>
++#include <fmtfsize.hxx>
+ #include <ndtxt.hxx>
+ #include <flyfrm.hxx>
+ #include <breakit.hxx>
+ 
++#include<vcl/window.hxx>
 +
+ 
+ SwCallLink::SwCallLink( SwCrsrShell & rSh, ULONG nAktNode, xub_StrLen nAktCntnt,
+                         BYTE nAktNdTyp, long nLRPos, bool bAktSelection )
+@@ -100,6 +105,47 @@ SwCallLink::~SwCallLink()
+     if( !pCNd )
+         return;
+ 
++    bool bUpdatedTable = false;
++    SwFrm *myFrm=pCNd->GetFrm();
++    if (myFrm!=NULL) 
++    {
++        // We need to emulated a change of the row height in order 
++        // to have the complete row redrawn
++        SwRowFrm* pRow = myFrm->FindRowFrm( );
++        if ( pRow )
++        {
++            const SwTableLine* pLine = pRow->GetTabLine( );
++            SwFmtFrmSize pSize = pLine->GetFrmFmt( )->GetFrmSize( );
++            pRow->Modify( NULL, &pSize );
 +
- 	xub_StrLen nCmp, nAktCntnt = pCurCrsr->GetPoint()->nContent.GetIndex();
- 	USHORT nNdWhich = pCNd->GetNodeType();
- 	ULONG nAktNode = pCurCrsr->GetPoint()->nNode.GetIndex();
-Index: sw/source/core/layout/calcmove.cxx
-===================================================================
-RCS file: /cvs/sw/sw/source/core/layout/calcmove.cxx,v
-retrieving revision 1.69.130.1
-diff -u -r1.69.130.1 calcmove.cxx
---- sw/source/core/layout/calcmove.cxx	2 Jan 2008 14:39:22 -0000	1.69.130.1
-+++ sw/source/core/layout/calcmove.cxx	15 Apr 2008 13:13:07 -0000
-@@ -91,6 +91,8 @@
- #endif
++            bUpdatedTable = true;
++        }
++    }
++ 
++    const SwDoc *pDoc=rShell.GetDoc();
++    const SwCntntNode *pNode=(pDoc!=NULL?pDoc->GetNodes()[nNode]->GetCntntNode():NULL);
++    if ( pNode != NULL )
++    {
++        SwFrm *myFrm2=pNode->GetFrm();
++ 	    if (myFrm2!=NULL) 
++        {
++            // We need to emulated a change of the row height in order 
++            // to have the complete row redrawn
++            SwRowFrm* pRow = myFrm2->FindRowFrm();
++            if ( pRow )
++            {
++                const SwTableLine* pLine = pRow->GetTabLine( );
++                SwFmtFrmSize pSize = pLine->GetFrmFmt( )->GetFrmSize( );
++                pRow->Modify( NULL, &pSize );
++            
++                bUpdatedTable = true;
++            }
++ 	    }
++    }
++
++    if ( bUpdatedTable )
++        rShell.GetWin( )->Invalidate( 0 );
++
+     xub_StrLen nCmp, nAktCntnt = pCurCrsr->GetPoint()->nContent.GetIndex();
+     USHORT nNdWhich = pCNd->GetNodeType();
+     ULONG nAktNode = pCurCrsr->GetPoint()->nNode.GetIndex();
+diff --git sw/source/core/doc/doc.cxx sw/source/core/doc/doc.cxx
+index f5ec3e5..bc44a5a 100644
+--- sw/source/core/doc/doc.cxx
++++ sw/source/core/doc/doc.cxx
+@@ -185,6 +185,7 @@ bool SwDoc::get(/*[in]*/ DocumentSettingId id) const
+         case TAB_AT_LEFT_INDENT_FOR_PARA_IN_LIST: return mbTabAtLeftIndentForParagraphsInList;
+         // <--
+ 	case INVERT_BORDER_SPACING: return mbInvertBorderSpacing;
++        case COLLAPSE_EMPTY_CELL_PARA: return mbCollapseEmptyCellPara;
+          // COMPATIBILITY FLAGS END
+ 
+         case BROWSE_MODE: return mbBrowseMode;
+@@ -311,6 +312,9 @@ void SwDoc::set(/*[in]*/ DocumentSettingId id, /*[in]*/ bool value)
+ 	case INVERT_BORDER_SPACING:
+ 	    mbInvertBorderSpacing = value;
+ 	break;
++        case COLLAPSE_EMPTY_CELL_PARA:
++            mbCollapseEmptyCellPara = value;
++         break;
+          // COMPATIBILITY FLAGS END
+ 
+         case BROWSE_MODE:
+diff --git sw/source/core/doc/docnew.cxx sw/source/core/doc/docnew.cxx
+index 966255b..2e8e1f8 100644
+--- sw/source/core/doc/docnew.cxx
++++ sw/source/core/doc/docnew.cxx
+@@ -380,6 +380,7 @@ SwDoc::SwDoc() :
+     mbTabAtLeftIndentForParagraphsInList    = false;        // hidden
+     // <--
+     mbInvertBorderSpacing                   = false;        // hidden
++    mbCollapseEmptyCellPara                 = true;        // hidden
+ 
+     //
+     // COMPATIBILITY FLAGS END
+diff --git sw/source/core/inc/frame.hxx sw/source/core/inc/frame.hxx
+index 9a35030..420d970 100644
+--- sw/source/core/inc/frame.hxx
++++ sw/source/core/inc/frame.hxx
+@@ -630,6 +630,7 @@ public:
+     SwRootFrm			*FindRootFrm();
+     SwPageFrm	   		*FindPageFrm();
+     SwFrm				*FindColFrm();
++    SwRowFrm			*FindRowFrm();
+     SwFtnBossFrm		*FindFtnBossFrm( BOOL bFootnotes = FALSE );
+     SwTabFrm			*ImplFindTabFrm();
+     SwFtnFrm			*ImplFindFtnFrm();
+@@ -916,6 +917,9 @@ public:
+ 
+     // FME 2007-08-30 #i81146# new loop control
+     void ValidateThisAndAllLowers( const USHORT nStage );
++
++public:
++    bool IsCollapse() const;
+ };
+ 
+ inline BOOL	SwFrm::IsInDocBody() const
+diff --git sw/source/core/layout/calcmove.cxx sw/source/core/layout/calcmove.cxx
+index bb73a85..bc9ffa0 100644
+--- sw/source/core/layout/calcmove.cxx
++++ sw/source/core/layout/calcmove.cxx
+@@ -68,6 +68,8 @@
+ #include <flyfrms.hxx>
  // <--
  
 +#include <ndtxt.hxx>
@@ -51,42 +172,47 @@ diff -u -r1.69.130.1 calcmove.cxx
  //------------------------------------------------------------------------
  //				Move-Methoden
  //------------------------------------------------------------------------
-@@ -977,6 +979,34 @@
+@@ -957,6 +959,39 @@ void SwLayoutFrm::MakeAll()
  |*	Letzte Aenderung	MA 03. Mar. 96
  |*
  |*************************************************************************/
 +bool SwTxtNode::IsCollapse() const
 +{
-+    if (GetTxt().Len()==0) {
-+	ULONG nIdx=GetIndex();
-+	const SwEndNode *pNdBefore=GetNodes()[nIdx-1]->GetEndNode();
-+	const SwEndNode *pNdAfter=GetNodes()[nIdx+1]->GetEndNode();
-+	if (pNdBefore!=NULL && pNdAfter!=NULL) {
-+	    return true;
-+	} else {
-+	    return false;
-+	}
-+    } else return false;
++    if ( GetDoc()->get( IDocumentSettingAccess::COLLAPSE_EMPTY_CELL_PARA ) &&  GetTxt().Len()==0 ) {
++        ULONG nIdx=GetIndex();
++        const SwEndNode *pNdBefore=GetNodes()[nIdx-1]->GetEndNode();
++        const SwEndNode *pNdAfter=GetNodes()[nIdx+1]->GetEndNode();
++        
++        SwSortedObjs* pObjs = this->GetFrm()->GetDrawObjs( );
++        sal_uInt32 nObjs = ( pObjs != NULL ) ? pObjs->Count( ) : 0;
++
++        if (pNdBefore!=NULL && pNdAfter!=NULL && nObjs == 0) {
++            return true;
++        } else {
++            return false;
++        }
++    } else 
++        return false;
 +}
 +
 +bool SwFrm::IsCollapse() const
 +{
 +    if (IsTxtFrm()) {
-+	const SwTxtFrm *pTxtFrm=(SwTxtFrm*)this;
-+	const SwTxtNode *pTxtNode=pTxtFrm->GetTxtNode();
-+	if (pTxtNode && pTxtNode->IsCollapse()) {
-+	    return true;
-+	} else {
-+	    return false;
-+	}
++        const SwTxtFrm *pTxtFrm=(SwTxtFrm*)this;
++        const SwTxtNode *pTxtNode=pTxtFrm->GetTxtNode();
++        if (pTxtNode && pTxtNode->IsCollapse()) {
++            return true;
++        } else {
++            return false;
++        }
 +    } else {
-+	return false;
++        return false;
 +    }
 +}
  
  BOOL SwCntntFrm::MakePrtArea( const SwBorderAttrs &rAttrs )
  {
-@@ -1078,6 +1108,11 @@
+@@ -1057,6 +1092,11 @@ BOOL SwCntntFrm::MakePrtArea( const SwBorderAttrs &rAttrs )
  
              // OD 2004-03-02 #106629# - use new method <CalcLowerSpace(..)>
              SwTwips nLower = CalcLowerSpace( &rAttrs );
@@ -98,14 +224,31 @@ diff -u -r1.69.130.1 calcmove.cxx
  //            // in balanced columned section frames we do not want the
  //            // common border
  //            sal_Bool bCommonBorder = sal_True;
-Index: sw/source/core/text/porrst.cxx
-===================================================================
-RCS file: /cvs/sw/sw/source/core/text/porrst.cxx,v
-retrieving revision 1.43
-diff -u -r1.43 porrst.cxx
---- sw/source/core/text/porrst.cxx	27 Sep 2007 09:18:30 -0000	1.43
-+++ sw/source/core/text/porrst.cxx	15 Apr 2008 13:13:07 -0000
-@@ -120,6 +120,8 @@
+diff --git sw/source/core/layout/findfrm.cxx sw/source/core/layout/findfrm.cxx
+index e192364..d641056 100644
+--- sw/source/core/layout/findfrm.cxx
++++ sw/source/core/layout/findfrm.cxx
+@@ -599,6 +599,15 @@ SwFrm *SwFrm::FindColFrm()
+     return pFrm;
+ }
+ 
++SwRowFrm *SwFrm::FindRowFrm()
++{
++    SwFrm *pFrm = this;
++    do
++    {	pFrm = pFrm->GetUpper();
++    } while ( pFrm && !pFrm->IsRowFrm() );
++    return dynamic_cast< SwRowFrm* >( pFrm );
++}
++
+ SwFrm* SwFrm::FindFooterOrHeader()
+ {
+     SwFrm* pRet = this;
+diff --git sw/source/core/text/porrst.cxx sw/source/core/text/porrst.cxx
+index 99aeaa4..fabc5a3 100644
+--- sw/source/core/text/porrst.cxx
++++ sw/source/core/text/porrst.cxx
+@@ -61,6 +61,8 @@
  #include <IDocumentSettingAccess.hxx>
  #include <IDocumentDeviceAccess.hxx>
  
@@ -114,7 +257,7 @@ diff -u -r1.43 porrst.cxx
  /*************************************************************************
   *                      class SwTmpEndPortion
   *************************************************************************/
-@@ -289,6 +291,20 @@
+@@ -230,6 +232,20 @@ SwLinePortion *SwArrowPortion::Compress() { return this; }
  
  SwTwips SwTxtFrm::EmptyHeight() const
  {
@@ -135,36 +278,84 @@ diff -u -r1.43 porrst.cxx
      ASSERT( ! IsVertical() || ! IsSwapped(),"SwTxtFrm::EmptyHeight with swapped frame" );
  
      SwFont *pFnt;
-Index: sw/source/core/inc/frame.hxx
-===================================================================
-RCS file: /cvs/sw/sw/source/core/inc/frame.hxx,v
-retrieving revision 1.57
-diff -u -r1.57 frame.hxx
---- sw/source/core/inc/frame.hxx	22 Nov 2007 15:35:16 -0000	1.57
-+++ sw/source/core/inc/frame.hxx	15 Apr 2008 13:13:08 -0000
-@@ -923,6 +923,9 @@
+diff --git sw/source/filter/ww8/ww8par.cxx sw/source/filter/ww8/ww8par.cxx
+index 2426ced..f9cd78e 100644
+--- sw/source/filter/ww8/ww8par.cxx
++++ sw/source/filter/ww8/ww8par.cxx
+@@ -1538,6 +1538,7 @@ void SwWW8ImplReader::ImportDop()
+     // <--
  
-     // FME 2007-08-30 #i81146# new loop control
-     void ValidateThisAndAllLowers( const USHORT nStage );
-+
-+public:
-+    bool IsCollapse() const;
+     rDoc.set(IDocumentSettingAccess::INVERT_BORDER_SPACING, true);
++    rDoc.set(IDocumentSettingAccess::COLLAPSE_EMPTY_CELL_PARA, true);
+ 
+     //
+     // COMPATIBILITY FLAGS END
+diff --git sw/source/filter/ww8/ww8par2.cxx sw/source/filter/ww8/ww8par2.cxx
+index 0a45f90..36e4d27 100644
+--- sw/source/filter/ww8/ww8par2.cxx
++++ sw/source/filter/ww8/ww8par2.cxx
+@@ -3578,18 +3578,6 @@ void SwWW8ImplReader::TabCellEnd()
+     if (nInTable && pTableDesc)
+     {
+         pTableDesc->TableCellEnd();
+-
+-        if (bReadTable 
+-            && pWFlyPara == NULL 
+-            && mpTableEndPaM.get() != NULL 
+-            && (! SwPaM::Overlap(*pPaM, *mpTableEndPaM))
+-            && SwPaM::LessThan(*mpTableEndPaM, *pPaM))
+-        {
+-            if (mpTableEndPaM->GetPoint()->nNode.GetNode().IsTxtNode())
+-            {
+-                rDoc.DelFullPara(*mpTableEndPaM);
+-            }
+-        }    
+     }
+     
+     bFirstPara = true;    // We have come to the end of a cell so FirstPara flag
+diff --git sw/source/ui/uno/SwXDocumentSettings.cxx sw/source/ui/uno/SwXDocumentSettings.cxx
+index a65d367..039cfb4 100644
+--- sw/source/ui/uno/SwXDocumentSettings.cxx
++++ sw/source/ui/uno/SwXDocumentSettings.cxx
+@@ -132,6 +132,7 @@ enum SwDocumentSettingsPropertyHandles
+     HANDLE_TAB_AT_LEFT_INDENT_FOR_PARA_IN_LIST
+     // <--
+     ,HANDLE_INVERT_BORDER_SPACING
++    ,HANDLE_COLLAPSE_EMPTY_CELL_PARA
  };
  
- inline BOOL	SwFrm::IsInDocBody() const
-Index: sw/inc/ndtxt.hxx
-===================================================================
-RCS file: /cvs/sw/sw/inc/ndtxt.hxx,v
-retrieving revision 1.51
-diff -u -r1.51 ndtxt.hxx
---- sw/inc/ndtxt.hxx	22 Oct 2007 15:06:19 -0000	1.51
-+++ sw/inc/ndtxt.hxx	15 Apr 2008 13:13:08 -0000
-@@ -700,6 +700,8 @@
- 
- 	USHORT GetScalingOfSelectedText( xub_StrLen nStt, xub_StrLen nEnd ) const;
- 
-+    bool IsCollapse() const;
-+
-     DECL_FIXEDMEMPOOL_NEWDEL(SwTxtNode)
- };
- 
+ MasterPropertySetInfo * lcl_createSettingsInfo()
+@@ -186,6 +187,7 @@ MasterPropertySetInfo * lcl_createSettingsInfo()
+         // --> OD 2008-06-05 #i89181#
+         { RTL_CONSTASCII_STRINGPARAM("TabAtLeftIndentForParagraphsInList"), HANDLE_TAB_AT_LEFT_INDENT_FOR_PARA_IN_LIST, CPPUTYPE_BOOLEAN, 0, 0},
+         { RTL_CONSTASCII_STRINGPARAM("InvertBorderSpacing"), HANDLE_INVERT_BORDER_SPACING, CPPUTYPE_BOOLEAN, 0, 0},
++        { RTL_CONSTASCII_STRINGPARAM("CollapseEmptyCellPara"), HANDLE_COLLAPSE_EMPTY_CELL_PARA, CPPUTYPE_BOOLEAN, 0, 0},
+ /*
+  * As OS said, we don't have a view when we need to set this, so I have to
+  * find another solution before adding them to this property set - MTG
+@@ -685,6 +687,12 @@ void SwXDocumentSettings::_setSingleValue( const comphelper::PropertyInfo & rInf
+             mpDoc->set(IDocumentSettingAccess::INVERT_BORDER_SPACING, bTmp);
+ 	}
+ 	break;
++        case HANDLE_COLLAPSE_EMPTY_CELL_PARA:
++        {
++            sal_Bool bTmp = *(sal_Bool*)rValue.getValue();
++            mpDoc->set(IDocumentSettingAccess::COLLAPSE_EMPTY_CELL_PARA, bTmp);
++        }
++        break;
+         default:
+             throw UnknownPropertyException();
+     }
+@@ -1018,6 +1026,12 @@ void SwXDocumentSettings::_getSingleValue( const comphelper::PropertyInfo & rInf
+             rValue.setValue( &bTmp, ::getBooleanCppuType() );
+ 	}
+ 	break;
++        case HANDLE_COLLAPSE_EMPTY_CELL_PARA:
++    	{
++            sal_Bool bTmp = mpDoc->get( IDocumentSettingAccess::COLLAPSE_EMPTY_CELL_PARA );
++            rValue.setValue( &bTmp, ::getBooleanCppuType() );
++	    }
++    	break;
+         default:
+             throw UnknownPropertyException();
+     }
