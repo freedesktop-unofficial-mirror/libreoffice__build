@@ -1,11 +1,16 @@
 #!/usr/bin/perl -w
 
-sub webget($$)
+sub webget($$$)
 {
-    my ($src, $dest) = @_;
+    my ($src, $dest, $name) = @_;
 
-    print "Get $src -> $dest\n";
-    system ("cd $dest ; $WGET \"$src\"") != 0 && die "Failed fetch";
+    $save_as = '';
+    if ( $name ne '' ) {
+        $save_as = "-O \"$name\"";
+    }
+
+    print "Get $src -> $dest/$name\n";
+    return ( system ("cd $dest ; $WGET \"$src\" $save_as") == 0 );
 }
 
 sub usage {
@@ -135,7 +140,18 @@ if ('@SPLIT@' eq '') {
 # Files to download
 @files = ();
 
-sub source_file($)
+sub source_file
+{
+    my $file = shift;
+    my $save_as = shift;
+
+    die "No file?" if ( !defined $file );
+    $save_as = '' if ( !defined $save_as );
+
+    push @files, { 'file' => "$file", 'save_as' => "$save_as" };
+}
+
+sub source_file_ooo($)
 {
     my ($upstream_what) = @_;
     my $what = $upstream_what;
@@ -158,15 +174,23 @@ sub source_file($)
 
         system( "cd @SRCDIR@/clone ; if [ -d $what ] ; then cd $what ; git fetch -t origin ; else git clone -n @OOO_GIT@/$what ; fi" );
     }
-    elsif ( '@UPSTREAM_SOURCE@' eq "YES" ) {
+    elsif ( '@SOURCE_TYPE@' eq "UPSTREAM" ) {
         die "Up-stream doesn't have a package split" if ($SPLIT);
-        push @files, '@UPSTREAM_URI@' . "&lang=$upstream_what";
+        source_file( '@UPSTREAM_URI@' . "&lang=$upstream_what", '@UPSTREAM_NAME@' . "_$upstream_what.tar.bz2" );
     }
-    elsif ( '@UPSTREAM_SOURCE@' eq "MIRROR" ) {
-        push @files, '@UPSTREAM_NAME@' . '_' . $upstream_what . '.tar.bz2';
+    elsif ( '@SOURCE_TYPE@' eq "MIRROR" ) {
+        source_file( '@UPSTREAM_NAME@' . "_$upstream_what.tar.bz2" );
+    }
+    elsif ( '@SOURCE_TYPE@' eq "CGIT" ) {
+        my $upstream_tag = $tag;
+        $upstream_tag =~ tr/a-z/A-Z/;
+        $upstream_tag =~ s/-M/_m/;
+
+        source_file( "http://cgit.freedesktop.org/ooo-build/$what/snapshot/ooo/$upstream_tag.tar.bz2",
+            '@CVSTAG@' . "-$what.tar.bz2" );
     }
     else {
-        push @files, '@CVSTAG@' . '-' . $what . '.tar.bz2';
+        source_file( '@CVSTAG@' . "-$what.tar.bz2" );
     }
 }
 
@@ -174,41 +198,52 @@ sub download_files($$$)
 {
     my ($files, $locations, $dest) = @_;
 
-    for my $file ( @{$files} ) {
-        if ( $file ne '' ) {
-            my $to_check = "$dest/$file";
-            if ( '@UPSTREAM_SOURCE@' eq "YES" ) {
-                if ( $file =~ /^.*=([^=]*)/ ) {
-                    $to_check = "$dest/" . '@UPSTREAM_NAME@' . '_' .  $1 . '.tar.bz2';
-                }
-            }
+    my @try = @{$files};
+    my $try_num = 10;
 
-            if ( -f "$to_check" ) {
-                print "Skipping $file\n";
-	    } elsif ( defined $ENV{'DOWNLOADCACHE'} &&
-		      -f "$ENV{'DOWNLOADCACHE'}/$file" ) {
-		print "Using cached $file\n";
-		system ("cp $ENV{'DOWNLOADCACHE'}/$file $to_check");
-            } else {
-                print "No file $to_check\n";
-                my $location = 'NOT_FOUND';
-                for $regexp (keys %{$locations}) {
-                    if ($file =~ m/^$regexp/) {
-                        $location = $locations->{$regexp};
-                        last;
+    do {
+        my @failed;
+        for my $record ( @try ) {
+            my $file = $record->{'file'};
+            my $save_as = $record->{'save_as'};
+
+            if ( $file ne '' ) {
+                my $to_check = ( $save_as ne '' )? "$dest/$save_as": "$dest/$file";
+                if ( -f "$to_check" ) {
+                    print "Skipping $file\n";
+                } elsif ( defined $ENV{'DOWNLOADCACHE'} &&
+                    -f "$ENV{'DOWNLOADCACHE'}/$file" ) {
+                    print "Using cached $file\n";
+                    system ("cp $ENV{'DOWNLOADCACHE'}/$file $to_check");
+                } else {
+                    print "No file $to_check\n";
+                    my $location = 'NOT_FOUND';
+                    for $regexp (keys %{$locations}) {
+                        if ($file =~ m/^$regexp/) {
+                            $location = $locations->{$regexp};
+                            last;
+                        }
+                    }
+
+                    my $to_get = $location."/$file";
+                    $location eq 'NOT_FOUND' && die "Can't find '$file' to download";
+                    if ( $location eq '' ) {
+                        $to_get = $file;
+                    }
+
+                    if ( !webget( $to_get, $dest, $save_as ) ) {
+                        print "Failed to get '$to_get', will retry later.\n";
+                        unlink $to_check;
+                        push @failed, $record;
                     }
                 }
-
-                my $to_get = $location."/$file";
-                $location eq 'NOT_FOUND' && die "Can't find '$file' to download";
-                if ( $location eq '' ) {
-                    $to_get = $file;
-                }
-
-                webget( $to_get, $dest );
             }
         }
-    }
+        @try = @failed;
+        --$try_num;
+    } while ( $#try >= 0 && $try_num > 0 );
+
+    die "Fetch failed" if ( $try_num == 0 && $#try >= 0 );
 }
 
 if (!-d "@SRCDIR@") {
@@ -235,176 +270,177 @@ print "Downloading files for @CVSTAG@\n";
 -x $WGET || die "Can't find wget - install it and try again\n";
 
 if ('@SYSTEM_GCC@' eq '') {
-    push @files, ( 'gcc-4.2.3.tar.bz2', 'binutils-2.18.tar.bz2' );
+    source_file( 'gcc-4.2.3.tar.bz2' );
+    source_file( 'binutils-2.18.tar.bz2' );
 }
 
 if (!$SPLIT && ($download_all || '@BUILD_WIN32@' ne ''))
 {
-    source_file( "system" );
+    source_file_ooo( "system" );
 }
 
 if ($download_all && '@BUILD_WIN32@' eq '')
 {
-    push @files, ( '@BUILD_MOZILLA_SOURCE@' );
+    source_file( '@BUILD_MOZILLA_SOURCE@' );
 }
 
 # Misc. bits for Win32
 if ('@BUILD_WIN32@' ne '') 
 {
-    push @files, ( 'unicows.exe' ) unless '@DISTRO@' =~ m/NovellWin32|GoOoWin32/;
-    push @files, ( 'dbghinst.EXE' );
-    push @files, ( 'instmsiw.exe' );
-    push @files, ( 'instmsia.exe' ) unless '@DISTRO@' =~ m/NovellWin32|GoOoWin32/;
+    source_file( 'unicows.exe' ) unless '@DISTRO@' =~ m/NovellWin32|GoOoWin32/;
+    source_file( 'dbghinst.EXE' );
+    source_file( 'instmsiw.exe' );
+    source_file( 'instmsia.exe' ) unless '@DISTRO@' =~ m/NovellWin32|GoOoWin32/;
     # instmsiw.exe can't be downloaded without Genuine Windows validation
 
-    push @files, ( "apache-ant-1.7.0-bin.tar.gz" );
+    source_file( "apache-ant-1.7.0-bin.tar.gz" );
 
 # Comment out the Mozilla source bits until we can compile it
 # with MSVS2008
-    #push @files, ( '@BUILD_MOZILLA_SOURCE@' );
-    #push @files, ( 'glib-1.2.10.tar.gz' );
-    #push @files, ( 'libIDL-0.6.8.tar.gz' );
+    #source_file( '@BUILD_MOZILLA_SOURCE@' );
+    #source_file( 'glib-1.2.10.tar.gz' );
+    #source_file( 'libIDL-0.6.8.tar.gz' );
 # this contains binaries and source, we just use the source
-    #push @files, ( 'wintools.zip' );
+    #source_file( 'wintools.zip' );
 
     # Icons
-    push @files, ( 'ooo-windows-icons-0.2.tar.bz2' ) if '@DISTRO@' =~ m/NovellWin32|GoOoWin32/;
+    source_file( 'ooo-windows-icons-0.2.tar.bz2' ) if '@DISTRO@' =~ m/NovellWin32|GoOoWin32/;
 
 # We must use the prebuilt Mozilla bits as the compiler to use (MSVS2008) does not compile
 # Mozilla 1.7.5 as used here without love that hasn't been applied yet
-    push @files, ( 'WNTMSCIinc.zip' );
-    push @files, ( 'WNTMSCIlib.zip' );
-    push @files, ( 'WNTMSCIruntime.zip' );
+    source_file( 'WNTMSCIinc.zip' );
+    source_file( 'WNTMSCIlib.zip' );
+    source_file( 'WNTMSCIruntime.zip' );
 }
 else
 {
     if ('@ENABLE_MONO@' ne 'FALSE') {
-	push @files, ( 'ooo-cli-prebuilt-3.1.1.tar.bz2' );
+	source_file( 'ooo-cli-prebuilt-3.1.1.tar.bz2' );
     }
     if ( $download_all ) {
-    	push @files, ( "apache-ant-1.7.0-bin.tar.gz" );
+    	source_file( "apache-ant-1.7.0-bin.tar.gz" );
     }
 }
 
 # Prebuilt dictionaries
-push @files, ( 'writingaids-@PREBUILT_WRITINGAIDS_TIMESTAMP@.zip' ) if '@DISTRO@' =~ m/NovellWin32|GoOoWin32/;
-push @files, ( 'writingaids-doc-@PREBUILT_WRITINGAIDS_TIMESTAMP@.zip' ) if '@DISTRO@' =~ m/NovellWin32|GoOoWin32/;
+source_file( 'writingaids-@PREBUILT_WRITINGAIDS_TIMESTAMP@.zip' ) if '@DISTRO@' =~ m/NovellWin32|GoOoWin32/;
+source_file( 'writingaids-doc-@PREBUILT_WRITINGAIDS_TIMESTAMP@.zip' ) if '@DISTRO@' =~ m/NovellWin32|GoOoWin32/;
 
-push @files, ( 'extensionaids-@PREBUILT_EXTENSIONAIDS_TIMESTAMP@.zip' ) if '@DISTRO@' =~ m/OxygenOfficeLinux|OxygenOfficeWindows|FSFhu/;
+source_file( 'extensionaids-@PREBUILT_EXTENSIONAIDS_TIMESTAMP@.zip' ) if '@DISTRO@' =~ m/OxygenOfficeLinux|OxygenOfficeWindows|FSFhu/;
 
 if ('@CAIRO_ENABLED@' eq 'TRUE' && '@SYSTEM_CAIRO@' ne 'TRUE') {
-    push @files, ( 'cairo-@CAIRO_VER@.tar.gz' );
+    source_file( 'cairo-@CAIRO_VER@.tar.gz' );
 }
 
 if ('@OPENCLIPART_VER@' ne '') {
-    push @files, ( 'openclipart-@OPENCLIPART_VER@.tar.bz2' );
+    source_file( 'openclipart-@OPENCLIPART_VER@.tar.bz2' );
 }
 
 if ('@DEJAVU_FONTS_VER@' ne '') {
-    push @files, ( '@DEJAVU_FONTS_PACK_NAME@.zip' );
+    source_file( '@DEJAVU_FONTS_PACK_NAME@.zip' );
 }
 
 if ('@LIBERATION_FONTS_VER@' ne '') {
-    push @files, ( 'liberation-fonts-ttf-@LIBERATION_FONTS_VER@.zip' );
+    source_file( 'liberation-fonts-ttf-@LIBERATION_FONTS_VER@.zip' );
 }
 
 if ('@MDBTOOLS_SRC@' ne '') {
-    push @files, ( '@MDBTOOLS_SRC@' );
+    source_file( '@MDBTOOLS_SRC@' );
 }
 
 if ($SPLIT) {
-    source_file( "artwork" );
-    source_file( "base" );
-    source_file( "bootstrap" );
-    source_file( "calc" );
-    source_file( "components" );
-    source_file( "extras" );
-    source_file( "filters" );
-    source_file( "help" );
-    source_file( "impress" );
-    source_file( "libs-gui" );
-    source_file( "libs-core" );
-    source_file( "libs-extern" );
-    source_file( "postprocess" );
-    source_file( "sdk" );
-    source_file( "testing" );
-    source_file( "ure" );
-    source_file( "writer" );
+    source_file_ooo( "artwork" );
+    source_file_ooo( "base" );
+    source_file_ooo( "bootstrap" );
+    source_file_ooo( "calc" );
+    source_file_ooo( "components" );
+    source_file_ooo( "extras" );
+    source_file_ooo( "filters" );
+    source_file_ooo( "help" );
+    source_file_ooo( "impress" );
+    source_file_ooo( "libs-gui" );
+    source_file_ooo( "libs-core" );
+    source_file_ooo( "libs-extern" );
+    source_file_ooo( "postprocess" );
+    source_file_ooo( "sdk" );
+    source_file_ooo( "testing" );
+    source_file_ooo( "ure" );
+    source_file_ooo( "writer" );
 # for now ...
-    source_file( "libs-extern-sys" );
+    source_file_ooo( "libs-extern-sys" );
 } else {
-    source_file( "core" );
+    source_file_ooo( "core" );
 }
 
 if ('@ENABLE_EXTENSIONS@' eq 'YES') {
-    source_file( "extensions" );
+    source_file_ooo( "extensions" );
 }
 
-push @files, ( '@OOO_CUSTOM_IMAGES@') if '@OOO_CUSTOM_IMAGES@';
-push @files, ( '@OOO_EXTRA_ARTWORK@' ) if '@OOO_EXTRA_ARTWORK@';
+source_file( '@OOO_CUSTOM_IMAGES@') if '@OOO_CUSTOM_IMAGES@';
+source_file( '@OOO_EXTRA_ARTWORK@' ) if '@OOO_EXTRA_ARTWORK@';
 # Temporary utf-8ization of bibliograpy bits
-push @files, ( "biblio.tar.bz2" );
+source_file( "biblio.tar.bz2" );
 
 if (!$SPLIT && ($download_all || '@ENABLE_BINFILTER@' eq 'TRUE')) {
-    source_file( "binfilter" );
+    source_file_ooo( "binfilter" );
 }
 
 if ('@USE_PREBUILD_UNOWINREG_DLL@' eq 'YES') {
-    push @files, ( "unowinreg.dll" );
+    source_file( "unowinreg.dll" );
 }
 
 if ( $download_all || '@OOO_LANGS@' ne 'en-US' || '@BUILD_WIN32@' ne '' ) {
-    source_file( "l10n" );
+    source_file_ooo( "l10n" );
 }
 
 if ('@PIECE@' eq 'bootstrap') {
-   push @files, ( 'setup_native_packinfo-ooo310-m2.tar.bz2' );
+   source_file( 'setup_native_packinfo-ooo310-m2.tar.bz2' );
 }
 
 if ('@GRAPHITE_SRC@' ne '') {
-    push @files, ( '@GRAPHITE_SRC@' );
+    source_file( '@GRAPHITE_SRC@' );
 }
 
 if ('@SYSTEM_LIBWPD@' eq 'NO') {
-   push @files, ( '@LIBWPD_TARBALL@' );
+   source_file( '@LIBWPD_TARBALL@' );
 }
 
 if ('@SYSTEM_LIBWPS@' eq 'NO') {
-   push @files, ( '@LIBWPS_TARBALL@' );
+   source_file( '@LIBWPS_TARBALL@' );
 }
 
 if ('@SYSTEM_LIBWPG@' eq 'NO') {
-   push @files, ( '@LIBWPG_TARBALL@' );
+   source_file( '@LIBWPG_TARBALL@' );
 }
 
 if ('@OOOP_FONTS_PACK@' ne '') {
-    push @files, ( '@OOOP_FONTS_PACK@' );
+    source_file( '@OOOP_FONTS_PACK@' );
 }
 
 if ('@OOOP_GALLERY_PACK@' ne '') {
-    push @files, ( '@OOOP_GALLERY_PACK@' );
+    source_file( '@OOOP_GALLERY_PACK@' );
 }
 
 if ('@OOOP_SAMPLES_PACK@' ne '') {
-    push @files, ( '@OOOP_SAMPLES_PACK@' );
+    source_file( '@OOOP_SAMPLES_PACK@' );
 }
 
 if ('@OOOP_TEMPLATES_PACK@' ne '') {
-    push @files, ( '@OOOP_TEMPLATES_PACK@' );
+    source_file( '@OOOP_TEMPLATES_PACK@' );
 }
 
 if ('@LIGHTPROOF_EXTENSION@' ne '') {
-    push @files, ( '@LIGHTPROOF_EXTENSION@' );
+    source_file( '@LIGHTPROOF_EXTENSION@' );
 }
 
 if ('@OXYGEN_IMAGES_TAR@' ne '') {
-    push @files, ( '@OXYGEN_IMAGES_TAR@' );
+    source_file( '@OXYGEN_IMAGES_TAR@' );
 }
 
 $suntemplang = trim('@SUNTEMPLATES_LANG@');
 @templang = split (/ /, $suntemplang);
 foreach (@templang) {
-    push @files, ( 'Sun_ODF_Template_Pack_' . $_ . '.oxt');
+    source_file( 'Sun_ODF_Template_Pack_' . $_ . '.oxt');
 }
 
 my $distro = '@DISTRO@';
@@ -420,7 +456,7 @@ if ($distro eq 'ArchLinux' ||
     $distro eq 'OxygenOfficeLinux' || $distro eq 'OxygenOfficeWindows' || 
     $distro eq 'FSFhuLinux' || $distro eq 'FSFhuWindows' || 
     $distro eq 'translate-org-za-linux' || $distro eq 'translate-org-za-win32' || $distro eq 'Pardus') {
-    source_file( "libs_extern_sys" ) if !$SPLIT;
+    source_file_ooo( "libs_extern_sys" ) if !$SPLIT;
 }
 
 if ($download_all ||
@@ -429,7 +465,7 @@ if ($download_all ||
     $distro =~ m/Frugalware/ ||
     $distro eq 'OxygenOfficeLinux' || $distro eq 'OxygenOfficeWindows' || 
     '@BUILD_WIN32@' ne '') {
-    source_file( "sdk" );
+    source_file_ooo( "sdk" );
 }
 
 download_files (\@files, \%SRC_URLS, '@SRCDIR@');
