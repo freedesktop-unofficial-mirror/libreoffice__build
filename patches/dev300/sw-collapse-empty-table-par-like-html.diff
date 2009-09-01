@@ -160,7 +160,7 @@ index 9a35030..420d970 100644
  
  inline BOOL	SwFrm::IsInDocBody() const
 diff --git sw/source/core/layout/calcmove.cxx sw/source/core/layout/calcmove.cxx
-index bb73a85..bc9ffa0 100644
+index bb73a85..4c5df37 100644
 --- sw/source/core/layout/calcmove.cxx
 +++ sw/source/core/layout/calcmove.cxx
 @@ -68,6 +68,8 @@
@@ -172,7 +172,7 @@ index bb73a85..bc9ffa0 100644
  //------------------------------------------------------------------------
  //				Move-Methoden
  //------------------------------------------------------------------------
-@@ -957,6 +959,39 @@ void SwLayoutFrm::MakeAll()
+@@ -957,6 +959,42 @@ void SwLayoutFrm::MakeAll()
  |*	Letzte Aenderung	MA 03. Mar. 96
  |*
  |*************************************************************************/
@@ -182,11 +182,14 @@ index bb73a85..bc9ffa0 100644
 +        ULONG nIdx=GetIndex();
 +        const SwEndNode *pNdBefore=GetNodes()[nIdx-1]->GetEndNode();
 +        const SwEndNode *pNdAfter=GetNodes()[nIdx+1]->GetEndNode();
-+        
++
++        // The paragraph is collapsed only if the NdAfter is the end of a cell
++        bool bInTable = this->FindTableNode( ) != NULL;
++
 +        SwSortedObjs* pObjs = this->GetFrm()->GetDrawObjs( );
 +        sal_uInt32 nObjs = ( pObjs != NULL ) ? pObjs->Count( ) : 0;
 +
-+        if (pNdBefore!=NULL && pNdAfter!=NULL && nObjs == 0) {
++        if ( pNdBefore!=NULL && pNdAfter!=NULL && nObjs == 0 && bInTable ) {
 +            return true;
 +        } else {
 +            return false;
@@ -212,7 +215,7 @@ index bb73a85..bc9ffa0 100644
  
  BOOL SwCntntFrm::MakePrtArea( const SwBorderAttrs &rAttrs )
  {
-@@ -1057,6 +1092,11 @@ BOOL SwCntntFrm::MakePrtArea( const SwBorderAttrs &rAttrs )
+@@ -1057,6 +1095,11 @@ BOOL SwCntntFrm::MakePrtArea( const SwBorderAttrs &rAttrs )
  
              // OD 2004-03-02 #106629# - use new method <CalcLowerSpace(..)>
              SwTwips nLower = CalcLowerSpace( &rAttrs );
@@ -244,8 +247,53 @@ index e192364..d641056 100644
  SwFrm* SwFrm::FindFooterOrHeader()
  {
      SwFrm* pRet = this;
+diff --git sw/source/core/text/frmpaint.cxx sw/source/core/text/frmpaint.cxx
+index d1f2416..f93ba6f 100644
+--- sw/source/core/text/frmpaint.cxx
++++ sw/source/core/text/frmpaint.cxx
+@@ -570,21 +570,25 @@ sal_Bool SwTxtFrm::PaintEmpty( const SwRect &rRect, sal_Bool bCheck ) const
+                     }
+                 }
+ 
+-                const XubString aTmp( CH_PAR );
+-                SwDrawTextInfo aDrawInf( pSh, *pSh->GetOut(), 0, aTmp, 0, 1 );
+-                aDrawInf.SetLeft( rRect.Left() );
+-                aDrawInf.SetRight( rRect.Right() );
+-                aDrawInf.SetPos( aPos );
+-                aDrawInf.SetSpace( 0 );
+-                aDrawInf.SetKanaComp( 0 );
+-                aDrawInf.SetWrong( NULL );
+-                aDrawInf.SetGrammarCheck( NULL );
+-                aDrawInf.SetSmartTags( NULL ); // SMARTTAGS
+-                aDrawInf.SetFrm( this );
+-                aDrawInf.SetFont( pFnt );
+-                aDrawInf.SetSnapToGrid( sal_False );
+-
+-                pFnt->_DrawText( aDrawInf );
++                // Don't show the paragraph mark for collapsed paragraphs, when they are hidden
++                if ( EmptyHeight( ) > 1 )
++                {
++                    const XubString aTmp( CH_PAR );
++                    SwDrawTextInfo aDrawInf( pSh, *pSh->GetOut(), 0, aTmp, 0, 1 );
++                    aDrawInf.SetLeft( rRect.Left() );
++                    aDrawInf.SetRight( rRect.Right() );
++                    aDrawInf.SetPos( aPos );
++                    aDrawInf.SetSpace( 0 );
++                    aDrawInf.SetKanaComp( 0 );
++                    aDrawInf.SetWrong( NULL );
++                    aDrawInf.SetGrammarCheck( NULL );
++                    aDrawInf.SetSmartTags( NULL ); // SMARTTAGS
++                    aDrawInf.SetFrm( this );
++                    aDrawInf.SetFont( pFnt );
++                    aDrawInf.SetSnapToGrid( sal_False );
++    
++                    pFnt->_DrawText( aDrawInf );
++                }
+                 delete pClip;
+             }
+             delete pFnt;
 diff --git sw/source/core/text/porrst.cxx sw/source/core/text/porrst.cxx
-index 99aeaa4..fabc5a3 100644
+index 99aeaa4..2c74caf 100644
 --- sw/source/core/text/porrst.cxx
 +++ sw/source/core/text/porrst.cxx
 @@ -61,6 +61,8 @@
@@ -262,18 +310,18 @@ index 99aeaa4..fabc5a3 100644
  SwTwips SwTxtFrm::EmptyHeight() const
  {
 +    if (IsCollapse()) {
-+	ViewShell *pSh = GetShell();
-+	if ( pSh->IsA( TYPE(SwCrsrShell) ) ) {
-+	    SwCrsrShell *pCrSh=(SwCrsrShell*)pSh;
-+	    SwCntntFrm *pCurrFrm=pCrSh->GetCurrFrm();
-+	    if (pCurrFrm==(SwCntntFrm*)this) {
-+		// do nothing
-+	    } else {
-+		return 1;
-+	    }
-+	} else {
-+	    return 1;
-+	}
++        ViewShell *pSh = GetShell();
++    	if ( pSh->IsA( TYPE(SwCrsrShell) ) ) {
++	        SwCrsrShell *pCrSh=(SwCrsrShell*)pSh;
++	        SwCntntFrm *pCurrFrm=pCrSh->GetCurrFrm();
++    	    if (pCurrFrm==(SwCntntFrm*)this) {
++	        	// do nothing
++	        } else {
++        		return 1;
++	        }
++        } else {
++	        return 1;
++    	}
 +    }
      ASSERT( ! IsVertical() || ! IsSwapped(),"SwTxtFrm::EmptyHeight with swapped frame" );
  
