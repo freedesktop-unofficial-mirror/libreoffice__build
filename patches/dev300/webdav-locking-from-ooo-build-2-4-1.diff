@@ -139,6 +139,15 @@
  	String aDescription = SvFileInformationManager::GetDescription( INetURLObject(rMainURL) );
 --- sfx2/source/doc/docfile.cxx
 +++ sfx2/source/doc/docfile.cxx
+@@ -533,7 +533,7 @@
+ //------------------------------------------------------------------
+ sal_Bool SfxMedium::DocNeedsFileDateCheck()
+ {
+-    return ( !IsReadOnly() && ::utl::LocalFileHelper::IsLocalFile( GetURLObject().GetMainURL( INetURLObject::NO_DECODE ) ) );
++    return ( !IsReadOnly() && SupportsActiveStreaming( GetURLObject().GetMainURL( INetURLObject::NO_DECODE ) ) );
+ }
+ 
+ //------------------------------------------------------------------
 @@ -749,10 +749,13 @@ sal_Bool SfxMedium::CloseOutStream_Impl(
  }
  
@@ -2128,7 +2137,7 @@
 +    Content *pContent = static_cast< Content *>( pData );
 +
 +#if OSL_DEBUG_LEVEL > 0
-+	fprintf( stderr, "Content::HandleLockingSignal: pContent=%p\n", pContent );
++	fprintf( stderr, "Content::HandleLockingSignal: pContent=%p pSignalInfo=%p\n", pContent, pSignalInfo );
 +#endif
 +
 +    if ( !pContent )
@@ -2169,21 +2178,22 @@
  {
      try
      {
-@@ -369,6 +490,13 @@ Content::Content(
+@@ -369,6 +490,14 @@ Content::Content(
  
          NeonUri aURI( Identifier->getContentIdentifier() );
          m_aEscapedTitle = aURI.GetPathBaseName();
 +
-+		m_pSignalHandler = osl_addSignalHandler( HandleLockingSignal, this );
++        m_pSignalHandler = osl_addSignalHandler( HandleLockingSignal, this );
 +
 +#if OSL_DEBUG_LEVEL > 0
-+		fprintf( stderr, "Content::Content: this=%p m_pSignalHandler=%p\n", this, m_pSignalHandler );
++        fprintf( stderr, "Content::Content (existing resource): this=%p m_pSignalHandler=%p\n", this, m_pSignalHandler );
++        fprintf( stderr, " identifier=%s\n", rtl::OUStringToOString( Identifier->getContentIdentifier(), RTL_TEXTENCODING_UTF8 ).getStr() );
 +#endif
-+		sTickerThreadController.start();
++        sTickerThreadController.start();
      }
      catch ( DAVException const & )
      {
-@@ -390,12 +518,23 @@ Content::Content(
+@@ -390,12 +518,24 @@ Content::Content(
    m_pProvider( pProvider ),
    m_bTransient( true ),
    m_bCollection( isCollection ),
@@ -2199,16 +2209,17 @@
          m_xResAccess.reset( new DAVResourceAccess(
              rxSMgr, rSessionFactory, Identifier->getContentIdentifier() ) );
 +
-+		m_pSignalHandler = osl_addSignalHandler( HandleLockingSignal, this );
++        m_pSignalHandler = osl_addSignalHandler( HandleLockingSignal, this );
 +
 +#if OSL_DEBUG_LEVEL > 0
-+		fprintf( stderr, "Content::Content: this=%p m_pSignalHandler=%p\n", this, m_pSignalHandler );
++        fprintf( stderr, "Content::Content (nonexistent resource): this=%p m_pSignalHandler=%p\n", this, m_pSignalHandler );
++        fprintf( stderr, " identifier=%s\n", rtl::OUStringToOString( Identifier->getContentIdentifier(), RTL_TEXTENCODING_UTF8 ).getStr() );
 +#endif
-+		sTickerThreadController.start();
++        sTickerThreadController.start();
      }
      catch ( DAVException const & )
      {
-@@ -409,6 +548,48 @@ Content::Content(
+@@ -409,6 +548,47 @@ Content::Content(
  // virtual
  Content::~Content()
  {
@@ -2240,8 +2251,7 @@
 +    osl::MutexGuard aGuard( m_aLock );
 +
 +#if OSL_DEBUG_LEVEL > 0
-+	if (m_nToExpire > 0)
-+		fprintf( stderr, "WebDAV: RefreshLock() - will refresh in %d sec\n", m_nToExpire - 30 );
++	fprintf( stderr, "Content::RefreshLock(): m_nToExpire=%d m_pLock=%p\n", m_nToExpire, m_pLock);
 +#endif
 +
 +    if ( m_nToExpire > 0 )
@@ -2262,19 +2272,43 @@
             uno::RuntimeException )
  {
 +#if OSL_DEBUG_LEVEL > 0
-+    fprintf( stderr, "WebDAV: Execute command '%s'\n",
-+            rtl::OUStringToOString( aCommand.Name, RTL_TEXTENCODING_UTF8 ).getStr() );
++    fprintf( stderr, "WebDAV: Content::execute(): this=%p command=%s\n",
++             this, rtl::OUStringToOString( aCommand.Name, RTL_TEXTENCODING_UTF8 ).getStr() );
 +#endif
 +
      uno::Any aRet;
      
      if ( aCommand.Name.equalsAsciiL(
+@@ -1000,6 +1000,11 @@
+     if ( !Name.getLength() )
+         throw lang::IllegalArgumentException();
+ 
++#if OSL_DEBUG_LEVEL > 0
++    fprintf( stderr, "WebDAV: Content::addProperty(): this=%p property=%s\n",
++             this, rtl::OUStringToOString( Name, RTL_TEXTENCODING_UTF8 ).getStr() );
++#endif
++
+     // Check property type.
+     if ( !UCBDeadPropertyValue::supportsType( DefaultValue.getValueType() ) )
+     {
+@@ -1100,6 +1100,11 @@
+     // Try to remove property from server.
+     //////////////////////////////////////////////////////////////////////
+ 
++#if OSL_DEBUG_LEVEL > 0
++    fprintf( stderr, "WebDAV: Content::removeProperty(): this=%p property=%s\n",
++             this, rtl::OUStringToOString( Name, RTL_TEXTENCODING_UTF8 ).getStr() );
++#endif
++
+     try
+     {
+         std::vector< ProppatchValue > aProppatchValues;
 @@ -1349,6 +1535,31 @@ uno::Reference< sdbc::XRow > Content::ge
      uno::Reference< ucb::XContentIdentifier >    xIdentifier;
      rtl::Reference< ::ucbhelper::ContentProviderImplHelper > xProvider;
  
 +#if OSL_DEBUG_LEVEL > 0
-+    fprintf( stderr, "WebDAV: getPropertyValues: answering the following properties: " );
++    fprintf( stderr, "WebDAV: Content::getPropertyValues(): answering the following properties: " );
 +    for ( int i = 0; i < rProperties.getLength(); ++i )
 +        fprintf( stderr, " %s,",
 +                rtl::OUStringToOString( rProperties[i].Name, RTL_TEXTENCODING_UTF8 ).getStr() );
@@ -2317,7 +2351,18 @@
  						}
  					}
  				}
-@@ -2092,9 +2308,10 @@ uno::Any Content::open(
+@@ -2000,6 +2000,10 @@
+ {
+     uno::Any aRet;
+ 
++#if OSL_DEBUG_LEVEL > 0
++    fprintf( stderr, "WebDAV: Content::open() this=%p\n", this );
++#endif
++
+     sal_Bool bOpenFolder = ( ( rArg.Mode == ucb::OpenMode::ALL ) ||
+                              ( rArg.Mode == ucb::OpenMode::FOLDERS ) ||
+                              ( rArg.Mode == ucb::OpenMode::DOCUMENTS ) );
+@@ -2092,13 +2308,17 @@ uno::Any Content::open(
          }
      }
  
@@ -2331,12 +2376,19 @@
  
          if ( ( rArg.Mode == ucb::OpenMode::DOCUMENT_SHARE_DENY_NONE ) ||
               ( rArg.Mode == ucb::OpenMode::DOCUMENT_SHARE_DENY_WRITE ) )
+         {
++#if OSL_DEBUG_LEVEL > 0
++            fprintf( stderr, "WebDAV: rArg.Mode currently(?) unsupported\n" );
++#endif
+             // Currently(?) unsupported.
+             ucbhelper::cancelCommandExecution(
+                 uno::makeAny(
 @@ -2115,6 +2332,9 @@ uno::Any Content::open(
              = uno::Reference< io::XOutputStream >( rArg.Sink, uno::UNO_QUERY );
          if ( xOut.is() )
          {
 +#if OSL_DEBUG_LEVEL > 0
-+        fprintf( stderr, "WebDAV: rArg.Sink is XOutputStream\n" );
++            fprintf( stderr, "WebDAV: rArg.Sink is XOutputStream\n" );
 +#endif
              // PUSH: write data
              try
@@ -2397,7 +2449,7 @@
 +                m_pLock->Scope = ucb::LockScope_EXCLUSIVE;
 +                m_pLock->Timeout = 2*60; // 2 minutes
 +
-+				m_nToExpire = m_pLock->Timeout;
++                m_nToExpire = m_pLock->Timeout;
 +
                  // PULL: wait for client read
                  try
@@ -2410,7 +2462,7 @@
 -                        = xResAccess->GET( aHeaders, aResource, xEnv );
 +                    try {
 +                        m_xResAccess->LOCK( *m_pLock, xEnv );
-+						m_xLockEnv = xEnv;
++                        m_xLockEnv = xEnv;
 +                    }
 +                    catch ( ucb::CommandFailedException const &e )
 +                    {
@@ -2462,7 +2514,14 @@
                  // Note: aOpenCommand.Sink may contain an XStream
                  //       implementation. Support for this type of
                  //       sink is optional...
-@@ -2228,6 +2532,9 @@ void Content::post(
+@@ -2228,9 +2532,16 @@ void Content::post(
+                 const uno::Reference< ucb::XCommandEnvironment > & xEnv )
+     throw( uno::Exception )
+ {
++#if OSL_DEBUG_LEVEL > 0
++    fprintf( stderr, "WebDAV: Content::post() this=%p\n", this );
++#endif
++
      uno::Reference< io::XActiveDataSink > xSink( rArg.Sink, uno::UNO_QUERY );
      if ( xSink.is() )
      {
@@ -2492,6 +2551,17 @@
              ucbhelper::cancelCommandExecution(
                  uno::makeAny(
                      ucb::UnsupportedDataSinkException(
+@@ -2600,6 +2600,10 @@
+     rtl::OUString aEscapedTitle;
+     std::auto_ptr< DAVResourceAccess > xResAccess;
+ 
++#if OSL_DEBUG_LEVEL > 0
++    fprintf( stderr, "WebDAV: Content::insert() this=%p\n", this );
++#endif
++
+     {
+         osl::Guard< osl::Mutex > aGuard( m_aMutex );
+ 
 @@ -2643,11 +2956,23 @@ void Content::transfer(
                  rtl::OUString::createFromAscii( HTTP_URL_SCHEME ) );
          }
@@ -2684,6 +2754,19 @@
      }
  
      sal_Int32 nPos = aURL.lastIndexOf( '/' );
+@@ -208,6 +208,12 @@
+     else
+         xCanonicId = Identifier;
+ 
++#if OSL_DEBUG_LEVEL > 0
++       fprintf( stderr, "ContentProvider::queryContent(): bNewId=%s, xCanonicId=%s\n",
++                bNewId ? "YES" : "NO", 
++                rtl::OUStringToOString( xCanonicId->getContentIdentifier(), RTL_TEXTENCODING_UTF8 ).getStr() );
++#endif
++
+ 	osl::MutexGuard aGuard( m_aMutex );
+ 
+ 	// Check, if a content with given id already exists...
 @@ -232,4 +234,3 @@ ContentProvider::queryContent(
  
  	return xContent;
