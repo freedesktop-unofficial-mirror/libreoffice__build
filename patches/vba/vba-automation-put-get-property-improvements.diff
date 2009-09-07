@@ -1,0 +1,321 @@
+diff --git basic/source/classes/sbunoobj.cxx basic/source/classes/sbunoobj.cxx
+index 09858a6..b1935c3 100644
+--- basic/source/classes/sbunoobj.cxx
++++ basic/source/classes/sbunoobj.cxx
+@@ -63,6 +63,7 @@
+ #include <com/sun/star/script/XInvocationAdapterFactory.hpp>
+ #include <com/sun/star/script/XTypeConverter.hpp>
+ #include <com/sun/star/script/XDefaultProperty.hpp>
++#include <com/sun/star/script/XDefaultMethod.hpp>
+ #include <com/sun/star/container/XNameAccess.hpp>
+ #include <com/sun/star/container/XHierarchicalNameAccess.hpp>
+ #include <com/sun/star/reflection/XIdlArray.hpp>
+@@ -73,7 +74,7 @@
+ #include <com/sun/star/bridge/oleautomation/Date.hpp>
+ #include <com/sun/star/bridge/oleautomation/Decimal.hpp>
+ #include <com/sun/star/bridge/oleautomation/Currency.hpp>
+-
++#include <com/sun/star/script/XAutomationInvocation.hpp>
+ 
+ using com::sun::star::uno::Reference;
+ using namespace com::sun::star::uno;
+@@ -1502,6 +1503,103 @@ Any sbxToUnoValue( SbxVariable* pVar, const Type& rType, Property* pUnoProperty
+     return aRetVal;
+ }
+ 
++void processAutomationParams( SbxArray* pParams, Sequence< Any >& args, bool bOLEAutomation, UINT32 nParamCount )
++{
++	AutomationNamedArgsSbxArray* pArgNamesArray = NULL;
++	if( bOLEAutomation )
++		pArgNamesArray = PTR_CAST(AutomationNamedArgsSbxArray,pParams);
++
++	args.realloc( nParamCount );
++	Any* pAnyArgs = args.getArray();
++	bool bBlockConversionToSmallestType = pINST->IsCompatibility();
++	UINT32 i = 0;	
++	if( pArgNamesArray )
++	{
++		Sequence< ::rtl::OUString >& rNameSeq = pArgNamesArray->getNames();
++		::rtl::OUString* pNames = rNameSeq.getArray();
++		Any aValAny;
++		for( i = 0 ; i < nParamCount ; i++ )
++		{
++			USHORT iSbx = (USHORT)(i+1);
++	
++			// ACHTUNG: Bei den Sbx-Parametern den Offset nicht vergessen!
++			aValAny = sbxToUnoValueImpl( pParams->Get( iSbx ),
++			bBlockConversionToSmallestType );
++	
++			::rtl::OUString aParamName = pNames[iSbx];
++			if( aParamName.getLength() )
++			{
++				oleautomation::NamedArgument aNamedArgument;
++				aNamedArgument.Name = aParamName;
++				aNamedArgument.Value = aValAny;
++				pAnyArgs[i] <<= aNamedArgument;
++			}
++			else
++			{
++				pAnyArgs[i] = aValAny;
++			}
++		}
++	}
++	else
++	{
++		for( i = 0 ; i < nParamCount ; i++ )
++		{
++			// ACHTUNG: Bei den Sbx-Parametern den Offset nicht vergessen!
++			pAnyArgs[i] = sbxToUnoValueImpl( pParams->Get( (USHORT)(i+1) ),
++			bBlockConversionToSmallestType );
++		}
++	}
++
++}
++enum INVOKETYPE
++{
++   GetProp = 0, 
++   SetProp, 
++   Func
++};
++Any invokeAutomationMethod( const String& Name, Sequence< Any >& args, SbxArray* pParams, UINT32 nParamCount, Reference< XInvocation >& rxInvocation, INVOKETYPE invokeType = Func )
++{
++	Sequence< INT16 > OutParamIndex;
++	Sequence< Any > OutParam;
++    
++	Any aRetAny;
++	switch( invokeType )
++	{
++		case Func:
++			aRetAny = rxInvocation->invoke( Name, args, OutParamIndex, OutParam );
++			break;
++		case GetProp:
++			{
++				Reference< XAutomationInvocation > xAutoInv( rxInvocation, UNO_QUERY_THROW );
++				aRetAny = xAutoInv->invokeGetProperty( Name, args, OutParamIndex, OutParam );
++				break;
++			}
++		case SetProp:
++			{
++				Reference< XAutomationInvocation > xAutoInv( rxInvocation, UNO_QUERY_THROW );
++				aRetAny = xAutoInv->invokePutProperty( Name, args, OutParamIndex, OutParam );
++				break;
++			}
++		default:
++			break; // should introduce an error here
++	
++	}
++	const INT16* pIndices = OutParamIndex.getConstArray();
++	UINT32 nLen = OutParamIndex.getLength();
++	if( nLen )
++	{
++		const Any* pNewValues = OutParam.getConstArray();
++		for( UINT32 j = 0 ; j < nLen ; j++ )
++		{
++			INT16 iTarget = pIndices[ j ];
++			if( iTarget >= (INT16)nParamCount )
++				break;
++			unoToSbxValue( (SbxVariable*)pParams->Get( (USHORT)(j+1) ), pNewValues[ j ] );
++		}
++	}
++    return aRetAny;
++}
++
+ // Dbg-Hilfsmethode zum Auslesen der in einem Object implementierten Interfaces
+ String Impl_GetInterfaceInfo( const Reference< XInterface >& x, const Reference< XIdlClass >& xClass, USHORT nRekLevel )
+ {
+@@ -2002,11 +2100,26 @@ void SbUnoObject::SFX_NOTIFY( SfxBroadcaster& rBC, const TypeId& rBCType,
+                 {
+                     try
+                     {
+-                        // Wert holen
+-                        Any aRetAny = mxInvocation->getValue( pProp->GetName() );
++						UINT32 nParamCount = pParams ? ((UINT32)pParams->Count() - 1) : 0;
++						sal_Bool bCanBeConsideredAMethod = mxInvocation->hasMethod( pProp->GetName() );
++						Any aRetAny;
++					   	if ( bCanBeConsideredAMethod && nParamCount )
++						{
++							// Automation properties have methods, so.. we need to invoke this through
++							// XInvocation
++							Sequence<Any> args;
++							processAutomationParams( pParams, args, true, nParamCount );
++							aRetAny = invokeAutomationMethod( pProp->GetName(), args, pParams, nParamCount, mxInvocation, GetProp );
++						}	
++						else
++							// Wert holen
++							aRetAny = mxInvocation->getValue( pProp->GetName() );
+ 
+                         // Wert von Uno nach Sbx uebernehmen
+                         unoToSbxValue( pVar, aRetAny );
++						if( pParams && bCanBeConsideredAMethod )
++							pVar->SetParameters( NULL );
++
+                     }
+                     catch( const Exception& )
+                     {
+@@ -2131,52 +2244,7 @@ void SbUnoObject::SFX_NOTIFY( SfxBroadcaster& rBC, const TypeId& rBCType,
+                 else if( bInvocation && pParams && mxInvocation.is() )
+                 {
+                     bool bOLEAutomation = true;
+-                    // TODO: bOLEAutomation = xOLEAutomation.is()
+-
+-                    AutomationNamedArgsSbxArray* pArgNamesArray = NULL;
+-                    if( bOLEAutomation )
+-                        pArgNamesArray = PTR_CAST(AutomationNamedArgsSbxArray,pParams);
+-
+-                    args.realloc( nParamCount );
+-                    Any* pAnyArgs = args.getArray();
+-                    bool bBlockConversionToSmallestType = pINST->IsCompatibility();
+-                    if( pArgNamesArray )
+-                    {
+-                        Sequence< ::rtl::OUString >& rNameSeq = pArgNamesArray->getNames();
+-                        ::rtl::OUString* pNames = rNameSeq.getArray();
+-
+-                        Any aValAny;
+-                        for( i = 0 ; i < nParamCount ; i++ )
+-                        {
+-                            USHORT iSbx = (USHORT)(i+1);
+-
+-                            // ACHTUNG: Bei den Sbx-Parametern den Offset nicht vergessen!
+-                            aValAny = sbxToUnoValueImpl( pParams->Get( iSbx ),
+-                                                        bBlockConversionToSmallestType );
+-
+-                            ::rtl::OUString aParamName = pNames[iSbx];
+-                            if( aParamName.getLength() )
+-                            {
+-                                oleautomation::NamedArgument aNamedArgument;
+-                                aNamedArgument.Name = aParamName;
+-                                aNamedArgument.Value = aValAny;
+-                                pAnyArgs[i] <<= aNamedArgument;
+-                            }
+-                            else
+-                            {
+-                                pAnyArgs[i] = aValAny;
+-                            }
+-                        }
+-                    }
+-                    else
+-                    {
+-                        for( i = 0 ; i < nParamCount ; i++ )
+-                        {
+-                            // ACHTUNG: Bei den Sbx-Parametern den Offset nicht vergessen!
+-                            pAnyArgs[i] = sbxToUnoValueImpl( pParams->Get( (USHORT)(i+1) ),
+-                                                            bBlockConversionToSmallestType );
+-                        }
+-                    }
++					processAutomationParams( pParams, args, bOLEAutomation, nParamCount );
+                 }
+ 
+                 // Methode callen
+@@ -2211,26 +2279,8 @@ void SbUnoObject::SFX_NOTIFY( SfxBroadcaster& rBC, const TypeId& rBCType,
+                     }
+                     else if( bInvocation && mxInvocation.is() )
+                     {
+-                        Sequence< INT16 > OutParamIndex;
+-                        Sequence< Any > OutParam;
+-                        Any aRetAny = mxInvocation->invoke( pMeth->GetName(), args, OutParamIndex, OutParam );
+-
+-                        // Wert von Uno nach Sbx uebernehmen
++						Any aRetAny = invokeAutomationMethod( pMeth->GetName(), args, pParams, nParamCount, mxInvocation );
+                         unoToSbxValue( pVar, aRetAny );
+-
+-                        const INT16* pIndices = OutParamIndex.getConstArray();
+-                        UINT32 nLen = OutParamIndex.getLength();
+-                        if( nLen )
+-                        {
+-                            const Any* pNewValues = OutParam.getConstArray();
+-                            for( UINT32 j = 0 ; j < nLen ; j++ )
+-                            {
+-                                INT16 iTarget = pIndices[ j ];
+-                                if( iTarget >= (INT16)nParamCount )
+-                                    break;
+-                                unoToSbxValue( (SbxVariable*)pParams->Get( (USHORT)(j+1) ), pNewValues[ j ] );
+-                            }
+-                        }
+                     }
+ 
+                     // #55460, Parameter hier weghauen, da das in unoToSbxValue()
+diff --git basic/source/comp/dim.cxx basic/source/comp/dim.cxx
+index b8b6a54..36cca2c 100644
+--- basic/source/comp/dim.cxx
++++ basic/source/comp/dim.cxx
+@@ -406,7 +406,10 @@ void SbiParser::DefVar( SbiOpcode eOp, BOOL bStatic )
+                 aExpr.Gen();
+                 SbiOpcode eOp_ = pDef->IsNew() ? _CREATE : _TCREATE;
+                 aGen.Gen( eOp_, pDef->GetId(), pDef->GetTypeId() );
+-                aGen.Gen( _SET );
++				if ( bVBASupportOn )
++					aGen.Gen( _VBASET );
++				else	
++					aGen.Gen( _SET );
+             }
+         }
+         else
+diff --git udkapi/com/sun/star/script/XAutomationInvocation.idl udkapi/com/sun/star/script/XAutomationInvocation.idl
+new file mode 100644
+index 0000000..9dcf61b
+--- /dev/null
++++ udkapi/com/sun/star/script/XAutomationInvocation.idl
+@@ -0,0 +1,51 @@
++/*************************************************************************
++ *
++ * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
++ * 
++ * Copyright 2008 by Sun Microsystems, Inc.
++ *
++ * OpenOffice.org - a multi-platform office productivity suite
++ *
++ * $RCSfile: XInvocation2.idl,v $
++ * $Revision: 1.10 $
++ *
++ * This file is part of OpenOffice.org.
++ *
++ * OpenOffice.org is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU Lesser General Public License version 3
++ * only, as published by the Free Software Foundation.
++ *
++ * OpenOffice.org is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU Lesser General Public License version 3 for more details
++ * (a copy is included in the LICENSE file that accompanied this code).
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * version 3 along with OpenOffice.org.  If not, see
++ * <http://www.openoffice.org/license.html>
++ * for a copy of the LGPLv3 License.
++ *
++ ************************************************************************/
++#ifndef __com_sun_star_script_XAutomationInvocation_idl__ 
++#define __com_sun_star_script_XAutomationInvocation_idl__
++ 
++#ifndef __com_sun_star_script_XInvocation_idl__ 
++#include <com/sun/star/script/XInvocation.idl> 
++#endif 
++ 
++ 
++ module com {  module sun {  module star {  module script {  
++ 
++interface XAutomationInvocation: com::sun::star::script::XInvocation
++{ 
++    any invokeGetProperty(  [in] string aFunctionName, [in] sequence<any> aParams, [out] sequence<short> aOutParamIndex, [out] sequence<any> aOutParam ) raises( com::sun::star::lang::IllegalArgumentException, com::sun::star::script::CannotConvertException, com::sun::star::reflection::InvocationTargetException );
++    any invokePutProperty(  [in] string aFunctionName, [in] sequence<any> aParams, [out] sequence<short> aOutParamIndex, [out] sequence<any> aOutParam ) raises( com::sun::star::lang::IllegalArgumentException, com::sun::star::script::CannotConvertException, com::sun::star::reflection::InvocationTargetException );
++ 
++}; 
++ 
++//============================================================================= 
++ 
++}; }; }; };  
++ 
++#endif 
+diff --git udkapi/com/sun/star/script/makefile.mk udkapi/com/sun/star/script/makefile.mk
+index 52a3214..8b8f53a 100644
+--- udkapi/com/sun/star/script/makefile.mk
++++ udkapi/com/sun/star/script/makefile.mk
+@@ -85,6 +85,7 @@ IDLFILES=\
+     XScriptEventsAttacher.idl\
+     XDefaultMethod.idl\
+     XDefaultProperty.idl\
++	XAutomationInvocation.idl\
+     ModuleInfo.idl\
+     ModuleType.idl\
+     XErrorQuery.idl\
