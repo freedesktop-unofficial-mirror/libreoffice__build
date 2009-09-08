@@ -1,0 +1,140 @@
+diff --git sc/source/filter/excel/xipivot.cxx sc/source/filter/excel/xipivot.cxx
+index 6053662..2b303a1 100644
+--- sc/source/filter/excel/xipivot.cxx
++++ sc/source/filter/excel/xipivot.cxx
+@@ -1434,7 +1434,10 @@ void XclImpPivotTable::MaybeRefresh()
+     {
+         // 'refresh table on load' flag is set.  Refresh the table now.  Some
+         // Excel files contain partial table output when this flag is set.
+-        mpDPObj->Output();
++        //mpDPObj->Output();
++        // #FIXME  change from above is just to satisfy compiler,
++        // it probably makes no sense
++        mpDPObj->Output( mpDPObj->GetOutRange().aStart );
+     }
+ }
+ 
+diff --git sc/source/ui/dbgui/filtdlg.cxx sc/source/ui/dbgui/filtdlg.cxx
+index 8e97d24..9d3baa1 100644
+--- sc/source/ui/dbgui/filtdlg.cxx
++++ sc/source/ui/dbgui/filtdlg.cxx
+@@ -454,7 +454,6 @@ void ScFilterDlg::UpdateValueList( USHORT nList )
+                 SCTAB nTab		 = nSrcTab;
+                 SCROW nFirstRow = theQueryData.nRow1;
+ 				SCROW nLastRow	 = theQueryData.bUseDynamicRange ? theQueryData.nDynamicEndRow : theQueryData.nRow2;
+-				SCROW nLastRow	 = theQueryData.bUseDynamicRange ? theQueryData.nDynamicEndRow : theQueryData.nRow2;
+ 
+                 //	erstmal ohne die erste Zeile
+ 
+diff --git sc/source/ui/docshell/docfunc.cxx sc/source/ui/docshell/docfunc.cxx
+index 424f6a0..9aea7ce 100644
+--- sc/source/ui/docshell/docfunc.cxx
++++ sc/source/ui/docshell/docfunc.cxx
+@@ -1693,7 +1693,11 @@ BOOL ScDocFunc::InsertCells( const ScRange& rRange, const ScMarkData* pTabMark,
+                     default:
+                         break;
+                 }
+-                MergeCells(aRange, FALSE, TRUE, TRUE);
++                ScCellMergeOption aMergeOption(
++                    aRange.aStart.Col(), aRange.aStart.Row(), 
++                    aRange.aEnd.Col(), aRange.aEnd.Row() );
++                aMergeOption.maTabs.insert(aRange.aStart.Tab());
++                MergeCells(aMergeOption, FALSE, TRUE, TRUE);
+             }
+             qIncreaseRange.pop_back();
+         }
+@@ -1742,7 +1746,10 @@ BOOL ScDocFunc::InsertCells( const ScRange& rRange, const ScMarkData* pTabMark,
+             while( !qIncreaseRange.empty() )
+             {
+                 ScRange aRange = qIncreaseRange.back();
+-                MergeCells(aRange, FALSE, TRUE, TRUE);
++                 ScCellMergeOption aMergeOption(
++                    aRange.aStart.Col(), aRange.aStart.Row(), 
++                    aRange.aEnd.Col(), aRange.aEnd.Row() );               
++                MergeCells(aMergeOption, FALSE, TRUE, TRUE);
+                 qIncreaseRange.pop_back();
+             }
+ 
+@@ -2180,7 +2187,10 @@ BOOL ScDocFunc::DeleteCells( const ScRange& rRange, const ScMarkData* pTabMark,
+ 
+         if( !pDoc->HasAttrib( aRange, HASATTR_OVERLAPPED | HASATTR_MERGED ) )
+         {
+-            MergeCells( aRange, FALSE, TRUE, TRUE );
++            ScCellMergeOption aMergeOption(
++                aRange.aStart.Col(), aRange.aStart.Row(), 
++                aRange.aEnd.Col(), aRange.aEnd.Row() ); 
++            MergeCells( aMergeOption, FALSE, TRUE, TRUE );
+         }
+         qDecreaseRange.pop_back();
+     }
+diff --git sc/source/ui/miscdlgs/makefile.mk sc/source/ui/miscdlgs/makefile.mk
+index d600107..c6b8f27 100644
+--- sc/source/ui/miscdlgs/makefile.mk
++++ sc/source/ui/miscdlgs/makefile.mk
+@@ -81,9 +81,7 @@ SLOFILES =  \
+     $(SLO)$/conflictsdlg.obj    \
+     $(SLO)$/sharedocdlg.obj \
+     $(SLO)$/protectiondlg.obj \
+-	$(SLO)$/retypepassdlg.obj \
+-	$(SLO)$/scuiautofmt.obj			\
+-	$(SLO)$/strindlg.obj            
++	$(SLO)$/retypepassdlg.obj
+ 
+ EXCEPTIONSFILES = \
+     $(SLO)$/acredlin.obj        \
+@@ -126,6 +124,8 @@ LIB1OBJFILES =  \
+     $(SLO)$/warnbox.obj         \
+     $(SLO)$/conflictsdlg.obj    \
+     $(SLO)$/sharedocdlg.obj \
++    $(SLO)$/scuiautofmt.obj     \
++    $(SLO)$/strindlg.obj		\
+     $(SLO)$/protectiondlg.obj \
+     $(SLO)$/retypepassdlg.obj
+ 
+diff --git sc/source/ui/unoobj/dapiuno.cxx sc/source/ui/unoobj/dapiuno.cxx
+index a4a78b7..a82585c 100644
+--- sc/source/ui/unoobj/dapiuno.cxx
++++ sc/source/ui/unoobj/dapiuno.cxx
+@@ -1627,7 +1627,7 @@ OUString SAL_CALL ScDataPilotFieldObj::getName() throw(RuntimeException)
+             aName = OUString( RTL_CONSTASCII_USTRINGPARAM( SC_DATALAYOUT_NAME ) );
+         else
+             {
+-                aName = pDim->GetLayoutName();
++                aName = *pDim->GetLayoutName();
+                 if (!aName)
+                     aName = pDim->GetName();
+             }
+diff --git sd/prj/build.lst sd/prj/build.lst
+index 52734f4..ef69a6a 100644
+--- sd/prj/build.lst
++++ sd/prj/build.lst
+@@ -30,7 +30,6 @@ sd	sd\source\filter\ppt					nmake	-	all	sd_ppt sd_inc NULL
+ sd	sd\source\filter						nmake	-	all	sd_filt sd_sdi sd_ppt sd_inc NULL
+ sd	sd\source\filter\cgm					nmake	-	all	sd_cgm sd_inc NULL
+ sd	sd\source\filter\eppt					nmake	-	all	sd_eppt sd_inc NULL
+-sd	sd\source\filter\pptx					nmake	-	all	sd_pptx sd_inc NULL
+ sd	sd\source\filter\grf					nmake	-	all	sd_grf sd_inc NULL
+ sd	sd\source\filter\xml					nmake	-	all	sd_filter_xml sd_inc NULL
+ sd	sd\source\filter\html					nmake	-	all	sd_html sd_inc NULL
+@@ -41,5 +40,4 @@ sd	sd\source\ui\framework\configuration	nmake	-	all sd_framework_configuration s
+ sd	sd\source\ui\framework\module       	nmake	-	all sd_framework_module sd_inc NULL
+ sd	sd\source\ui\framework\factories       	nmake	-	all sd_framework_factories sd_inc NULL
+ sd	sd\source\ui\framework\tools           	nmake	-	all sd_framework_tools sd_inc NULL
+-sd	sd\util									nmake	-	all	sd_util sd_app sd_cgm sd_core sd_dlg sd_docsh sd_eppt sd_pptx sd_filt sd_func sd_grf sd_unid sd_view sd_filter_xml sd_html sd_ppt sd_accessibility sd_animations sd_toolpanel sd_toolpanel_controls sd_tools sd_slsshell sd_slsmodel sd_slsview sd_slscontroller sd_slscache sd_notes sd_table sd_slideshow sd_presenter sd_undo sd_helper sd_framework_configuration sd_framework_module sd_framework_tools sd_framework_factories NULL
+-sd	sd\xml									nmake	-	all	sd_xml NULL
++sd	sd\util									nmake	-	all	sd_util sd_app sd_cgm sd_core sd_dlg sd_docsh sd_eppt sd_filt sd_func sd_grf sd_unid sd_view sd_filter_xml sd_html sd_ppt sd_accessibility sd_animations sd_toolpanel sd_toolpanel_controls sd_tools sd_slsshell sd_slsmodel sd_slsview sd_slscontroller sd_slscache sd_notes sd_table sd_slideshow sd_presenter sd_undo sd_helper sd_framework_configuration sd_framework_module sd_framework_tools sd_framework_factories NULL
+diff --git sd/source/ui/inc/res_bmp.hrc sd/source/ui/inc/res_bmp.hrc
+index ec8bb6b..89841d7 100644
+--- sd/source/ui/inc/res_bmp.hrc
++++ sd/source/ui/inc/res_bmp.hrc
+@@ -308,8 +308,8 @@
+ 
+ #define RID_DRAW_TABLEOBJ_INSIDE_POPUP		RID_APP_START+94
+ 
+-#define RID_DRAW_OUTLINETEXTOBJ_POPUP		RID_APP_START+94
+-#define RID_GRAPHIC_OUTLINETEXTOBJ_POPUP	RID_APP_START+95
++#define RID_DRAW_OUTLINETEXTOBJ_POPUP		RID_APP_START+95
++#define RID_GRAPHIC_OUTLINETEXTOBJ_POPUP	RID_APP_START+96
+ 
+ /*
+  * Pointer (Mauszeiger)
