@@ -1,0 +1,299 @@
+Core
+	Positions
+		: UNO API doesn't use SwPaM / SwPosition: creates a bookmark (see the UNO cursor)
+	SwDoc
+		Nodes
+			: SwDoc::aNodes
+			: Infos taken from sw/inc/ndarr.hxx
+			:
+			: || Nodes begin/end | Containing |
+			: | 1st | empty |
+			: | 2nd | footnotes, endnotes |
+			: | 3rd | Headers, footers, flys |
+			: | 4th | Redlines, but doesn't seems to be used |
+			: | 5th | Content |
+			:
+			: The redlines are stored in SwDoc::pRedlineTbl. This member is an
+			: SvArray of SwRedline.
+			:
+			: The undo informations seems to be stored in the SwDoc::pUndos
+			: rather than in the aUndoNodes structure. The latter structure
+			: seems to be unused.
+			:
+			: Text nodes are using tool strings, which are only 16bits index.
+			: Paragraphs can't then be longer than 65k characters.
+		Formatting
+			: The formatting is stored in SwTxtNode::m_pSwpHints. One
+			: formatting is one hint. A hint is composed by a start and an
+			: end. For example, if "Cell1" is bold on the "Cell" word, then
+			: the hint will be "Bold [0,4)"
+			:
+			: Some text attributes have a CJK (or even BiDi) equivalent
+			: attribute. OOo and MSO seems to have some problems on that part
+			: as these are sometimes created without any CJK/BiDi scripts.
+	SvPointerArrays
+		SV_DECL_PTRARR_SORT(SwpHtStart,SwTxtAttr*,1,1)
+			: Declares SwpHtStart as an array of SwTxtAttr*
+			: Contains a Count() method and [] operator
+	SfxPoolItem
+		: used for any attribute in OOo.
+		: ( sv: StarView, UI class view marketted by StarDivision )
+		:
+		: Which IDs are stored in inc/hintids.hxx
+		: 
+		SfxItemSet:
+			: Interesting header file sw/inc/charatr.hxx#81
+			_pWhichRanges
+				:stores the possible Which of the stored items
+				>STRUCTURE
+				> Loop until there is a 0 value	
+				> value n: the start of the range
+				> value n+1 the end of the range
+			_nCount 
+				:the number of items
+			_aItems 
+				: Contains all the items. The array contains as much values as
+				: what is possible for the range. If an item isn't set: the
+				: value in the _aItems is 0.
+				: 
+				: All the possible values of the first range are stored first, then all
+				: the possible values for the second range, and so on.
+			_pParent
+				: The parent SfxItemSet are used when possible to find the
+				: value defined in one of the parents.	
+	Lists
+		A SwNumberTree is maintained at the document level
+		Each numbered node has a pointer to the element in the SwNumberTree
+		Virtual nodes are created for missing levels in the tree
+	Undo
+		: aUnodeNodes stores mainly the entire removed nodes (may be other
+		: cases ?). Everything else is in SwDoc::pUndos.
+		:
+		: Constants for the undo types are defined in sw/inc/swundo.hxx.
+
+	Tables
+		: The start node of the table is a SwTableNode. pTable: reference to
+		: the SwTable object. On a table, there is a list of lines
+		: (SwTableLine). On a SwTableLine, pUpper is the parent SwTable.
+		Historic point
+			: The old table model is considering the table as one big splitted
+			: cell.
+			: The new table model is the same as HTML model
+			:
+			In Odf: table:is-subtable
+				: When there are merged cells: other cells in the row will contain
+				: a nested table if table:is-subtable="true" attribute
+			In the SwTable
+				: If the Cell pSttNd == NULL, then the cell is a "subtable" of
+				: the old model.
+				: In that case, the aLines member isn't empty
+				:
+				: The SwTableBox.nLines contains either lines or columns: it
+				: changes everytime (after a column split, there is a row
+				: split)
+	Sections / TOC
+		Same Start/End node things than for tables.
+		A TOC is just a normal section
+			The title is in a section
+			The contents + title section are in another section
+			WW8 interop problems
+				: During the WW8 import of TOC, the Word TOC is thrown away
+				: and an OOo TOC is generated: manual changes are lost
+				:
+				: Not an ODF problem
+		Never create empty sections: layout will crash!
+	Compatibility options
+		Stored in IDocumentSettingsAccess
+		Writer/Compatibility options dialog
+			Implemented in sw/source/ui/config/optcomp.cxx
+			Changing the options happens in the ViewShell do invalidate the layout
+Layout
+	: Most of the code is in sw/core/layout
+	:
+	: Layout was (caolan fixed a lot of it) running every xxx ms: even when
+	: nothing was done. 
+	: Many parts of the GUI code are based on timers.
+	Shells
+		ViewShell: used in the help viewer
+		EditShell: used by Writer.
+	Frames
+		SwFrm is the base for all the frames
+		There is always RootFrame / PageFrame
+		Every node has a pointer to a linked list of frames
+		Body frames
+			used in many places ( columns, pages... )
+			Mostly for reusing purpose
+		Points to a list of SwTxtPortion ( text runs )
+		Formatting
+			Each frame has its own format method
+			Calls the children format methods
+			Can create loops by having to call format method of an already formatted child
+	Portions
+		SwLinesLayout contains SwLinePortion
+		SwTxtPortion, SwTabPortion ( runs of text )
+		first ASCII characters
+			Character 0x1: something anchored as character
+			Other characters are used too: Defined in sw/inc/hintids.hxx
+				INWORD: same as 0x1 without line break after it
+		Using WhichIDs like in core
+			Defined in sw/source/core/inc/txttypes.hxx
+				: SwParaPortion (8002) -> SwLineLayout (8001)-> SwTxtPortion (8000)-> SwLinePortion 
+				: (-> inherits)
+				:
+				: POR_QUOVADIS: used for elements which are not rendered yet
+			SwTxtPortions are only storing the length of the portion. 
+				: To get the offset, all the previous portions have to be
+				: parsed
+		Layout done using the Visitor pattern
+			SwPortionHandler: interface for the visitor
+			A paragraph is split on two pages
+				Two text portions with the same text (the paragraph)
+				The second one is a follow text portion
+				The follow text portion will skip the first characters
+					The number of chars to skip is sometimes wrong
+			Fields are rendered using the Special method
+		SwTxtFrm::GetFormatted
+			Ensures the portion is formatte
+	Field problems
+		The problem
+			Wasn't possible to place the cursor in the field, but on the field
+		How this is done
+			Using field start / end markers
+			Bookmarks are used to link start and end together
+			Tweaked layout to make it looks like a field
+			The document can be marked as protected
+				Section can toggle be unprotected
+		Still to be done
+			All the UI for that feature
+		Patch not upstreamed
+			ODF would need to be changed to integrate the new fields stuffs
+			Sun doesn't want it
+	Lists
+		: Some flags in the EditShell are handling cursors before the start of
+		: the node to select the numbering.
+	Utils
+		scratch/writer/sw-dump-layout-tree.diff
+			: F12 dumps the current window layout in layout.xml
+			: Can still be improved to get some more useful infos
+		Sun devs
+			Frank Meies
+			Oliver Reiner Wittman
+	Misc problems
+		Device indenpendent layout
+			Some old .doc documents have a compatibility option to use the printer metrics
+				Layout is broken because the printer isn't the original one
+				Same problem with word
+			Layout done with hight res, printed on low res
+			OOo uses integers for fonts measurements, everything else uses float
+Word filters
+	Links
+		Office binary formats specs
+			http://www.microsoft.com/interop/docs/OfficeBinaryFormats.mspx
+	General structure
+		.DOC is an OLE storage
+			See the dumpers code to understand how this is done
+				scratch/mso-dumper/src/ole.py
+		2 important streams
+			"document" stream
+			table stream "0Table" and sometimes "1Table"
+	FIB ( File Information Block )
+		First bytes found in the "document" stream
+		fWhichTblStm
+			Defines which one of the table streams to use
+		fcMin
+			Offset to the first text character of the document
+	Table stream
+		Contains the SPRM: Single PRoperty Modifier
+			PAP: PAragraph Property
+			CHP: Character Property
+			PIC: PICture porperty
+			SEP: SEction Property
+			TAP: TAble Property
+		Contains attributes based on the index of the characters in the Text part
+			[6,25) BOLD (0x0835 0x01)
+				0x0835 is the SPRM
+				0x01 is the value of the SPRM
+			Some SPRM are more complex (variable length)
+				eg: sprmPChgabsPapx ( 0xC60D )
+			Sequence of SPRMs after each position
+		Paragraph SPRM are always including the whole paragraph (including the 13 char)
+		Indexes are encoded in PLEX
+			: <Start Index, End index, Offset to next pair>
+			FIB tells where those pairs are in the table stream
+				fcPlcfbteChpx, lcbPlcfbteChpx: Character properties
+				fcPlcfbtePapx, lcbPlcfbtePapx: Paragraph properties
+			Everything starting with PL
+				way to encode a start/end interval with informations attached to it
+	Tables
+		Structure
+			Cell and row marks only
+			sprmPFInTable SPRM set to true to indicate what is in the table
+			table Level SPRM to set the nesting level (not understood by old versions)
+	Piece table / Fast save
+		To consider when fComplex is set to 1 in FIB
+			Used by Word 2000 and above for Unicode support
+		General idea
+			The text is stored in the order the user adds the text
+			Character position: position in the text
+			File position: position of the character in the file (storage)
+		SPRMs are indexed on File positions
+	List table / List Override table
+	Comparison with RTF
+		Spec
+			http://www.microsoft.com/downloads/details.aspx?FamilyID=dd422b8d-ff06-4207-b476-6b5396a18a2b&displaylang=en
+		Similarities
+			SPRMs are encoded in \SPRMvalue 
+				with the name and value of SPRM
+				eg: \b1 (Bold set to 1)
+				eg {\b1 foo} bar: only foo is bold
+			Paragraphs boundaries 
+				started by \pard (paragraph default)
+				ended by \par (same like char 13
+			\intbl is used in the same way than in doc
+			Small changes
+				Last \par isn't mandatory
+				Starts with \rtf
+				\plain reset the character properties
+		Differences
+			Difference between a Command and a Destination
+				{\b Florian} -> Florian (even if b command isn't understood)
+				{\author Florian} -> gives nothing : this is a destination
+				Forced destination {\*\tag ...} starting with \*
+				Word uses it for backward compatibility
+					Example {\shp {\*\shpinst NEW SHAPE STUFFS}{\do ALTERNATIVE DRAWING OBJECT}}
+						Word 2003 would read the first part and throw away the \do
+						Word 95 won't know the \shp command
+							will read inside and ignore the \*\shpinst
+							will read the known \do destination
+				The RTF filter doesn't handles this difference between command and destination
+		Some strange things
+			\'01 means \x01
+			\uXXXX is an unicode character. If unicode can't be handled, use the next character
+WW8 Filter
+	Files
+		ww8par files
+			split due to some old compiler unable to handle a big file
+			handles the reading
+		ww8scan.hxx
+			Important header file for the import
+			wwSprmParser: parses an SPRM
+		ww8par.hxx
+			SwWW8ImplReader is the main class where everything happens
+
+
+
+Debugging with gdb
+	Misc gdb infos
+		>WARNING
+		> gdb variables are global, not local!
+		: use source /path/to/file to load gdb commands
+	Handy places to put breakpoints
+		; sw/source/core/doc/doc.cxx:457
+		; sw/source/core/doc/doc.cxx:793 (Insert method on SwDoc)
+
+Further docs
+	; http://wiki.services.openoffice.org/wiki/Writer_Core_And_Layout
+
+Misc infos
+	: for localization stuffs, have a look at ICU. Its includes have to be
+	: prefixed with "unicode" and everything is in the icu namespace
