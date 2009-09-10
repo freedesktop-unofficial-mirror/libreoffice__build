@@ -1,438 +1,32 @@
---- sc/inc/dpobject.hxx
-+++ sc/inc/dpobject.hxx
-@@ -110,6 +110,7 @@ private:
- 	USHORT                                  nAutoFormatIndex;
- 	BOOL					bAllowMove;
- 	long					nHeaderRows;	// page fields plus filter button
-+    bool                    bHeaderLayout;  // TRUE : grid, FALSE : standard
- 
- 
- 	SC_DLLPRIVATE void				CreateObjects();
-@@ -141,6 +142,9 @@ public:
- 	void 			SetAutoFormatIndex (const USHORT nIndex);
- 	USHORT			GetAutoFormatIndex ()	{ if (this == NULL) return 65535; else return nAutoFormatIndex; }
- 
-+    void                SetHeaderLayout (bool bUseGrid);
-+    bool                GetHeaderLayout ()  const { return bHeaderLayout; }
-+
- 	void				SetSheetDesc(const ScSheetSourceDesc& rDesc);
- 	void				SetImportDesc(const ScImportSourceDesc& rDesc);
- 	void				SetServiceData(const ScDPServiceDesc& rDesc);
---- sc/inc/dpoutput.hxx.old	2009-04-02 10:45:43.000000000 +0000
-+++ sc/inc/dpoutput.hxx	2009-04-06 16:41:48.000000000 +0000
-@@ -109,6 +109,7 @@ private:
- 	long					nColCount;
- 	long					nRowCount;
- 	long					nHeaderSize;
-+    bool                    bHeaderLayout;  // TRUE : grid, FALSE : standard
- 	SCCOL					nTabStartCol;
- 	SCROW					nTabStartRow;
- 	SCCOL					nMemberStartCol;
-@@ -162,6 +163,9 @@ public:
- 
-     void            GetMemberResultNames( ScStrCollection& rNames, long nDimension );
- 
-+    void            SetHeaderLayout (bool bUseGrid);
-+    bool            GetHeaderLayout () const    { return bHeaderLayout; }
-+
-     static void     GetDataDimensionNames( String& rSourceName, String& rGivenName,
-                                            const com::sun::star::uno::Reference<
-                                                com::sun::star::uno::XInterface>& xDim );
---- sc/source/core/data/dpobject.cxx
-+++ sc/source/core/data/dpobject.cxx
-@@ -168,7 +168,8 @@ ScDPObject::ScDPObject( ScDocument* pD )
- 	bAlive( FALSE ),
-     nAutoFormatIndex( 65535 ),
- 	bAllowMove( FALSE ),
--	nHeaderRows( 0 )
-+	nHeaderRows( 0 ),
-+    bHeaderLayout( false )
- {
- }
- 
-@@ -188,7 +189,8 @@ ScDPObject::ScDPObject(const ScDPObject&
- 	bAlive( FALSE ),
- 	nAutoFormatIndex( r.nAutoFormatIndex ),
- 	bAllowMove( FALSE ),
--	nHeaderRows( r.nHeaderRows )
-+	nHeaderRows( r.nHeaderRows ),
-+    bHeaderLayout( r.bHeaderLayout )
- {
- 	if (r.pSaveData)
- 		pSaveData = new ScDPSaveData(*r.pSaveData);
-@@ -241,6 +243,11 @@ void ScDPObject::SetAutoFormatIndex(cons
- 	nAutoFormatIndex	= nIndex;
- }
- 
-+void ScDPObject::SetHeaderLayout (bool bUseGrid)
-+{
-+    bHeaderLayout = bUseGrid;
-+}
-+
- void ScDPObject::SetOutRange(const ScRange& rRange)
- {
- 	aOutRange = rRange;
-@@ -348,6 +355,7 @@ void ScDPObject::CreateOutput()
- 	{
-         BOOL bFilterButton = IsSheetData() && pSaveData && pSaveData->GetFilterButton();
-         pOutput = new ScDPOutput( pDoc, xSource, aOutRange.aStart, bFilterButton );
-+        pOutput->SetHeaderLayout ( bHeaderLayout );
- 
- 		long nOldRows = nHeaderRows;
- 		nHeaderRows = pOutput->GetHeaderRows();
---- sc/source/core/data/dpoutput.cxx.old	2009-04-02 10:45:01.000000000 +0000
-+++ sc/source/core/data/dpoutput.cxx	2009-04-06 16:41:48.000000000 +0000
-@@ -376,7 +376,8 @@ ScDPOutput::ScDPOutput( ScDocument* pD, const uno::Reference<sheet::XDimensionsS
- 	nRowFmtCount( 0 ),
-     nSingleNumFmt( 0 ),
- 	bSizesValid( FALSE ),
--	bSizeOverflow( FALSE )
-+	bSizeOverflow( FALSE ),
-+    bHeaderLayout( false )
- {
- 	nTabStartCol = nMemberStartCol = nDataStartCol = nTabEndCol = 0;
- 	nTabStartRow = nMemberStartRow = nDataStartRow = nTabEndRow = 0;
-@@ -666,7 +667,11 @@ void ScDPOutput::CalcSizes()
- 		nRowCount = aData.getLength();
- 		const uno::Sequence<sheet::DataResult>* pRowAry = aData.getConstArray();
- 		nColCount = nRowCount ? ( pRowAry[0].getLength() ) : 0;
--		nHeaderSize = 1;			// one row for field names
-+
-+        nHeaderSize = 1;
-+        if (GetHeaderLayout() && nColFieldCount == 0)
-+            // Insert an extra header row only when there is no column field.
-+            nHeaderSize = 2;
- 
- 		//	calculate output positions and sizes
- 
-@@ -1185,6 +1190,12 @@ bool ScDPOutput::GetDataResultPositionDa
-     return true;
- }
- 
-+void ScDPOutput::SetHeaderLayout (bool bLayout)
-+{
-+    bHeaderLayout = bLayout;
-+    bSizesValid = FALSE;
-+}
-+
- //
- //  helper functions for ScDPOutput::GetPivotData
- //
---- sc/source/filter/excel/read.cxx.old	2009-04-02 10:44:55.000000000 +0000
-+++ sc/source/filter/excel/read.cxx	2009-04-06 16:41:48.000000000 +0000
-@@ -1152,6 +1152,7 @@ FltError ImportExcel8::Read( void )
-                     case EXC_ID_SXDI:           rPTableMgr.ReadSxdi( maStrm );      break;
-                     case EXC_ID_SXVDEX:         rPTableMgr.ReadSxvdex( maStrm );    break;
-                     case EXC_ID_SXEX:           rPTableMgr.ReadSxex( maStrm );      break;
-+                    case EXC_ID_SXVIEWEX9:      rPTableMgr.ReadSxViewEx9( maStrm ); break;
-                 }
- 			}
-             break;
---- sc/source/filter/excel/xepivot.cxx.old	2009-04-02 10:44:55.000000000 +0000
-+++ sc/source/filter/excel/xepivot.cxx	2009-04-06 16:41:48.000000000 +0000
-@@ -1220,6 +1220,8 @@ XclExpPivotTable::XclExpPivotTable( cons
-         maPTInfo.maDataName = ScGlobal::GetRscString( STR_PIVOT_DATA );
-         maPTInfo.mnCacheIdx = mrPCache.GetCacheIndex();
- 
-+        maPTAutoFormat.Init( rDPObj );
-+
-         if( const ScDPSaveData* pSaveData = rDPObj.GetSaveData() )
-         {
-             // additional properties from ScDPSaveData
-@@ -1299,6 +1301,8 @@ void XclExpPivotTable::Save( XclExpStrea
-         WriteSxli( rStrm, maPTInfo.mnDataCols, maPTInfo.mnColFields );
-         // SXEX
-         WriteSxex( rStrm );
-+        // SX_AUTOFORMAT
-+        WriteSxAutoformat( rStrm );
-     }
- }
- 
-@@ -1439,6 +1443,8 @@ void XclExpPivotTable::Finalize()
-     rnDataXclRow = rnXclRow1 + maPTInfo.mnColFields + 1;
-     if( maDataFields.empty() )
-         ++rnDataXclRow;
-+    if( 0 == maPTAutoFormat.mnGridLayout )
-+        ++rnDataXclRow;
-     rnXclCol2 = ::std::max( rnXclCol2, rnDataXclCol );
-     rnXclRow2 = ::std::max( rnXclRow2, rnDataXclRow );
-     maPTInfo.mnDataCols = rnXclCol2 - rnDataXclCol + 1;
-@@ -1446,6 +1452,8 @@ void XclExpPivotTable::Finalize()
- 
-     // first heading
-     maPTInfo.mnFirstHeadRow = rnXclRow1 + 1;
-+    if( 0 == maPTAutoFormat.mnGridLayout )
-+        maPTInfo.mnFirstHeadRow++;
- }
- 
- // records ----------------------------------------------------------------
-@@ -1521,6 +1529,18 @@ void XclExpPivotTable::WriteSxex( XclExp
-     rStrm.EndRecord();
- }
- 
-+void XclExpPivotTable::WriteSxAutoformat( XclExpStream& rStrm ) const
-+{
-+    // Until we sync the autoformat ids only export if using grid header layout
-+    // That could only have been set via xls import so far.
-+    if ( 0 == maPTAutoFormat.mnGridLayout )
-+    {
-+        rStrm.StartRecord( EXC_ID_SXVIEWEX9, 17 );
-+        rStrm << maPTAutoFormat;
-+        rStrm.EndRecord();
-+    }
-+}
-+
- // ============================================================================
- 
- namespace {
---- sc/source/filter/excel/xipivot.cxx.old	2009-04-02 10:44:55.000000000 +0000
-+++ sc/source/filter/excel/xipivot.cxx	2009-04-06 16:41:48.000000000 +0000
-@@ -1296,6 +1296,11 @@ void XclImpPivotTable::ReadSxex( XclImpS
-     rStrm >> maPTExtInfo;
- }
- 
-+void XclImpPivotTable::ReadSxViewEx9( XclImpStream& rStrm )
-+{
-+    rStrm >> maPTAutoFormat;
-+}
-+
- // ----------------------------------------------------------------------------
- 
- void XclImpPivotTable::Convert()
-@@ -1363,6 +1368,7 @@ void XclImpPivotTable::Convert()
-     pDPObj->SetSheetDesc( aDesc );
-     pDPObj->SetOutRange( aOutRange );
-     pDPObj->SetAlive( TRUE );
-+    pDPObj->SetHeaderLayout( maPTAutoFormat.mnGridLayout == 0 );
-     GetDoc().GetDPCollection()->Insert( pDPObj );
- }
- 
-@@ -1458,6 +1464,12 @@ void XclImpPivotTableManager::ReadSxex(
-         maPTables.back()->ReadSxex( rStrm );
- }
- 
-+void XclImpPivotTableManager::ReadSxViewEx9( XclImpStream& rStrm )
-+{
-+    if( !maPTables.empty() )
-+        maPTables.back()->ReadSxViewEx9( rStrm );
-+}
-+
- // ----------------------------------------------------------------------------
- 
- void XclImpPivotTableManager::ReadPivotCaches( XclImpStream& rStrm )
-@@ -1473,4 +1485,85 @@ void XclImpPivotTableManager::ConvertPiv
- }
- 
- // ============================================================================
-+
-+// Pivot table autoformat settings ============================================
-+
-+/**
-+classic     : 10 08 00 00 00 00 00 00 20 00 00 00 01 00 00 00 00
-+default     : 10 08 00 00 00 00 00 00 20 00 00 00 01 00 00 00 00
-+report01    : 10 08 02 00 00 00 00 00 20 00 00 00 00 10 00 00 00
-+report02    : 10 08 02 00 00 00 00 00 20 00 00 00 01 10 00 00 00
-+report03    : 10 08 02 00 00 00 00 00 20 00 00 00 02 10 00 00 00
-+report04    : 10 08 02 00 00 00 00 00 20 00 00 00 03 10 00 00 00
-+report05    : 10 08 02 00 00 00 00 00 20 00 00 00 04 10 00 00 00
-+report06    : 10 08 02 00 00 00 00 00 20 00 00 00 05 10 00 00 00
-+report07    : 10 08 02 00 00 00 00 00 20 00 00 00 06 10 00 00 00
-+report08    : 10 08 02 00 00 00 00 00 20 00 00 00 07 10 00 00 00
-+report09    : 10 08 02 00 00 00 00 00 20 00 00 00 08 10 00 00 00
-+report10    : 10 08 02 00 00 00 00 00 20 00 00 00 09 10 00 00 00
-+table01     : 10 08 00 00 00 00 00 00 20 00 00 00 0a 10 00 00 00
-+table02     : 10 08 00 00 00 00 00 00 20 00 00 00 0b 10 00 00 00
-+table03     : 10 08 00 00 00 00 00 00 20 00 00 00 0c 10 00 00 00
-+table04     : 10 08 00 00 00 00 00 00 20 00 00 00 0d 10 00 00 00
-+table05     : 10 08 00 00 00 00 00 00 20 00 00 00 0e 10 00 00 00
-+table06     : 10 08 00 00 00 00 00 00 20 00 00 00 0f 10 00 00 00
-+table07     : 10 08 00 00 00 00 00 00 20 00 00 00 10 10 00 00 00
-+table08     : 10 08 00 00 00 00 00 00 20 00 00 00 11 10 00 00 00
-+table09     : 10 08 00 00 00 00 00 00 20 00 00 00 12 10 00 00 00
-+table10     : 10 08 00 00 00 00 00 00 20 00 00 00 13 10 00 00 00
-+none        : 10 08 00 00 00 00 00 00 20 00 00 00 15 10 00 00 00
-+**/
-+
-+XclPTAutoFormat::XclPTAutoFormat() :
-+    mbReport( 0 ),
-+    mnAutoFormat( 0 ),
-+    mnGridLayout( 0x10 )
-+{
-+}
-+
-+void XclPTAutoFormat::Init( const ScDPObject& rDPObj )
-+{
-+    if( rDPObj.GetHeaderLayout() )
-+    {
-+        mbReport     = 0;
-+        mnAutoFormat = 1;
-+        mnGridLayout = 0;
-+    }
-+    else
-+    {
-+        // Report1 for now
-+        // TODO : sync with autoformat indicies
-+        mbReport     = 2;
-+        mnAutoFormat = 1;
-+        mnGridLayout = 0x10;
-+    }
-+}
-+
-+XclImpStream& operator>>( XclImpStream& rStrm, XclPTAutoFormat& rInfo )
-+{
-+    rStrm.Ignore( 2 );
-+    rStrm >> rInfo.mbReport;            /// 2 for report* fmts ?
-+    rStrm.Ignore( 6 );
-+    sal_uInt8 nDummy;
-+    return rStrm
-+        >> rInfo.mnAutoFormat
-+        >> rInfo.mnGridLayout 
-+        >> nDummy >> nDummy >> nDummy;
-+}
-+
-+XclExpStream& operator<<( XclExpStream& rStrm, const XclPTAutoFormat& rInfo )
-+{
-+    return rStrm
-+        << EXC_PT_AUTOFMT_HEADER
-+        << rInfo.mbReport
-+        << EXC_PT_AUTOFMT_ZERO
-+        << EXC_PT_AUTOFMT_FLAGS
-+        << rInfo.mnAutoFormat
-+        << rInfo.mnGridLayout
-+        << static_cast<sal_uInt8>(0x00)
-+        << static_cast<sal_uInt8>(0x00)
-+        << static_cast<sal_uInt8>(0x00);
-+}
-+
-+// ============================================================================
- 
---- sc/source/filter/inc/xepivot.hxx.old	2009-04-02 10:44:58.000000000 +0000
-+++ sc/source/filter/inc/xepivot.hxx	2009-04-06 16:41:48.000000000 +0000
-@@ -412,6 +412,8 @@ private:
-     void                WriteSxli( XclExpStream& rStrm, sal_uInt16 nLineCount, sal_uInt16 nIndexCount ) const;
-     /** Writes the SXEX records containing additional pivot table info. */
-     void                WriteSxex( XclExpStream& rStrm ) const;
-+    /** Writes the SX_AUTOFORMAT records with the autoformat id and header layout */
-+    void                WriteSxAutoformat( XclExpStream& rStrm ) const;
- 
-     // ------------------------------------------------------------------------
- private:
-@@ -422,6 +424,7 @@ private:
-     const XclExpPivotCache& mrPCache;       /// The pivot cache this pivot table bases on.
-     XclPTInfo           maPTInfo;           /// Info about the pivot table (SXVIEW record).
-     XclPTExtInfo        maPTExtInfo;        /// Extended info about the pivot table (SXEX record).
-+    XclPTAutoFormat     maPTAutoFormat;     /// The selected autoformat (SXVIEWEX9)
-     XclExpPTFieldList   maFieldList;        /// All fields in pivot cache order.
-     ScfUInt16Vec        maRowFields;        /// Row field indexes.
-     ScfUInt16Vec        maColFields;        /// Column field indexes.
---- sc/source/filter/inc/xipivot.hxx.old	2009-04-02 10:44:58.000000000 +0000
-+++ sc/source/filter/inc/xipivot.hxx	2009-04-06 16:41:48.000000000 +0000
-@@ -350,6 +350,9 @@ public:
-     void                ReadSxdi( XclImpStream& rStrm );
-     /** Reads an SXEX record containing additional settings for the pivot table. */
-     void                ReadSxex( XclImpStream& rStrm );
-+    /** Reads an SXVIEWEX9 record that specifies the pivot tables
-+     *  autoformat. */
-+    void                ReadSxViewEx9( XclImpStream& rStrm );
- 
-     // ------------------------------------------------------------------------
- 
-@@ -364,6 +367,7 @@ private:
- 
-     XclPTInfo           maPTInfo;           /// General info about the pivot table (SXVIEW record).
-     XclPTExtInfo        maPTExtInfo;        /// Extended info about the pivot table (SXEX record).
-+    XclPTAutoFormat     maPTAutoFormat;     /// The selected autoformat (SX_AUTOFORMAT)
-     XclImpPTFieldVec    maFields;           /// Vector containing all fields.
-     XclImpPTFieldRef    mxCurrField;        /// Current field for importing additional info.
-     ScfStringVec        maVisFieldNames;    /// Vector containing all visible field names.
-@@ -422,6 +426,9 @@ public:
-     void                ReadSxvi( XclImpStream& rStrm );
-     /** Reads an SXEX record containing additional settings for a pivot table. */
-     void                ReadSxex( XclImpStream& rStrm );
-+    /** Reads an SXVIEWEX9 record that specifies the pivot tables
-+     *  autoformat. */
-+    void                ReadSxViewEx9( XclImpStream& rStrm );
- 
-     // ------------------------------------------------------------------------
- 
---- sc/source/filter/inc/xlpivot.hxx.old	2009-04-02 10:44:58.000000000 +0000
-+++ sc/source/filter/inc/xlpivot.hxx	2009-04-06 16:41:48.000000000 +0000
-@@ -41,6 +41,7 @@
- #include <tools/datetime.hxx>
- #include "ftools.hxx"
- #include "xladdress.hxx"
-+#include "dpobject.hxx"
- 
- class XclImpStream;
- class XclExpStream;
-@@ -73,6 +74,10 @@ const sal_uInt16 EXC_PT_MAXDATACOUNT
- // pivot table items
- const sal_uInt16 EXC_PT_MAXITEMCOUNT        = 32500;
- 
-+const sal_uInt16 EXC_PT_AUTOFMT_HEADER      = 0x810;
-+const sal_uInt16 EXC_PT_AUTOFMT_ZERO        = 0;
-+const sal_uInt32 EXC_PT_AUTOFMT_FLAGS       = 0x20;
-+
- /** Data type of a pivot cache item. */
- enum XclPCItemType
- {
-@@ -396,6 +401,9 @@ const double EXC_SXDBEX_CREATION_DATE
- const sal_uInt16 EXC_ID_SXFDBTYPE           = 0x01BB;
- const sal_uInt16 EXC_SXFDBTYPE_DEFAULT      = 0x0000;
- 
-+// (0x0810) SXVIEWEX9 ---------------------------------------------------------
-+const sal_uInt16 EXC_ID_SXVIEWEX9       = 0x0810;
-+
- // ============================================================================
- // Pivot cache
- // ============================================================================
-@@ -786,5 +794,22 @@ XclExpStream& operator<<( XclExpStream&
- 
- // ============================================================================
- 
-+// Pivot table autoformat settings ==============================================
-+
-+/** Pivot table autoformat settings (SX_AUTOFORMAT record). */
-+struct XclPTAutoFormat
-+{
-+    sal_uInt32          mbReport;           /// 2 for report* fmts ?
-+    sal_uInt8           mnAutoFormat;       /// AutoFormat ID
-+    sal_uInt8           mnGridLayout;       /// 0 == gridlayout, 0x10 == modern
-+
-+    explicit            XclPTAutoFormat();
-+    void                Init( const ScDPObject& rDPObj );
-+};
-+
-+XclImpStream& operator>>( XclImpStream& rStrm, XclPTAutoFormat& rInfo );
-+XclExpStream& operator<<( XclExpStream& rStrm, const XclPTAutoFormat& rInfo );
-+
-+// ============================================================================
- #endif
- 
---- sc/source/filter/xml/XMLExportDataPilot.cxx.old	2009-04-06 16:41:48.000000000 +0000
-+++ sc/source/filter/xml/XMLExportDataPilot.cxx	2009-04-06 16:41:48.000000000 +0000
-@@ -781,6 +781,8 @@ void ScXMLExportDataPilot::WriteDataPilo
+diff --git sc/source/filter/xml/XMLExportDataPilot.cxx sc/source/filter/xml/XMLExportDataPilot.cxx
+index eeecd3b..135a6d1 100644
+--- sc/source/filter/xml/XMLExportDataPilot.cxx
++++ sc/source/filter/xml/XMLExportDataPilot.cxx
+@@ -797,6 +797,9 @@ void ScXMLExportDataPilot::WriteDataPilots(const uno::Reference <sheet::XSpreads
                              rExport.AddAttribute(XML_NAMESPACE_TABLE, XML_SHOW_FILTER_BUTTON, XML_FALSE);
                          if (!pDPSave->GetDrillDown())
                              rExport.AddAttribute(XML_NAMESPACE_TABLE, XML_DRILL_DOWN_ON_DOUBLE_CLICK, XML_FALSE);
-+                        if ((*pDPs)[i]->GetHeaderLayout ())
++                        if ((*pDPs)[i]->GetHeaderLayout())
 +                            rExport.AddAttribute(XML_NAMESPACE_TABLE, XML_HEADER_GRID_LAYOUT, XML_TRUE);
- 						SvXMLElementExport aElemDP(rExport, XML_NAMESPACE_TABLE, XML_DATA_PILOT_TABLE, sal_True, sal_True);
- 						rExport.CheckAttrList();
- 						if ((*pDPs)[i]->IsSheetData())
---- sc/source/filter/xml/xmldpimp.cxx.old	2009-04-02 10:44:57.000000000 +0000
-+++ sc/source/filter/xml/xmldpimp.cxx	2009-04-06 16:41:48.000000000 +0000
-@@ -132,7 +132,8 @@ ScXMLDataPilotTableContext::ScXMLDataPil
- 	bTargetRangeAddress(sal_False),
- 	bSourceCellRange(sal_False),
++
+                         SvXMLElementExport aElemDP(rExport, XML_NAMESPACE_TABLE, XML_DATA_PILOT_TABLE, sal_True, sal_True);
+ 
+                         // grand total elements.
+diff --git sc/source/filter/xml/xmldpimp.cxx sc/source/filter/xml/xmldpimp.cxx
+index 070fbc2..0d4d467 100644
+--- sc/source/filter/xml/xmldpimp.cxx
++++ sc/source/filter/xml/xmldpimp.cxx
+@@ -142,7 +142,8 @@ ScXMLDataPilotTableContext::ScXMLDataPilotTableContext( ScXMLImport& rImport,
+     bTargetRangeAddress(sal_False),
+     bSourceCellRange(sal_False),
      bShowFilter(sal_True),
 -    bDrillDown(sal_True)
 +    bDrillDown(sal_True),
 +    bHeaderGridLayout(sal_False)
  {
- 	sal_Int16 nAttrCount = xAttrList.is() ? xAttrList->getLength() : 0;
- 	const SvXMLTokenMap& rAttrTokenMap = GetScImport().GetDataPilotTableAttrTokenMap();
-@@ -192,6 +193,11 @@ ScXMLDataPilotTableContext::ScXMLDataPil
+     sal_Int16 nAttrCount = xAttrList.is() ? xAttrList->getLength() : 0;
+     const SvXMLTokenMap& rAttrTokenMap = GetScImport().GetDataPilotTableAttrTokenMap();
+@@ -215,6 +216,11 @@ ScXMLDataPilotTableContext::ScXMLDataPilotTableContext( ScXMLImport& rImport,
                  bDrillDown = IsXMLToken(sValue, XML_TRUE);
              }
              break;
@@ -441,30 +35,34 @@
 +                bHeaderGridLayout = IsXMLToken(sValue, XML_TRUE);
 +            }
 +            break;
- 		}
- 	}
+         }
+     }
  
-@@ -313,6 +319,7 @@ void ScXMLDataPilotTableContext::EndElem
- 		pDPObject->SetName(sDataPilotTableName);
- 		pDPObject->SetTag(sApplicationData);
- 		pDPObject->SetOutRange(aTargetRangeAddress);
+@@ -392,6 +398,7 @@ void ScXMLDataPilotTableContext::EndElement()
+         pDPObject->SetName(sDataPilotTableName);
+         pDPObject->SetTag(sApplicationData);
+         pDPObject->SetOutRange(aTargetRangeAddress);
 +        pDPObject->SetHeaderLayout(bHeaderGridLayout);
- 		switch (nSourceType)
- 		{
- 			case SQL :
---- sc/source/filter/xml/xmldpimp.hxx.old	2009-04-02 10:44:57.000000000 +0000
-+++ sc/source/filter/xml/xmldpimp.hxx	2009-04-06 16:41:48.000000000 +0000
-@@ -111,6 +111,7 @@ class ScXMLDataPilotTableContext : publi
- 	sal_Bool		bSourceCellRange;
+         switch (nSourceType)
+         {
+             case SQL :
+diff --git sc/source/filter/xml/xmldpimp.hxx sc/source/filter/xml/xmldpimp.hxx
+index b4df6b1..0f604a4 100644
+--- sc/source/filter/xml/xmldpimp.hxx
++++ sc/source/filter/xml/xmldpimp.hxx
+@@ -128,6 +128,7 @@ class ScXMLDataPilotTableContext : public SvXMLImportContext
+     sal_Bool		bSourceCellRange;
      sal_Bool        bShowFilter;
      sal_Bool        bDrillDown;
 +    sal_Bool        bHeaderGridLayout;
  
- 	const ScXMLImport& GetScImport() const { return (const ScXMLImport&)GetImport(); }
- 	ScXMLImport& GetScImport() { return (ScXMLImport&)GetImport(); }
---- sc/source/filter/xml/xmlimprt.cxx.old	2009-04-02 10:44:57.000000000 +0000
-+++ sc/source/filter/xml/xmlimprt.cxx	2009-04-06 16:41:48.000000000 +0000
-@@ -1327,6 +1327,7 @@ const SvXMLTokenMap& ScXMLImport::GetDat
+     const ScXMLImport& GetScImport() const { return (const ScXMLImport&)GetImport(); }
+     ScXMLImport& GetScImport() { return (ScXMLImport&)GetImport(); }
+diff --git sc/source/filter/xml/xmlimprt.cxx sc/source/filter/xml/xmlimprt.cxx
+index 7d9e882..bc43180 100644
+--- sc/source/filter/xml/xmlimprt.cxx
++++ sc/source/filter/xml/xmlimprt.cxx
+@@ -1328,6 +1328,7 @@ const SvXMLTokenMap& ScXMLImport::GetDataPilotTableAttrTokenMap()
              { XML_NAMESPACE_TABLE, XML_BUTTONS,				    XML_TOK_DATA_PILOT_TABLE_ATTR_BUTTONS				},
              { XML_NAMESPACE_TABLE, XML_SHOW_FILTER_BUTTON,	    XML_TOK_DATA_PILOT_TABLE_ATTR_SHOW_FILTER_BUTTON	},
              { XML_NAMESPACE_TABLE, XML_DRILL_DOWN_ON_DOUBLE_CLICK, XML_TOK_DATA_PILOT_TABLE_ATTR_DRILL_DOWN			},
@@ -472,11 +70,13 @@
              XML_TOKEN_MAP_END
          };
  
---- sc/source/filter/xml/xmlimprt.hxx.old	2009-04-02 10:44:57.000000000 +0000
-+++ sc/source/filter/xml/xmlimprt.hxx	2009-04-06 16:41:48.000000000 +0000
+diff --git sc/source/filter/xml/xmlimprt.hxx sc/source/filter/xml/xmlimprt.hxx
+index 139acf5..1e18bd8 100644
+--- sc/source/filter/xml/xmlimprt.hxx
++++ sc/source/filter/xml/xmlimprt.hxx
 @@ -482,7 +482,8 @@ enum ScXMLDataPilotTableAttrTokens
- 	XML_TOK_DATA_PILOT_TABLE_ATTR_TARGET_RANGE_ADDRESS,
- 	XML_TOK_DATA_PILOT_TABLE_ATTR_BUTTONS,
+     XML_TOK_DATA_PILOT_TABLE_ATTR_TARGET_RANGE_ADDRESS,
+     XML_TOK_DATA_PILOT_TABLE_ATTR_BUTTONS,
      XML_TOK_DATA_PILOT_TABLE_ATTR_SHOW_FILTER_BUTTON,
 -    XML_TOK_DATA_PILOT_TABLE_ATTR_DRILL_DOWN
 +    XML_TOK_DATA_PILOT_TABLE_ATTR_DRILL_DOWN,
@@ -484,9 +84,11 @@
  };
  
  enum ScXMLDataPilotTableElemTokens
---- xmloff/inc/xmloff/xmltoken.hxx.old	2009-04-06 16:41:48.000000000 +0000
-+++ xmloff/inc/xmloff/xmltoken.hxx	2009-04-06 16:41:48.000000000 +0000
-@@ -2508,6 +2508,7 @@ namespace xmloff { namespace token {
+diff --git xmloff/inc/xmloff/xmltoken.hxx xmloff/inc/xmloff/xmltoken.hxx
+index dacfd53..741a120 100644
+--- xmloff/inc/xmloff/xmltoken.hxx
++++ xmloff/inc/xmloff/xmltoken.hxx
+@@ -2507,6 +2507,7 @@ namespace xmloff { namespace token {
  
          XML_SHOW_FILTER_BUTTON,
          XML_DRILL_DOWN_ON_DOUBLE_CLICK,
@@ -494,9 +96,11 @@
          XML_GROUPED_BY,
          XML_DAYS,
          XML_MONTHS,
---- xmloff/source/core/xmltoken.cxx.old	2009-04-06 16:41:48.000000000 +0000
-+++ xmloff/source/core/xmltoken.cxx	2009-04-06 16:41:48.000000000 +0000
-@@ -2513,6 +2513,7 @@ namespace xmloff { namespace token {
+diff --git xmloff/source/core/xmltoken.cxx xmloff/source/core/xmltoken.cxx
+index 0aea4f9..a4a43bb 100644
+--- xmloff/source/core/xmltoken.cxx
++++ xmloff/source/core/xmltoken.cxx
+@@ -2512,6 +2512,7 @@ namespace xmloff { namespace token {
  
          TOKEN( "show-filter-button",                   XML_SHOW_FILTER_BUTTON ),
          TOKEN( "drill-down-on-double-click",           XML_DRILL_DOWN_ON_DOUBLE_CLICK ),

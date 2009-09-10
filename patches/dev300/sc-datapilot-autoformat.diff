@@ -1,49 +1,36 @@
---- sc/inc/dpobject.hxx
-+++ sc/inc/dpobject.hxx
-@@ -106,6 +106,7 @@ private:
- 	ScDPOutput*				pOutput;
- 	BOOL					bSettingsChanged;
- 	BOOL					bAlive;			// FALSE if only used to hold settings
-+	USHORT                                  nAutoFormatIndex;
- 	BOOL					bAllowMove;
- 	long					nHeaderRows;	// page fields plus filter button
- 
-@@ -137,6 +138,9 @@ public:
- 	void				SetOutRange(const ScRange& rRange);
- 	const ScRange&		GetOutRange() const		{ return aOutRange; }
- 
-+	void 			SetAutoFormatIndex (const USHORT nIndex);
-+	USHORT			GetAutoFormatIndex ()	{ if (this == NULL) return 65535; else return nAutoFormatIndex; }
-+
- 	void				SetSheetDesc(const ScSheetSourceDesc& rDesc);
- 	void				SetImportDesc(const ScImportSourceDesc& rDesc);
- 	void				SetServiceData(const ScDPServiceDesc& rDesc);
---- sc/inc/sc.hrc.old	2009-04-06 16:41:39.000000000 +0000
-+++ sc/inc/sc.hrc	2009-04-06 16:41:48.000000000 +0000
-@@ -1652,6 +1652,9 @@
+diff --git sc/inc/sc.hrc sc/inc/sc.hrc
+index d67b625..33d0240 100644
+--- sc/inc/sc.hrc
++++ sc/inc/sc.hrc
+@@ -1664,6 +1664,9 @@
  #define SID_DATA_FORM               (SC_OOO_BUILD_START + 2) // menu (in Data menu)
  #define RID_SCDLG_DATAFORM          (SC_OOO_BUILD_START + 3) // dialog
  
+-#endif
 +// Autoformat for DataPilot
 +#define SID_PIVOT_AFMT              (SC_OOO_BUILD_START + 4)
 +
- #endif 
++#endif 
  
  
---- sc/sdi/pivotsh.sdi.old	2009-04-02 10:44:54.000000000 +0000
-+++ sc/sdi/pivotsh.sdi	2009-04-06 16:41:48.000000000 +0000
+diff --git sc/sdi/pivotsh.sdi sc/sdi/pivotsh.sdi
+index ddbb49c..94821e5 100644
+--- sc/sdi/pivotsh.sdi
++++ sc/sdi/pivotsh.sdi
 @@ -34,6 +34,7 @@ interface Pivot
- 	SID_PIVOT_RECALC	[ ExecMethod = Execute; StateMethod = GetState; Export = FALSE; ]
- 	SID_PIVOT_KILL		[ ExecMethod = Execute; StateMethod = GetState; Export = FALSE; ]
+     SID_PIVOT_RECALC	[ ExecMethod = Execute; StateMethod = GetState; Export = FALSE; ]
+     SID_PIVOT_KILL		[ ExecMethod = Execute; StateMethod = GetState; Export = FALSE; ]
          SID_DP_FILTER           [ ExecMethod = Execute; StateMethod = GetState; Export = FALSE; ]
 +	SID_PIVOT_AFMT		[ ExecMethod = Execute; StateMethod = GetState; Export = FALSE; ]
  }
  
  shell ScPivotShell
---- sc/sdi/scalc.sdi.old	2009-04-06 16:41:39.000000000 +0000
-+++ sc/sdi/scalc.sdi	2009-04-06 16:41:48.000000000 +0000
-@@ -1900,6 +1900,31 @@ SfxVoidItem DeletePivotTable SID_PIVOT_K
- 	GroupId = GID_DATA;
+diff --git sc/sdi/scalc.sdi sc/sdi/scalc.sdi
+index 39380f8..ad21670 100644
+--- sc/sdi/scalc.sdi
++++ sc/sdi/scalc.sdi
+@@ -1900,6 +1900,30 @@ SfxVoidItem DeletePivotTable SID_PIVOT_KILL
+     GroupId = GID_DATA;
  ]
  
 +SfxVoidItem AutoFormatPivotTable SID_PIVOT_AFMT
@@ -70,235 +57,219 @@
 +        GroupId = GID_DATA;
 +]
 +
-+
  //--------------------------------------------------------------------------
  SfxVoidItem DeletePrintArea SID_DELETE_PRINTAREA
  ()
---- sc/source/core/data/dpobject.cxx
-+++ sc/source/core/data/dpobject.cxx
-@@ -165,6 +165,7 @@ ScDPObject::ScDPObject( ScDocument* pD ) :
- 	pOutput( NULL ),
- 	bSettingsChanged( FALSE ),
- 	bAlive( FALSE ),
-+    nAutoFormatIndex( 65535 ),
- 	bAllowMove( FALSE ),
- 	nHeaderRows( 0 )
- {
-@@ -178,6 +179,7 @@ ScDPObject::ScDPObject(const ScDPObject&
- 	pOutput( NULL ),
- 	bSettingsChanged( FALSE ),
- 	bAlive( FALSE ),
-+	nAutoFormatIndex( r.nAutoFormatIndex ),
- 	bAllowMove( FALSE ),
- 	nHeaderRows( r.nHeaderRows )
- {
-@@ -234,6 +236,11 @@ void ScDPObject::SetSaveData(const ScDPS
- 	InvalidateData();		// re-init source from SaveData
- }
+diff --git sc/source/ui/docshell/dbdocfun.cxx sc/source/ui/docshell/dbdocfun.cxx
+index 8ee336e..d525da1 100644
+--- sc/source/ui/docshell/dbdocfun.cxx
++++ sc/source/ui/docshell/dbdocfun.cxx
+@@ -1405,6 +1405,36 @@ BOOL ScDBDocFunc::DataPilotUpdate( ScDPObject* pOldObj, const ScDPObject* pNewOb
+     delete pNewUndoDoc;
+     delete pUndoDPObj;
  
-+void ScDPObject::SetAutoFormatIndex(const USHORT nIndex)
-+{
-+	nAutoFormatIndex	= nIndex;
-+}
++    if (const_cast<ScDPObject *>(pNewObj)->GetAutoFormatIndex() != 65535)
++    {
++        ScViewData* pViewData = rDocShell.GetViewData();
++        ScTabViewShell* pViewShell = pViewData->GetViewShell();
++        pViewShell->GetDBData( TRUE, SC_DB_OLD );
++        const ScMarkData& rMark1 = pViewData->GetMarkData();
++        SCCOL nStartCol;
++        SCROW nStartRow;
++        SCTAB nStartTab;
++        SCCOL nEndCol;
++        SCROW nEndRow;
++        SCTAB nEndTab;
 +
- void ScDPObject::SetOutRange(const ScRange& rRange)
- {
- 	aOutRange = rRange;
---- sc/source/ui/docshell/dbdocfun.cxx.old	2009-04-02 10:45:27.000000000 +0000
-+++ sc/source/ui/docshell/dbdocfun.cxx	2009-04-06 16:41:48.000000000 +0000
-@@ -1390,6 +1390,35 @@ BOOL ScDBDocFunc::DataPilotUpdate( ScDPO
- 	delete pNewUndoDoc;
- 	delete pUndoDPObj;
++        rDocShell.GetViewData()->GetSimpleArea( nStartCol,nStartRow,nStartTab,nEndCol,nEndRow,nEndTab );
++        ScRange Outrange = pNewObj->GetOutRange();
++        if (( (Outrange.aStart.Col() <= nStartCol) && (nStartCol <= Outrange.aEnd.Col() )&& (nStartTab == Outrange.aStart.Tab()))
++            && ( (Outrange.aStart.Row() <= nStartRow) && (nStartRow <= Outrange.aEnd.Row() )) )
++        {
++        
++            if ( !rMark1.IsMarked() && !rMark1.IsMultiMarked() )
++                pViewShell->MarkDataArea( TRUE );
++            //FIXME: Autoformat even when clicked from a non-dp cell.
++            pViewData->MoveNextRow();
++            sal_uInt16 nAutoFmtIndex = pNewObj->GetAutoFormatIndex();
++            pViewShell->AutoFormat(nAutoFmtIndex);
++            pViewShell->AutoFormatPivotTable(const_cast<ScDPObject*>(pNewObj), nAutoFmtIndex);
++            pViewData->MovePrevRow();
++        }
++    }
++
+     if (bDone)
+         aModificator.SetDocumentModified();
  
-+	if (const_cast<ScDPObject *>(pNewObj)->GetAutoFormatIndex() != 65535)
-+	{
-+		ScViewData* pViewData = rDocShell.GetViewData();
-+		rDocShell.GetViewData()->GetViewShell()->GetDBData( TRUE, SC_DB_OLD );
-+		const ScMarkData& rMark1 = pViewData->GetMarkData();
-+		SCCOL nStartCol;
-+		SCROW nStartRow;
-+		SCTAB nStartTab;
-+		SCCOL nEndCol;
-+		SCROW nEndRow;
-+		SCTAB nEndTab;
-+
-+		rDocShell.GetViewData()->GetSimpleArea( nStartCol,nStartRow,nStartTab,nEndCol,nEndRow,nEndTab );
-+		ScRange Outrange = pNewObj->GetOutRange();
-+		if (( (Outrange.aStart.Col() <= nStartCol) && (nStartCol <= Outrange.aEnd.Col() )&& (nStartTab == Outrange.aStart.Tab()))
-+			&& ( (Outrange.aStart.Row() <= nStartRow) && (nStartRow <= Outrange.aEnd.Row() )) )
-+			{
-+		
-+			if ( !rMark1.IsMarked() && !rMark1.IsMultiMarked() )
-+				rDocShell.GetViewData()->GetViewShell()->MarkDataArea( TRUE );
-+			//FIXME: Autoformat even when clicked from a non-dp cell.
-+			pViewData->MoveNextRow();		
-+			rDocShell.GetViewData()->GetViewShell()->AutoFormat( const_cast<ScDPObject *>(pNewObj)->GetAutoFormatIndex());
-+			rDocShell.GetViewData()->GetViewShell()->AutoFormatPivotTable( const_cast<ScDPObject *>(pNewObj), const_cast<ScDPObject *>(pNewObj)->GetAutoFormatIndex() );		
-+			pViewData->MovePrevRow();
-+			}
-+	}
-+
-+
- 	if (bDone)
- 		aModificator.SetDocumentModified();
- 
---- sc/source/ui/inc/dbfunc.hxx.old	2009-04-02 10:45:37.000000000 +0000
-+++ sc/source/ui/inc/dbfunc.hxx	2009-04-06 16:41:48.000000000 +0000
+diff --git sc/source/ui/inc/dbfunc.hxx sc/source/ui/inc/dbfunc.hxx
+index bb43553..91834e1 100644
+--- sc/source/ui/inc/dbfunc.hxx
++++ sc/source/ui/inc/dbfunc.hxx
 @@ -90,6 +90,8 @@ public:
                                      const ScDPObject& rSource, BOOL bApi = FALSE );
- 	void			DeletePivotTable();
- 	void			RecalcPivotTable();
-+        void                    AutoFormatPivotTable(USHORT nIndex);
-+        void            	AutoFormatPivotTable(ScDPObject*        pDPObj, USHORT nIndex);
+     void			DeletePivotTable();
+     void			RecalcPivotTable();
++    void            AutoFormatPivotTable(USHORT nIndex);
++    void            AutoFormatPivotTable(ScDPObject* pDPObj, USHORT nIndex);
  
      BOOL            HasSelectionForDateGroup( ScDPNumGroupInfo& rOldInfo, sal_Int32& rParts );
      BOOL            HasSelectionForNumGroup( ScDPNumGroupInfo& rOldInfo );
---- sc/source/ui/inc/viewdata.hxx.old	2009-04-02 10:45:37.000000000 +0000
-+++ sc/source/ui/inc/viewdata.hxx	2009-04-06 16:41:48.000000000 +0000
-@@ -331,6 +331,10 @@ public:
- 
- 	ScMarkType      GetSimpleArea( SCCOL& rStartCol, SCROW& rStartRow, SCTAB& rStartTab,
- 									SCCOL& rEndCol, SCROW& rEndRow, SCTAB& rEndTab ) const;
+diff --git sc/source/ui/inc/viewdata.hxx sc/source/ui/inc/viewdata.hxx
+index 024eac3..6f0d986 100644
+--- sc/source/ui/inc/viewdata.hxx
++++ sc/source/ui/inc/viewdata.hxx
+@@ -332,6 +332,10 @@ public:
+     ScMarkType      GetSimpleArea( SCCOL& rStartCol, SCROW& rStartRow, SCTAB& rStartTab,
+                                     SCCOL& rEndCol, SCROW& rEndRow, SCTAB& rEndTab ) const;
+     ScMarkType      GetSimpleArea( ScRange& rRange ) const;
 +
 +    void            MoveNextRow();
 +    void            MovePrevRow();
 +
- 	ScMarkType      GetSimpleArea( ScRange& rRange ) const;
                      /// May modify rNewMark using MarkToSimple().
      ScMarkType      GetSimpleArea( ScRange & rRange, ScMarkData & rNewMark ) const;
+     void			GetMultiArea( ScRangeListRef& rRange ) const;
+diff --git sc/source/ui/miscdlgs/makefile.mk sc/source/ui/miscdlgs/makefile.mk
+index 12b2d2f..df75a88 100644
 --- sc/source/ui/miscdlgs/makefile.mk
 +++ sc/source/ui/miscdlgs/makefile.mk
-@@ -117,7 +117,9 @@ LIB1OBJFILES =  \
- 	$(SLO)$/conflictsdlg.obj    \
- 	$(SLO)$/sharedocdlg.obj \
- 	$(SLO)$/protectiondlg.obj \
--	$(SLO)$/retypepassdlg.obj
-+	$(SLO)$/retypepassdlg.obj \
+@@ -81,7 +81,9 @@ SLOFILES =  \
+     $(SLO)$/conflictsdlg.obj    \
+     $(SLO)$/sharedocdlg.obj \
+     $(SLO)$/protectiondlg.obj \
+-    $(SLO)$/retypepassdlg.obj
++    $(SLO)$/retypepassdlg.obj \
 +	$(SLO)$/scuiautofmt.obj			\
 +	$(SLO)$/strindlg.obj            
  
  EXCEPTIONSFILES = \
      $(SLO)$/acredlin.obj        \
---- sc/source/ui/src/popup.src.old	2009-04-02 10:45:23.000000000 +0000
-+++ sc/source/ui/src/popup.src	2009-04-06 16:41:48.000000000 +0000
-@@ -206,6 +206,84 @@ Menu RID_POPUP_PIVOT
- 			Text [ en-US ] = "~Start..." ;
- 		};
- 		MenuItem
-+                {
-+                        Identifier = SID_PIVOT_AFMT ;
-+                        HelpId = SID_PIVOT_AFMT ;
-+			Text [ en-US ] = "~AutoFormat..." ; 
-+                        Text [ de ] = "A~utoFormat" ;
-+			Text [ af ] = "OutoFormateer..." ;
-+			Text [ ar ] = "تنسيق تلقائي..." ;
-+			Text [ as-IN ] = "স্বয়ংক্ৰিয় ফৰমেট ..." ;
-+			Text [ be-BY ] = "Аўта-фармат..." ;
-+			Text [ bg ] = "Автоформат..." ;
-+			Text [ br ] = "EmVentrezhañ..." ;
-+			Text [ bs ] = "AutoFormat..." ;
-+			Text [ ca ] = "Formatació automàtica..." ;
-+			Text [ cs ] = "Automatický formát..." ;
-+			Text [ cy ] = "AwtoFformat..." ;
-+			Text [ da ] = "Autoformat..." ;
-+			Text [ el ] = "Αυτόματη μορφοποίηση..." ;
-+			Text [ en-GB ] = "AutoFormat..." ;
-+			Text [ en-ZA ] = "AutoFormat..." ;
-+			Text [ eo ] = "Aŭtomate Formati..." ;
-+			Text [ es ] = "Formateado automático..." ;
-+			Text [ et ] = "Automaatvormindus..." ;
-+			Text [ fa ] = "قالب‌بندی خودکار..." ;
-+			Text [ fi ] = "Automaattinen muotoilu..." ;
-+			Text [ fr ] = "AutoFormat..." ;
-+			Text [ ga ] = "UathFhormáidigh..." ;
-+			Text [ gu ] = "આપોઆપબંધારણ..." ;
-+			Text [ gu-IN ] = "આપોઆપબંધારણ..." ;
-+			Text [ hi-IN ] = "स्वचालित ढंग से रचना..." ;
-+			Text [ hr ] = "SamoOblikovanje..." ;
-+			Text [ hu ] = "Automatikus formázás..." ;
-+			Text [ it ] = "Formattazione automatica..." ;
-+			Text [ ja ] = "オートフォーマット..." ;
-+			Text [ ka ] = "ავტო-ფორმატირება..." ;
-+			Text [ km ] = "ទ្រង់ទ្រាយ​ស្វ័យប្រវត្តិ..." ;
-+			Text [ ko ] = "자동 서식..." ;
-+			Text [ ku ] = "TeşekirinaBixweber..." ;
-+			Text [ lt ] = "Automatinis formatavimas..." ;
-+			Text [ mk ] = "Автоматско форматирање..." ;
-+			Text [ ml-IN ] = "സ്വയം രൂപപ്പെടുത്തുക..." ;
-+			Text [ mr-IN ] = "स्वंयचलित रचना..." ;
-+			Text [ nb ] = "Autoformatering..." ;
-+			Text [ nl ] = "AutoOpmaak..." ;
-+			Text [ nn ] = "Autoformatering..." ;
-+			Text [ nr ] = "Fometha ngokuzenzakalela..." ;
-+			Text [ ns ] = "Fomate ye e Itiragalelago..." ;
-+			Text [ or-IN ] = "ସ୍ବଯଂଚାଳିତଫର୍ମାଟ..." ;
-+			Text [ pa-IN ] = "ਸਵੈ-ਫਾਰਮਿਟ..." ;
-+			Text [ pl ] = "Autoformatowanie..." ;
-+			Text [ pt ] = "Formatação automática..." ;
-+			Text [ pt-BR ] = "AutoFormatar..." ;
-+			Text [ ru ] = "Автоформат..." ;
-+			Text [ rw ] = "Nyamwihamiterere..." ;
-+			Text [ sh-YU ] = "Automatsko formatiranje..." ;
-+			Text [ sk ] = "Automatický formát..." ;
-+			Text [ sl ] = "Samooblikovanje..." ;
-+			Text [ sr-CS ] = "Аутоматско форматирање..." ;
-+			Text [ ss ] = "Kutifomethekela..." ;
-+			Text [ st ] = "Fomate e iketsahallang..." ;
-+			Text [ sv ] = "Autoformat..." ;
-+			Text [ sw-TZ ] = "AutoFormat..." ;
-+			Text [ ta ] = "தானியக்க வடிவம்..." ;
-+			Text [ ta-IN ] = "தானியக்க வடிவம்..." ;
-+			Text [ te-IN ] = "స్వయంరూపలావణ్యం..." ;
-+			Text [ tg ] = "Автоформат..." ;
-+			Text [ th ] = "AutoFormat..." ;
-+			Text [ tr ] = "Otomatik Biçimlendirme..." ;
-+			Text [ ts ] = "Fomati yo tiendlekela hi yoxe..." ;
-+			Text [ uk ] = "Автоформат..." ;
-+			Text [ ur-IN ] = "خودکارطریقہ..." ;
-+			Text [ ve ] = "OthoFomathi..." ;
-+			Text [ vi ] = "Tự định dạng..." ;
-+			Text [ xh ] = "Ulungiselelo Oluzenzekelayo..." ;
-+			Text [ zh-CN ] = "自动格式..." ;
-+			Text [ zh-TW ] = "自動格式..." ;
-+			Text [ zu ] = "Isakhiwo esizenzekelayo..." ;
-+		};
-+		MenuItem
- 		{
- 			Identifier = SID_PIVOT_RECALC ;
- 			HelpId = SID_PIVOT_RECALC ;
---- sc/source/ui/view/dbfunc3.cxx.old	2009-04-02 10:45:40.000000000 +0000
-+++ sc/source/ui/view/dbfunc3.cxx	2009-04-06 16:41:48.000000000 +0000
-@@ -1976,7 +1976,28 @@ void ScDBFunc::RepeatDB( BOOL bRecord )
- 	else		// "Keine Operationen auszufuehren"
- 		ErrorMessage(STR_MSSG_REPEATDB_0);
+diff --git sc/source/ui/src/popup.src sc/source/ui/src/popup.src
+index 05d10b9..4e19349 100644
+--- sc/source/ui/src/popup.src
++++ sc/source/ui/src/popup.src
+@@ -213,6 +213,84 @@ Menu RID_POPUP_PIVOT
+         };
+         MenuItem
+         {
++            Identifier = SID_PIVOT_AFMT ;
++            HelpId = SID_PIVOT_AFMT ;
++            Text [ en-US ] = "~AutoFormat..." ; 
++            Text [ de ] = "A~utoFormat" ;
++            Text [ af ] = "OutoFormateer..." ;
++            Text [ ar ] = "تنسيق تلقائي..." ;
++            Text [ as-IN ] = "স্বয়ংক্ৰিয় ফৰমেট ..." ;
++            Text [ be-BY ] = "Аўта-фармат..." ;
++            Text [ bg ] = "Автоформат..." ;
++            Text [ br ] = "EmVentrezhañ..." ;
++            Text [ bs ] = "AutoFormat..." ;
++            Text [ ca ] = "Formatació automàtica..." ;
++            Text [ cs ] = "Automatický formát..." ;
++            Text [ cy ] = "AwtoFformat..." ;
++            Text [ da ] = "Autoformat..." ;
++            Text [ el ] = "Αυτόματη μορφοποίηση..." ;
++            Text [ en-GB ] = "AutoFormat..." ;
++            Text [ en-ZA ] = "AutoFormat..." ;
++            Text [ eo ] = "Aŭtomate Formati..." ;
++            Text [ es ] = "Formateado automático..." ;
++            Text [ et ] = "Automaatvormindus..." ;
++            Text [ fa ] = "قالب‌بندی خودکار..." ;
++            Text [ fi ] = "Automaattinen muotoilu..." ;
++            Text [ fr ] = "AutoFormat..." ;
++            Text [ ga ] = "UathFhormáidigh..." ;
++            Text [ gu ] = "આપોઆપબંધારણ..." ;
++            Text [ gu-IN ] = "આપોઆપબંધારણ..." ;
++            Text [ hi-IN ] = "स्वचालित ढंग से रचना..." ;
++            Text [ hr ] = "SamoOblikovanje..." ;
++            Text [ hu ] = "Automatikus formázás..." ;
++            Text [ it ] = "Formattazione automatica..." ;
++            Text [ ja ] = "オートフォーマット..." ;
++            Text [ ka ] = "ავტო-ფორმატირება..." ;
++            Text [ km ] = "ទ្រង់ទ្រាយ​ស្វ័យប្រវត្តិ..." ;
++            Text [ ko ] = "자동 서식..." ;
++            Text [ ku ] = "TeşekirinaBixweber..." ;
++            Text [ lt ] = "Automatinis formatavimas..." ;
++            Text [ mk ] = "Автоматско форматирање..." ;
++            Text [ ml-IN ] = "സ്വയം രൂപപ്പെടുത്തുക..." ;
++            Text [ mr-IN ] = "स्वंयचलित रचना..." ;
++            Text [ nb ] = "Autoformatering..." ;
++            Text [ nl ] = "AutoOpmaak..." ;
++            Text [ nn ] = "Autoformatering..." ;
++            Text [ nr ] = "Fometha ngokuzenzakalela..." ;
++            Text [ ns ] = "Fomate ye e Itiragalelago..." ;
++            Text [ or-IN ] = "ସ୍ବଯଂଚାଳିତଫର୍ମାଟ..." ;
++            Text [ pa-IN ] = "ਸਵੈ-ਫਾਰਮਿਟ..." ;
++            Text [ pl ] = "Autoformatowanie..." ;
++            Text [ pt ] = "Formatação automática..." ;
++            Text [ pt-BR ] = "AutoFormatar..." ;
++            Text [ ru ] = "Автоформат..." ;
++            Text [ rw ] = "Nyamwihamiterere..." ;
++            Text [ sh-YU ] = "Automatsko formatiranje..." ;
++            Text [ sk ] = "Automatický formát..." ;
++            Text [ sl ] = "Samooblikovanje..." ;
++            Text [ sr-CS ] = "Аутоматско форматирање..." ;
++            Text [ ss ] = "Kutifomethekela..." ;
++            Text [ st ] = "Fomate e iketsahallang..." ;
++            Text [ sv ] = "Autoformat..." ;
++            Text [ sw-TZ ] = "AutoFormat..." ;
++            Text [ ta ] = "தானியக்க வடிவம்..." ;
++            Text [ ta-IN ] = "தானியக்க வடிவம்..." ;
++            Text [ te-IN ] = "స్వయంరూపలావణ్యం..." ;
++            Text [ tg ] = "Автоформат..." ;
++            Text [ th ] = "AutoFormat..." ;
++            Text [ tr ] = "Otomatik Biçimlendirme..." ;
++            Text [ ts ] = "Fomati yo tiendlekela hi yoxe..." ;
++            Text [ uk ] = "Автоформат..." ;
++            Text [ ur-IN ] = "خودکارطریقہ..." ;
++            Text [ ve ] = "OthoFomathi..." ;
++            Text [ vi ] = "Tự định dạng..." ;
++            Text [ xh ] = "Ulungiselelo Oluzenzekelayo..." ;
++            Text [ zh-CN ] = "自动格式..." ;
++            Text [ zh-TW ] = "自動格式..." ;
++            Text [ zu ] = "Isakhiwo esizenzekelayo..." ;
++        };
++        MenuItem
++        {
+             Identifier = SID_PIVOT_RECALC ;
+             HelpId = SID_PIVOT_RECALC ;
+             Text [ en-US ] = "~Refresh" ;
+diff --git sc/source/ui/view/dbfunc3.cxx sc/source/ui/view/dbfunc3.cxx
+index 86fc703..1e5ff2c 100644
+--- sc/source/ui/view/dbfunc3.cxx
++++ sc/source/ui/view/dbfunc3.cxx
+@@ -2296,6 +2296,28 @@ void ScDBFunc::RepeatDB( BOOL bRecord )
+         ErrorMessage(STR_MSSG_REPEATDB_0);
  }
+ 
 +void ScDBFunc::AutoFormatPivotTable(USHORT nIndex)
 +{
-+	ScDocument* pDoc	= GetViewData()->GetDocument();
- 
-+	//	old pivot not used any more
++    ScDocument* pDoc    = GetViewData()->GetDocument();
 +
-+	ScDPObject*	pDPObj	= pDoc->GetDPAtCursor( GetViewData()->GetCurX(),
-+												  GetViewData()->GetCurY(),
-+												  GetViewData()->GetTabNo() );
-+	if ( pDPObj )
-+	{
-+		pDPObj->SetAutoFormatIndex(nIndex);
-+	}
-+	else
-+		ErrorMessage(STR_PIVOT_NOTFOUND);
++    //  old pivot not used any more
++
++    ScDPObject* pDPObj  = pDoc->GetDPAtCursor(
++        GetViewData()->GetCurX(), GetViewData()->GetCurY(), GetViewData()->GetTabNo() );
++
++    if ( pDPObj )
++    {
++        pDPObj->SetAutoFormatIndex(nIndex);
++    }
++    else
++        ErrorMessage(STR_PIVOT_NOTFOUND);
 +
 +}
 +
 +void ScDBFunc::AutoFormatPivotTable(ScDPObject*	pDPObj, USHORT nIndex)
 +{
-+	pDPObj->SetAutoFormatIndex(nIndex);
++    pDPObj->SetAutoFormatIndex(nIndex);
 +}
  
  
  
---- sc/source/ui/view/pivotsh.cxx.old	2009-04-02 10:45:40.000000000 +0000
-+++ sc/source/ui/view/pivotsh.cxx	2009-04-06 16:41:48.000000000 +0000
+diff --git sc/source/ui/view/pivotsh.cxx sc/source/ui/view/pivotsh.cxx
+index 5af6f2e..cd33bde 100644
+--- sc/source/ui/view/pivotsh.cxx
++++ sc/source/ui/view/pivotsh.cxx
 @@ -56,6 +56,12 @@
  #include "uiitems.hxx"
  //CHINA001 #include "pfiltdlg.hxx"
@@ -312,70 +283,58 @@
  //------------------------------------------------------------------------
  
  #define ScPivotShell
-@@ -99,13 +105,56 @@ void ScPivotShell::Execute( SfxRequest&
- {
- 	switch ( rReq.GetSlot() )
- 	{
--		case SID_PIVOT_RECALC:
--			pViewShell->RecalcPivotTable();
--			break;
-+		case SID_PIVOT_AFMT:
-+			{
-+			ScViewData* pViewData = pViewShell->GetViewData();
+@@ -102,7 +108,45 @@ void ScPivotShell::Execute( SfxRequest& rReq )
+         case SID_PIVOT_RECALC:
+             pViewShell->RecalcPivotTable();
+             break;
++        case SID_PIVOT_AFMT:
++        {
++            ScViewData* pViewData = pViewShell->GetViewData();
 +
-+			pViewShell->GetDBData( TRUE, SC_DB_OLD );
-+			const ScMarkData& rMark1 = pViewData->GetMarkData();
-+			if ( !rMark1.IsMarked() && !rMark1.IsMultiMarked() )
-+				pViewShell->MarkDataArea( TRUE );
-+			
-+			Window* pDlgParent = pViewShell->GetDialogParent();
-+			
-+			pViewData->MoveNextRow();
-+				
-+			ScGlobal::ClearAutoFormat();
-+			ScAutoFormatData* pNewEntry = pViewShell->CreateAutoFormatData();
-+			ScAutoFormatDlg*  pDlg		= new ScAutoFormatDlg(
-+													pDlgParent,
-+													ScGlobal::GetAutoFormat(),
-+				                                                               pNewEntry,
-+                            				                                   pViewShell->GetViewData()->GetDocument() );
++            pViewShell->GetDBData( TRUE, SC_DB_OLD );
++            const ScMarkData& rMark1 = pViewData->GetMarkData();
++            if ( !rMark1.IsMarked() && !rMark1.IsMultiMarked() )
++                pViewShell->MarkDataArea( TRUE );
++            
++            Window* pDlgParent = pViewShell->GetDialogParent();
++            
++            pViewData->MoveNextRow();
++                
++            ScGlobal::ClearAutoFormat();
++            ScAutoFormatData* pNewEntry = pViewShell->CreateAutoFormatData();
++            ScAutoFormatDlg*  pDlg = new ScAutoFormatDlg(
++                pDlgParent, ScGlobal::GetAutoFormat(), pNewEntry, pViewData->GetDocument() );
 +
-+			if ( pDlg->Execute() == RET_OK )
-+			{
-+				ScEditableTester aTester( pViewShell );
-+				if ( !aTester.IsEditable() )
-+				{
-+					pViewShell->ErrorMessage(aTester.GetMessageId());
-+				}
-+				else
-+				{
-+					/* AutoFormat and Store the index */
-+					pViewShell->AutoFormat( pDlg->GetIndex() );
-+					pViewShell->AutoFormatPivotTable( pDlg->GetIndex() );
-+				}
-+			}
-+			delete pDlg;
-+			delete pNewEntry;
++            if ( pDlg->Execute() == RET_OK )
++            {
++                ScEditableTester aTester( pViewShell );
++                if ( !aTester.IsEditable() )
++                {
++                    pViewShell->ErrorMessage(aTester.GetMessageId());
++                }
++                else
++                {
++                    /* AutoFormat and Store the index */
++                    pViewShell->AutoFormat( pDlg->GetIndex() );
++                    pViewShell->AutoFormatPivotTable( pDlg->GetIndex() );
++                }
++            }
++            delete pDlg;
++            delete pNewEntry;
  
-+
-+			//pViewShell->DeletePivotTable();
-+			//pViewShell->RecalcPivotTable();
-+			break;
-+			}
- 		case SID_PIVOT_KILL:
- 			pViewShell->DeletePivotTable();
- 			break;
-+		case SID_PIVOT_RECALC:
-+			//pViewShell->DeletePivotTable();
-+			pViewShell->RecalcPivotTable();
-+			break;
- 
-         case SID_DP_FILTER:
-         {
---- sc/source/ui/view/viewdata.cxx.old	2009-04-02 10:45:40.000000000 +0000
-+++ sc/source/ui/view/viewdata.cxx	2009-04-06 16:41:48.000000000 +0000
++            //pViewShell->DeletePivotTable();
++            //pViewShell->RecalcPivotTable();
++        }
++        break;
+         case SID_PIVOT_KILL:
+             pViewShell->DeletePivotTable();
+             break;
+diff --git sc/source/ui/view/viewdata.cxx sc/source/ui/view/viewdata.cxx
+index fbb1306..df48982 100644
+--- sc/source/ui/view/viewdata.cxx
++++ sc/source/ui/view/viewdata.cxx
 @@ -670,6 +670,22 @@ void ScViewData::RefreshZoom()
- 	aLogicMode.SetScaleY( GetZoomY() );
+     aLogicMode.SetScaleY( GetZoomY() );
  }
  
 +void ScViewData::MoveNextRow()
@@ -396,4 +355,4 @@
 +
  void ScViewData::SetPagebreakMode( BOOL bSet )
  {
- 	bPagebreak = bSet;
+     bPagebreak = bSet;
