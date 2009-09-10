@@ -1,33 +1,19 @@
-Index: sc/source/ui/inc/cellsh.hxx
-===================================================================
-RCS file: /cvs/sc/sc/source/ui/inc/cellsh.hxx,v
-retrieving revision 1.9
-diff -u -p -r1.9 cellsh.hxx
---- sc/source/ui/inc/cellsh.hxx	10 Apr 2008 22:43:12 -0000	1.9
-+++ sc/source/ui/inc/cellsh.hxx	1 May 2008 20:04:42 -0000
-@@ -42,6 +42,7 @@ class SvxClipboardFmtItem;
- class TransferableDataHelper;
- class TransferableClipboardListener;
- class AbstractScLinkedAreaDlg;
-+class ScTabViewShell;
+diff --git sc/source/ui/app/inputhdl.cxx sc/source/ui/app/inputhdl.cxx
+index 98aac39..6ac26bc 100644
+--- sc/source/ui/app/inputhdl.cxx
++++ sc/source/ui/app/inputhdl.cxx
+@@ -2055,6 +2055,7 @@ IMPL_LINK( ScInputHandler, ModifyHdl, void *, EMPTYARG )
  
- struct CellShell_Impl
+ BOOL ScInputHandler::DataChanging( sal_Unicode cTyped, BOOL bFromCommand )		// return TRUE = new view created
  {
-@@ -102,6 +103,7 @@ public:
- 	void		ExecutePageSel( SfxRequest& rReq );
- 	void		ExecuteMove( SfxRequest& rReq );
- 	void		GetStateCursor( SfxItemSet& rSet );
-+	static void PasteFromClipboard( ScViewData* pViewData, ScTabViewShell* pTabViewShell, BOOL bShowDialog );
- };
++    pActiveViewSh->GetViewData()->SetPasteMode( SC_PASTE_NONE );
+     bInOwnChange = TRUE;				// disable ModifyHdl (reset in DataChanged)
  
- #endif
-Index: sc/source/ui/inc/viewdata.hxx
-===================================================================
-RCS file: /cvs/sc/sc/source/ui/inc/viewdata.hxx,v
-retrieving revision 1.24
-diff -u -p -r1.24 viewdata.hxx
---- sc/source/ui/inc/viewdata.hxx	18 Apr 2008 11:36:48 -0000	1.24
-+++ sc/source/ui/inc/viewdata.hxx	1 May 2008 20:04:42 -0000
+     if ( eMode == SC_INPUT_NONE )
+diff --git sc/source/ui/inc/viewdata.hxx sc/source/ui/inc/viewdata.hxx
+index 6f0d986..19583a8 100644
+--- sc/source/ui/inc/viewdata.hxx
++++ sc/source/ui/inc/viewdata.hxx
 @@ -89,6 +89,13 @@ enum ScMarkType
  #endif
  };
@@ -42,98 +28,54 @@ diff -u -p -r1.24 viewdata.hxx
  class ScDocShell;
  class ScDocument;
  class ScDBFunc;
-@@ -210,6 +219,8 @@ private:
- 	SCCOL				nTabStartCol;				// fuer Enter nach Tab
- 	ScRange				aDelRange;					// fuer AutoFill-Loeschen
+@@ -210,6 +217,8 @@ private:
+     SCCOL				nTabStartCol;				// fuer Enter nach Tab
+     ScRange				aDelRange;					// fuer AutoFill-Loeschen
  
-+	ScPasteFlags        nPasteFlags;
++    ScPasteFlags        nPasteFlags;
 +
      ScSplitPos          eEditActivePart;            // the part that was active when edit mode was started
- 	BOOL				bEditActive[4];				// aktiv?
- 	BOOL				bActive;					// aktives Fenster ?
-@@ -295,6 +306,8 @@ public:
- 	SCCOL			GetFixPosX() const						{ return pThisTab->nFixPosX; }
- 	SCROW			GetFixPosY() const						{ return pThisTab->nFixPosY; }
- 	BOOL			IsPagebreakMode() const					{ return bPagebreak; }
-+	BOOL			IsPasteMode() const                     { return nPasteFlags & SC_PASTE_MODE; }
-+	BOOL			ShowPasteSource() const                 { return nPasteFlags & SC_PASTE_BORDER; }
+     BOOL				bEditActive[4];				// aktiv?
+     BOOL				bActive;					// aktives Fenster ?
+@@ -295,6 +304,8 @@ public:
+     SCCOL			GetFixPosX() const						{ return pThisTab->nFixPosX; }
+     SCROW			GetFixPosY() const						{ return pThisTab->nFixPosY; }
+     BOOL			IsPagebreakMode() const					{ return bPagebreak; }
++    BOOL            IsPasteMode() const                     { return nPasteFlags & SC_PASTE_MODE; }
++    BOOL            ShowPasteSource() const                 { return nPasteFlags & SC_PASTE_BORDER; }
  
- 	void			SetPosX( ScHSplitPos eWhich, SCCOL nNewPosX );
- 	void			SetPosY( ScVSplitPos eWhich, SCROW nNewPosY );
-@@ -309,6 +322,7 @@ public:
- 	void			SetFixPosX( SCCOL nPos )						{ pThisTab->nFixPosX = nPos; }
- 	void			SetFixPosY( SCROW nPos )						{ pThisTab->nFixPosY = nPos; }
- 	void			SetPagebreakMode( BOOL bSet );
-+	void			SetPasteMode ( ScPasteFlags nFlags )            { nPasteFlags = nFlags; }
+     void			SetPosX( ScHSplitPos eWhich, SCCOL nNewPosX );
+     void			SetPosY( ScVSplitPos eWhich, SCROW nNewPosY );
+@@ -309,6 +320,7 @@ public:
+     void			SetFixPosX( SCCOL nPos )						{ pThisTab->nFixPosX = nPos; }
+     void			SetFixPosY( SCROW nPos )						{ pThisTab->nFixPosY = nPos; }
+     void			SetPagebreakMode( BOOL bSet );
++    void            SetPasteMode ( ScPasteFlags nFlags )            { nPasteFlags = nFlags; }
  
      void            SetZoomType( SvxZoomType eNew, BOOL bAll );
      void            SetZoom( const Fraction& rNewX, const Fraction& rNewY, BOOL bAll );
-Index: sc/source/ui/view/cellsh1.cxx
-===================================================================
-RCS file: /cvs/sc/sc/source/ui/view/cellsh1.cxx,v
-retrieving revision 1.51
-diff -u -p -r1.51 cellsh1.cxx
---- sc/source/ui/view/cellsh1.cxx	18 Apr 2008 11:40:55 -0000	1.51
-+++ sc/source/ui/view/cellsh1.cxx	1 May 2008 20:04:42 -0000
-@@ -1168,6 +1178,8 @@ void ScCellShell::ExecuteEdit( SfxReques
- 				WaitObject aWait( GetViewData()->GetDialogParent() );
- 				pTabViewShell->CopyToClip( NULL, FALSE, FALSE, TRUE );
- 				rReq.Done();
-+				GetViewData()->SetPasteMode( (ScPasteFlags) (SC_PASTE_MODE | SC_PASTE_BORDER) );
-+				pTabViewShell->ShowCursor();
- 			}
- 			break;
+diff --git sc/source/ui/view/cellsh1.cxx sc/source/ui/view/cellsh1.cxx
+index ba66243..0cd4007 100644
+--- sc/source/ui/view/cellsh1.cxx
++++ sc/source/ui/view/cellsh1.cxx
+@@ -1170,6 +1170,8 @@ void ScCellShell::ExecuteEdit( SfxRequest& rReq )
+                 WaitObject aWait( GetViewData()->GetDialogParent() );
+                 pTabViewShell->CopyToClip( NULL, FALSE, FALSE, TRUE );
+                 rReq.Done();
++                GetViewData()->SetPasteMode( (ScPasteFlags) (SC_PASTE_MODE | SC_PASTE_BORDER) );
++                pTabViewShell->ShowCursor();
+             }
+             break;
  
-@@ -1176,46 +1188,15 @@ void ScCellShell::ExecuteEdit( SfxReques
- 				WaitObject aWait( GetViewData()->GetDialogParent() );
- 				pTabViewShell->CutToClip( NULL, TRUE );
- 				rReq.Done();
-+				GetViewData()->SetPasteMode( SC_PASTE_MODE );
- 			}
- 			break;
+@@ -1178,6 +1180,7 @@ void ScCellShell::ExecuteEdit( SfxRequest& rReq )
+                 WaitObject aWait( GetViewData()->GetDialogParent() );
+                 pTabViewShell->CutToClip( NULL, TRUE );
+                 rReq.Done();
++                GetViewData()->SetPasteMode( SC_PASTE_MODE );
+             }
+             break;
  
- 		case SID_PASTE:
- 			{
--                Window* pWin = GetViewData()->GetActiveWin();
--                ScTransferObj* pOwnClip = ScTransferObj::GetOwnClipboard( pWin );
--                ScDocument* pThisDoc = GetViewData()->GetDocument();
--                ScDPObject* pDPObj = pThisDoc->GetDPAtCursor( GetViewData()->GetCurX(),
--                                     GetViewData()->GetCurY(), GetViewData()->GetTabNo() );
--                if ( pOwnClip && pDPObj )
--                {
--                    // paste from Calc into DataPilot table: sort (similar to drag & drop)
--
--                    ScDocument* pClipDoc = pOwnClip->GetDocument();
--                    SCTAB nSourceTab = pOwnClip->GetVisibleTab();
--
--                    SCCOL nClipStartX;
--                    SCROW nClipStartY;
--                    SCCOL nClipEndX;
--                    SCROW nClipEndY;
--                    pClipDoc->GetClipStart( nClipStartX, nClipStartY );
--                    pClipDoc->GetClipArea( nClipEndX, nClipEndY, TRUE );
--                    nClipEndX = nClipEndX + nClipStartX;
--                    nClipEndY = nClipEndY + nClipStartY;   // GetClipArea returns the difference
--
--                    ScRange aSource( nClipStartX, nClipStartY, nSourceTab, nClipEndX, nClipEndY, nSourceTab );
--                    BOOL bDone = pTabViewShell->DataPilotMove( aSource, GetViewData()->GetCurPos() );
--                    if ( !bDone )
--                        pTabViewShell->ErrorMessage( STR_ERR_DATAPILOT_INPUT );
--                }
--                else
--                {
--                    // normal paste
--                    WaitObject aWait( GetViewData()->GetDialogParent() );
--                    pTabViewShell->PasteFromSystem();
--                }
-+				PasteFromClipboard ( GetViewData(), pTabViewShell, TRUE );
- 				rReq.Done();
- 			}
--			pTabViewShell->CellContentChanged();		// => PasteFromSystem() ???
- 			break;
- 
- 		case SID_CLIPBOARD_FORMAT_ITEMS:
-@@ -2264,3 +2245,47 @@ IMPL_LINK( ScCellShell, DialogClosed, Ab
+@@ -2195,6 +2198,50 @@ IMPL_LINK( ScCellShell, DialogClosed, AbstractScLinkedAreaDlg*, EMPTYARG )
      return 0;
  }
  
@@ -181,29 +123,11 @@ diff -u -p -r1.51 cellsh1.cxx
 +    pTabViewShell->CellContentChanged();		// => PasteFromSystem() ???
 +}
 +
-Index: sc/source/ui/view/viewdata.cxx
-===================================================================
-RCS file: /cvs/sc/sc/source/ui/view/viewdata.cxx,v
-retrieving revision 1.65
-diff -u -p -r1.65 viewdata.cxx
---- sc/source/ui/view/viewdata.cxx	18 Apr 2008 12:01:29 -0000	1.65
-+++ sc/source/ui/view/viewdata.cxx	1 May 2008 20:04:43 -0000
-@@ -306,6 +306,7 @@ ScViewData::ScViewData( ScDocShell* pDocSh, ScTabViewShell* pViewSh )
- 		eRefType	( SC_REFTYPE_NONE ),
- 		nTabNo		( 0 ),
- 		nRefTabNo	( 0 ),
-+        nPasteFlags ( SC_PASTE_NONE ),
-         eEditActivePart( SC_SPLIT_BOTTOMLEFT ),
- 		bActive		( TRUE ),					//! wie initialisieren?
- 		bIsRefMode	( FALSE ),
-@@ -441,6 +450,7 @@ void ScViewData::InitFrom( const ScViewD
- //UNUSED2008-05      aDefPageZoomX = pRef->aDefPageZoomX;
- //UNUSED2008-05      aDefPageZoomY = pRef->aDefPageZoomY;
- //UNUSED2008-05  	bPagebreak	= pRef->bPagebreak;
-+//UNUSED2008-05 	nPasteFlags = pRef->nPasteFlags;
- //UNUSED2008-05  	aLogicMode	= pRef->aLogicMode;
- //UNUSED2008-05  
- //UNUSED2008-05  	SetGridMode		( pRef->IsGridMode() );
+ void ScCellShell::PasteFromClipboard( ScViewData* pViewData, ScTabViewShell* pTabViewShell, bool bShowDialog )
+ {
+     Window* pWin = pViewData->GetActiveWin();
+diff --git sc/source/ui/view/gridwin.cxx sc/source/ui/view/gridwin.cxx
+index 6fc33d5..6e0280a 100644
 --- sc/source/ui/view/gridwin.cxx
 +++ sc/source/ui/view/gridwin.cxx
 @@ -118,6 +118,7 @@
@@ -214,7 +138,7 @@ diff -u -p -r1.65 viewdata.cxx
  #include "validat.hxx"
  #include "tabprotection.hxx"
  #include "postit.hxx"
-@@ -2934,12 +2935,30 @@ void ScGridWindow::SelectForContextMenu(
+@@ -2969,12 +2970,30 @@ void ScGridWindow::SelectForContextMenu( const Point& rPosPixel )
      }
  }
  
@@ -246,69 +170,71 @@ diff -u -p -r1.65 viewdata.cxx
          if( !rKeyCode.GetModifier() && (rKeyCode.GetCode() == KEY_F2) )
          {
              SC_MOD()->EndReference();
-@@ -2954,9 +2973,35 @@ void __EXPORT ScGridWindow::KeyInput(con
+@@ -2989,9 +3008,35 @@ void __EXPORT ScGridWindow::KeyInput(const KeyEvent& rKEvt)
              return;
          }
      }
-+	else if( rKeyCode.GetCode() == KEY_RETURN && pViewData->IsPasteMode() )
-+	{
-+		ScTabViewShell* pTabViewShell = pViewData->GetViewShell();
++    else if( rKeyCode.GetCode() == KEY_RETURN && pViewData->IsPasteMode() )
++    {
++        ScTabViewShell* pTabViewShell = pViewData->GetViewShell();
 +
-+		ScCellShell::PasteFromClipboard( pViewData, pTabViewShell, FALSE );
-+		ClearSingleSelection( pViewData );
++        ScCellShell::PasteFromClipboard( pViewData, pTabViewShell, FALSE );
++        ClearSingleSelection( pViewData );
 +
-+		uno::Reference<datatransfer::clipboard::XClipboard> xSystemClipboard = 
-+			TransferableHelper::GetSystemClipboard();
-+		if (xSystemClipboard.is())
-+		{
-+			xSystemClipboard->setContents(
-+					uno::Reference<datatransfer::XTransferable>(),
-+					uno::Reference<datatransfer::clipboard::XClipboardOwner>());
-+		}
++        uno::Reference<datatransfer::clipboard::XClipboard> xSystemClipboard = 
++            TransferableHelper::GetSystemClipboard();
++        if (xSystemClipboard.is())
++        {
++            xSystemClipboard->setContents(
++                    uno::Reference<datatransfer::XTransferable>(),
++                    uno::Reference<datatransfer::clipboard::XClipboardOwner>());
++        }
 +
-+		// hide the border around the copy source
-+		pViewData->SetPasteMode( SC_PASTE_NONE );
-+		UpdateCursorOverlay();
-+		return;
-+	}
- 	// wenn semi-Modeless-SfxChildWindow-Dialog oben, keine KeyInputs:
++        // hide the border around the copy source
++        pViewData->SetPasteMode( SC_PASTE_NONE );
++        UpdateCursorOverlay();
++        return;
++    }
+     // wenn semi-Modeless-SfxChildWindow-Dialog oben, keine KeyInputs:
      else if( !pViewData->IsAnyFillMode() )
- 	{
-+		if (rKeyCode.GetCode() == KEY_ESCAPE)
-+		{
-+			pViewData->SetPasteMode( SC_PASTE_NONE );
-+			UpdateCursorOverlay();
-+		}
- 		//	query for existing note marker before calling ViewShell's keyboard handling
- 		//	which may remove the marker
- 		BOOL bHadKeyMarker = ( pNoteMarker && pNoteMarker->IsByKeyboard() );
-Index: sc/source/ui/app/inputhdl.cxx
-===================================================================
-RCS file: /cvs/sc/sc/source/ui/app/inputhdl.cxx,v
-retrieving revision 1.77
-diff -u -p -r1.77 inputhdl.cxx
---- sc/source/ui/app/inputhdl.cxx	10 Apr 2008 21:45:27 -0000	1.77
-+++ sc/source/ui/app/inputhdl.cxx	1 May 2008 20:04:44 -0000
-@@ -1699,6 +1699,7 @@ IMPL_LINK( ScInputHandler, ModifyHdl, vo
- 
- BOOL ScInputHandler::DataChanging( sal_Unicode cTyped, BOOL bFromCommand )		// return TRUE = new view created
- {
-+	pActiveViewSh->GetViewData()->SetPasteMode( SC_PASTE_NONE );
- 	bInOwnChange = TRUE;				// disable ModifyHdl (reset in DataChanged)
- 
- 	if ( eMode == SC_INPUT_NONE )
-Index: sc/source/ui/view/viewfunc.cxx
-===================================================================
-RCS file: /cvs/sc/sc/source/ui/view/viewfunc.cxx,v
-retrieving revision 1.44
-diff -u -p -r1.44 viewfunc.cxx
---- sc/source/ui/view/viewfunc.cxx	18 Apr 2008 11:50:48 -0000	1.44
-+++ sc/source/ui/view/viewfunc.cxx	1 May 2008 20:04:44 -0000
-@@ -1785,6 +1799,7 @@ void ScViewFunc::DeleteMulti( BOOL bRows
+     {
++        if (rKeyCode.GetCode() == KEY_ESCAPE)
++        {
++            pViewData->SetPasteMode( SC_PASTE_NONE );
++            UpdateCursorOverlay();
++        }
+         //	query for existing note marker before calling ViewShell's keyboard handling
+         //	which may remove the marker
+         BOOL bHadKeyMarker = ( pNoteMarker && pNoteMarker->IsByKeyboard() );
+diff --git sc/source/ui/view/viewdata.cxx sc/source/ui/view/viewdata.cxx
+index df48982..e75b864 100644
+--- sc/source/ui/view/viewdata.cxx
++++ sc/source/ui/view/viewdata.cxx
+@@ -306,6 +306,7 @@ ScViewData::ScViewData( ScDocShell* pDocSh, ScTabViewShell* pViewSh )
+         eRefType	( SC_REFTYPE_NONE ),
+         nTabNo		( 0 ),
+         nRefTabNo	( 0 ),
++        nPasteFlags ( SC_PASTE_NONE ),
+         eEditActivePart( SC_SPLIT_BOTTOMLEFT ),
+         bActive		( TRUE ),					//! wie initialisieren?
+         bIsRefMode	( FALSE ),
+@@ -432,6 +433,7 @@ void ScViewData::InitData( ScDocument* pDocument )
+ //UNUSED2008-05      aDefPageZoomX = pRef->aDefPageZoomX;
+ //UNUSED2008-05      aDefPageZoomY = pRef->aDefPageZoomY;
+ //UNUSED2008-05      bPagebreak  = pRef->bPagebreak;
++//UNUSED2008-05 	nPasteFlags = pRef->nPasteFlags;
+ //UNUSED2008-05      aLogicMode  = pRef->aLogicMode;
+ //UNUSED2008-05  
+ //UNUSED2008-05      SetGridMode     ( pRef->IsGridMode() );
+diff --git sc/source/ui/view/viewfunc.cxx sc/source/ui/view/viewfunc.cxx
+index 8155a80..61670e7 100644
+--- sc/source/ui/view/viewfunc.cxx
++++ sc/source/ui/view/viewfunc.cxx
+@@ -1910,6 +1910,7 @@ void ScViewFunc::DeleteMulti( BOOL bRows, BOOL bRecord )
  
  void ScViewFunc::DeleteContents( USHORT nFlags, BOOL bRecord )
  {
-+	GetViewData()->SetPasteMode( SC_PASTE_NONE );
- 	// nur wegen Matrix nicht editierbar? Attribute trotzdem ok
- 	BOOL bOnlyNotBecauseOfMatrix;
- 	BOOL bEditable = SelectionEditable( &bOnlyNotBecauseOfMatrix );
++    GetViewData()->SetPasteMode( SC_PASTE_NONE );
+     // nur wegen Matrix nicht editierbar? Attribute trotzdem ok
+     BOOL bOnlyNotBecauseOfMatrix;
+     BOOL bEditable = SelectionEditable( &bOnlyNotBecauseOfMatrix );
