@@ -1,0 +1,385 @@
+diff --git svx/inc/svx/svxacorr.hxx svx/inc/svx/svxacorr.hxx
+index 6771086..d414aed 100644
+--- svx/inc/svx/svxacorr.hxx
++++ svx/inc/svx/svxacorr.hxx
+@@ -67,6 +67,7 @@ const long SaveWordWrdSttLst= 0x00000400;	// 2 GrB. am WortAnf. auto. aufnehmen
+ const long IngnoreDoubleSpace= 0x00000800;	// 2 Spaces ignorieren
+ const long ChgSglQuotes		= 0x00001000;	// einfache Quotes ersetzen
+ const long CorrectCapsLock  = 0x00002000;   // Correct accidental use of cAPS LOCK key
++const long AddNonBrkSpace	= 0x00004000;	// Add non breaking space before :;?!
+ 
+ const long ChgWordLstLoad	= 0x20000000;	// Ersetzungsliste geladen
+ const long CplSttLstLoad	= 0x40000000;	// Exceptionlist fuer CplStart geladen
+@@ -369,6 +370,9 @@ public:
+     BOOL FnChgToEnEmDash( SvxAutoCorrDoc&, const String&,
+                                 xub_StrLen nSttPos, xub_StrLen nEndPos,
+                                 LanguageType eLang = LANGUAGE_SYSTEM );
++    BOOL FnAddNonBrkSpace( SvxAutoCorrDoc&, const String&,
++                                xub_StrLen nSttPos, xub_StrLen nEndPos,
++                                LanguageType eLang = LANGUAGE_SYSTEM );
+     BOOL FnSetINetAttr( SvxAutoCorrDoc&, const String&,
+                                 xub_StrLen nSttPos, xub_StrLen nEndPos,
+                                 LanguageType eLang = LANGUAGE_SYSTEM );
+diff --git svx/inc/svx/swafopt.hxx svx/inc/svx/swafopt.hxx
+index 18ae7e0..eb557ea 100644
+--- svx/inc/svx/swafopt.hxx
++++ svx/inc/svx/swafopt.hxx
+@@ -68,6 +68,7 @@ struct SVX_DLLPUBLIC SvxSwAutoFmtFlags
+     BOOL bChgFracionSymbol : 1;
+     BOOL bChgOrdinalNumber : 1;
+     BOOL bChgToEnEmDash : 1;
++    BOOL bAddNonBrkSpace : 1;
+     BOOL bChgWeightUnderl : 1;
+     BOOL bSetINetAttr : 1;
+ 
+diff --git svx/source/cui/autocdlg.cxx svx/source/cui/autocdlg.cxx
+index f4c0a21..a517c98 100644
+--- svx/source/cui/autocdlg.cxx
++++ svx/source/cui/autocdlg.cxx
+@@ -233,6 +233,7 @@ OfaAutocorrOptionsPage::OfaAutocorrOptionsPage( Window* pParent,
+     sNoDblSpaces        (SVX_RES(STR_NO_DBL_SPACES    )),
+     sHalf               (SVX_RES(ST_FRACTION          )),
+     sDash    			(SVX_RES(ST_DASH	         	)),
++    sNonBrkSpace		(SVX_RES(ST_NON_BREAK_SPACE   )),
+     sFirst              (SVX_RES(ST_ORDINAL           )),
+     sAccidentalCaps     (SVX_RES(ST_CORRECT_ACCIDENTAL_CAPS_LOCK))
+ {
+@@ -279,6 +280,7 @@ BOOL OfaAutocorrOptionsPage::FillItemSet( SfxItemSet& )
+     pAutoCorrect->SetAutoCorrFlag(ChgOrdinalNumber,		aCheckLB.IsChecked(nPos++));
+     pAutoCorrect->SetAutoCorrFlag(ChgFractionSymbol,	aCheckLB.IsChecked(nPos++));
+     pAutoCorrect->SetAutoCorrFlag(ChgToEnEmDash,		aCheckLB.IsChecked(nPos++));
++    pAutoCorrect->SetAutoCorrFlag(AddNonBrkSpace,		aCheckLB.IsChecked(nPos++));
+     pAutoCorrect->SetAutoCorrFlag(IngnoreDoubleSpace,	aCheckLB.IsChecked(nPos++));
+     pAutoCorrect->SetAutoCorrFlag(CorrectCapsLock,      aCheckLB.IsChecked(nPos++));
+ 
+@@ -321,6 +323,7 @@ void OfaAutocorrOptionsPage::Reset( const SfxItemSet& )
+     aCheckLB.InsertEntry(sFirst);
+     aCheckLB.InsertEntry(sHalf);
+     aCheckLB.InsertEntry(sDash);
++    aCheckLB.InsertEntry(sNonBrkSpace);
+     aCheckLB.InsertEntry(sNoDblSpaces);
+     aCheckLB.InsertEntry(sAccidentalCaps);
+ 
+@@ -333,6 +336,7 @@ void OfaAutocorrOptionsPage::Reset( const SfxItemSet& )
+     aCheckLB.CheckEntryPos( nPos++, 0 != (nFlags & ChgOrdinalNumber) );
+     aCheckLB.CheckEntryPos( nPos++, 0 != (nFlags & ChgFractionSymbol) );
+     aCheckLB.CheckEntryPos( nPos++, 0 != (nFlags & ChgToEnEmDash) );
++    aCheckLB.CheckEntryPos( nPos++, 0 != (nFlags & AddNonBrkSpace) );
+     aCheckLB.CheckEntryPos( nPos++, 0 != (nFlags & IngnoreDoubleSpace) );
+     aCheckLB.CheckEntryPos( nPos++, 0 != (nFlags & CorrectCapsLock) );
+ 
+@@ -464,6 +468,7 @@ enum OfaAutoFmtOptions
+     REPLACE_1ST,
+     REPLACE_HALF,
+     REPLACE_DASHES,
++    ADD_NON_BRK_SPACE,
+     DEL_SPACES_AT_STT_END,
+     DEL_SPACES_BETWEEN_LINES,
+     IGNORE_DBLSPACE,
+@@ -501,6 +506,7 @@ OfaSwAutoFmtOptionsPage::OfaSwAutoFmtOptionsPage( Window* pParent,
+     sFraction			(SVX_RES(	ST_FRACTION     )),
+     sDetectURL			(SVX_RES(	ST_DETECT_URL   )),
+     sDash				(SVX_RES(	ST_DASH         )),
++    sNonBrkSpace        (SVX_RES(   ST_NON_BREAK_SPACE )),
+     sOrdinal			(SVX_RES(	ST_ORDINAL      )),
+     sRightMargin		(SVX_RES(	ST_RIGHT_MARGIN	)),
+     sNum				(SVX_RES(	STR_NUM			)),
+@@ -711,6 +717,12 @@ BOOL OfaSwAutoFmtOptionsPage::FillItemSet( SfxItemSet&  )
+     pOpt->bChgToEnEmDash = bCheck;
+     pAutoCorrect->SetAutoCorrFlag(ChgToEnEmDash,
+                         aCheckLB.IsChecked(REPLACE_DASHES, CBCOL_SECOND));
++    
++    bCheck = aCheckLB.IsChecked(ADD_NON_BRK_SPACE, CBCOL_FIRST);
++    bModified |= pOpt->bAddNonBrkSpace != bCheck;
++    pOpt->bAddNonBrkSpace = bCheck;
++    pAutoCorrect->SetAutoCorrFlag(AddNonBrkSpace,
++                        aCheckLB.IsChecked(ADD_NON_BRK_SPACE, CBCOL_SECOND));
+ 
+     bCheck = aCheckLB.IsChecked(DEL_SPACES_AT_STT_END, CBCOL_FIRST);
+     bModified |= pOpt->bAFmtDelSpacesAtSttEnd != bCheck;
+@@ -768,6 +780,7 @@ void OfaSwAutoFmtOptionsPage::Reset( const SfxItemSet& )
+     aCheckLB.GetModel()->Insert(CreateEntry(sOrdinal,			CBCOL_BOTH	));
+     aCheckLB.GetModel()->Insert(CreateEntry(sFraction,			CBCOL_BOTH  ));
+     aCheckLB.GetModel()->Insert(CreateEntry(sDash,				CBCOL_BOTH  ));
++    aCheckLB.GetModel()->Insert(CreateEntry(sNonBrkSpace,       CBCOL_BOTH  ));
+     aCheckLB.GetModel()->Insert(CreateEntry(sDelSpaceAtSttEnd,	CBCOL_BOTH  ));
+     aCheckLB.GetModel()->Insert(CreateEntry(sDelSpaceBetweenLines, CBCOL_BOTH  ));
+ 
+@@ -801,6 +814,8 @@ void OfaSwAutoFmtOptionsPage::Reset( const SfxItemSet& )
+     aCheckLB.CheckEntryPos( REPLACE_HALF,		CBCOL_SECOND,	0 != (nFlags & ChgFractionSymbol) );
+     aCheckLB.CheckEntryPos( REPLACE_DASHES,		CBCOL_FIRST,	pOpt->bChgToEnEmDash );
+     aCheckLB.CheckEntryPos( REPLACE_DASHES,		CBCOL_SECOND,	0 != (nFlags & ChgToEnEmDash) );
++    aCheckLB.CheckEntryPos( ADD_NON_BRK_SPACE,  CBCOL_FIRST,	0 != (nFlags & AddNonBrkSpace) );
++    aCheckLB.CheckEntryPos( ADD_NON_BRK_SPACE,	CBCOL_SECOND,	0 != (nFlags & AddNonBrkSpace) );
+     aCheckLB.CheckEntryPos( DEL_SPACES_AT_STT_END,		CBCOL_FIRST,	pOpt->bAFmtDelSpacesAtSttEnd );
+     aCheckLB.CheckEntryPos( DEL_SPACES_AT_STT_END,		CBCOL_SECOND,	pOpt->bAFmtByInpDelSpacesAtSttEnd );
+     aCheckLB.CheckEntryPos( DEL_SPACES_BETWEEN_LINES,	CBCOL_FIRST,	pOpt->bAFmtDelSpacesBetweenLines );
+diff --git svx/source/cui/autocdlg.hrc svx/source/cui/autocdlg.hrc
+index 38b3507..7aef1e4 100644
+--- svx/source/cui/autocdlg.hrc
++++ svx/source/cui/autocdlg.hrc
+@@ -153,6 +153,7 @@
+ #define FT_LANG                         209
+ #define LB_LANG                         210
+ #define ST_CORRECT_ACCIDENTAL_CAPS_LOCK 211
++#define ST_NON_BREAK_SPACE              212
+ 
+ #define CB_SMARTTAGS                    220
+ #define FT_SMARTTAGS                    221
+diff --git svx/source/cui/autocdlg.hxx svx/source/cui/autocdlg.hxx
+index ea5ee11..e3d1d3f 100644
+--- svx/source/cui/autocdlg.hxx
++++ svx/source/cui/autocdlg.hxx
+@@ -118,6 +118,7 @@ private:
+     String		sNoDblSpaces;
+     String		sHalf;
+     String		sDash;
++    String      sNonBrkSpace;
+     String		sFirst;
+     String      sAccidentalCaps;
+ 
+@@ -162,6 +163,7 @@ class OfaSwAutoFmtOptionsPage : public SfxTabPage
+     String			sFraction;
+     String			sDetectURL;
+     String          sDash;
++    String          sNonBrkSpace;
+     String			sOrdinal;
+     String			sRightMargin;
+     String			sNum;
+diff --git svx/source/cui/autocdlg.src svx/source/cui/autocdlg.src
+index 099f63a..47f6c62 100644
+--- svx/source/cui/autocdlg.src
++++ svx/source/cui/autocdlg.src
+@@ -144,6 +144,10 @@ TabDialog RID_OFA_AUTOCORR_DLG
+     String ST_CORRECT_ACCIDENTAL_CAPS_LOCK \
+     { \
+         Text [ en-US ] = "Correct accidental use of cAPS LOCK key" ; \
++    } \
++    String ST_NON_BREAK_SPACE \
++    { \
++       Text [ en-US ] = "Add non breaking space before : ; ? ! in french text" ; \
+     };
+ 
+ /**************************************************************************/
+diff --git svx/source/editeng/acorrcfg.cxx svx/source/editeng/acorrcfg.cxx
+index 95ecf61..9a794c2 100644
+--- svx/source/editeng/acorrcfg.cxx
++++ svx/source/editeng/acorrcfg.cxx
+@@ -128,9 +128,10 @@ Sequence<OUString> 	SvxBaseAutoCorrCfg::GetPropertyNames()
+         "ReplaceDoubleQuote",					// 14
+         "DoubleQuoteAtStart",					// 15
+ 		"DoubleQuoteAtEnd",						// 16
+-        "CorrectAccidentalCapsLock"             // 17
++        "CorrectAccidentalCapsLock",            // 17
++        "AddNonBreakingSpace"                   // 18
+     };
+-	const int nCount = 18;
++	const int nCount = 19;
+     Sequence<OUString> aNames(nCount);
+     OUString* pNames = aNames.getArray();
+     for(int i = 0; i < nCount; i++)
+@@ -234,6 +235,10 @@ void SvxBaseAutoCorrCfg::Load(sal_Bool bInit)
+                         if(*(sal_Bool*)pValues[nProp].getValue())
+                             nFlags |= CorrectCapsLock;
+                     break;//"CorrectAccidentalCapsLock"
++                    case 18:
++                        if(*(sal_Bool*)pValues[nProp].getValue())
++                             nFlags |= AddNonBrkSpace;
++                     break;//"AddNonBreakingSpace"
+                 }
+             }
+         }
+@@ -408,8 +413,10 @@ Sequence<OUString> 	SvxSwAutoCorrCfg::GetPropertyNames()
+         "Format/ByInput/ApplyNumbering/SpecialCharacter/FontFamily",    //45
+         "Format/ByInput/ApplyNumbering/SpecialCharacter/FontCharset",   //46
+         "Format/ByInput/ApplyNumbering/SpecialCharacter/FontPitch",     //47
++        "Format/Option/AddNonBreakSpace",                               //48
++        "Format/ByInput/AddNonBreakSpace",                              //49
+     };
+-    const int nCount = 48;
++    const int nCount = 50;
+     Sequence<OUString> aNames(nCount);
+     OUString* pNames = aNames.getArray();
+     for(int i = 0; i < nCount; i++)
+@@ -561,6 +568,8 @@ void SvxSwAutoCorrCfg::Load(sal_Bool bInit)
+                         rSwFlags.aByInputBulletFont.SetPitch(FontPitch(nVal));
+                     }
+                     break;// "Format/ByInput/ApplyNumbering/SpecialCharacter/FontPitch",
++                    case 48 : rSwFlags.bAddNonBrkSpace = *(sal_Bool*)pValues[nProp].getValue( ); break;// "Format/Output/AddNonBreakingSpace",
++                    case 49 : rSwFlags.bAddNonBrkSpace = *(sal_Bool*)pValues[nProp].getValue( ); break;// "Format/ByInput/AddNonBreakingSpace",
+                 }
+             }
+         }
+@@ -676,6 +685,12 @@ void SvxSwAutoCorrCfg::Commit()
+             case 47 :
+                 pValues[nProp] <<= (sal_Int32)rSwFlags.aByInputBulletFont.GetPitch();
+             break;// "Format/ByInput/ApplyNumbering/SpecialCharacter/FontPitch",
++            case  48:
++                bVal = rSwFlags.bAddNonBrkSpace;  pValues[nProp].setValue(&bVal, rType);
++            break; // "Format/Option/AddNonBreakingSpace",
++            case  49:
++                bVal = rSwFlags.bAddNonBrkSpace;  pValues[nProp].setValue(&bVal, rType);
++            break; // "Format/ByInput/AddNonBreakingSpace",
+         }
+     }
+     PutProperties(aNames, aValues);
+diff --git svx/source/editeng/svxacorr.cxx svx/source/editeng/svxacorr.cxx
+index a6e7401..fd7b093 100644
+--- svx/source/editeng/svxacorr.cxx
++++ svx/source/editeng/svxacorr.cxx
+@@ -33,6 +33,7 @@
+ 
+ 
+ #include <com/sun/star/io/XStream.hpp>
++#include <com/sun/star/lang/Locale.hpp>
+ #include <tools/urlobj.hxx>
+ #include <tools/table.hxx>
+ #include <i18npool/mslangid.hxx>
+@@ -98,6 +99,8 @@
+ #include <com/sun/star/ucb/NameClash.hpp>
+ #include <xmloff/xmltoken.hxx>
+ 
++#define CHAR_HARDBLANK		((sal_Unicode)0x00A0)
++
+ using namespace ::com::sun::star::ucb;
+ using namespace ::com::sun::star::uno;
+ using namespace ::com::sun::star;
+@@ -348,6 +351,7 @@ long SvxAutoCorrect::GetDefaultFlags()
+                     | ChgFractionSymbol
+                     | ChgOrdinalNumber
+                     | ChgToEnEmDash
++                    | AddNonBrkSpace
+                     | ChgWeightUnderl
+                     | SetINetAttr
+                     | ChgQuotes
+@@ -694,6 +698,50 @@ BOOL SvxAutoCorrect::FnChgToEnEmDash(
+     return bRet;
+ }
+ 
++BOOL SvxAutoCorrect::FnAddNonBrkSpace(
++                                SvxAutoCorrDoc& rDoc, const String& rTxt,
++                                xub_StrLen , xub_StrLen nEndPos,
++                                LanguageType eLang )
++{
++    bool bRet = false;
++    
++    CharClass& rCC = GetCharClass( eLang );
++    const lang::Locale rLocale = rCC.getLocale( );
++
++    if ( rLocale.Language == OUString::createFromAscii( "fr" ) )
++    {
++        sal_Unicode cChar = rTxt.GetChar( nEndPos );
++        if ( cChar == ':' || cChar == ';' || cChar == '!' || cChar == '?' )
++        {
++            // Check the previous char
++            sal_Unicode cPrevChar = rTxt.GetChar( nEndPos - 1 );
++            if ( cPrevChar != ':' && cPrevChar != ';' && cPrevChar != '!' && cPrevChar != '?' )
++            { 
++                // Remove any previous normal space
++                xub_StrLen nPos = nEndPos - 1;
++                while ( cPrevChar == ' ' || cPrevChar == CHAR_HARDBLANK )
++                {
++                    if ( nPos == 0 ) break;
++                    nPos--;
++                    cPrevChar = rTxt.GetChar( nPos );
++                }
++
++                if ( nPos != 0 )
++                {
++                    nPos++;
++                    if ( nEndPos - nPos > 0 )
++                        rDoc.Delete( nPos, nEndPos );
++
++                    // Add the non-breaking space at the end pos
++                    rDoc.Insert( nPos, CHAR_HARDBLANK );
++                    bRet = true;
++                }
++            }
++        }
++    }
++
++    return bRet;
++}
+ 
+ BOOL SvxAutoCorrect::FnSetINetAttr( SvxAutoCorrDoc& rDoc, const String& rTxt,
+                                     xub_StrLen nSttPos, xub_StrLen nEndPos,
+@@ -1347,6 +1395,8 @@ ULONG SvxAutoCorrect::AutoCorrect( SvxAutoCorrDoc& rDoc, const String& rTxt,
+                 FnChgFractionSymbol( rDoc, rTxt, nCapLttrPos, nInsPos ) ) ||
+             ( IsAutoCorrFlag( nRet = ChgOrdinalNumber ) &&
+                 FnChgOrdinalNumber( rDoc, rTxt, nCapLttrPos, nInsPos, eLang ) ) ||
++            ( IsAutoCorrFlag( nRet = AddNonBrkSpace ) &&
++                FnAddNonBrkSpace( rDoc, rTxt, nCapLttrPos, nInsPos - 1, eLang ) ) ||
+             ( IsAutoCorrFlag( nRet = SetINetAttr ) &&
+                 ( ' ' == cChar || '\t' == cChar || 0x0a == cChar || !cChar ) &&
+                 FnSetINetAttr( rDoc, rTxt, nCapLttrPos, nInsPos, eLang ) ) )
+diff --git sw/inc/comcore.hrc sw/inc/comcore.hrc
+index 8260814..9122841 100644
+--- sw/inc/comcore.hrc
++++ sw/inc/comcore.hrc
+@@ -115,8 +115,9 @@
+ #define STR_AUTOFMTREDL_SET_TMPL_HEADLINE		18
+ #define STR_AUTOFMTREDL_SET_NUMBULET			19
+ #define STR_AUTOFMTREDL_DEL_MORELINES			20
++#define STR_AUTOFMTREDL_NON_BREAK_SPACE         21
+ // !!!!!!!!!!!!!!!!!!!!!!!!!!  das Ende immer richtig setzen !!!!!!!!!!!!
+-#define STR_AUTOFMTREDL_END						21
++#define STR_AUTOFMTREDL_END						22
+ 
+ 
+ #endif
+diff --git sw/source/core/edit/autofmt.cxx sw/source/core/edit/autofmt.cxx
+index 9622075..f4499b2 100644
+--- sw/source/core/edit/autofmt.cxx
++++ sw/source/core/edit/autofmt.cxx
+@@ -319,6 +319,7 @@ void SwAutoFormat::_SetRedlineTxt( USHORT nActionId )
+         case STR_AUTOFMTREDL_FRACTION:
+         case STR_AUTOFMTREDL_DASH:
+         case STR_AUTOFMTREDL_ORDINAL:
++        case STR_AUTOFMTREDL_NON_BREAK_SPACE:
+             nSeqNo = ++nRedlAutoFmtSeqId;
+             break;
+         }
+@@ -1885,7 +1886,7 @@ void SwAutoFormat::AutoCorrect( xub_StrLen nPos )
+         !aFlags.bCptlSttSntnc && !aFlags.bCptlSttWrd &&
+         !aFlags.bChgFracionSymbol && !aFlags.bChgOrdinalNumber &&
+         !aFlags.bChgToEnEmDash && !aFlags.bSetINetAttr &&
+-        !aFlags.bChgWeightUnderl) )
++		!aFlags.bChgWeightUnderl && !aFlags.bAddNonBrkSpace) )
+         return;
+ 
+     const String* pTxt = &pAktTxtNd->GetTxt();
+@@ -1894,7 +1895,8 @@ void SwAutoFormat::AutoCorrect( xub_StrLen nPos )
+ 
+     BOOL bGetLanguage = aFlags.bChgOrdinalNumber ||
+                         aFlags.bChgToEnEmDash || aFlags.bSetINetAttr ||
+-                        aFlags.bCptlSttWrd || aFlags.bCptlSttSntnc;
++						aFlags.bCptlSttWrd || aFlags.bCptlSttSntnc ||
++                        aFlags.bAddNonBrkSpace;
+ 
+ 
+     aDelPam.DeleteMark();
+@@ -2123,6 +2125,9 @@ void SwAutoFormat::AutoCorrect( xub_StrLen nPos )
+                 ( aFlags.bChgToEnEmDash &&
+                     SetRedlineTxt( STR_AUTOFMTREDL_DASH ) &&
+                     pATst->FnChgToEnEmDash( aACorrDoc, *pTxt, nSttPos, nPos, eLang ) ) ||
++                ( aFlags.bAddNonBrkSpace &&
++                    SetRedlineTxt( STR_AUTOFMTREDL_NON_BREAK_SPACE ) &&
++                    pATst->FnAddNonBrkSpace( aACorrDoc, *pTxt, nSttPos, nPos, eLang ) ) ||
+                 ( aFlags.bSetINetAttr &&
+                     ( nPos == pTxt->Len() || IsSpace( pTxt->GetChar( nPos )) ) &&
+                     SetRedlineTxt( STR_AUTOFMTREDL_DETECT_URL ) &&
+diff --git sw/source/ui/utlui/utlui.src sw/source/ui/utlui/utlui.src
+index 7a45772..3aad027 100644
+--- sw/source/ui/utlui/utlui.src
++++ sw/source/ui/utlui/utlui.src
+@@ -122,6 +122,10 @@ Resource RID_SHELLRES_AUTOFMTSTRS
+     {
+         Text [ en-US ] = "Combine paragraphs";
+     };
++    String STR_AUTOFMTREDL_NON_BREAK_SPACE +1
++    {
++        Text [ en-US ] = "Add non breaking space";
++    };
+ 
+ };
+ 
