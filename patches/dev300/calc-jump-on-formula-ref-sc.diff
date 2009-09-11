@@ -1,17 +1,17 @@
 diff --git sc/inc/cell.hxx sc/inc/cell.hxx
-index 45d0de2..714fb1e 100644
+index 5ec1281..4c1afdb 100644
 --- sc/inc/cell.hxx
 +++ sc/inc/cell.hxx
 @@ -662,6 +662,7 @@ private:
  public:
- 				ScDetectiveRefIter( ScFormulaCell* pCell );
- 	BOOL		GetNextRef( ScRange& rRange );
+                 ScDetectiveRefIter( ScFormulaCell* pCell );
+     BOOL		GetNextRef( ScRange& rRange );
 +    ScToken*    GetNextRefToken();
  };
  
  // ============================================================================
 diff --git sc/inc/detfunc.hxx sc/inc/detfunc.hxx
-index 0b07af8..ca3ffc8 100644
+index 49a7938..c38150d 100644
 --- sc/inc/detfunc.hxx
 +++ sc/inc/detfunc.hxx
 @@ -35,6 +35,9 @@
@@ -34,13 +34,13 @@ index 0b07af8..ca3ffc8 100644
  
 @@ -146,6 +150,9 @@ public:
  
- 	BOOL		MarkInvalid(BOOL& rOverflow);
+     BOOL		MarkInvalid(BOOL& rOverflow);
  
 +    void        GetAllPreds(SCCOL nCol1, SCROW nRow1, SCCOL nCol2, SCROW nRow2, ::std::vector<ScSharedTokenRef>& rRefTokens);
 +    void        GetAllSuccs(SCCOL nCol1, SCROW nRow1, SCCOL nCol2, SCROW nRow2, ::std::vector<ScSharedTokenRef>& rRefTokens);
 +
      static void UpdateAllComments( ScDocument& rDoc );        // on all tables
- 	void		UpdateAllArrowColors();		// on all tables
+     void		UpdateAllArrowColors();		// on all tables
  
 diff --git sc/inc/reftokenhelper.hxx sc/inc/reftokenhelper.hxx
 index d7b335f..44619ab 100644
@@ -57,10 +57,10 @@ index d7b335f..44619ab 100644
  
  #endif
 diff --git sc/inc/sc.hrc sc/inc/sc.hrc
-index ec16438..3ecd9ba 100644
+index bd688c8..340416b 100644
 --- sc/inc/sc.hrc
 +++ sc/inc/sc.hrc
-@@ -902,6 +902,9 @@
+@@ -900,6 +900,9 @@
  #define SID_DETECTIVE_REFRESH   (DETECTIVE_START+14)
  #define SID_DETECTIVE_AUTO      (DETECTIVE_START+15)
  
@@ -71,23 +71,23 @@ index ec16438..3ecd9ba 100644
  
  #define SID_API_SLOTS			(DETECTIVE_END)
 diff --git sc/sdi/cellsh.sdi sc/sdi/cellsh.sdi
-index baec475..3a4047c 100644
+index 05ab23c..b22589b 100644
 --- sc/sdi/cellsh.sdi
 +++ sc/sdi/cellsh.sdi
 @@ -113,6 +113,8 @@ interface CellSelection
- 	SID_DETECTIVE_ADD_ERR	[ ExecMethod = ExecuteEdit; StateMethod = GetState; ]
- 	SID_DETECTIVE_INVALID	[ ExecMethod = ExecuteEdit; StateMethod = GetState; ]
- 	SID_DETECTIVE_REFRESH	[ ExecMethod = ExecuteEdit; StateMethod = GetState; ]
+     SID_DETECTIVE_ADD_ERR	[ ExecMethod = ExecuteEdit; StateMethod = GetState; ]
+     SID_DETECTIVE_INVALID	[ ExecMethod = ExecuteEdit; StateMethod = GetState; ]
+     SID_DETECTIVE_REFRESH	[ ExecMethod = ExecuteEdit; StateMethod = GetState; ]
 +	SID_DETECTIVE_MARK_PRED	[ ExecMethod = ExecuteEdit; StateMethod = GetState; ]
 +	SID_DETECTIVE_MARK_SUCC	[ ExecMethod = ExecuteEdit; StateMethod = GetState; ]
- 	FID_INS_ROW				[ ExecMethod = ExecuteEdit; StateMethod = GetBlockState; ]
- 	FID_INS_COLUMN			[ ExecMethod = ExecuteEdit; StateMethod = GetBlockState; ]
- 	FID_INS_CELLSDOWN		[ ExecMethod = ExecuteEdit; StateMethod = GetBlockState; ]
+     FID_INS_ROW				[ ExecMethod = ExecuteEdit; StateMethod = GetBlockState; ]
+     FID_INS_COLUMN			[ ExecMethod = ExecuteEdit; StateMethod = GetBlockState; ]
+     FID_INS_CELLSDOWN		[ ExecMethod = ExecuteEdit; StateMethod = GetBlockState; ]
 diff --git sc/sdi/scalc.sdi sc/sdi/scalc.sdi
-index 430d474..77fc5b7 100644
+index 66c0a09..f8eddc2 100644
 --- sc/sdi/scalc.sdi
 +++ sc/sdi/scalc.sdi
-@@ -7977,4 +7977,53 @@ SfxBoolItem ToggleSheetGrid FID_TAB_TOGGLE_GRID
+@@ -7899,4 +7899,53 @@ SfxBoolItem ToggleSheetGrid FID_TAB_TOGGLE_GRID
      GroupId = GID_FORMAT;
  ]
  
@@ -142,60 +142,59 @@ index 430d474..77fc5b7 100644
 +]
  
 diff --git sc/source/core/data/cell.cxx sc/source/core/data/cell.cxx
-index b181e4c..d28de5e 100644
+index 1c3035c..4d5773d 100644
 --- sc/source/core/data/cell.cxx
 +++ sc/source/core/data/cell.cxx
-@@ -1981,7 +1981,7 @@ BOOL lcl_ScDetectiveRefIter_SkipRef( ScToken* p )
- 	if ( rRef1.IsColDeleted() || rRef1.IsRowDeleted() || rRef1.IsTabDeleted()
- 			|| !rRef1.Valid() )
- 		return TRUE;
--	if ( p->GetType() == svDoubleRef )
+@@ -1954,7 +1954,7 @@ BOOL lcl_ScDetectiveRefIter_SkipRef( ScToken* p )
+     if ( rRef1.IsColDeleted() || rRef1.IsRowDeleted() || rRef1.IsTabDeleted()
+             || !rRef1.Valid() )
+         return TRUE;
+-    if ( p->GetType() == svDoubleRef )
 +	if ( p->GetType() == svDoubleRef || p->GetType() == svExternalDoubleRef )
- 	{
- 		ScSingleRefData& rRef2 = p->GetDoubleRef().Ref2;
- 		if ( rRef2.IsColDeleted() || rRef2.IsRowDeleted() || rRef2.IsTabDeleted()
-@@ -1994,18 +1994,7 @@ BOOL lcl_ScDetectiveRefIter_SkipRef( ScToken* p )
+     {
+         ScSingleRefData& rRef2 = p->GetDoubleRef().Ref2;
+         if ( rRef2.IsColDeleted() || rRef2.IsRowDeleted() || rRef2.IsTabDeleted()
+@@ -1967,7 +1967,20 @@ BOOL lcl_ScDetectiveRefIter_SkipRef( ScToken* p )
  BOOL ScDetectiveRefIter::GetNextRef( ScRange& rRange )
  {
- 	BOOL bRet = FALSE;
--
--	ScToken* p = static_cast<ScToken*>(pCode->GetNextReferenceRPN());
--	if (p)
--		p->CalcAbsIfRel( aPos );
--
--	while ( p && lcl_ScDetectiveRefIter_SkipRef( p ) )
--	{
--		p = static_cast<ScToken*>(pCode->GetNextReferenceRPN());
--		if (p)
--			p->CalcAbsIfRel( aPos );
--	}
--
+     BOOL bRet = FALSE;
 +    ScToken* p = GetNextRefToken();
- 	if( p )
- 	{
- 		SingleDoubleRefProvider aProv( *p );
-@@ -2017,4 +2006,19 @@ BOOL ScDetectiveRefIter::GetNextRef( ScRange& rRange )
- 	return bRet;
- }
- 
-+ScToken* ScDetectiveRefIter::GetNextRefToken()
-+{
-+    ScToken* p = static_cast<ScToken*>(pCode->GetNextReferenceRPN());
-+    if (p)
-+        p->CalcAbsIfRel( aPos );
-+
-+    while ( p && lcl_ScDetectiveRefIter_SkipRef( p ) )
++    if( p )
 +    {
-+        p = static_cast<ScToken*>(pCode->GetNextReferenceRPN());
-+        if (p)
-+            p->CalcAbsIfRel( aPos );
++        SingleDoubleRefProvider aProv( *p );
++        rRange.aStart.Set( aProv.Ref1.nCol, aProv.Ref1.nRow, aProv.Ref1.nTab );
++        rRange.aEnd.Set( aProv.Ref2.nCol, aProv.Ref2.nRow, aProv.Ref2.nTab );
++        bRet = TRUE;
 +    }
-+    return p;
+ 
++    return bRet;
 +}
 +
++ScToken* ScDetectiveRefIter::GetNextRefToken()
++{
+     ScToken* p = static_cast<ScToken*>(pCode->GetNextReferenceRPN());
+     if (p)
+         p->CalcAbsIfRel( aPos );
+@@ -1978,16 +1991,7 @@ BOOL ScDetectiveRefIter::GetNextRef( ScRange& rRange )
+         if (p)
+             p->CalcAbsIfRel( aPos );
+     }
+-
+-    if( p )
+-    {
+-        SingleDoubleRefProvider aProv( *p );
+-        rRange.aStart.Set( aProv.Ref1.nCol, aProv.Ref1.nRow, aProv.Ref1.nTab );
+-        rRange.aEnd.Set( aProv.Ref2.nCol, aProv.Ref2.nRow, aProv.Ref2.nTab );
+-        bRet = TRUE;
+-    }
+-
+-    return bRet;
++    return p;
+ }
+ 
  // ============================================================================
 diff --git sc/source/core/tool/detfunc.cxx sc/source/core/tool/detfunc.cxx
-index f2a2a42..7251a1d 100644
+index 7680bda..99e0e71 100644
 --- sc/source/core/tool/detfunc.cxx
 +++ sc/source/core/tool/detfunc.cxx
 @@ -80,6 +80,12 @@
@@ -212,7 +211,7 @@ index f2a2a42..7251a1d 100644
  //------------------------------------------------------------------------
  
 @@ -1407,6 +1413,52 @@ BOOL ScDetectiveFunc::MarkInvalid(BOOL& rOverflow)
- 	return ( bDeleted || nInsCount != 0 );
+     return ( bDeleted || nInsCount != 0 );
  }
  
 +void ScDetectiveFunc::GetAllPreds(SCCOL nCol1, SCROW nRow1, SCCOL nCol2, SCROW nRow2,
@@ -263,12 +262,12 @@ index f2a2a42..7251a1d 100644
 +
  void ScDetectiveFunc::UpdateAllComments( ScDocument& rDoc )
  {
- 	//	for all caption objects, update attributes and SpecialTextBoxShadow flag
+     //	for all caption objects, update attributes and SpecialTextBoxShadow flag
 diff --git sc/source/core/tool/reftokenhelper.cxx sc/source/core/tool/reftokenhelper.cxx
-index 0e07819..6a46f9c 100644
+index ed196e0..635df6e 100644
 --- sc/source/core/tool/reftokenhelper.cxx
 +++ sc/source/core/tool/reftokenhelper.cxx
-@@ -436,3 +436,19 @@ bool ScRefTokenHelper::getDoubleRefDataFromToken(ScComplexRefData& rData, const
+@@ -475,3 +475,19 @@ bool ScRefTokenHelper::getDoubleRefDataFromToken(ScComplexRefData& rData, const
      }
      return true;
  }
@@ -289,20 +288,19 @@ index 0e07819..6a46f9c 100644
 +    return pRef;
 +}
 diff --git sc/source/ui/docshell/docfunc.cxx sc/source/ui/docshell/docfunc.cxx
-index fde95e5..2326d92 100644
+index f55b697..a289649 100644
 --- sc/source/ui/docshell/docfunc.cxx
 +++ sc/source/ui/docshell/docfunc.cxx
-@@ -106,7 +106,7 @@
+@@ -102,6 +102,7 @@
  
  using namespace com::sun::star;
  using ::com::sun::star::uno::Sequence;
--
 +using ::std::vector;
  
  // STATIC DATA -----------------------------------------------------------
  
-@@ -524,6 +524,44 @@ BOOL ScDocFunc::DetectiveRefresh( BOOL bAutomatic )
- 	return bDone;
+@@ -524,6 +525,44 @@ BOOL ScDocFunc::DetectiveRefresh( BOOL bAutomatic )
+     return bDone;
  }
  
 +static void lcl_collectAllPredOrSuccRanges(
@@ -347,10 +345,10 @@ index fde95e5..2326d92 100644
  
  BOOL ScDocFunc::DeleteContents( const ScMarkData& rMark, USHORT nFlags,
 diff --git sc/source/ui/inc/docfunc.hxx sc/source/ui/inc/docfunc.hxx
-index 9976230..753e761 100644
+index 6a1bf00..302b07d 100644
 --- sc/source/ui/inc/docfunc.hxx
 +++ sc/source/ui/inc/docfunc.hxx
-@@ -36,6 +36,9 @@
+@@ -34,6 +34,9 @@
  #include <tools/link.hxx>
  #include "global.hxx"
  #include "formula/grammar.hxx"
@@ -359,8 +357,8 @@ index 9976230..753e761 100644
 +#include <vector>
  
  class ScEditEngineDefaulter;
- class SfxUndoAction;
-@@ -44,6 +47,7 @@ class ScDocShell;
+ class SdrUndoAction;
+@@ -42,6 +45,7 @@ class ScDocShell;
  class ScMarkData;
  class ScPatternAttr;
  class ScRange;
@@ -368,44 +366,44 @@ index 9976230..753e761 100644
  class ScRangeName;
  class ScBaseCell;
  class ScTokenArray;
-@@ -79,6 +83,8 @@ public:
- 	BOOL			DetectiveMarkInvalid(SCTAB nTab);
- 	BOOL			DetectiveDelAll(SCTAB nTab);
- 	BOOL			DetectiveRefresh(BOOL bAutomatic = FALSE);
+@@ -77,6 +81,8 @@ public:
+     BOOL			DetectiveMarkInvalid(SCTAB nTab);
+     BOOL			DetectiveDelAll(SCTAB nTab);
+     BOOL			DetectiveRefresh(BOOL bAutomatic = FALSE);
 +    void            DetectiveCollectAllPreds(const ScRangeList& rSrcRanges, ::std::vector<ScSharedTokenRef>& rRefTokens);
 +    void            DetectiveCollectAllSuccs(const ScRangeList& rSrcRanges, ::std::vector<ScSharedTokenRef>& rRefTokens);
  
- 	BOOL			DeleteContents( const ScMarkData& rMark, USHORT nFlags,
- 									BOOL bRecord, BOOL bApi );
+     BOOL			DeleteContents( const ScMarkData& rMark, USHORT nFlags,
+                                     BOOL bRecord, BOOL bApi );
 diff --git sc/source/ui/inc/viewfunc.hxx sc/source/ui/inc/viewfunc.hxx
-index 3f99bde..d227c16 100644
+index 7bf556d..7bd9a26 100644
 --- sc/source/ui/inc/viewfunc.hxx
 +++ sc/source/ui/inc/viewfunc.hxx
-@@ -330,6 +330,8 @@ public:
- 	void			DetectiveMarkInvalid();
- 	void			DetectiveDelAll();
- 	void			DetectiveRefresh();
+@@ -326,6 +326,8 @@ public:
+     void			DetectiveMarkInvalid();
+     void			DetectiveDelAll();
+     void			DetectiveRefresh();
 +    void            DetectiveMarkPred();
 +    void            DetectiveMarkSucc();
  
- 	void			ShowNote( bool bShow = true );
- 	inline void		HideNote() { ShowNote( false ); }
-@@ -370,6 +372,8 @@ private:
- 	BOOL			TestFormatArea( SCCOL nCol, SCROW nRow, SCTAB nTab, BOOL bAttrChanged );
- 	void			DoAutoAttributes( SCCOL nCol, SCROW nRow, SCTAB nTab,
- 										BOOL bAttrChanged, BOOL bAddUndo );
+     void			ShowNote( bool bShow = true );
+     inline void		HideNote() { ShowNote( false ); }
+@@ -366,6 +368,8 @@ private:
+     BOOL			TestFormatArea( SCCOL nCol, SCROW nRow, SCTAB nTab, BOOL bAttrChanged );
+     void			DoAutoAttributes( SCCOL nCol, SCROW nRow, SCTAB nTab,
+                                         BOOL bAttrChanged, BOOL bAddUndo );
 +
 +    void            MarkAndJumpToRanges(const ScRangeList& rRanges);
  };
  
  
 diff --git sc/source/ui/view/cellsh1.cxx sc/source/ui/view/cellsh1.cxx
-index ce1010e..8a46b55 100644
+index 0cd4007..d6fdb75 100644
 --- sc/source/ui/view/cellsh1.cxx
 +++ sc/source/ui/view/cellsh1.cxx
-@@ -1592,6 +1592,13 @@ void ScCellShell::ExecuteEdit( SfxRequest& rReq )
- 			rReq.Done();
- 			break;
+@@ -1584,6 +1584,13 @@ void ScCellShell::ExecuteEdit( SfxRequest& rReq )
+             rReq.Done();
+             break;
  
 +        case SID_DETECTIVE_MARK_PRED:
 +            pTabViewShell->DetectiveMarkPred();
@@ -418,13 +416,13 @@ index ce1010e..8a46b55 100644
  //           pTabViewShell->DoSpellingChecker();
              {
 diff --git sc/source/ui/view/gridwin.cxx sc/source/ui/view/gridwin.cxx
-index 078c55a..67107db 100644
+index 57f1996..2b2ec31 100644
 --- sc/source/ui/view/gridwin.cxx
 +++ sc/source/ui/view/gridwin.cxx
-@@ -3108,6 +3108,17 @@ void __EXPORT ScGridWindow::KeyInput(const KeyEvent& rKEvt)
- 				ShowNoteMarker( pViewData->GetCurX(), pViewData->GetCurY(), TRUE );
- 			return;
- 		}
+@@ -3078,6 +3078,17 @@ void __EXPORT ScGridWindow::KeyInput(const KeyEvent& rKEvt)
+                 ShowNoteMarker( pViewData->GetCurX(), pViewData->GetCurY(), TRUE );
+             return;
+         }
 +        if (aCode.GetCode() == KEY_BRACKETLEFT && aCode.GetModifier() == KEY_MOD1)
 +        {
 +            pViewSh->DetectiveMarkPred();
@@ -436,32 +434,32 @@ index 078c55a..67107db 100644
 +            return;
 +        }
 +        
- 	}
+     }
  
- 	Window::KeyInput(rKEvt);
+     Window::KeyInput(rKEvt);
 diff --git sc/source/ui/view/tabvwsh3.cxx sc/source/ui/view/tabvwsh3.cxx
-index 836f359..81c2e1b 100644
+index e106539..eb4c908 100644
 --- sc/source/ui/view/tabvwsh3.cxx
 +++ sc/source/ui/view/tabvwsh3.cxx
-@@ -414,13 +414,15 @@ void ScTabViewShell::Execute( SfxRequest& rReq )
- 					{
- 						pViewData->ResetOldCursor();
- 						SetCursor( nCol, nRow );
--						AlignToCursor( nCol, nRow, SC_FOLLOW_JUMP );
- 						rBindings.Invalidate( SID_CURRENTCELL );
- 						rBindings.Update( nSlot );
+@@ -407,13 +407,15 @@ void ScTabViewShell::Execute( SfxRequest& rReq )
+                     {
+                         pViewData->ResetOldCursor();
+                         SetCursor( nCol, nRow );
+-                        AlignToCursor( nCol, nRow, SC_FOLLOW_JUMP );
+                         rBindings.Invalidate( SID_CURRENTCELL );
+                         rBindings.Update( nSlot );
  
- 						if (!rReq.IsAPI())
- 							rReq.Done();
- 					}
+                         if (!rReq.IsAPI())
+                             rReq.Done();
+                     }
 +                    // align to cursor even if the cursor position hasn't changed, 
 +                    // because the cursor may be set outside the visible area.
 +                    AlignToCursor( nCol, nRow, SC_FOLLOW_JUMP );
  
- 					rReq.SetReturnValue( SfxStringItem( SID_CURRENTCELL, aAddress ) );
- 				}
+                     rReq.SetReturnValue( SfxStringItem( SID_CURRENTCELL, aAddress ) );
+                 }
 diff --git sc/source/ui/view/viewfun6.cxx sc/source/ui/view/viewfun6.cxx
-index bd3ccdf..19d19ba 100644
+index 43b3db1..e686cfc 100644
 --- sc/source/ui/view/viewfun6.cxx
 +++ sc/source/ui/view/viewfun6.cxx
 @@ -50,6 +50,13 @@
@@ -479,7 +477,7 @@ index bd3ccdf..19d19ba 100644
  //==================================================================
  
 @@ -140,6 +147,136 @@ void ScViewFunc::DetectiveRefresh()
- 	RecalcPPT();
+     RecalcPPT();
  }
  
 +static void lcl_jumpToRange(const ScRange& rRange, ScViewData* pView, ScDocument* pDoc)
