@@ -1,8 +1,27 @@
+diff --git sc/inc/column.hxx sc/inc/column.hxx
+index d49f85b..355f30d 100644
+--- sc/inc/column.hxx
++++ sc/inc/column.hxx
+@@ -378,7 +378,7 @@ public:
+                 /// Including current, may return -1
+     SCsROW		GetNextUnprotected( SCROW nRow, BOOL bUp ) const;
+ 
+-    void		GetFilterEntries(SCROW nStartRow, SCROW nEndRow, TypedScStrCollection& rStrings);
++    void		GetFilterEntries(SCROW nStartRow, SCROW nEndRow, TypedScStrCollection& rStrings, bool& rHasDates);
+     BOOL		GetDataEntries(SCROW nRow, TypedScStrCollection& rStrings, BOOL bLimit);
+ 
+ //UNUSED2008-05  SCROW		NoteCount( SCROW nMaxRow = MAXROW ) const;
 diff --git sc/inc/dbcolect.hxx sc/inc/dbcolect.hxx
-index edd5a09..f2a0a3f 100644
+index 48d314e..00ea53b 100644
 --- sc/inc/dbcolect.hxx
 +++ sc/inc/dbcolect.hxx
-@@ -94,6 +94,7 @@ private:
+@@ -88,11 +88,13 @@ private:
+     SCCOLROW		nQueryField[MAXQUERY];
+     ScQueryOp		eQueryOp[MAXQUERY];
+     BOOL			bQueryByString[MAXQUERY];
++    bool            bQueryByDate[MAXQUERY];
+     String*			pQueryStr[MAXQUERY];
+     double			nQueryVal[MAXQUERY];
      ScQueryConnect  eQueryConnect[MAXQUERY];
      BOOL			bIsAdvanced;		// TRUE if created by advanced filter
      ScRange			aAdvSource;			// source range
@@ -10,7 +29,7 @@ index edd5a09..f2a0a3f 100644
      // SubTotalParam
      BOOL			bSubRemoveOnly;
      BOOL			bSubReplace;
-@@ -141,9 +142,10 @@ public:
+@@ -140,9 +142,10 @@ public:
              const String& GetName() const				{ return aName; }
              void		GetName(String& rName) const	{ rName = aName; }
              void		SetName(const String& rName)	{ aName = rName; }
@@ -24,10 +43,10 @@ index edd5a09..f2a0a3f 100644
              BOOL		IsByRow() const 				{ return bByRow; }
              void		SetByRow(BOOL bByR) 			{ bByRow = bByR; }
 diff --git sc/inc/document.hxx sc/inc/document.hxx
-index 589a41f..975cd3e 100644
+index 3a38dde..daeb91e 100644
 --- sc/inc/document.hxx
 +++ sc/inc/document.hxx
-@@ -868,7 +868,7 @@ public:
+@@ -873,7 +873,7 @@ public:
      bool            ShrinkToDataArea(SCTAB nTab, SCCOL& rStartCol, SCROW& rStartRow, SCCOL& rEndCol, SCROW& rEndRow) const;
  
      void			GetDataArea( SCTAB nTab, SCCOL& rStartCol, SCROW& rStartRow,
@@ -36,7 +55,7 @@ index 589a41f..975cd3e 100644
      SC_DLLPUBLIC BOOL			GetCellArea( SCTAB nTab, SCCOL& rEndCol, SCROW& rEndRow ) const;
      SC_DLLPUBLIC BOOL			GetTableArea( SCTAB nTab, SCCOL& rEndCol, SCROW& rEndRow ) const;
      SC_DLLPUBLIC BOOL			GetPrintArea( SCTAB nTab, SCCOL& rEndCol, SCROW& rEndRow,
-@@ -1387,6 +1387,9 @@ public:
+@@ -1392,10 +1392,13 @@ public:
                                          SCTAB nTab, ScQueryParam& rQueryParam );
      void 			GetUpperCellString(SCCOL nCol, SCROW nRow, SCTAB nTab, String& rStr);
  
@@ -44,26 +63,47 @@ index 589a41f..975cd3e 100644
 +    void            UpdateDynamicEndRow(ScDBData& rDBData) const;
 +
      BOOL			GetFilterEntries( SCCOL nCol, SCROW nRow, SCTAB nTab,
-                                 bool bFilter, TypedScStrCollection& rStrings, bool& rHasDates);
+-                                TypedScStrCollection& rStrings, bool bFilter = false );
++                                bool bFilter, TypedScStrCollection& rStrings, bool& rHasDates);
      SC_DLLPUBLIC BOOL			GetFilterEntriesArea( SCCOL nCol, SCROW nStartRow, SCROW nEndRow,
+-                                SCTAB nTab, TypedScStrCollection& rStrings );
++                                SCTAB nTab, TypedScStrCollection& rStrings, bool& rHasDates );
+     BOOL			GetDataEntries( SCCOL nCol, SCROW nRow, SCTAB nTab,
+                                 TypedScStrCollection& rStrings, BOOL bLimit = FALSE );
+     BOOL			GetFormulaEntries( TypedScStrCollection& rStrings );
 diff --git sc/inc/global.hxx sc/inc/global.hxx
-index de5be83..adbb4e7 100644
+index b401cb9..64cf3b8 100644
 --- sc/inc/global.hxx
 +++ sc/inc/global.hxx
-@@ -831,6 +831,8 @@ struct SC_DLLPUBLIC ScQueryParam
-     SCTAB			nDestTab;
-     SCCOL			nDestCol;
-     SCROW			nDestRow;
-+    SCROW           nDynamicEndRow;
-+    bool            bUseDynamicRange;
+@@ -797,6 +797,7 @@ struct ScQueryEntry
+ {
+     BOOL			bDoQuery;
+     BOOL			bQueryByString;
++    bool            bQueryByDate;
+     SCCOLROW		nField;
+     ScQueryOp		eOp;
+     ScQueryConnect  eConnect;
+diff --git sc/inc/rangeutl.hxx sc/inc/rangeutl.hxx
+index 1e8d5da..1dc463d 100644
+--- sc/inc/rangeutl.hxx
++++ sc/inc/rangeutl.hxx
+@@ -38,6 +38,11 @@
+ #include <com/sun/star/table/CellRangeAddress.hpp>
+ #include <com/sun/star/uno/Sequence.hxx>
  
- private:
-     SCSIZE			nEntryCount;
++// Chart always stores cell range addresses using CONV_OOO convention. But
++// if parsing with CONV_OOO fails, try parsing it using the current address
++// convention.
++#define CHART_ADDRESS_CONV_WORKAROUND 1
++
+ //------------------------------------------------------------------------
+ 
+ class SvStream;
 diff --git sc/inc/table.hxx sc/inc/table.hxx
-index d9cba72..5c0d354 100644
+index 481cb8c..89f505e 100644
 --- sc/inc/table.hxx
 +++ sc/inc/table.hxx
-@@ -375,7 +375,7 @@ public:
+@@ -379,7 +379,7 @@ public:
                          SCCOL nStartCol, SCROW nStartRow, SCCOL& rEndCol, SCROW nEndRow );
  
      void		GetDataArea( SCCOL& rStartCol, SCROW& rStartRow, SCCOL& rEndCol, SCROW& rEndRow,
@@ -72,11 +112,93 @@ index d9cba72..5c0d354 100644
  
      SCSIZE	    GetEmptyLinesInBlock( SCCOL nStartCol, SCROW nStartRow,
                                          SCCOL nEndCol, SCROW nEndRow, ScDirection eDir );
+@@ -643,8 +643,8 @@ public:
+     SCSIZE		Query(ScQueryParam& rQueryParam, BOOL bKeepSub);
+     BOOL		CreateQueryParam(SCCOL nCol1, SCROW nRow1, SCCOL nCol2, SCROW nRow2, ScQueryParam& rQueryParam);
+ 
+-    void		GetFilterEntries(SCCOL nCol, SCROW nRow1, SCROW nRow2, TypedScStrCollection& rStrings);
+-    void        GetFilteredFilterEntries( SCCOL nCol, SCROW nRow1, SCROW nRow2, const ScQueryParam& rParam, TypedScStrCollection& rStrings );
++    void        GetFilterEntries(SCCOL nCol, SCROW nRow1, SCROW nRow2, TypedScStrCollection& rStrings, bool& rHasDates);
++    void        GetFilteredFilterEntries( SCCOL nCol, SCROW nRow1, SCROW nRow2, const ScQueryParam& rParam, TypedScStrCollection& rStrings, bool& rHasDates );
+     BOOL		GetDataEntries(SCCOL nCol, SCROW nRow, TypedScStrCollection& rStrings, BOOL bLimit);
+ 
+     BOOL		HasColHeader( SCCOL nStartCol, SCROW nStartRow, SCCOL nEndCol, SCROW nEndRow );
+diff --git sc/inc/tabprotection.hxx sc/inc/tabprotection.hxx
+index fc38a1b..99fec7b 100644
+--- sc/inc/tabprotection.hxx
++++ sc/inc/tabprotection.hxx
+@@ -38,7 +38,7 @@
+ #include <vector>
+ #include <boost/shared_ptr.hpp>
+ 
+-#define ENABLE_SHEET_PROTECTION 0
++#define ENABLE_SHEET_PROTECTION 1
+ 
+ class ScDocument;
+ class ScTableProtectionImpl;
+diff --git sc/source/core/data/column2.cxx sc/source/core/data/column2.cxx
+index 9fc2ea5..2291859 100644
+--- sc/source/core/data/column2.cxx
++++ sc/source/core/data/column2.cxx
+@@ -1319,6 +1319,10 @@ BOOL ScColumn::IsEmpty() const
+ 
+ BOOL ScColumn::IsEmptyBlock(SCROW nStartRow, SCROW nEndRow, bool bIgnoreNotes) const
+ {
++	Rectangle aRect;
++	if (pAttrArray->HasLines(nStartRow, nEndRow, aRect, TRUE, TRUE))
++		return FALSE;
++
+     if ( nCount == 0 || !pItems )
+         return TRUE;
+ 
+diff --git sc/source/core/data/column3.cxx sc/source/core/data/column3.cxx
+index 242c5c0..560801d 100644
+--- sc/source/core/data/column3.cxx
++++ sc/source/core/data/column3.cxx
+@@ -1470,8 +1470,9 @@ BOOL ScColumn::SetString( SCROW nRow, SCTAB nTabP, const String& rString,
+ }
+ 
+ 
+-void ScColumn::GetFilterEntries(SCROW nStartRow, SCROW nEndRow, TypedScStrCollection& rStrings)
++void ScColumn::GetFilterEntries(SCROW nStartRow, SCROW nEndRow, TypedScStrCollection& rStrings, bool& rHasDates)
+ {
++    bool bHasDates = false;
+     SvNumberFormatter* pFormatter = pDocument->GetFormatTable();
+     String aString;
+     SCROW nRow = 0;
+@@ -1507,6 +1508,18 @@ void ScColumn::GetFilterEntries(SCROW nStartRow, SCROW nEndRow, TypedScStrCollec
+                     nValue = 0.0;
+             }
+ 
++            if (pFormatter)
++            {
++                short nType = pFormatter->GetType(nFormat);
++                if ((nType & NUMBERFORMAT_DATE) && !(nType & NUMBERFORMAT_TIME))
++                {    
++                    // special case for date values.  Disregard the time
++                    // element if the number format is of date type.
++                    nValue = ::rtl::math::approxFloor(nValue);
++                    bHasDates = true;
++                }
++            }
++
+             pData = new TypedStrData( aString, nValue, SC_STRTYPE_VALUE );
+         }
+ #if 0 // DR
+@@ -1525,6 +1538,8 @@ void ScColumn::GetFilterEntries(SCROW nStartRow, SCROW nEndRow, TypedScStrCollec
+ 
+         ++nIndex;
+     }
++
++    rHasDates = bHasDates;
+ }
+ 
+ //
 diff --git sc/source/core/data/documen3.cxx sc/source/core/data/documen3.cxx
-index 7848054..8b13c35 100644
+index f0806eb..396d54c 100644
 --- sc/source/core/data/documen3.cxx
 +++ sc/source/core/data/documen3.cxx
-@@ -1255,6 +1255,18 @@ BOOL ScDocument::HasRowHeader( SCCOL nStartCol, SCROW nStartRow, SCCOL nEndCol,
+@@ -1255,17 +1255,31 @@ BOOL ScDocument::HasRowHeader( SCCOL nStartCol, SCROW nStartRow, SCCOL nEndCol,
      //return FALSE;
  }
  
@@ -95,7 +217,13 @@ index 7848054..8b13c35 100644
  //
  //	GetFilterEntries - Eintraege fuer AutoFilter-Listbox
  //
-@@ -1267,6 +1279,7 @@ BOOL ScDocument::GetFilterEntries(
+ 
+-BOOL ScDocument::GetFilterEntries( SCCOL nCol, SCROW nRow, SCTAB nTab, TypedScStrCollection& rStrings, bool bFilter )
++BOOL ScDocument::GetFilterEntries(
++    SCCOL nCol, SCROW nRow, SCTAB nTab, bool bFilter, TypedScStrCollection& rStrings, bool& rHasDates)
+ {
+     if ( ValidTab(nTab) && pTab[nTab] && pDBCollection )
+     {
          ScDBData* pDBData = pDBCollection->GetDBAtCursor(nCol, nRow, nTab, FALSE);	//!??
          if (pDBData)
          {
@@ -103,7 +231,7 @@ index 7848054..8b13c35 100644
              SCTAB nAreaTab;
              SCCOL nStartCol;
              SCROW nStartRow;
-@@ -1278,6 +1291,7 @@ BOOL ScDocument::GetFilterEntries(
+@@ -1277,6 +1291,7 @@ BOOL ScDocument::GetFilterEntries( SCCOL nCol, SCROW nRow, SCTAB nTab, TypedScSt
  
              ScQueryParam aParam;
              pDBData->GetQueryParam( aParam );
@@ -111,11 +239,39 @@ index 7848054..8b13c35 100644
              rStrings.SetCaseSensitive( aParam.bCaseSens );
  
              // return all filter entries, if a filter condition is connected with a boolean OR
+@@ -1296,11 +1311,11 @@ BOOL ScDocument::GetFilterEntries( SCCOL nCol, SCROW nRow, SCTAB nTab, TypedScSt
+ 
+             if ( bFilter )
+             {
+-                pTab[nTab]->GetFilteredFilterEntries( nCol, nStartRow, nEndRow, aParam, rStrings );
++                pTab[nTab]->GetFilteredFilterEntries( nCol, nStartRow, nEndRow, aParam, rStrings, rHasDates );
+             }
+             else
+             {
+-                pTab[nTab]->GetFilterEntries( nCol, nStartRow, nEndRow, rStrings );
++                pTab[nTab]->GetFilterEntries( nCol, nStartRow, nEndRow, rStrings, rHasDates );
+             }
+ 
+             return TRUE;
+@@ -1315,11 +1330,11 @@ BOOL ScDocument::GetFilterEntries( SCCOL nCol, SCROW nRow, SCTAB nTab, TypedScSt
+ //
+ 
+ BOOL ScDocument::GetFilterEntriesArea( SCCOL nCol, SCROW nStartRow, SCROW nEndRow,
+-                                        SCTAB nTab, TypedScStrCollection& rStrings )
++                                        SCTAB nTab, TypedScStrCollection& rStrings, bool& rHasDates )
+ {
+     if ( ValidTab(nTab) && pTab[nTab] )
+     {
+-        pTab[nTab]->GetFilterEntries( nCol, nStartRow, nEndRow, rStrings );
++        pTab[nTab]->GetFilterEntries( nCol, nStartRow, nEndRow, rStrings, rHasDates );
+         return TRUE;
+     }
+ 
 diff --git sc/source/core/data/document.cxx sc/source/core/data/document.cxx
-index 80b1773..c608508 100644
+index 3d61f28..187199f 100644
 --- sc/source/core/data/document.cxx
 +++ sc/source/core/data/document.cxx
-@@ -640,7 +640,7 @@ bool ScDocument::ShrinkToDataArea(SCTAB nTab, SCCOL& rStartCol, SCROW& rStartRow
+@@ -663,7 +663,7 @@ bool ScDocument::ShrinkToDataArea(SCTAB nTab, SCCOL& rStartCol, SCROW& rStartRow
  //	zusammenhaengender Bereich
  
  void ScDocument::GetDataArea( SCTAB nTab, SCCOL& rStartCol, SCROW& rStartRow,
@@ -125,61 +281,94 @@ index 80b1773..c608508 100644
      if (VALIDTAB(nTab))
          if (pTab[nTab])
 diff --git sc/source/core/data/global2.cxx sc/source/core/data/global2.cxx
-index c9b2e3e..58d71d0 100644
+index 181c634..6f3c424 100644
 --- sc/source/core/data/global2.cxx
 +++ sc/source/core/data/global2.cxx
-@@ -262,7 +262,8 @@ ScQueryParam::ScQueryParam( const ScQueryParam& r ) :
-         bHasHeader(r.bHasHeader), bByRow(r.bByRow), bInplace(r.bInplace), bCaseSens(r.bCaseSens),
-         bRegExp(r.bRegExp), bMixedComparison(r.bMixedComparison),
-         bDuplicate(r.bDuplicate), bDestPers(r.bDestPers),
--        nDestTab(r.nDestTab), nDestCol(r.nDestCol), nDestRow(r.nDestRow)
-+		nDestTab(r.nDestTab), nDestCol(r.nDestCol), nDestRow(r.nDestRow),
-+        nDynamicEndRow(r.nDynamicEndRow), bUseDynamicRange(r.bUseDynamicRange)
+@@ -145,30 +145,32 @@ BOOL ScImportParam::operator==( const ScImportParam& rOther ) const
+ //------------------------------------------------------------------------
+ // struct ScQueryParam:
+ 
+-ScQueryEntry::ScQueryEntry()
++ScQueryEntry::ScQueryEntry() :
++    bDoQuery(FALSE),
++    bQueryByString(FALSE),
++    bQueryByDate(false),
++    nField(0),
++    eOp(SC_EQUAL),
++    eConnect(SC_AND),
++    pStr(new String),
++    nVal(0.0),
++    pSearchParam(NULL),
++    pSearchText(NULL)
++{
++}
++
++ScQueryEntry::ScQueryEntry(const ScQueryEntry& r) :
++    bDoQuery(r.bDoQuery),
++    bQueryByString(r.bQueryByString),
++    bQueryByDate(r.bQueryByDate),
++    nField(r.nField),
++    eOp(r.eOp),
++    eConnect(r.eConnect),
++    pStr(new String(*r.pStr)),
++    nVal(r.nVal),
++    pSearchParam(NULL),
++    pSearchText(NULL)
  {
-     nEntryCount = 0;
+-    bDoQuery		= FALSE;
+-    bQueryByString	= FALSE;
+-    eOp				= SC_EQUAL;
+-    eConnect		= SC_AND;
+-    nField			= 0;
+-    nVal			= 0.0;
+-    pStr			= new String;
+-    pSearchParam	= NULL;
+-    pSearchText		= NULL;
+-}
+-
+-ScQueryEntry::ScQueryEntry(const ScQueryEntry& r)
+-{
+-    bDoQuery		= r.bDoQuery;
+-    bQueryByString	= r.bQueryByString;
+-    eOp				= r.eOp;
+-    eConnect		= r.eConnect;
+-    nField			= r.nField;
+-    nVal			= r.nVal;
+-    pStr			= new String(*r.pStr);
+-    pSearchParam	= NULL;
+-    pSearchText		= NULL;
+ }
  
-@@ -288,6 +289,8 @@ void ScQueryParam::Clear()
-     nTab = SCTAB_MAX;
-     bHasHeader = bCaseSens = bRegExp = bMixedComparison = FALSE;
-     bInplace = bByRow = bDuplicate = bDestPers = TRUE;
-+    nDynamicEndRow = 0;
-+    bUseDynamicRange = false;
- 
-     Resize( MAXQUERY );
-     for (USHORT i=0; i<MAXQUERY; i++)
-@@ -314,6 +317,8 @@ ScQueryParam& ScQueryParam::operator=( const ScQueryParam& r )
-     bDuplicate	= r.bDuplicate;
-     bByRow		= r.bByRow;
-     bDestPers	= r.bDestPers;
-+    nDynamicEndRow = r.nDynamicEndRow;
-+    bUseDynamicRange = r.bUseDynamicRange;
- 
-     Resize( r.nEntryCount );
-     for (USHORT i=0; i<nEntryCount; i++)
-@@ -351,7 +356,9 @@ BOOL ScQueryParam::operator==( const ScQueryParam& rOther ) const
-         && (bDestPers   == rOther.bDestPers)
-         && (nDestTab	== rOther.nDestTab)
-         && (nDestCol	== rOther.nDestCol)
--        && (nDestRow	== rOther.nDestRow) )
-+        && (nDestRow    == rOther.nDestRow)
-+        && (nDynamicEndRow == rOther.nDynamicEndRow)
-+        && (bUseDynamicRange == rOther.bUseDynamicRange) )
-     {
-         bEqual = TRUE;
-         for ( USHORT i=0; i<nUsed && bEqual; i++ )
-@@ -413,6 +420,7 @@ void ScQueryParam::MoveToDest()
-         nCol2 = sal::static_int_cast<SCCOL>( nCol2 + nDifX );
-         nRow2 = sal::static_int_cast<SCROW>( nRow2 + nDifY );
-         nTab  = sal::static_int_cast<SCTAB>( nTab  + nDifZ );
-+        nDynamicEndRow = sal::static_int_cast<SCROW>( nDynamicEndRow + nDifY );
-         for (USHORT i=0; i<nEntryCount; i++)
-             pEntries[i].nField += nDifX;
- 
+ ScQueryEntry::~ScQueryEntry()
+@@ -185,6 +187,7 @@ ScQueryEntry& ScQueryEntry::operator=( const ScQueryEntry& r )
+ {
+     bDoQuery		= r.bDoQuery;
+     bQueryByString	= r.bQueryByString;
++    bQueryByDate    = r.bQueryByDate;
+     eOp				= r.eOp;
+     eConnect		= r.eConnect;
+     nField			= r.nField;
+@@ -205,6 +208,7 @@ void ScQueryEntry::Clear()
+ {
+     bDoQuery		= FALSE;
+     bQueryByString	= FALSE;
++    bQueryByDate    = false;
+     eOp				= SC_EQUAL;
+     eConnect		= SC_AND;
+     nField			= 0;
+@@ -223,6 +227,7 @@ BOOL ScQueryEntry::operator==( const ScQueryEntry& r ) const
+ {
+     return bDoQuery			== r.bDoQuery
+         && bQueryByString	== r.bQueryByString
++        && bQueryByDate     == r.bQueryByDate
+         && eOp				== r.eOp
+         && eConnect			== r.eConnect
+         && nField			== r.nField
 diff --git sc/source/core/data/table1.cxx sc/source/core/data/table1.cxx
-index ade7f5a..6934899 100644
+index 15db733..10b8cda 100644
 --- sc/source/core/data/table1.cxx
 +++ sc/source/core/data/table1.cxx
-@@ -670,7 +670,7 @@ BOOL ScTable::GetDataStart( SCCOL& rStartCol, SCROW& rStartRow ) const
+@@ -680,7 +680,7 @@ BOOL ScTable::GetDataStart( SCCOL& rStartCol, SCROW& rStartRow ) const
  }
  
  void ScTable::GetDataArea( SCCOL& rStartCol, SCROW& rStartRow, SCCOL& rEndCol, SCROW& rEndRow,
@@ -189,10 +378,39 @@ index ade7f5a..6934899 100644
      BOOL bLeft       = FALSE;
      BOOL bRight  = FALSE;
 diff --git sc/source/core/data/table3.cxx sc/source/core/data/table3.cxx
-index 7067799..c2c1f20 100644
+index 390f6b1..2ecc8c1 100644
 --- sc/source/core/data/table3.cxx
 +++ sc/source/core/data/table3.cxx
-@@ -1616,6 +1616,7 @@ SCSIZE ScTable::Query(ScQueryParam& rParamOrg, BOOL bKeepSub)
+@@ -61,6 +61,7 @@
+ #include "cellform.hxx"
+ #include "postit.hxx"
+ #include "queryparam.hxx"
++#include "svtools/zformat.hxx"
+ 
+ #include <vector>
+ 
+@@ -1144,6 +1145,20 @@ BOOL ScTable::ValidQuery(SCROW nRow, const ScQueryParam& rParam,
+             }
+             else
+                 nCellVal = GetValue( static_cast<SCCOL>(rEntry.nField), nRow );
++
++            if (rEntry.bQueryByDate)
++            {
++                sal_uInt32 nNumFmt = GetNumberFormat(static_cast<SCCOL>(rEntry.nField), nRow);
++                const SvNumberformat* pEntry = pDocument->GetFormatTable()->GetEntry(nNumFmt);
++                if (pEntry)
++                {
++                    short nNumFmtType = pEntry->GetType();
++                    if ((nNumFmtType & NUMBERFORMAT_DATE) && !(nNumFmtType & NUMBERFORMAT_TIME))
++                        // The format is of date type.  Strip off the time element.
++                        nCellVal = ::rtl::math::approxFloor(nCellVal);
++                }
++            }
++
+             switch (rEntry.eOp)
+             {
+                 case SC_EQUAL :
+@@ -1602,6 +1617,7 @@ SCSIZE ScTable::Query(ScQueryParam& rParamOrg, BOOL bKeepSub)
      BOOL* pSpecial = new BOOL[nEntryCount];
      lcl_PrepareQuery( pDocument, this, aParam, pSpecial );
  
@@ -200,7 +418,7 @@ index 7067799..c2c1f20 100644
      if (!aParam.bInplace)
      {
          nOutRow = aParam.nDestRow + nHeader;
-@@ -1624,7 +1625,7 @@ SCSIZE ScTable::Query(ScQueryParam& rParamOrg, BOOL bKeepSub)
+@@ -1610,7 +1626,7 @@ SCSIZE ScTable::Query(ScQueryParam& rParamOrg, BOOL bKeepSub)
                              aParam.nDestCol, aParam.nDestRow, aParam.nDestTab );
      }
  
@@ -209,11 +427,65 @@ index 7067799..c2c1f20 100644
      {
          BOOL bResult;									// Filterergebnis
          BOOL bValid = ValidQuery(j, aParam, pSpecial);
+@@ -1931,12 +1947,13 @@ BOOL ScTable::HasRowHeader( SCCOL nStartCol, SCROW nStartRow, SCCOL /* nEndCol *
+     return TRUE;
+ }
+ 
+-void ScTable::GetFilterEntries(SCCOL nCol, SCROW nRow1, SCROW nRow2, TypedScStrCollection& rStrings)
++void ScTable::GetFilterEntries(SCCOL nCol, SCROW nRow1, SCROW nRow2, TypedScStrCollection& rStrings, bool& rHasDates)
+ {
+-    aCol[nCol].GetFilterEntries( nRow1, nRow2, rStrings );
++    aCol[nCol].GetFilterEntries( nRow1, nRow2, rStrings, rHasDates );
+ }
+ 
+-void ScTable::GetFilteredFilterEntries( SCCOL nCol, SCROW nRow1, SCROW nRow2, const ScQueryParam& rParam, TypedScStrCollection& rStrings )
++void ScTable::GetFilteredFilterEntries(
++    SCCOL nCol, SCROW nRow1, SCROW nRow2, const ScQueryParam& rParam, TypedScStrCollection& rStrings, bool& rHasDates )
+ {
+     // remove the entry for this column from the query parameter
+     ScQueryParam aParam( rParam );
+@@ -1954,15 +1971,18 @@ void ScTable::GetFilteredFilterEntries( SCCOL nCol, SCROW nRow1, SCROW nRow2, co
+ 
+     BOOL* pSpecial = new BOOL[nEntryCount];
+     lcl_PrepareQuery( pDocument, this, aParam, pSpecial );
+-
++    bool bHasDates = false;
+     for ( SCROW j = nRow1; j <= nRow2; ++j )
+     {
+         if ( ValidQuery( j, aParam, pSpecial ) )
+         {
+-            aCol[nCol].GetFilterEntries( j, j, rStrings );
++            bool bThisHasDates = false;
++            aCol[nCol].GetFilterEntries( j, j, rStrings, bThisHasDates );
++            bHasDates |= bThisHasDates;
+         }
+     }
+ 
++    rHasDates = bHasDates;
+     delete[] pSpecial;
+ }
+ 
 diff --git sc/source/core/tool/dbcolect.cxx sc/source/core/tool/dbcolect.cxx
-index 9ed2645..dbe2911 100644
+index 22642f4..5fae4bd 100644
 --- sc/source/core/tool/dbcolect.cxx
 +++ sc/source/core/tool/dbcolect.cxx
-@@ -380,18 +380,20 @@ String ScDBData::GetOperations() const
+@@ -159,6 +159,7 @@ ScDBData::ScDBData( const ScDBData& rData ) :
+         nQueryField[i]		= rData.nQueryField[i];
+         eQueryOp[i]			= rData.eQueryOp[i];
+         bQueryByString[i]	= rData.bQueryByString[i];
++        bQueryByDate[i]     = rData.bQueryByDate[i];
+         pQueryStr[i]		= new String( *(rData.pQueryStr[i]) );
+         nQueryVal[i]		= rData.nQueryVal[i];
+         eQueryConnect[i]	= rData.eQueryConnect[i];
+@@ -249,6 +250,7 @@ ScDBData& ScDBData::operator= (const ScDBData& rData)
+         nQueryField[i]		= rData.nQueryField[i];
+         eQueryOp[i]			= rData.eQueryOp[i];
+         bQueryByString[i]	= rData.bQueryByString[i];
++        bQueryByDate[i]     = rData.bQueryByDate[i];
+         *pQueryStr[i]		= *rData.pQueryStr[i];
+         nQueryVal[i]		= rData.nQueryVal[i];
+         eQueryConnect[i]	= rData.eQueryConnect[i];
+@@ -379,18 +381,20 @@ String ScDBData::GetOperations() const
      return aVal;
  }
  
@@ -238,7 +510,7 @@ index 9ed2645..dbe2911 100644
  }
  
  void ScDBData::SetArea(SCTAB nTab, SCCOL nCol1, SCROW nRow1, SCCOL nCol2, SCROW nRow2)
-@@ -403,6 +405,11 @@ void ScDBData::SetArea(SCTAB nTab, SCCOL nCol1, SCROW nRow1, SCCOL nCol2, SCROW
+@@ -402,6 +406,11 @@ void ScDBData::SetArea(SCTAB nTab, SCCOL nCol1, SCROW nRow1, SCCOL nCol2, SCROW
      nEndRow   = nRow2;
  }
  
@@ -250,7 +522,7 @@ index 9ed2645..dbe2911 100644
  void ScDBData::MoveTo(SCTAB nTab, SCCOL nCol1, SCROW nRow1, SCCOL nCol2, SCROW nRow2)
  {
      USHORT i;
-@@ -510,6 +517,7 @@ void ScDBData::GetQueryParam( ScQueryParam& rQueryParam ) const
+@@ -509,6 +518,7 @@ void ScDBData::GetQueryParam( ScQueryParam& rQueryParam ) const
      rQueryParam.nDestTab = nQueryDestTab;
      rQueryParam.nDestCol = nQueryDestCol;
      rQueryParam.nDestRow = nQueryDestRow;
@@ -258,19 +530,234 @@ index 9ed2645..dbe2911 100644
  
      rQueryParam.Resize( MAXQUERY );
      for (SCSIZE i=0; i<MAXQUERY; i++)
+@@ -519,6 +529,7 @@ void ScDBData::GetQueryParam( ScQueryParam& rQueryParam ) const
+         rEntry.nField = nQueryField[i];
+         rEntry.eOp = eQueryOp[i];
+         rEntry.bQueryByString = bQueryByString[i];
++        rEntry.bQueryByDate = bQueryByDate[i];
+         *rEntry.pStr = *pQueryStr[i];
+         rEntry.nVal = nQueryVal[i];
+         rEntry.eConnect = eQueryConnect[i];
+@@ -550,6 +561,7 @@ void ScDBData::SetQueryParam(const ScQueryParam& rQueryParam)
+         nQueryField[i] = rEntry.nField;
+         eQueryOp[i] = rEntry.eOp;
+         bQueryByString[i] = rEntry.bQueryByString;
++        bQueryByDate[i] = rEntry.bQueryByDate;
+         *pQueryStr[i] = *rEntry.pStr;
+         nQueryVal[i] = rEntry.nVal;
+         eQueryConnect[i] = rEntry.eConnect;
+diff --git sc/source/core/tool/rangeutl.cxx sc/source/core/tool/rangeutl.cxx
+index 62474c3..b5bdfda 100644
+--- sc/source/core/tool/rangeutl.cxx
++++ sc/source/core/tool/rangeutl.cxx
+@@ -479,6 +479,11 @@ sal_Bool ScRangeStringConverter::GetAddressFromString(
+     {
+         if ((rAddress.Parse( sToken, const_cast<ScDocument*>(pDocument), eConv ) & SCA_VALID) == SCA_VALID)
+             return true;
++#if CHART_ADDRESS_CONV_WORKAROUND
++        ::formula::FormulaGrammar::AddressConvention eConvUI = pDocument->GetAddressConvention();
++        if (eConv != eConvUI)
++            return ((rAddress.Parse(sToken, const_cast<ScDocument*>(pDocument), eConvUI) & SCA_VALID) == SCA_VALID);
++#endif
+     }
+     return sal_False;
+ }
+@@ -505,6 +510,11 @@ sal_Bool ScRangeStringConverter::GetRangeFromString(
+             if ( aUIString.GetChar(0) == (sal_Unicode) '.' )
+                 aUIString.Erase( 0, 1 );
+             bResult = ((rRange.aStart.Parse( aUIString, const_cast<ScDocument*> (pDocument), eConv) & SCA_VALID) == SCA_VALID);
++#if CHART_ADDRESS_CONV_WORKAROUND
++            if (!bResult && eConv != eConv)
++                bResult = ((rRange.aStart.Parse(
++                    aUIString, const_cast<ScDocument*>(pDocument), eConv) & SCA_VALID) == SCA_VALID);
++#endif
+             rRange.aEnd = rRange.aStart;
+         }
+         else
+@@ -529,6 +539,15 @@ sal_Bool ScRangeStringConverter::GetRangeFromString(
+                                 eConv) & SCA_VALID) == SCA_VALID) &&
+                           ((rRange.aEnd.Parse( aUIString.Copy((xub_StrLen)nIndex+1), const_cast<ScDocument*>(pDocument),
+                                 eConv) & SCA_VALID) == SCA_VALID);
++#if CHART_ADDRESS_CONV_WORKAROUND
++                if (!bResult && eConv != eConv)
++                {
++                    bResult = ((rRange.aStart.Parse( aUIString.Copy(0, (xub_StrLen)nIndex), const_cast<ScDocument*>(pDocument),
++                                    eConv) & SCA_VALID) == SCA_VALID) &&
++                              ((rRange.aEnd.Parse( aUIString.Copy((xub_StrLen)nIndex+1), const_cast<ScDocument*>(pDocument),
++                                    eConv) & SCA_VALID) == SCA_VALID);
++                }
++#endif
+             }
+         }
+     }
+@@ -863,6 +882,8 @@ static void lcl_appendCellRangeAddress(
+ 
+ void ScRangeStringConverter::GetStringFromXMLRangeString( OUString& rString, const OUString& rXMLRange, ScDocument* pDoc )
+ {
++    FormulaGrammar::AddressConvention eConv = pDoc->GetAddressConvention();
++    const OUString aRangeSep = GetScCompilerNativeSymbol(ocSep);
+     const sal_Unicode cSep = ' ';
+     const sal_Unicode cQuote = '\'';
+ 
+@@ -915,13 +936,37 @@ void ScRangeStringConverter::GetStringFromXMLRangeString( OUString& rString, con
+             rtl::OUString aBuf;
+             USHORT nRet = aCell1.Parse(aBeginCell, pDoc, FormulaGrammar::CONV_OOO, &aExtInfo1);
+             if ((nRet & SCA_VALID) != SCA_VALID)
++            {    
+                 // first cell is invalid.
++#if CHART_ADDRESS_CONV_WORKAROUND
++                if (eConv == FormulaGrammar::CONV_OOO)
++                    continue;
++
++                nRet = aCell1.Parse(aBeginCell, pDoc, eConv, &aExtInfo1);
++                if ((nRet & SCA_VALID) != SCA_VALID)
++                    // first cell is really invalid.
++                    continue;
++#else
+                 continue;
++#endif
++            }
+ 
+             nRet = aCell2.Parse(aEndCell, pDoc, FormulaGrammar::CONV_OOO, &aExtInfo2);
+             if ((nRet & SCA_VALID) != SCA_VALID)
++            {    
+                 // second cell is invalid.
++#if CHART_ADDRESS_CONV_WORKAROUND
++                if (eConv == FormulaGrammar::CONV_OOO)
++                    continue;
++
++                nRet = aCell2.Parse(aEndCell, pDoc, eConv, &aExtInfo2);
++                if ((nRet & SCA_VALID) != SCA_VALID)
++                    // second cell is really invalid.
++                    continue;
++#else
+                 continue;
++#endif
++            }
+ 
+             if (aExtInfo1.mnFileId != aExtInfo2.mnFileId || aExtInfo1.mbExternal != aExtInfo2.mbExternal)
+                 // external info inconsistency.
+@@ -932,7 +977,7 @@ void ScRangeStringConverter::GetStringFromXMLRangeString( OUString& rString, con
+             if (bFirst)
+                 bFirst = false;
+             else
+-                aRetStr.appendAscii(";");
++                aRetStr.append(aRangeSep);
+ 
+             lcl_appendCellRangeAddress(aRetStr, pDoc, aCell1, aCell2, aExtInfo1, aExtInfo2);
+         }
+@@ -943,14 +988,22 @@ void ScRangeStringConverter::GetStringFromXMLRangeString( OUString& rString, con
+             ScAddress aCell;
+             USHORT nRet = aCell.Parse(aToken, pDoc, ::formula::FormulaGrammar::CONV_OOO, &aExtInfo);
+             if ((nRet & SCA_VALID) != SCA_VALID)
++            {
++#if CHART_ADDRESS_CONV_WORKAROUND
++                nRet = aCell.Parse(aToken, pDoc, eConv, &aExtInfo);
++                if ((nRet & SCA_VALID) != SCA_VALID)
++                    continue;
++#else
+                 continue;
++#endif
++            }
+ 
+             // Looks good!
+ 
+             if (bFirst)
+                 bFirst = false;
+             else
+-                aRetStr.appendAscii(";");
++                aRetStr.append(aRangeSep);
+ 
+             lcl_appendCellAddress(aRetStr, pDoc, aCell, aExtInfo);
+         }
+diff --git sc/source/ui/app/inputhdl.cxx sc/source/ui/app/inputhdl.cxx
+index 98aac39..6ac26bc 100644
+--- sc/source/ui/app/inputhdl.cxx
++++ sc/source/ui/app/inputhdl.cxx
+@@ -2055,6 +2055,7 @@ IMPL_LINK( ScInputHandler, ModifyHdl, void *, EMPTYARG )
+ 
+ BOOL ScInputHandler::DataChanging( sal_Unicode cTyped, BOOL bFromCommand )		// return TRUE = new view created
+ {
++    pActiveViewSh->GetViewData()->SetPasteMode( SC_PASTE_NONE );
+     bInOwnChange = TRUE;				// disable ModifyHdl (reset in DataChanged)
+ 
+     if ( eMode == SC_INPUT_NONE )
 diff --git sc/source/ui/dbgui/filtdlg.cxx sc/source/ui/dbgui/filtdlg.cxx
-index 4f56adb..3491024 100644
+index 4a2d4d4..3491024 100644
 --- sc/source/ui/dbgui/filtdlg.cxx
 +++ sc/source/ui/dbgui/filtdlg.cxx
-@@ -454,7 +454,7 @@ void ScFilterDlg::UpdateValueList( USHORT nList )
-                 USHORT nOffset = GetSliderPos();
+@@ -451,24 +451,27 @@ void ScFilterDlg::UpdateValueList( USHORT nList )
+             SCCOL nColumn = theQueryData.nCol1 + static_cast<SCCOL>(nFieldSelPos) - 1;
+             if (!pEntryLists[nColumn])
+             {
++                USHORT nOffset = GetSliderPos();
                  SCTAB nTab		 = nSrcTab;
                  SCROW nFirstRow = theQueryData.nRow1;
 -                SCROW nLastRow	 = theQueryData.nRow2;
 +                SCROW nLastRow = theQueryData.bUseDynamicRange ? theQueryData.nDynamicEndRow : theQueryData.nRow2;
-                 mbHasDates[nOffset+nList-1] = false;
++                mbHasDates[nOffset+nList-1] = false;
  
                  //	erstmal ohne die erste Zeile
+ 
+                 pEntryLists[nColumn] = new TypedScStrCollection( 128, 128 );
+                 pEntryLists[nColumn]->SetCaseSensitive( aBtnCase.IsChecked() );
+                 pDoc->GetFilterEntriesArea( nColumn, nFirstRow+1, nLastRow,
+-                                            nTab, *pEntryLists[nColumn] );
++                                            nTab, *pEntryLists[nColumn], mbHasDates[nOffset+nList-1] );
+ 
+                 //	Eintrag fuer die erste Zeile
+                 //!	Eintrag (pHdrEntry) ohne Collection erzeugen?
+ 
+                 nHeaderPos[nColumn] = USHRT_MAX;
+                 TypedScStrCollection aHdrColl( 1, 1 );
++                bool bDummy = false;
+                 pDoc->GetFilterEntriesArea( nColumn, nFirstRow, nFirstRow,
+-                                            nTab, aHdrColl );
++                                            nTab, aHdrColl, bDummy );
+                 TypedStrData* pHdrEntry = aHdrColl[0];
+                 if ( pHdrEntry )
+                 {
+@@ -1064,7 +1067,8 @@ IMPL_LINK( ScFilterDlg, ValModifyHdl, ComboBox*, pEd )
+                 static_cast<SCCOL>(nField) - 1) : static_cast<SCCOL>(0);
+            
+             ScQueryOp eOp  = (ScQueryOp)pLbCond->GetSelectEntryPos();
+-           rEntry.eOp	  = eOp;
++            rEntry.eOp	   = eOp;
++            rEntry.bQueryByDate = mbHasDates[nQE];
+ 
+         }
+     }		
+diff --git sc/source/ui/dbgui/pfiltdlg.cxx sc/source/ui/dbgui/pfiltdlg.cxx
+index 35bfc35..42c2c26 100644
+--- sc/source/ui/dbgui/pfiltdlg.cxx
++++ sc/source/ui/dbgui/pfiltdlg.cxx
+@@ -352,11 +352,12 @@ void ScPivotFilterDlg::UpdateValueList( USHORT nList )
+                 SCROW	nFirstRow	= theQueryData.nRow1;
+                 SCROW	nLastRow	= theQueryData.nRow2;
+                 nFirstRow++;
++                bool bHasDates = false;
+ 
+                 pEntryLists[nColumn] = new TypedScStrCollection( 128, 128 );
+                 pEntryLists[nColumn]->SetCaseSensitive( aBtnCase.IsChecked() );
+                 pDoc->GetFilterEntriesArea( nColumn, nFirstRow, nLastRow,
+-                                            nTab, *pEntryLists[nColumn] );
++                                            nTab, *pEntryLists[nColumn], bHasDates );
+             }
+ 
+             TypedScStrCollection* pColl = pEntryLists[nColumn];
+diff --git sc/source/ui/docshell/docsh.cxx sc/source/ui/docshell/docsh.cxx
+index 2e9ad98..e884d14 100644
+--- sc/source/ui/docshell/docsh.cxx
++++ sc/source/ui/docshell/docsh.cxx
+@@ -1924,7 +1924,7 @@ BOOL __EXPORT ScDocShell::ConvertTo( SfxMedium &rMed )
+             bool bNeedRetypePassDlg = ScPassHashHelper::needsPassHashRegen(aDocument, PASSHASH_XL);
+             if (bNeedRetypePassDlg && !pViewShell->ExecuteRetypePassDlg(PASSHASH_XL))
+             {
+-                SetError( ERRCODE_ABORT );
++                SetError( ERRCODE_ABORT, ::rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( OSL_LOG_PREFIX ) ) );
+                 return false;
+             }
+ #else
 diff --git sc/source/ui/inc/dbfunc.hxx sc/source/ui/inc/dbfunc.hxx
 index 91834e1..f9a76a0 100644
 --- sc/source/ui/inc/dbfunc.hxx
@@ -283,6 +770,109 @@ index 91834e1..f9a76a0 100644
 +	ScDBData* 		GetDBData( BOOL bMarkArea = TRUE, ScGetDBMode eMode = SC_DB_MAKE, bool bExpandRows = false, bool bShrinkToData = false );
  
      void			NotifyCloseDbNameDlg( const ScDBCollection& rNewColl, const List& rDelAreaList );
+ 
+diff --git sc/source/ui/inc/filtdlg.hxx sc/source/ui/inc/filtdlg.hxx
+index c418e82..7409b5a 100644
+--- sc/source/ui/inc/filtdlg.hxx
++++ sc/source/ui/inc/filtdlg.hxx
+@@ -167,6 +167,7 @@ private:
+     ListBox*			aFieldLbArr[4];
+     ListBox*			aCondLbArr[4];
+     ListBox*			aConnLbArr[4];
++    bool                mbHasDates[MAXQUERY];
+     BOOL                bRefreshExceptQuery[MAXQUERY];
+     USHORT				nFieldCount;
+     BOOL				bRefInputMode;
+diff --git sc/source/ui/inc/gridwin.hxx sc/source/ui/inc/gridwin.hxx
+index 4013e1a..aae0353 100644
+--- sc/source/ui/inc/gridwin.hxx
++++ sc/source/ui/inc/gridwin.hxx
+@@ -218,7 +218,7 @@ private:
+ 
+     BOOL 			IsAutoFilterActive( SCCOL nCol, SCROW nRow, SCTAB nTab );
+     void			ExecFilter( ULONG nSel, SCCOL nCol, SCROW nRow,
+-                                const String& aValue );
++                                const String& aValue, bool bCheckForDates );
+     void			FilterSelect( ULONG nSel );
+ 
+     void			ExecDataSelect( SCCOL nCol, SCROW nRow, const String& rStr );
+diff --git sc/source/ui/inc/preview.hxx sc/source/ui/inc/preview.hxx
+index 2449554..848f22e 100644
+--- sc/source/ui/inc/preview.hxx
++++ sc/source/ui/inc/preview.hxx
+@@ -66,6 +66,8 @@ private:
+     ScPreviewLocationData* pLocationData;	// stores table layout for accessibility API
+     FmFormView*		pDrawView;
+ 
++    SCTAB           nCurTab;
++
+                                         // intern:
+     BOOL			bInPaint;
+     BOOL			bInGetState;
+diff --git sc/source/ui/inc/viewdata.hxx sc/source/ui/inc/viewdata.hxx
+index 6f0d986..19583a8 100644
+--- sc/source/ui/inc/viewdata.hxx
++++ sc/source/ui/inc/viewdata.hxx
+@@ -89,6 +89,13 @@ enum ScMarkType
+ #endif
+ };
+ 
++enum ScPasteFlags
++{
++    SC_PASTE_NONE   = 0,    // No flags specified
++    SC_PASTE_MODE   = 1,    // Enable paste-mode
++    SC_PASTE_BORDER = 2,    // Show a border around the source cells
++};
++
+ class ScDocShell;
+ class ScDocument;
+ class ScDBFunc;
+@@ -210,6 +217,8 @@ private:
+     SCCOL				nTabStartCol;				// fuer Enter nach Tab
+     ScRange				aDelRange;					// fuer AutoFill-Loeschen
+ 
++    ScPasteFlags        nPasteFlags;
++
+     ScSplitPos          eEditActivePart;            // the part that was active when edit mode was started
+     BOOL				bEditActive[4];				// aktiv?
+     BOOL				bActive;					// aktives Fenster ?
+@@ -295,6 +304,8 @@ public:
+     SCCOL			GetFixPosX() const						{ return pThisTab->nFixPosX; }
+     SCROW			GetFixPosY() const						{ return pThisTab->nFixPosY; }
+     BOOL			IsPagebreakMode() const					{ return bPagebreak; }
++    BOOL            IsPasteMode() const                     { return nPasteFlags & SC_PASTE_MODE; }
++    BOOL            ShowPasteSource() const                 { return nPasteFlags & SC_PASTE_BORDER; }
+ 
+     void			SetPosX( ScHSplitPos eWhich, SCCOL nNewPosX );
+     void			SetPosY( ScVSplitPos eWhich, SCROW nNewPosY );
+@@ -309,6 +320,7 @@ public:
+     void			SetFixPosX( SCCOL nPos )						{ pThisTab->nFixPosX = nPos; }
+     void			SetFixPosY( SCROW nPos )						{ pThisTab->nFixPosY = nPos; }
+     void			SetPagebreakMode( BOOL bSet );
++    void            SetPasteMode ( ScPasteFlags nFlags )            { nPasteFlags = nFlags; }
+ 
+     void            SetZoomType( SvxZoomType eNew, BOOL bAll );
+     void            SetZoom( const Fraction& rNewX, const Fraction& rNewY, BOOL bAll );
+diff --git sc/source/ui/view/cellsh1.cxx sc/source/ui/view/cellsh1.cxx
+index d87d081..19ee659 100644
+--- sc/source/ui/view/cellsh1.cxx
++++ sc/source/ui/view/cellsh1.cxx
+@@ -1170,6 +1170,8 @@ void ScCellShell::ExecuteEdit( SfxRequest& rReq )
+                 WaitObject aWait( GetViewData()->GetDialogParent() );
+                 pTabViewShell->CopyToClip( NULL, FALSE, FALSE, TRUE );
+                 rReq.Done();
++                GetViewData()->SetPasteMode( (ScPasteFlags) (SC_PASTE_MODE | SC_PASTE_BORDER) );
++                pTabViewShell->ShowCursor();
+             }
+             break;
+ 
+@@ -1178,6 +1180,7 @@ void ScCellShell::ExecuteEdit( SfxRequest& rReq )
+                 WaitObject aWait( GetViewData()->GetDialogParent() );
+                 pTabViewShell->CutToClip( NULL, TRUE );
+                 rReq.Done();
++                GetViewData()->SetPasteMode( SC_PASTE_MODE );
+             }
+             break;
  
 diff --git sc/source/ui/view/dbfunc.cxx sc/source/ui/view/dbfunc.cxx
 index 05dce54..fa05fa6 100644
@@ -321,10 +911,80 @@ index 05dce54..fa05fa6 100644
      }
      return pData;
 diff --git sc/source/ui/view/gridwin.cxx sc/source/ui/view/gridwin.cxx
-index 6e0280a..57f1996 100644
+index b547e2c..57f1996 100644
 --- sc/source/ui/view/gridwin.cxx
 +++ sc/source/ui/view/gridwin.cxx
-@@ -1276,6 +1276,7 @@ void ScGridWindow::ExecFilter( ULONG nSel,
+@@ -118,6 +118,7 @@
+ #include "userdat.hxx"
+ #include "drwlayer.hxx"
+ #include "attrib.hxx"
++#include "cellsh.hxx"
+ #include "validat.hxx"
+ #include "tabprotection.hxx"
+ #include "postit.hxx"
+@@ -170,6 +171,7 @@ private:
+     BOOL			bInit;
+     BOOL			bCancelled;
+     BOOL            bInSelect;
++    bool            mbListHasDates;
+     ULONG			nSel;
+     ScFilterBoxMode	eMode;
+ 
+@@ -193,6 +195,8 @@ public:
+     BOOL            IsInInit() const        { return bInit; }
+     void			SetCancelled()			{ bCancelled = TRUE; }
+     BOOL            IsInSelect() const      { return bInSelect; }
++    void            SetListHasDates(bool b) { mbListHasDates = b; }
++    bool            HasDates() const        { return mbListHasDates; }
+ };
+ 
+ //-------------------------------------------------------------------
+@@ -208,6 +212,7 @@ ScFilterListBox::ScFilterListBox( Window* pParent, ScGridWindow* pGrid,
+     bInit( TRUE ),
+     bCancelled( FALSE ),
+     bInSelect( FALSE ),
++    mbListHasDates(false),
+     nSel( 0 ),
+     eMode( eNewMode )
+ {
+@@ -912,7 +917,9 @@ void ScGridWindow::DoAutoFilterMenue( SCCOL nCol, SCROW nRow, BOOL bDataSelect )
+         pFilterBox->SetSeparatorPos( nDefCount - 1 );
+ 
+         //	get list entries
+-        pDoc->GetFilterEntries( nCol, nRow, nTab, aStrings, true );
++        bool bHasDates = false;
++        pDoc->GetFilterEntries( nCol, nRow, nTab, true, aStrings, bHasDates);
++        pFilterBox->SetListHasDates(bHasDates);
+ 
+         //	check widths of numerical entries (string entries are not included)
+         //	so all numbers are completely visible
+@@ -1122,7 +1129,7 @@ void ScGridWindow::FilterSelect( ULONG nSel )
+             ExecDataSelect( nCol, nRow, aString );
+             break;
+         case SC_FILTERBOX_FILTER:
+-            ExecFilter( nSel, nCol, nRow, aString );
++            ExecFilter( nSel, nCol, nRow, aString, pFilterBox->HasDates() );
+             break;
+         case SC_FILTERBOX_SCENARIO:
+             pViewData->GetView()->UseScenario( aString );
+@@ -1155,7 +1162,7 @@ void ScGridWindow::ExecDataSelect( SCCOL nCol, SCROW nRow, const String& rStr )
+ 
+ void ScGridWindow::ExecFilter( ULONG nSel,
+                                SCCOL nCol, SCROW nRow,
+-                               const String& aValue )
++                               const String& aValue, bool bCheckForDates )
+ {
+     SCTAB nTab = pViewData->GetTabNo();
+     ScDocument* pDoc = pViewData->GetDocument();
+@@ -1227,6 +1234,7 @@ void ScGridWindow::ExecFilter( ULONG nSel,
+                     rNewEntry.bDoQuery		 = TRUE;
+                     rNewEntry.bQueryByString = TRUE;
+                     rNewEntry.nField		 = nCol;
++                    rNewEntry.bQueryByDate   = bCheckForDates;
+                     if ( nSel == SC_AUTOFILTER_TOP10 )
+                     {
+                         rNewEntry.eOp	= SC_TOPVAL;
+@@ -1268,6 +1276,7 @@ void ScGridWindow::ExecFilter( ULONG nSel,
                      pViewData->GetViewShell()->UpdateInputHandler();
                  }
  
@@ -332,6 +992,122 @@ index 6e0280a..57f1996 100644
                  pViewData->GetView()->Query( aParam, NULL, TRUE );
                  pDBData->SetQueryParam( aParam );							// speichern
              }
+@@ -2962,12 +2971,30 @@ void ScGridWindow::SelectForContextMenu( const Point& rPosPixel )
+     }
+ }
+ 
++static void ClearSingleSelection( ScViewData* pViewData )
++{
++    SCCOL nX;
++    SCROW nY;
++    ScTransferObj* pTransObj = ScTransferObj::GetOwnClipboard( 
++        pViewData->GetActiveWin() );
++    if (!pTransObj)
++        return;
++
++    ScDocument* pClipDoc = pTransObj->GetDocument();
++    pClipDoc->GetClipArea( nX, nY, TRUE );
++    if (nX == 0 && nY == 0)
++    {
++        ScTabView* pView = pViewData->GetView();
++        pView->Unmark();
++    }
++}
++
+ void __EXPORT ScGridWindow::KeyInput(const KeyEvent& rKEvt)
+ {
+     // #96965# Cursor control for ref input dialog
++    const KeyCode& rKeyCode = rKEvt.GetKeyCode();
+     if( SC_MOD()->IsRefDialogOpen() )
+     {
+-        const KeyCode& rKeyCode = rKEvt.GetKeyCode();
+         if( !rKeyCode.GetModifier() && (rKeyCode.GetCode() == KEY_F2) )
+         {
+             SC_MOD()->EndReference();
+@@ -2982,9 +3009,35 @@ void __EXPORT ScGridWindow::KeyInput(const KeyEvent& rKEvt)
+             return;
+         }
+     }
++    else if( rKeyCode.GetCode() == KEY_RETURN && pViewData->IsPasteMode() )
++    {
++        ScTabViewShell* pTabViewShell = pViewData->GetViewShell();
++
++        ScCellShell::PasteFromClipboard( pViewData, pTabViewShell, FALSE );
++        ClearSingleSelection( pViewData );
++
++        uno::Reference<datatransfer::clipboard::XClipboard> xSystemClipboard = 
++            TransferableHelper::GetSystemClipboard();
++        if (xSystemClipboard.is())
++        {
++            xSystemClipboard->setContents(
++                    uno::Reference<datatransfer::XTransferable>(),
++                    uno::Reference<datatransfer::clipboard::XClipboardOwner>());
++        }
++
++        // hide the border around the copy source
++        pViewData->SetPasteMode( SC_PASTE_NONE );
++        UpdateCursorOverlay();
++        return;
++    }
+     // wenn semi-Modeless-SfxChildWindow-Dialog oben, keine KeyInputs:
+     else if( !pViewData->IsAnyFillMode() )
+     {
++        if (rKeyCode.GetCode() == KEY_ESCAPE)
++        {
++            pViewData->SetPasteMode( SC_PASTE_NONE );
++            UpdateCursorOverlay();
++        }
+         //	query for existing note marker before calling ViewShell's keyboard handling
+         //	which may remove the marker
+         BOOL bHadKeyMarker = ( pNoteMarker && pNoteMarker->IsByKeyboard() );
+diff --git sc/source/ui/view/preview.cxx sc/source/ui/view/preview.cxx
+index d1e59ca..0756c8f 100644
+--- sc/source/ui/view/preview.cxx
++++ sc/source/ui/view/preview.cxx
+@@ -112,6 +112,7 @@ ScPreview::ScPreview( Window* pParent, ScDocShell* pDocSh, ScPreviewShell* pView
+     bLocationValid( FALSE ),
+     pLocationData( NULL ),
+     pDrawView( NULL ),
++    nCurTab ( ScDocShell::GetCurTab() ),
+     bInPaint( FALSE ),
+     bInGetState( FALSE ),
+     pDocShell( pDocSh ),
+@@ -252,8 +253,17 @@ void ScPreview::CalcPages( SCTAB /*nToWhichTab*/ )
+     //	but always all sheets are used (there is no selected sheet)
+     ScPrintOptions aOptions = SC_MOD()->GetPrintOptions();
+ 
++	ScMarkData aMarkData;
++	aMarkData.SelectTable( nCurTab, TRUE );
++
+     for (SCTAB i=nStart; i<nAnz; i++)
+     {
++		if (!aOptions.GetAllSheets() && !aMarkData.GetTableSelect( i )) {
++			nPages[i] = 0;
++			nFirstAttr[i] = 0;
++			continue;
++		}
++
+         long nAttrPage = i > 0 ? nFirstAttr[i-1] : 1;
+ 
+         long nThisStart = nTotalPages;
+diff --git sc/source/ui/view/tabvwsh4.cxx sc/source/ui/view/tabvwsh4.cxx
+index 46e25c1..a7ba066 100644
+--- sc/source/ui/view/tabvwsh4.cxx
++++ sc/source/ui/view/tabvwsh4.cxx
+@@ -1194,8 +1194,13 @@ PrintDialog* __EXPORT ScTabViewShell::CreatePrintDialog( Window *pParent )
+     // instead of a separate progress for each sheet from ScPrintFunc
+     pDocShell->UpdatePendingRowHeights( MAXTAB, true );
+ 
++	ScMarkData aMarkData;
++	aMarkData.SelectTable( GetViewData()->GetTabNo(), TRUE );
++
+     for ( SCTAB i=0; i<nTabCount; i++ )
+     {
++		if ( !bAllTabs && !aMarkData.GetTableSelect( i ) )
++			continue;
+         ScPrintFunc aPrintFunc( pDocShell, pPrinter, i );
+         nDocPageMax += aPrintFunc.GetTotalPages();
+     }
 diff --git sc/source/ui/view/tabvwshc.cxx sc/source/ui/view/tabvwshc.cxx
 index 968984d..499c2a0 100644
 --- sc/source/ui/view/tabvwshc.cxx
@@ -358,3 +1134,35 @@ index 968984d..499c2a0 100644
  
              aArgSet.Put( ScQueryItem( SCITEM_QUERYDATA,
                                        GetViewData(),
+diff --git sc/source/ui/view/viewdata.cxx sc/source/ui/view/viewdata.cxx
+index df48982..e75b864 100644
+--- sc/source/ui/view/viewdata.cxx
++++ sc/source/ui/view/viewdata.cxx
+@@ -306,6 +306,7 @@ ScViewData::ScViewData( ScDocShell* pDocSh, ScTabViewShell* pViewSh )
+         eRefType	( SC_REFTYPE_NONE ),
+         nTabNo		( 0 ),
+         nRefTabNo	( 0 ),
++        nPasteFlags ( SC_PASTE_NONE ),
+         eEditActivePart( SC_SPLIT_BOTTOMLEFT ),
+         bActive		( TRUE ),					//! wie initialisieren?
+         bIsRefMode	( FALSE ),
+@@ -432,6 +433,7 @@ void ScViewData::InitData( ScDocument* pDocument )
+ //UNUSED2008-05      aDefPageZoomX = pRef->aDefPageZoomX;
+ //UNUSED2008-05      aDefPageZoomY = pRef->aDefPageZoomY;
+ //UNUSED2008-05      bPagebreak  = pRef->bPagebreak;
++//UNUSED2008-05 	nPasteFlags = pRef->nPasteFlags;
+ //UNUSED2008-05      aLogicMode  = pRef->aLogicMode;
+ //UNUSED2008-05  
+ //UNUSED2008-05      SetGridMode     ( pRef->IsGridMode() );
+diff --git sc/source/ui/view/viewfunc.cxx sc/source/ui/view/viewfunc.cxx
+index 8155a80..61670e7 100644
+--- sc/source/ui/view/viewfunc.cxx
++++ sc/source/ui/view/viewfunc.cxx
+@@ -1910,6 +1910,7 @@ void ScViewFunc::DeleteMulti( BOOL bRows, BOOL bRecord )
+ 
+ void ScViewFunc::DeleteContents( USHORT nFlags, BOOL bRecord )
+ {
++    GetViewData()->SetPasteMode( SC_PASTE_NONE );
+     // nur wegen Matrix nicht editierbar? Attribute trotzdem ok
+     BOOL bOnlyNotBecauseOfMatrix;
+     BOOL bEditable = SelectionEditable( &bOnlyNotBecauseOfMatrix );
