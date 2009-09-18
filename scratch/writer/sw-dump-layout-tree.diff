@@ -1,18 +1,18 @@
-diff --git a/sw/source/core/inc/bodyfrm.hxx b/sw/source/core/inc/bodyfrm.hxx
-index e4492dc..db991fe 100644
+diff --git sw/source/core/inc/bodyfrm.hxx sw/source/core/inc/bodyfrm.hxx
+index 8e44fca..78658d7 100644
 --- sw/source/core/inc/bodyfrm.hxx
 +++ sw/source/core/inc/bodyfrm.hxx
 @@ -46,6 +46,8 @@ protected:
  public:
- 	SwBodyFrm( SwFrmFmt* );
+     SwBodyFrm( SwFrmFmt* );
  
-+        virtual	void Paint( const SwRect& ) const;
++    virtual void Paint( const SwRect& ) const;
 +
- 	DECL_FIXEDMEMPOOL_NEWDEL(SwBodyFrm)
+     DECL_FIXEDMEMPOOL_NEWDEL(SwBodyFrm)
  };
  
-diff --git a/sw/source/core/inc/frame.hxx b/sw/source/core/inc/frame.hxx
-index 1316abd..66a88a2 100644
+diff --git sw/source/core/inc/frame.hxx sw/source/core/inc/frame.hxx
+index 9a35030..8054a71 100644
 --- sw/source/core/inc/frame.hxx
 +++ sw/source/core/inc/frame.hxx
 @@ -33,6 +33,8 @@
@@ -35,8 +35,8 @@ index 1316abd..66a88a2 100644
  };
  
  inline BOOL	SwFrm::IsInDocBody() const
-diff --git a/sw/source/core/layout/makefile.mk b/sw/source/core/layout/makefile.mk
-index c70b264..a81d484 100644
+diff --git sw/source/core/layout/makefile.mk sw/source/core/layout/makefile.mk
+index e2e8a2c..573874a 100644
 --- sw/source/core/layout/makefile.mk
 +++ sw/source/core/layout/makefile.mk
 @@ -103,7 +103,8 @@ SLOFILES =  \
@@ -49,11 +49,11 @@ index c70b264..a81d484 100644
  
  .IF "$(product)"==""
  .IF "$(cap)"==""
-diff --git a/sw/source/core/layout/pagechg.cxx b/sw/source/core/layout/pagechg.cxx
-index e31c6ca..a6c807a 100644
+diff --git sw/source/core/layout/pagechg.cxx sw/source/core/layout/pagechg.cxx
+index e1c1055..1e1ea48 100644
 --- sw/source/core/layout/pagechg.cxx
 +++ sw/source/core/layout/pagechg.cxx
-@@ -2489,3 +2499,17 @@ const SwPageFrm& SwPageFrm::GetFormatPage() const
+@@ -2489,3 +2489,17 @@ const SwPageFrm& SwPageFrm::GetFormatPage() const
      return *pRet;
  }
  
@@ -71,15 +71,169 @@ index e31c6ca..a6c807a 100644
 +    pOut->Pop();
 +    SwLayoutFrm::Paint(rRect);
 +}
-diff --git a/sw/source/core/layout/xmldump.cxx b/sw/source/core/layout/xmldump.cxx
-index e69de29..0417726 100644
---- sw/source/core/layout/xmldump.cxx
+diff --git sw/source/core/layout/xmldump.cxx sw/source/core/layout/xmldump.cxx
+new file mode 100644
+index 0000000..47ce44d
+--- /dev/null
 +++ sw/source/core/layout/xmldump.cxx
-@@ -0,0 +1,85 @@
+@@ -0,0 +1,243 @@
 +#include "precompiled_sw.hxx"
 +
 +#include "frame.hxx"
 +#include "txtfrm.hxx"
++#include "../text/porlin.hxx"
++#include "../text/porlay.hxx"
++#include "../text/portxt.hxx"
++#include <SwPortionHandler.hxx>
++
++
++
++class XmlPortionDumper : public SwPortionHandler {
++private:
++  xmlTextWriterPtr writer;
++  USHORT ofs;
++public:
++
++  XmlPortionDumper(xmlTextWriterPtr pWriter) : writer(pWriter), ofs(0) {
++  }
++
++  virtual ~XmlPortionDumper() {
++  }
++
++  virtual void Text(
++	USHORT nLength,         /// length of this portion in the model string
++	USHORT nType) {         /// type of this portion  
++    ofs+=nLength;
++    xmlTextWriterStartElement(writer, BAD_CAST("Text"));
++    xmlTextWriterWriteFormatAttribute(writer,
++				      BAD_CAST("nLength"),
++				      "%i",
++				      (int)nLength);
++    xmlTextWriterWriteFormatAttribute(writer,
++				      BAD_CAST("nType"),
++				      "%i",
++				      (int)nType);
++    xmlTextWriterEndElement(writer);
++  }
++
++  virtual void Special(
++        USHORT nLength,         /// length of this portion in the model string
++	const String& rText,    /// text which is painted on-screen
++	USHORT nType) {         /// type of this portion
++    xmlTextWriterStartElement(writer, BAD_CAST("Special"));
++    xmlTextWriterWriteFormatAttribute(writer,
++				      BAD_CAST("nLength"),
++				      "%i",
++				      (int)nLength);
++    xmlTextWriterWriteFormatAttribute(writer,
++				      BAD_CAST("nType"),
++				      "%i",
++				      (int)nType);
++    rtl::OUString sText(rText);
++    rtl::OString sText8 = ::rtl::OUStringToOString (sText, RTL_TEXTENCODING_UTF8);
++    xmlTextWriterWriteFormatAttribute(writer,
++				      BAD_CAST("rText"),
++				      "%s",
++				      sText8.getStr());
++
++    xmlTextWriterEndElement(writer);
++    ofs+=nLength;
++  }
++
++  virtual void LineBreak() {
++    xmlTextWriterStartElement(writer, BAD_CAST("LineBreak"));
++    xmlTextWriterEndElement(writer);
++  }
++
++  virtual void Skip(USHORT nLength) {   /// number of 'model string' characters to be skipped
++    xmlTextWriterStartElement(writer, BAD_CAST("Skip"));
++    xmlTextWriterWriteFormatAttribute(writer,
++				      BAD_CAST("nLength"),
++				      "%i",
++				      (int)nLength);
++    xmlTextWriterEndElement(writer);
++    ofs+=nLength;
++  }
++
++  virtual void Finish() {
++    xmlTextWriterStartElement(writer, BAD_CAST("Finish"));
++    xmlTextWriterEndElement(writer);
++  }
++ 
++
++};
++
++
++void SwTxtPortion::dumpPortionAsXml(xub_StrLen ofs, XubString & /*aText*/, xmlTextWriterPtr writer) {
++  xmlTextWriterStartElement(writer, BAD_CAST("SwTxtPortion"));
++  xmlTextWriterWriteFormatAttribute(writer,
++				    BAD_CAST("ofs"),
++				    "%i",
++				    ofs);
++  xmlTextWriterWriteFormatAttribute(writer,
++				    BAD_CAST("len"),
++				    "%i",
++				    (int)this->GetLen());
++
++  xmlTextWriterEndElement(writer);
++}
++
++void SwLinePortion::dumpPortionAsXml(xub_StrLen ofs, XubString & /*aText*/, xmlTextWriterPtr writer) {
++  xmlTextWriterStartElement(writer, BAD_CAST("SwLinePortion"));
++  xmlTextWriterWriteFormatAttribute(writer,
++				    BAD_CAST("nWhichPor"),
++				    "%04X",
++				    (int)this->GetWhichPor());
++  xmlTextWriterWriteFormatAttribute(writer,
++				    BAD_CAST("ofs"),
++				    "%i",
++				    ofs);
++  xmlTextWriterWriteFormatAttribute(writer,
++				    BAD_CAST("len"),
++				    "%i",
++				    (int)this->GetLen());
++  xmlTextWriterEndElement(writer);
++}
++
++void SwLineLayout::dumpLineAsXml(xmlTextWriterPtr writer, xub_StrLen &ofs, XubString &aText) { // not used any longer...
++  xmlTextWriterStartElement(writer, BAD_CAST("SwLineLayout"));
++  SwLinePortion *portion=this;
++  while(portion!=NULL) {
++    portion->dumpPortionAsXml(ofs, aText, writer);
++    ofs+=portion->GetLen();
++    portion=portion->GetPortion();
++  }
++  xmlTextWriterEndElement(writer);
++}
++
++
++void SwParaPortion::dumpAsXml(xmlTextWriterPtr writer, SwTxtFrm *pTxtFrm) {
++  xmlTextWriterStartElement(writer, BAD_CAST("SwParaPortion"));
++  SwParaPortion* pPara = this;
++  
++  if( pPara && pTxtFrm ) {
++    xub_StrLen ofs=0;
++    XubString &aText=(String&)pTxtFrm->GetTxt();
++    if ( pTxtFrm->IsFollow() )
++      ofs+=pTxtFrm->GetOfst();
++      
++    SwLineLayout* pLine = pPara;
++    while ( pLine ) {
++      xmlTextWriterStartElement(writer, BAD_CAST("line"));
++      SwLinePortion* pPor = pLine->GetFirstPortion();
++      while ( pPor ) {
++	pPor->dumpPortionAsXml(ofs, aText, writer);
++	ofs+=pPor->GetLen();
++	pPor = pPor->GetPortion();
++      }
++      
++      xmlTextWriterEndElement(writer); // line
++      pLine = pLine->GetNext();
++    }
++  }
++  xmlTextWriterEndElement(writer);
++}
++
 +
 +void SwFrm::dumpAsXml(xmlTextWriterPtr writer)
 +{
@@ -146,7 +300,12 @@ index e69de29..0417726 100644
 +	    }
 +	    rtl::OString aTxt8 = ::rtl::OUStringToOString (aTxt, RTL_TEXTENCODING_UTF8);
 +	    xmlTextWriterWriteString(writer, (const xmlChar*)aTxt8.getStr());
-+ 
++	    XmlPortionDumper pdumper(writer);
++	    pTxtFrm->VisitPortions(pdumper);
++	    //	    if (pTxtFrm->GetPara()) {
++	    //pTxtFrm->GetPara()->dumpAsXml(writer, pTxtFrm);
++	    //}
++	   
 +	} else {
 +	    dumpChildrenAsXml(writer);
 +	}
@@ -161,11 +320,67 @@ index e69de29..0417726 100644
 +	pFrm->dumpAsXml(writer);
 +    }
 +}
-diff --git a/sw/source/ui/docvw/edtwin.cxx b/sw/source/ui/docvw/edtwin.cxx
-index 9b920d1..bb5ca93 100644
+diff --git sw/source/core/text/porlay.hxx sw/source/core/text/porlay.hxx
+index 4d757c7..03be02f 100644
+--- sw/source/core/text/porlay.hxx
++++ sw/source/core/text/porlay.hxx
+@@ -263,6 +263,8 @@ public:
+                         const xub_StrLen nStart ); //$ ostream
+ #endif
+ 
++    void dumpLineAsXml( xmlTextWriter* writer, USHORT& ofs, String& aText );
++
+     OUTPUT_OPERATOR
+     DECL_FIXEDMEMPOOL_NEWDEL(SwLineLayout)
+ };
+@@ -370,6 +372,8 @@ public:
+ 
+     const SwDropPortion *FindDropPortion() const;
+ 
++    void dumpAsXml( xmlTextWriter* pWriter, SwTxtFrm* pFrm );
++
+     OUTPUT_OPERATOR
+     DECL_FIXEDMEMPOOL_NEWDEL(SwParaPortion)
+ };
+diff --git sw/source/core/text/porlin.hxx sw/source/core/text/porlin.hxx
+index 9beb401..14601fb 100644
+--- sw/source/core/text/porlin.hxx
++++ sw/source/core/text/porlin.hxx
+@@ -31,6 +31,7 @@
+ #define _PORLIN_HXX
+ 
+ #include "possiz.hxx"		// SwPosSize
++#include <libxml/xmlwriter.h>
+ 
+ class XubString;
+ class SwTxtSizeInfo;
+@@ -198,6 +199,8 @@ public:
+     // Accessibility: pass information about this portion to the PortionHandler
+     virtual void HandlePortion( SwPortionHandler& rPH ) const;
+ 
++    void dumpPortionAsXml( USHORT ofs, String& aText, xmlTextWriter* writer );
++
+     OUTPUT_OPERATOR
+ };
+ 
+diff --git sw/source/core/text/portxt.hxx sw/source/core/text/portxt.hxx
+index 240d40a..ae4b822 100644
+--- sw/source/core/text/portxt.hxx
++++ sw/source/core/text/portxt.hxx
+@@ -69,6 +69,8 @@ public:
+     // Accessibility: pass information about this portion to the PortionHandler
+     virtual void HandlePortion( SwPortionHandler& rPH ) const;
+ 
++    void dumpPortionAsXml( USHORT ofs, String& aText, xmlTextWriter* writer );
++
+     OUTPUT_OPERATOR
+     DECL_FIXEDMEMPOOL_NEWDEL(SwTxtPortion)
+ };
+diff --git sw/source/ui/docvw/edtwin.cxx sw/source/ui/docvw/edtwin.cxx
+index 8787fc4..515824c 100644
 --- sw/source/ui/docvw/edtwin.cxx
 +++ sw/source/ui/docvw/edtwin.cxx
-@@ -127,6 +127,7 @@
+@@ -128,6 +128,7 @@
  #include <crsskip.hxx>
  #include <breakit.hxx>
  #include <checkit.hxx>
@@ -173,43 +388,41 @@ index 9b920d1..bb5ca93 100644
  
  #ifndef _HELPID_H
  #include <helpid.h>
-@@ -1315,7 +1316,21 @@ void SwEditWin::KeyInput(const KeyEvent &rKEvt)
- 	BOOL bChkInsBlank = pQuickHlpData->bChkInsBlank;
- 	pQuickHlpData->bChkInsBlank = FALSE;
+@@ -1316,6 +1317,19 @@ void SwEditWin::KeyInput(const KeyEvent &rKEvt)
+     BOOL bChkInsBlank = pQuickHlpData->bChkInsBlank;
+     pQuickHlpData->bChkInsBlank = FALSE;
  
-+	if (rKEvt.GetKeyCode().GetCode()==KEY_F12) {
-+	    SwRootFrm* pLayout = GetView().GetDocShell()->GetWrtShell()->GetLayout();
-+	    xmlTextWriterPtr writer = xmlNewTextWriterFilename("layout.xml", 0);
-+	    if (writer!=NULL) {
-+		printf("dumping layout in \"layout.xml\"\n");
-+		xmlTextWriterStartDocument(writer, NULL, NULL, NULL);
-+		pLayout->dumpAsXml(writer);
-+		xmlTextWriterEndDocument(writer);
-+		xmlFreeTextWriter(writer);
-+	    }
-+	    return;
-+	}
++    if (rKEvt.GetKeyCode().GetCode()==KEY_F12) {
++        SwRootFrm* pLayout = GetView().GetDocShell()->GetWrtShell()->GetLayout();
++        xmlTextWriterPtr writer = xmlNewTextWriterFilename("layout.xml", 0);
++        if (writer!=NULL) {
++        printf("dumping layout in \"layout.xml\"\n");
++        xmlTextWriterStartDocument(writer, NULL, NULL, NULL);
++        pLayout->dumpAsXml(writer);
++        xmlTextWriterEndDocument(writer);
++        xmlFreeTextWriter(writer);
++        }
++        return;
++    }
 +
- 	KeyEvent aKeyEvent( rKEvt );
-+
- 	// look for vertical mappings
- 	if( !bIsDocReadOnly && !rSh.IsSelFrmMode() && !rSh.IsObjSelected() )
- 	{
-diff --git a/sw/util/makefile.mk b/sw/util/makefile.mk
-index 097824b..2713fdf 100644
+     KeyEvent aKeyEvent( rKEvt );
+     // look for vertical mappings
+     if( !bIsDocReadOnly && !rSh.IsSelFrmMode() && !rSh.IsObjSelected() )
+diff --git sw/util/makefile.mk sw/util/makefile.mk
+index df8bafe..8bdcf3a 100644
 --- sw/util/makefile.mk
 +++ sw/util/makefile.mk
-@@ -125,7 +125,8 @@ SHL1STDLIBS+= \
- 	$(SALHELPERLIB) \
+@@ -128,7 +128,8 @@ SHL1STDLIBS+= \
      $(ICUUCLIB) \
- 	$(I18NUTILLIB)	\
--	$(AVMEDIALIB)
-+	$(AVMEDIALIB)  \
-+	$(LIBXML2LIB)
+     $(I18NUTILLIB)	\
+ 		        $(VBAHELPERLIB) \
+-    $(AVMEDIALIB)
++    $(AVMEDIALIB) \
++ 	$(LIBXML2LIB)
  
  .IF "$(GUI)"=="WNT"
  SHL1STDLIBS+= $(ADVAPI32LIB)
-@@ -155,7 +156,8 @@ SHL2STDLIBS= \
+@@ -158,7 +159,8 @@ SHL2STDLIBS= \
              $(COMPHELPERLIB) \
              $(CPPUHELPERLIB) \
              $(CPPULIB) \
@@ -219,14 +432,13 @@ index 097824b..2713fdf 100644
  
  SHL2OBJS=   $(SLO)$/swdetect.obj \
          $(SLO)$/swdet2.obj \
-@@ -193,7 +195,9 @@ SHL3STDLIBS= \
- 			$(CPPUHELPERLIB)	\
- 			$(CPPULIB) \
+@@ -198,7 +200,8 @@ SHL3STDLIBS= \
+             $(CPPUHELPERLIB)	\
+             $(CPPULIB) \
              $(SALLIB) \
--			$(SOTLIB)
-+			$(SOTLIB) \
-+	     $(LIBXML2LIB) 
-+
+-            $(SOTLIB)
++            $(SOTLIB) \
++            $(LIBXML2LIB) 
  
  SHL3LIBS=   $(SLB)$/swui.lib
  LIB3TARGET = $(SLB)$/swui.lib
