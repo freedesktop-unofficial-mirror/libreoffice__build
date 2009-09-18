@@ -1,0 +1,1881 @@
+diff --git sc/inc/ViewSettingsSequenceDefines.hxx sc/inc/ViewSettingsSequenceDefines.hxx
+index 63671c5..c720413 100644
+--- sc/inc/ViewSettingsSequenceDefines.hxx
++++ sc/inc/ViewSettingsSequenceDefines.hxx
+@@ -64,7 +64,7 @@
+ // this are the defines for the position of the settings in the
+ // TableViewSettingsSequence
+ 
+-#define SC_TABLE_VIEWSETTINGS_COUNT         14
++#define SC_TABLE_VIEWSETTINGS_COUNT         15
+ 
+ #define SC_CURSOR_X							0
+ #define SC_CURSOR_Y							1
+@@ -80,6 +80,7 @@
+ #define SC_TABLE_ZOOM_TYPE                  11
+ #define SC_TABLE_ZOOM_VALUE                 12
+ #define SC_TABLE_PAGE_VIEW_ZOOM_VALUE       13
++#define SC_TABLE_TAB_BG_COLOR               14
+ 
+ #define SC_CURSORPOSITIONX					"CursorPositionX"
+ #define SC_CURSORPOSITIONY					"CursorPositionY"
+diff --git sc/inc/globstr.hrc sc/inc/globstr.hrc
+index 1db4648..5c0f48e 100644
+--- sc/inc/globstr.hrc
++++ sc/inc/globstr.hrc
+@@ -573,7 +573,10 @@
+ #define STR_STYLE_FAMILY_CELL       433
+ #define STR_STYLE_FAMILY_PAGE       434
+ 
+-#define STR_COUNT                   435
++#define STR_UNDO_SET_TAB_BG_COLOR       435
++#define STR_UNDO_SET_MULTI_TAB_BG_COLOR 436
++
++#define STR_COUNT                   437
+ 
+ #endif
+ 
+diff --git sc/inc/sc.hrc sc/inc/sc.hrc
+index c9bd929..76f0343 100644
+--- sc/inc/sc.hrc
++++ sc/inc/sc.hrc
+@@ -833,8 +833,10 @@
+ #define FID_TAB_INDEX			(TAB_POPUP_START+6)
+ #define FID_TAB_RTL				(TAB_POPUP_START+7)
+ #define FID_TAB_DESELECTALL     (TAB_POPUP_START+8)
++#define FID_TAB_MENU_SET_TAB_BG_COLOR (TAB_POPUP_START + 9)
++#define FID_TAB_SET_TAB_BG_COLOR      (TAB_POPUP_START + 10)
+ 
+-#define TAB_POPUP_END			(DATA_MENU_END + 20)
++#define TAB_POPUP_END			(TAB_POPUP_START + 20)
+ 
+ #define OBJBAR_FORMAT_START		(TAB_POPUP_END)
+ #define SID_ALIGNLEFT			(OBJBAR_FORMAT_START+6)
+@@ -1430,7 +1432,10 @@
+ 
+ #define RID_SCSTR_ONCLICK       (STR_START + 402)
+ 
+-#define STR_END                 RID_SCSTR_ONCLICK
++#define SCSTR_SET_TAB_BG_COLOR  (STR_START + 403)
++#define SCSTR_NO_TAB_BG_COLOR   (STR_START + 404)
++
++#define STR_END                 (SCSTR_NO_TAB_BG_COLOR)
+ 
+ #define BMP_START				(STR_END)
+ 
+@@ -1639,8 +1644,9 @@
+ #define RID_SCDLG_RETYPEPASS_INPUT      (SC_DIALOGS_START + 151)
+ #define RID_POPUP_FILTER                (SC_DIALOGS_START + 152)
+ #define RID_SCDLG_TEXT_IMPORT_OPTIONS   (SC_DIALOGS_START + 153)
++#define RID_SCDLG_TAB_BG_COLOR          (SC_DIALOGS_START + 154)
+ 
+-#define SC_DIALOGS_END                  (SC_DIALOGS_START + 154)
++#define SC_DIALOGS_END                  (SC_DIALOGS_START + 155)
+ 
+ #ifndef STD_MASKCOLOR
+ #define STD_MASKCOLOR Color { Red = 0xFF00; Green = 0x0000; Blue = 0xFF00; }
+diff --git sc/inc/scabstdlg.hxx sc/inc/scabstdlg.hxx
+index 1de5302..81f190b 100644
+--- sc/inc/scabstdlg.hxx
++++ sc/inc/scabstdlg.hxx
+@@ -285,6 +285,12 @@ public:
+     virtual void GetInputString( String& rString ) const = 0;
+ };
+ 
++class AbstractScTabBgColorDlg : public VclAbstractDialog  //add for ScTabBgColorDlg
++{
++public:
++    virtual void GetSelectedColor( Color& rColor ) const = 0;
++};
++
+ class AbstractScImportOptionsDlg : public VclAbstractDialog  //add for ScImportOptionsDlg
+ {
+ public:
+@@ -434,6 +440,14 @@ public:
+                                                                 const String& rDefault,
+                                                                 ULONG nHelpId ,
+                                                                 int nId ) = 0;
++
++    virtual AbstractScTabBgColorDlg * CreateScTabBgColorDlg (  Window* pParent, //add for ScTabBgColorDlg
++                                                                const String& rTitle, //Dialog Title
++                                                                const String& rTabBgColorNoColorText, //Label for no tab color
++                                                                const Color& rDefaultColor, //Currently selected Color
++                                                                ULONG nHelpId ,
++                                                                int nId ) = 0;
++
+     virtual AbstractScImportOptionsDlg * CreateScImportOptionsDlg ( Window* 				pParent, //add for ScImportOptionsDlg
+                                                                     int nId,
+                                                                     BOOL                    bAscii = TRUE,
+diff --git sc/inc/scextopt.hxx sc/inc/scextopt.hxx
+index d9e654e..0e3866e 100644
+--- sc/inc/scextopt.hxx
++++ sc/inc/scextopt.hxx
+@@ -80,6 +80,8 @@ struct ScExtTabSettings
+     bool                mbSelected;         /// true = Sheet is selected.
+     bool                mbFrozenPanes;      /// true = Frozen panes; false = Normal splits.
+     bool                mbPageMode;         /// true = Pagebreak mode; false = Normal view mode.
++    Color               maTabBgColor;       /// Tab Bg Color
++    bool                IsDefaultTabBgColor() const { return maTabBgColor == Color(COL_AUTO) ? TRUE : FALSE; };
+ 
+     explicit            ScExtTabSettings();
+ };
+diff --git sc/inc/tabbgcolor.hxx sc/inc/tabbgcolor.hxx
+new file mode 100644
+index 0000000..83b694a
+--- /dev/null
++++ sc/inc/tabbgcolor.hxx
+@@ -0,0 +1,46 @@
++/*************************************************************************
++ *
++ * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
++ *
++ * Copyright 2008 by Sun Microsystems, Inc.
++ *
++ * OpenOffice.org - a multi-platform office productivity suite
++ *
++ * $RCSfile: tabbgcolor.hxx,v $
++ * $Revision: 1.00 $
++ *
++ * This file is part of OpenOffice.org.
++ *
++ * OpenOffice.org is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU Lesser General Public License version 3
++ * only, as published by the Free Software Foundation.
++ *
++ * OpenOffice.org is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU Lesser General Public License version 3 for more details
++ * (a copy is included in the LICENSE file that accompanied this code).
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * version 3 along with OpenOffice.org.  If not, see
++ * <http://www.openoffice.org/license.html>
++ * for a copy of the LGPLv3 License.
++ *
++ ************************************************************************/
++#ifndef SC_TABBGCOLOR_HXX
++#define SC_TABBGCOLOR_HXX
++
++#include <tools/color.hxx>
++#include <tools/list.hxx>
++
++struct ScUndoSetTabBgColorInfo
++{
++public:
++    SCTAB nTabId;
++    Color aOldTabBgColor;
++    Color aNewTabBgColor;
++    BOOL IsDefaultOldTabBgColor() const {return aOldTabBgColor == Color( COL_AUTO ) ? TRUE : FALSE ;};
++    BOOL IsDefaultNewTabBgColor() const {return aOldTabBgColor == Color( COL_AUTO ) ? TRUE : FALSE ;};
++};
++DECLARE_LIST( ScUndoSetTabBgColorInfoList, ScUndoSetTabBgColorInfo* )
++#endif
+diff --git sc/inc/unonames.hxx sc/inc/unonames.hxx
+index faa463f..589fa37 100644
+--- sc/inc/unonames.hxx
++++ sc/inc/unonames.hxx
+@@ -529,6 +529,8 @@
+ #define SC_UNO_ZOOMTYPE             "ZoomType"
+ #define SC_UNO_ZOOMVALUE            "ZoomValue"
+ #define SC_UNO_UPDTEMPL             "UpdateFromTemplate"
++#define SC_UNO_TABCOLOR             "TabColor"
++ 
+ /*Stampit enable/disable print cancel */
+ #define SC_UNO_ALLOWPRINTJOBCANCEL  "AllowPrintJobCancel"
+ 
+diff --git sc/sdi/docsh.sdi sc/sdi/docsh.sdi
+index 67803b5..4a773ab 100644
+--- sc/sdi/docsh.sdi
++++ sc/sdi/docsh.sdi
+@@ -63,6 +63,7 @@ interface TableSelection
+     FID_DELETE_TABLE	[ ExecMethod = ExecuteTable; StateMethod = GetStateTable; ]
+     FID_TAB_RENAME		[ ExecMethod = ExecuteTable; StateMethod = GetStateTable; ]
+     FID_TAB_RTL			[ ExecMethod = ExecuteTable; StateMethod = GetStateTable; ]
++    FID_TAB_SET_TAB_BG_COLOR    [ ExecMethod = ExecuteTable; StateMethod = GetStateTable; ]
+ 
+     SID_TABLE_ACTIVATE	[ ExecMethod = Execute; ]
+ }
+diff --git sc/sdi/scalc.sdi sc/sdi/scalc.sdi
+index 9a1678d..2d0e476 100644
+--- sc/sdi/scalc.sdi
++++ sc/sdi/scalc.sdi
+@@ -7824,3 +7824,56 @@ SfxVoidItem ShareDocument SID_SHARE_DOC
+     ToolBoxConfig = FALSE,
+     GroupId = GID_OPTIONS;
+ ]
++
++//--------------------------------------------------------------------------
++SvxColorItem TabBgColor FID_TAB_SET_TAB_BG_COLOR
++
++[
++    // flags: 
++    AutoUpdate = FALSE,
++    Cachable = Cachable,
++    FastCall = FALSE,
++    HasCoreId = FALSE,
++    HasDialog = TRUE,
++    ReadOnlyDoc = TRUE,
++    Toggle = FALSE,
++    Container = FALSE,
++    RecordAbsolute = FALSE,
++    RecordPerSet;
++    Synchron;
++
++    Readonly = FALSE,
++
++    // config: 
++    AccelConfig = TRUE,
++    MenuConfig = TRUE,
++    StatusBarConfig = FALSE,
++    ToolBoxConfig = FALSE,
++    GroupId = GID_FORMAT;
++]
++
++//--------------------------------------------------------------------------
++SfxVoidItem SetTabBgColor FID_TAB_MENU_SET_TAB_BG_COLOR
++(SvxColorItem TabBgColor FID_TAB_SET_TAB_BG_COLOR)
++[
++    /* flags: */
++    AutoUpdate = FALSE,
++    Cachable = Cachable,
++    FastCall = FALSE,
++    HasCoreId = FALSE,
++    HasDialog = TRUE,
++    ReadOnlyDoc = TRUE,
++    Toggle = FALSE,
++    Container = FALSE,
++    RecordAbsolute = FALSE,
++    RecordPerSet;
++    Synchron;
++
++    /* config: */
++    AccelConfig = TRUE,
++    MenuConfig = TRUE,
++    StatusBarConfig = FALSE,
++    ToolBoxConfig = FALSE,
++    GroupId = GID_FORMAT;
++]
++
+diff --git sc/sdi/tabvwsh.sdi sc/sdi/tabvwsh.sdi
+index 624cb09..44855a2 100644
+--- sc/sdi/tabvwsh.sdi
++++ sc/sdi/tabvwsh.sdi
+@@ -61,6 +61,7 @@ interface Tables
+     FID_TABLE_HIDE	[ ExecMethod = ExecuteTable; StateMethod = GetStateTable; ]
+     FID_TABLE_SHOW	[ ExecMethod = ExecuteTable; StateMethod = GetStateTable; ]
+         SID_SELECT_TABLES       [ ExecMethod = Execute; StateMethod = GetState; ]
++    FID_TAB_MENU_SET_TAB_BG_COLOR   [ ExecMethod = ExecuteTable; StateMethod = GetStateTable; ]
+ }
+ 
+  // ===========================================================================
+diff --git sc/source/filter/excel/read.cxx sc/source/filter/excel/read.cxx
+index a93f993..e8c2d89 100644
+--- sc/source/filter/excel/read.cxx
++++ sc/source/filter/excel/read.cxx
+@@ -1152,6 +1152,9 @@ FltError ImportExcel8::Read( void )
+                     case EXC_ID_SXVDEX:         rPTableMgr.ReadSxvdex( maStrm );    break;
+                     case EXC_ID_SXEX:           rPTableMgr.ReadSxex( maStrm );      break;
+                     case EXC_ID_SXVIEWEX9:      rPTableMgr.ReadSxViewEx9( maStrm ); break;
++
++                    // 0x0862 (SHEETEXT)
++                    case EXC_ID_SHEETEXT:       rTabViewSett.ReadTabBgColor( maStrm, rPal );    break;
+                 }
+             }
+             break;
+diff --git sc/source/filter/excel/xestyle.cxx sc/source/filter/excel/xestyle.cxx
+index d93eec3..de32a64 100644
+--- sc/source/filter/excel/xestyle.cxx
++++ sc/source/filter/excel/xestyle.cxx
+@@ -77,6 +77,7 @@ sal_uInt32 lclGetWeighting( XclExpColorType eType )
+         case EXC_COLOR_CELLTEXT:
+         case EXC_COLOR_CHARTTEXT:
+         case EXC_COLOR_CTRLTEXT:    return 10;
++        case EXC_COLOR_TABBG:
+         case EXC_COLOR_CELLAREA:    return 20;
+         case EXC_COLOR_GRID:        return 50;
+         default:    DBG_ERRORFILE( "lclGetWeighting - unknown color type" );
+diff --git sc/source/filter/excel/xeview.cxx sc/source/filter/excel/xeview.cxx
+index da4af8c..81c5b9a 100644
+--- sc/source/filter/excel/xeview.cxx
++++ sc/source/filter/excel/xeview.cxx
+@@ -259,6 +259,35 @@ void XclExpSelection::WriteBody( XclExpStream& rStrm )
+     maSelData.maXclSelection.Write( rStrm, false );
+ }
+ 
++// ----------------------------------------------------------------------------
++
++XclExpTabBgColor::XclExpTabBgColor( const XclTabViewData& rTabViewData ) :
++    XclExpRecord( EXC_ID_SHEETEXT, 18 ),
++    mrTabViewData( rTabViewData )
++{
++}
++//TODO Fix savexml...
++/*void XclExpTabBgColor::SaveXml( XclExpXmlStream& rStrm )
++{
++}*/
++
++void XclExpTabBgColor::WriteBody( XclExpStream& rStrm )
++{
++    if ( mrTabViewData.IsDefaultTabBgColor() )
++        return;
++    sal_uInt16 rt = 0x0862; //rt
++    sal_uInt16 grbitFrt = 0x0000; //grbit must be set to 0
++    sal_uInt32 unused = 0x00000000; //Use twice...
++    sal_uInt32 cb = 0x00000014; // Record Size, may be larger in future...
++    sal_uInt16 reserved = 0x0000; //trailing bits are 0
++    sal_uInt16 TabBgColorIndex;
++    XclExpPalette& rPal = rStrm.GetRoot().GetPalette();
++    TabBgColorIndex = rPal.GetColorIndex(mrTabViewData.mnTabBgColorId);
++    if (TabBgColorIndex < 8 || TabBgColorIndex > 63 ) // only numbers 8 - 63 are valid numbers
++        TabBgColorIndex = 127; //Excel specs: 127 makes excel ignore tab color information.
++    rStrm << rt << grbitFrt << unused << unused << cb << TabBgColorIndex << reserved;
++}
++
+ // Sheet view settings ========================================================
+ 
+ namespace {
+@@ -368,6 +397,14 @@ XclExpTabViewSettings::XclExpTabViewSettings( const XclExpRoot& rRoot, SCTAB nSc
+         maData.mnNormalZoom     = lclGetXclZoom( rTabSett.mnNormalZoom, EXC_WIN2_NORMALZOOM_DEF );
+         maData.mnPageZoom       = lclGetXclZoom( rTabSett.mnPageZoom, EXC_WIN2_PAGEZOOM_DEF );
+         maData.mnCurrentZoom    = maData.mbPageMode ? maData.mnPageZoom : maData.mnNormalZoom;
++
++        // Tab Bg Color
++        if ( GetBiff() == EXC_BIFF8 && !rTabSett.IsDefaultTabBgColor() )
++        {
++            XclExpPalette& rPal = GetPalette();
++            maData.maTabBgColor = rTabSett.maTabBgColor;
++            maData.mnTabBgColorId = rPal.InsertColor(maData.maTabBgColor, EXC_COLOR_TABBG, EXC_COLOR_NOTABBG );
++        }
+     }
+ }
+ 
+@@ -380,6 +417,7 @@ void XclExpTabViewSettings::Save( XclExpStream& rStrm )
+     WriteSelection( rStrm, EXC_PANE_TOPRIGHT );
+     WriteSelection( rStrm, EXC_PANE_BOTTOMLEFT );
+     WriteSelection( rStrm, EXC_PANE_BOTTOMRIGHT );
++    WriteTabBgColor( rStrm );
+ }
+ 
+ static void lcl_WriteSelection( XclExpXmlStream& rStrm, const XclTabViewData& rData, sal_uInt8 nPane )
+@@ -494,5 +532,10 @@ void XclExpTabViewSettings::WriteSelection( XclExpStream& rStrm, sal_uInt8 nPane
+         XclExpSelection( maData, nPane ).Save( rStrm );
+ }
+ 
++void XclExpTabViewSettings::WriteTabBgColor( XclExpStream& rStrm ) const
++{
++    if ( !maData.IsDefaultTabBgColor() )
++        XclExpTabBgColor( maData ).Save( rStrm );
++}
+ // ============================================================================
+ 
+diff --git sc/source/filter/excel/xichart.cxx sc/source/filter/excel/xichart.cxx
+index 69ead7f..41ec801 100644
+--- sc/source/filter/excel/xichart.cxx
++++ sc/source/filter/excel/xichart.cxx
+@@ -3765,6 +3765,12 @@ void XclImpChart::ReadChartSubStream( XclImpStream& rStrm )
+ 
+             case EXC_ID_WINDOW2:        rTabViewSett.ReadWindow2( rStrm, true );break;
+             case EXC_ID_SCL:            rTabViewSett.ReadScl( rStrm );          break;
++            case EXC_ID_SHEETEXT: //0x0862
++            {
++                XclImpPalette& rPal = GetPalette();
++                rTabViewSett.ReadTabBgColor( rStrm,  rPal);
++            }
++            break;
+         }
+ 
+         switch( rStrm.GetRecId() )
+diff --git sc/source/filter/excel/xiview.cxx sc/source/filter/excel/xiview.cxx
+index a871bdd..fbd72d0 100644
+--- sc/source/filter/excel/xiview.cxx
++++ sc/source/filter/excel/xiview.cxx
+@@ -109,6 +109,24 @@ void XclImpTabViewSettings::Initialize()
+     maData.SetDefaults();
+ }
+ 
++void XclImpTabViewSettings::ReadTabBgColor( XclImpStream& rStrm, XclImpPalette& rPal )
++{
++    DBG_ASSERT_BIFF( GetBiff() >= EXC_BIFF8 );
++    if( GetBiff() < EXC_BIFF8 )
++        return;
++
++    sal_uInt8 ColorIndex;
++    Color TabBgColor;
++
++    rStrm.Ignore( 16 );
++    ColorIndex = rStrm.ReaduInt8() & EXC_SHEETEXT_TABCOLOR; //0x7F
++    if ( ColorIndex >= 8 && ColorIndex <= 63 ) //only accept valid index values
++    {
++        TabBgColor = rPal.GetColor( ColorIndex );
++        maData.maTabBgColor = TabBgColor;
++    }
++}
++
+ void XclImpTabViewSettings::ReadWindow2( XclImpStream& rStrm, bool bChart )
+ {
+     if( GetBiff() == EXC_BIFF2 )
+@@ -279,6 +297,10 @@ void XclImpTabViewSettings::Finalize()
+         aViewOpt.SetOption( VOPT_OUTLINER, maData.mbShowOutline );
+         rDoc.SetViewOptions( aViewOpt );
+     }
++
++    // *** set tab bg color
++    if ( !maData.IsDefaultTabBgColor() )
++        rTabSett.maTabBgColor = maData.maTabBgColor;
+ }
+ 
+ // ============================================================================
+diff --git sc/source/filter/excel/xlview.cxx sc/source/filter/excel/xlview.cxx
+index 080075b..8580d7a 100644
+--- sc/source/filter/excel/xlview.cxx
++++ sc/source/filter/excel/xlview.cxx
+@@ -79,6 +79,7 @@ void XclTabViewData::SetDefaults()
+     mbDefGridColor = true;
+     mbShowFormulas = false;
+     mbShowGrid = mbShowHeadings = mbShowZeros = mbShowOutline = true;
++    maTabBgColor.SetColor( COL_AUTO );
+ }
+ 
+ bool XclTabViewData::IsSplit() const
+diff --git sc/source/filter/inc/xestyle.hxx sc/source/filter/inc/xestyle.hxx
+index 8485bb1..9508c8b 100644
+--- sc/source/filter/inc/xestyle.hxx
++++ sc/source/filter/inc/xestyle.hxx
+@@ -61,7 +61,8 @@ enum XclExpColorType
+     EXC_COLOR_CHARTLINE,        /// Line in a chart.
+     EXC_COLOR_CHARTAREA,        /// Area in a chart.
+     EXC_COLOR_CTRLTEXT,         /// Text color in a form control.
+-    EXC_COLOR_GRID              /// Spreadsheet grid color.
++    EXC_COLOR_GRID,              /// Spreadsheet grid color.
++    EXC_COLOR_TABBG             /// Spreadsheet tab bg color.
+ };
+ 
+ // ----------------------------------------------------------------------------
+diff --git sc/source/filter/inc/xeview.hxx sc/source/filter/inc/xeview.hxx
+index 4d8b10d..5c54ecd 100644
+--- sc/source/filter/inc/xeview.hxx
++++ sc/source/filter/inc/xeview.hxx
+@@ -134,6 +134,20 @@ private:
+     sal_uInt8           mnPane;             /// Pane identifier of this selection.
+ };
+ 
++class XclExpTabBgColor : public XclExpRecord
++{
++public:
++    explicit            XclExpTabBgColor( const XclTabViewData& rTabViewData );
++
++    /* virtual void        SaveXml( XclExpXmlStream& rStrm ); TODO Fix XML Saving Stream */
++private:
++    /** Writes the contents of the SHEETEXT record. */
++    virtual void        WriteBody( XclExpStream& rStrm );
++
++private:
++    const XclTabViewData&  mrTabViewData;             /// view settings data of current sheet.
++};
++
+ // View settings ==============================================================
+ 
+ /** Contains all view settings records for a single sheet. */
+@@ -156,6 +170,7 @@ private:
+     void                WriteScl( XclExpStream& rStrm ) const;
+     void                WritePane( XclExpStream& rStrm ) const;
+     void                WriteSelection( XclExpStream& rStrm, sal_uInt8 nPane ) const;
++    void                WriteTabBgColor( XclExpStream& rStrm ) const;
+ 
+ private:
+     XclTabViewData      maData;             /// All view settings for a sheet.
+diff --git sc/source/filter/inc/xiview.hxx sc/source/filter/inc/xiview.hxx
+index f0b393e..a54c67b 100644
+--- sc/source/filter/inc/xiview.hxx
++++ sc/source/filter/inc/xiview.hxx
+@@ -83,7 +83,8 @@ public:
+     void                ReadPane( XclImpStream& rStrm );
+     /** Reads a SELECTION record. */
+     void                ReadSelection( XclImpStream& rStrm );
+-
++    /** Reads a SHEETEXT record (Tab Color). */
++    void                ReadTabBgColor( XclImpStream& rStrm, XclImpPalette& rPal );
+     /** Sets the view settings at the current sheet or the extended sheet options object. */
+     void                Finalize();
+ 
+diff --git sc/source/filter/inc/xlview.hxx sc/source/filter/inc/xlview.hxx
+index 4a3798e..3070c28 100644
+--- sc/source/filter/inc/xlview.hxx
++++ sc/source/filter/inc/xlview.hxx
+@@ -89,6 +89,11 @@ const sal_uInt8 EXC_PANE_TOPLEFT            = 3;        /// Single, top, left, o
+ 
+ const sal_uInt16 EXC_ID_SCL                 = 0x00A0;
+ 
++// (0x0862) SHEETEXT ----------------------------------------------------------
++
++const sal_uInt16 EXC_ID_SHEETEXT            = 0x0862; 	/// header id for sheetext
++const sal_uInt8 EXC_SHEETEXT_TABCOLOR       = 0x7F; 	/// mask for tab color
++const sal_uInt16 EXC_COLOR_NOTABBG          = 0x7F;     /// Excel ignores Tab color when set to this value...
+ // Structs ====================================================================
+ 
+ /** Contains all view settings for the entire document. */
+@@ -149,6 +154,9 @@ struct XclTabViewData
+     bool                mbShowHeadings;     /// true = Show column/row headings.
+     bool                mbShowZeros;        /// true = Show zero value zells.
+     bool                mbShowOutline;      /// true = Show outlines.
++    Color               maTabBgColor;       /// Tab Color default = (COL_AUTO )
++    bool                IsDefaultTabBgColor() const { return maTabBgColor == Color(COL_AUTO) ? TRUE : FALSE; };
++    sal_uInt32          mnTabBgColorId;         /// pallette color id
+ 
+     explicit            XclTabViewData();
+                         ~XclTabViewData();
+diff --git sc/source/ui/attrdlg/scdlgfact.cxx sc/source/ui/attrdlg/scdlgfact.cxx
+index 7cf83db..c896365 100644
+--- sc/source/ui/attrdlg/scdlgfact.cxx
++++ sc/source/ui/attrdlg/scdlgfact.cxx
+@@ -65,6 +65,7 @@
+ #include "scendlg.hxx" //add for ScNewScenarioDlg
+ #include "shtabdlg.hxx" //add for ScShowTabDlg
+ #include "strindlg.hxx" //add for ScStringInputDlg
++#include "tabbgcolordlg.hxx"//add for ScTabBgColorDlg
+ #include "scuiimoptdlg.hxx" //add for ScImportOptionsDlg
+ #include "attrdlg.hxx" //add for ScAttrDlg
+ #include "hfedtdlg.hxx" //add for ScHFEditDlg
+@@ -115,6 +116,7 @@ IMPL_ABSTDLG_BASE(AbstractScDPShowDetailDlg_Impl); //add for ScDPShowDetailDlg
+ IMPL_ABSTDLG_BASE(AbstractScNewScenarioDlg_Impl); //add for ScNewScenarioDlg
+ IMPL_ABSTDLG_BASE(AbstractScShowTabDlg_Impl); //add for ScShowTabDlg
+ IMPL_ABSTDLG_BASE(AbstractScStringInputDlg_Impl); //add for ScStringInputDlg
++IMPL_ABSTDLG_BASE(AbstractScTabBgColorDlg_Impl); //add for ScTabBgColorDlg
+ IMPL_ABSTDLG_BASE(AbstractScImportOptionsDlg_Impl); //add for ScImportOptionsDlg
+ IMPL_ABSTDLG_BASE(AbstractScTextImportOptionsDlg_Impl);
+ IMPL_ABSTDLG_BASE(AbstractTabDialog_Impl); //add for ScAttrDlg, ScHFEditDlg, ScStyleDlg, ScSubTotalDlg,ScCharDlg, ScParagraphDlg, ScValidationDlg, ScSortDlg
+@@ -616,6 +618,14 @@ void AbstractScStringInputDlg_Impl::GetInputString( String& rString ) const  //a
+ }
+ //add for AbstractScStringInputDlg_Impl end
+ 
++//add for AbstractScTabBgColorDlg_Impl begin
++void AbstractScTabBgColorDlg_Impl::GetSelectedColor( Color& rColor ) const  //add for ScTabBgColorDlg
++{
++    pDlg->GetSelectedColor( rColor );
++}
++//add for AbstractScTabBgColorDlg_Impl end
++
++
+ //add for AbstractScImportOptionsDlg_Impl begin
+ void AbstractScImportOptionsDlg_Impl::GetImportOptions( ScImportOptions& rOptions ) const  //add for ScImportOptionsDlg
+ {
+@@ -1291,6 +1301,31 @@ AbstractScShowTabDlg * ScAbstractDialogFactory_Impl::CreateScShowTabDlg ( Window
+ }
+  //add for ScStringInputDlg end
+ 
++//add for ScTabBgColorDlg begin
++AbstractScTabBgColorDlg * ScAbstractDialogFactory_Impl::CreateScTabBgColorDlg (
++                                                            Window* pParent,
++                                                            const String& rTitle,
++                                                            const String& rTabBgColorNoColorText,
++                                                            const Color& rDefaultColor,
++                                                            ULONG nHelpId ,
++                                                            int nId )
++{
++ScTabBgColorDlg * pDlg=NULL;
++switch ( nId )
++{
++    case RID_SCDLG_TAB_BG_COLOR :
++        pDlg = new ScTabBgColorDlg( pParent, rTitle, rTabBgColorNoColorText, rDefaultColor, nHelpId );
++        break;
++    default:
++        break;
++}
++
++if ( pDlg )
++    return new AbstractScTabBgColorDlg_Impl( pDlg );
++return 0;
++}
++//add for ScTabBgColorDlg end
++
+ //add for ScImportOptionsDlg begin
+ AbstractScImportOptionsDlg * ScAbstractDialogFactory_Impl::CreateScImportOptionsDlg ( Window* 				pParent,
+                                                                     int nId,
+diff --git sc/source/ui/attrdlg/scdlgfact.hxx sc/source/ui/attrdlg/scdlgfact.hxx
+index 6fef61d..059cc8e 100644
+--- sc/source/ui/attrdlg/scdlgfact.hxx
++++ sc/source/ui/attrdlg/scdlgfact.hxx
+@@ -61,6 +61,7 @@ class ScDPShowDetailDlg;
+ class ScNewScenarioDlg;
+ class ScShowTabDlg;
+ class ScStringInputDlg;
++class ScTabBgColorDlg;
+ class ScImportOptionsDlg;
+ class SfxTabDialog;
+ class ScSortWarningDlg;
+@@ -338,6 +339,12 @@ class AbstractScStringInputDlg_Impl :  public AbstractScStringInputDlg  //add fo
+     virtual void GetInputString( String& rString ) const;
+ };
+ 
++class AbstractScTabBgColorDlg_Impl :  public AbstractScTabBgColorDlg  //add for ScTabBgColorDlg
++{
++    DECL_ABSTDLG_BASE( AbstractScTabBgColorDlg_Impl, ScTabBgColorDlg )
++    virtual void GetSelectedColor( Color& rColor ) const;
++};
++
+ class AbstractScImportOptionsDlg_Impl : public AbstractScImportOptionsDlg  //add for ScImportOptionsDlg
+ {
+     DECL_ABSTDLG_BASE( AbstractScImportOptionsDlg_Impl, ScImportOptionsDlg)
+@@ -521,6 +528,14 @@ public:
+                                                                 const String& rDefault,
+                                                                 ULONG nHelpId ,
+                                                                 int nId );
++
++    virtual AbstractScTabBgColorDlg * CreateScTabBgColorDlg (  Window* pParent, //add for ScStringInputDlg
++                                                                const String& rTitle, //Dialog Title
++                                                                const String& rTabBgColorNoColorText, //Label for no tab color
++                                                                const Color& rDefaultColor, //Currently selected Color
++                                                                ULONG nHelpId ,
++                                                                int nId );
++
+     virtual AbstractScImportOptionsDlg * CreateScImportOptionsDlg ( Window* 				pParent, //add for ScImportOptionsDlg
+                                                                     int nId,
+                                                                     BOOL                    bAscii = TRUE,
+diff --git sc/source/ui/docshell/docfunc.cxx sc/source/ui/docshell/docfunc.cxx
+index 9b8b4f7..0467a11 100644
+--- sc/source/ui/docshell/docfunc.cxx
++++ sc/source/ui/docshell/docfunc.cxx
+@@ -2855,6 +2855,104 @@ BOOL ScDocFunc::RenameTable( SCTAB nTab, const String& rName, BOOL bRecord, BOOL
+     return bSuccess;
+ }
+ 
++BOOL ScDocFunc::SetTabBgColor( SCTAB nTab, const Color& rColor, BOOL bRecord, BOOL bApi )
++{
++
++    ScDocument* pDoc = rDocShell.GetDocument();
++    if (bRecord && !pDoc->IsUndoEnabled())
++        bRecord = FALSE;
++    if ( !pDoc->IsDocEditable() || pDoc->IsTabProtected(nTab) )
++    {
++        if (!bApi)
++            rDocShell.ErrorMessage(STR_PROTECTIONERR); //TODO Check to see what this string is...
++        return FALSE;
++    }
++
++    ScViewData* pViewData = rDocShell.GetViewData();
++
++    Color aOldTabBgColor;
++    aOldTabBgColor = pViewData->GetTabBgColor(nTab);
++
++    BOOL bSuccess = FALSE;
++    pViewData->SetTabBgColor(rColor, nTab);
++    if ( pViewData->GetTabBgColor( nTab ) == rColor)
++        bSuccess = TRUE;
++    if (bSuccess)
++    {
++        if (bRecord)
++        {
++            rDocShell.GetUndoManager()->AddUndoAction(
++                new ScUndoSetTabBgColor( &rDocShell, nTab, aOldTabBgColor, rColor));
++        }
++        rDocShell.PostPaintExtras();
++        ScDocShellModificator aModificator( rDocShell );
++        aModificator.SetDocumentModified();
++        SFX_APP()->Broadcast( SfxSimpleHint( SC_HINT_TABLES_CHANGED ) );
++
++        bSuccess = TRUE;
++    }
++    return bSuccess;
++}
++
++BOOL ScDocFunc::SetTabBgColor( ScUndoSetTabBgColorInfoList* rUndoSetTabBgColorInfoList, BOOL bRecord, BOOL bApi )
++{
++    ScDocument* pDoc = rDocShell.GetDocument();
++    if (bRecord && !pDoc->IsUndoEnabled())
++        bRecord = FALSE;
++    if ( !pDoc->IsDocEditable() )
++    {
++        if (!bApi)
++            rDocShell.ErrorMessage(STR_PROTECTIONERR); //TODO Get a better String Error...
++        return FALSE;
++    }
++
++    ScViewData* pViewData = rDocShell.GetViewData();
++    USHORT nTab;
++    Color aNewTabBgColor;
++    ScUndoSetTabBgColorInfo* rUndoSetTabBgColorInfo;
++    BOOL bSuccess = TRUE;
++    USHORT nTabProtectCount = 0;
++    for ( USHORT i=0; i < rUndoSetTabBgColorInfoList->Count(); i++ )
++    {
++        rUndoSetTabBgColorInfo = rUndoSetTabBgColorInfoList->GetObject(i);
++        nTab = rUndoSetTabBgColorInfo->nTabId;
++        if ( !pDoc->IsTabProtected(nTab) )
++        {
++            aNewTabBgColor = rUndoSetTabBgColorInfo->aNewTabBgColor;
++            rUndoSetTabBgColorInfo->aOldTabBgColor = pViewData->GetTabBgColor(nTab);
++            pViewData->SetTabBgColor(aNewTabBgColor, nTab);
++            if ( pViewData->GetTabBgColor( nTab ) != aNewTabBgColor)
++            {
++                bSuccess = FALSE;
++                break;
++            }
++        }
++        else
++        {
++            nTabProtectCount++;
++        }
++    }
++    if ( nTabProtectCount == rUndoSetTabBgColorInfoList->Count() )
++    {
++        if (!bApi)
++            rDocShell.ErrorMessage(STR_PROTECTIONERR); //TODO Get a better String Error...
++        return FALSE;
++    }
++    if (bSuccess)
++    {
++        if (bRecord)
++        {
++            rDocShell.GetUndoManager()->AddUndoAction(
++                new ScUndoSetTabBgColor( &rDocShell, rUndoSetTabBgColorInfoList));
++        }
++        rDocShell.PostPaintExtras();
++        ScDocShellModificator aModificator( rDocShell );
++        aModificator.SetDocumentModified();
++        SFX_APP()->Broadcast( SfxSimpleHint( SC_HINT_TABLES_CHANGED ) );
++    }
++    return bSuccess;
++}
++
+ //------------------------------------------------------------------------
+ 
+ //!	SetWidthOrHeight - noch doppelt zu ViewFunc !!!!!!
+diff --git sc/source/ui/inc/docfunc.hxx sc/source/ui/inc/docfunc.hxx
+index b02cf98..49a242a 100644
+--- sc/source/ui/inc/docfunc.hxx
++++ sc/source/ui/inc/docfunc.hxx
+@@ -34,6 +34,7 @@
+ #include <tools/link.hxx>
+ #include "global.hxx"
+ #include "formula/grammar.hxx"
++#include "tabbgcolor.hxx"
+ 
+ class ScEditEngineDefaulter;
+ class SdrUndoAction;
+@@ -120,6 +121,10 @@ public:
+     BOOL			RenameTable( SCTAB nTab, const String& rName, BOOL bRecord, BOOL bApi );
+     BOOL			DeleteTable( SCTAB nTab, BOOL bRecord, BOOL bApi );
+ 
++    BOOL            SetTabBgColor( SCTAB nTab, const Color& rColor, BOOL bRecord, BOOL bApi );
++    BOOL            SetTabBgColor( ScUndoSetTabBgColorInfoList* rUndoSetTabBgColorInfoList,
++                                    BOOL bRecord, BOOL bApi );
++
+     BOOL			SetTableVisible( SCTAB nTab, BOOL bVisible, BOOL bApi );
+ 
+     BOOL			SetLayoutRTL( SCTAB nTab, BOOL bRTL, BOOL bApi );
+diff --git sc/source/ui/inc/miscdlgs.hrc sc/source/ui/inc/miscdlgs.hrc
+index 154d310..97cd0ca 100644
+--- sc/source/ui/inc/miscdlgs.hrc
++++ sc/source/ui/inc/miscdlgs.hrc
+@@ -184,3 +184,9 @@
+ #define BTN_GROUP_ROWS	3
+ #define STR_GROUP		1
+ #define STR_UNGROUP		2
++
++// Tab Bg Color
++#define TAB_BG_COLOR_CT_BORDER 1
++#define TAB_BG_COLOR_SET_BGDCOLOR 2
++#define TAB_BG_COLOR_GB_BGDCOLOR 3
++
+diff --git sc/source/ui/inc/tabbgcolordlg.hxx sc/source/ui/inc/tabbgcolordlg.hxx
+new file mode 100644
+index 0000000..235a06e
+--- /dev/null
++++ sc/source/ui/inc/tabbgcolordlg.hxx
+@@ -0,0 +1,80 @@
++/*************************************************************************
++ *
++ * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
++ * 
++ * Copyright 2008 by Sun Microsystems, Inc.
++ *
++ * OpenOffice.org - a multi-platform office productivity suite
++ *
++ * $RCSfile: tabbgcolordlg.hxx,v $
++ * $Revision: 1.0 $
++ *
++ * This file is part of OpenOffice.org.
++ *
++ * OpenOffice.org is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU Lesser General Public License version 3
++ * only, as published by the Free Software Foundation.
++ *
++ * OpenOffice.org is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU Lesser General Public License version 3 for more details
++ * (a copy is included in the LICENSE file that accompanied this code).
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * version 3 along with OpenOffice.org.  If not, see
++ * <http://www.openoffice.org/license.html>
++ * for a copy of the LGPLv3 License.
++ *
++ ************************************************************************/
++
++#ifndef SC_TABBGCOLORDLG_HXX
++#define SC_TABBGCOLORDLG_HXX
++
++#include <vcl/dialog.hxx>
++#include <vcl/fixed.hxx>
++#include <vcl/imagebtn.hxx>
++#include <svtools/valueset.hxx>
++
++//------------------------------------------------------------------------
++
++class ScTabBgColorDlg : public ModalDialog
++{
++public:
++        ScTabBgColorDlg(    Window* pParent,
++                            const String& rTitle,
++                            const String& rTabBgColorNoColorText,
++                            const Color& rDefaultColor,
++                            ULONG nHelpId );
++        ~ScTabBgColorDlg();
++
++        void GetSelectedColor( Color& rColor ) const;
++        //void SelectColor( const Color& rColor2 ) const;
++private:
++    class ScTabBgColorValueSet : public ValueSet
++    {
++
++    public:
++            ScTabBgColorValueSet(Control* pParent, const ResId& rResId, ScTabBgColorDlg* pTabBgColorDlg);
++
++            virtual void KeyInput( const KeyEvent& rKEvt );
++    private:
++        ScTabBgColorDlg* aTabBgColorDlg;
++    };
++        Control                 aBorderWin;
++        ScTabBgColorValueSet    aTabBgColorSet;
++        FixedLine               aTabBgColorBox;
++        OKButton                aBtnOk;
++        CancelButton            aBtnCancel;
++        HelpButton              aBtnHelp;
++        Color                   aTabBgColor;
++        const String            aTabBgColorNoColorText;
++        ULONG                   aHelpId;
++
++        void            FillColorValueSets_Impl();
++
++        DECL_LINK( TabBgColorDblClickHdl_Impl, ValueSet* );
++        DECL_LINK( TabBgColorOKHdl_Impl, OKButton* pBtn );
++};
++
++#endif // SC_TABBGCOLORDLG_HXX
+diff --git sc/source/ui/inc/undotab.hxx sc/source/ui/inc/undotab.hxx
+index 7f18fdb..a0e954b 100644
+--- sc/source/ui/inc/undotab.hxx
++++ sc/source/ui/inc/undotab.hxx
+@@ -35,6 +35,7 @@
+ #include "markdata.hxx"
+ #include "formula/grammar.hxx"
+ #include <tools/color.hxx>
++#include "tabbgcolor.hxx"
+ 
+ #ifndef _SVSTDARR_SHORTS
+ 
+@@ -226,6 +227,37 @@ private:
+     void DoChange() const;
+ };
+ 
++class ScUndoSetTabBgColor: public ScSimpleUndo
++{
++public:
++                    TYPEINFO();
++                    ScUndoSetTabBgColor(
++                            ScDocShell* pNewDocShell,
++                            SCTAB nT,
++                            const Color& aOTabBgColor,
++                            const Color& aNTabBgColor);
++                    ScUndoSetTabBgColor(
++                            ScDocShell* pNewDocShell,
++                            ScUndoSetTabBgColorInfoList* pUndoSetTabBgColorInfoList);
++    virtual         ~ScUndoSetTabBgColor();
++
++    virtual void    Undo();
++    virtual void    Redo();
++    virtual void    Repeat(SfxRepeatTarget& rTarget);
++    virtual BOOL    CanRepeat(SfxRepeatTarget& rTarget) const;
++
++virtual String	GetComment() const;
++
++private:
++    SCTAB   nTab;
++    Color   aOldTabBgColor;
++    Color   aNewTabBgColor;
++    ScUndoSetTabBgColorInfoList* aUndoSetTabBgColorInfoList;
++    BOOL    bIsMultipleUndo;
++
++    void DoChange( SCTAB nTab, const Color& rTabBgColor ) const;
++    void DoChange( BOOL bUndoType ) const;
++};
+ 
+ class ScUndoMakeScenario: public ScSimpleUndo
+ {
+diff --git sc/source/ui/inc/viewdata.hxx sc/source/ui/inc/viewdata.hxx
+index 024eac3..72fa6e5 100644
+--- sc/source/ui/inc/viewdata.hxx
++++ sc/source/ui/inc/viewdata.hxx
+@@ -144,6 +144,9 @@ private:
+ 
+     BOOL			bOldCurValid;				// "virtuelle" Cursorpos. bei zusammengefassten
+ 
++    Color           aTabBgColor;
++    BOOL            IsDefaultTabBgColor() const {return aTabBgColor == Color( COL_AUTO ) ? TRUE : FALSE ;};
++
+                     ScViewDataTable();
+                     ~ScViewDataTable();
+ 
+@@ -276,6 +279,10 @@ public:
+     void			CopyTab( SCTAB nSrcTab, SCTAB nDestTab );
+     void			MoveTab( SCTAB nSrcTab, SCTAB nDestTab );
+ 
++    void            SetTabBgColor( Color rTabBgColor, SCTAB nTab );
++    BOOL            IsDefaultTabBgColor( SCTAB nTab ) const;
++    Color           GetTabBgColor( SCTAB nTab ) const;
++
+     SCTAB			GetRefTabNo() const 					{ return nRefTabNo; }
+     void			SetRefTabNo( SCTAB nNewTab )			{ nRefTabNo = nNewTab; }
+ 
+diff --git sc/source/ui/inc/viewfunc.hxx sc/source/ui/inc/viewfunc.hxx
+index 3d703da..8e41aea 100644
+--- sc/source/ui/inc/viewfunc.hxx
++++ sc/source/ui/inc/viewfunc.hxx
+@@ -32,6 +32,8 @@
+ 
+ #include "tabview.hxx"
+ 
++#include "tabbgcolor.hxx"
++
+ #ifndef _SVSTDARR_SHORTS
+ #define _SVSTDARR_SHORTS
+ #include <svtools/svstdarr.hxx>
+@@ -276,6 +278,9 @@ public:
+                                     SCTAB nCount, const SCTAB* pSrcTabs,
+                                     BOOL bLink,SCTAB nTab);
+ 
++    BOOL            SetTabBgColor( const Color& rColor, SCTAB nTabNr );
++    BOOL            SetTabBgColor( ScUndoSetTabBgColorInfoList* rUndoSetTabBgColorInfoList );
++
+     void			InsertTableLink( const String& rFile,
+                                         const String& rFilter, const String& rOptions,
+                                         const String& rTabName );
+diff --git sc/source/ui/miscdlgs/makefile.mk sc/source/ui/miscdlgs/makefile.mk
+index 66e1f33..a1ad212 100644
+--- sc/source/ui/miscdlgs/makefile.mk
++++ sc/source/ui/miscdlgs/makefile.mk
+@@ -50,6 +50,7 @@ SLOFILES =  \
+     $(SLO)$/delcodlg.obj		\
+     $(SLO)$/inscodlg.obj		\
+     $(SLO)$/strindlg.obj		\
++    $(SLO)$/tabbgcolordlg.obj   \
+     $(SLO)$/mtrindlg.obj		\
+     $(SLO)$/lbseldlg.obj		\
+     $(SLO)$/filldlg.obj			\
+diff --git sc/source/ui/miscdlgs/tabbgcolordlg.cxx sc/source/ui/miscdlgs/tabbgcolordlg.cxx
+new file mode 100644
+index 0000000..8e9987e
+--- /dev/null
++++ sc/source/ui/miscdlgs/tabbgcolordlg.cxx
+@@ -0,0 +1,197 @@
++/*************************************************************************
++ *
++ * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
++ * 
++ * Copyright 2008 by Sun Microsystems, Inc.
++ *
++ * OpenOffice.org - a multi-platform office productivity suite
++ *
++ * $RCSfile: tabbgcolordlg.cxx,v $
++ * $Revision: 1.0 $
++ *
++ * This file is part of OpenOffice.org.
++ *
++ * OpenOffice.org is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU Lesser General Public License version 3
++ * only, as published by the Free Software Foundation.
++ *
++ * OpenOffice.org is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU Lesser General Public License version 3 for more details
++ * (a copy is included in the LICENSE file that accompanied this code).
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * version 3 along with OpenOffice.org.  If not, see
++ * <http://www.openoffice.org/license.html>
++ * for a copy of the LGPLv3 License.
++ *
++ ************************************************************************/
++
++// MARKER(update_precomp.py): autogen include statement, do not remove
++#include "precompiled_sc.hxx"
++
++#undef SC_DLLIMPLEMENTATION
++
++//------------------------------------------------------------------
++
++#include <tools/debug.hxx>
++#include <tools/color.hxx>
++#include <sfx2/objsh.hxx>
++#include <svx/xtable.hxx>
++#include <svx/drawitem.hxx>
++#include <svtools/pathoptions.hxx>
++#include <tools/resid.hxx>
++#include "tabbgcolordlg.hxx"
++#include "scresid.hxx"
++#include "miscdlgs.hrc"
++#include <svx/svxitems.hrc>
++
++//==================================================================
++
++#define HDL(hdl) LINK(this,ScTabBgColorDlg,hdl)
++
++__EXPORT ScTabBgColorDlg::ScTabBgColorDlg( Window*         pParent,
++                                    const String&   rTitle,
++                                    const String&   rTabBgColorNoColorText,
++                                    const Color&    rDefaultColor,
++                                    ULONG nHelpId ) :
++    ModalDialog    ( pParent, ScResId( RID_SCDLG_TAB_BG_COLOR ) ),
++    aBorderWin              ( this, ScResId( TAB_BG_COLOR_CT_BORDER ) ),
++    aTabBgColorSet          ( &aBorderWin, ScResId( TAB_BG_COLOR_SET_BGDCOLOR ), this ),
++    aTabBgColorBox          ( this, ScResId( TAB_BG_COLOR_GB_BGDCOLOR ) ),
++    aBtnOk                  ( this, ScResId( BTN_OK ) ),
++    aBtnCancel              ( this, ScResId( BTN_CANCEL ) ),
++    aBtnHelp                ( this, ScResId( BTN_HELP ) ),
++    aTabBgColorNoColorText  ( rTabBgColorNoColorText ),
++    aTabBgColor             ( rDefaultColor ),
++    aHelpId                 ( nHelpId )
++
++{
++    SetHelpId( nHelpId );
++    this->SetText( rTitle );
++    this->SetStyle(GetStyle() | WB_BORDER | WB_STDFLOATWIN | WB_3DLOOK | WB_DIALOGCONTROL | WB_SYSTEMWINDOW | WB_STANDALONE | WB_HIDE);
++    //TODO: Assign Help ID's to all controls...
++    aTabBgColorBox.SetText(rTitle);
++    FillColorValueSets_Impl();
++    aTabBgColorSet.SetDoubleClickHdl( HDL(TabBgColorDblClickHdl_Impl) );
++    aBtnOk.SetClickHdl( HDL(TabBgColorOKHdl_Impl) );
++    FreeResource();
++}
++
++//------------------------------------------------------------------------
++
++void ScTabBgColorDlg::GetSelectedColor( Color& rColor ) const
++{
++    rColor = this->aTabBgColor;
++}
++
++__EXPORT ScTabBgColorDlg::~ScTabBgColorDlg()
++{
++}
++
++void ScTabBgColorDlg::FillColorValueSets_Impl()
++{
++    SfxObjectShell* pDocSh = SfxObjectShell::Current();
++    const SfxPoolItem* pItem = NULL;
++    XColorTable* pColorTable = NULL;
++    const Size aSize15x15 = Size( 15, 15 );
++    const Size aSize10x10 = Size( 10, 10 );
++    const Size aSize5x5 = Size( 5, 5 );
++    USHORT nSelectedItem = 0;
++    FASTBOOL bOwn = FALSE;
++
++    DBG_ASSERT( pDocSh, "DocShell not found!" );
++
++    if ( pDocSh && ( 0 != ( pItem = pDocSh->GetItem( SID_COLOR_TABLE ) ) ) )
++        pColorTable = ( (SvxColorTableItem*)pItem )->GetColorTable();
++    if ( !pColorTable )
++    {
++        bOwn = TRUE;
++        pColorTable = new XColorTable( SvtPathOptions().GetPalettePath() );
++    }
++    if ( pColorTable )
++    {
++        short i = 0;
++        long nCount = pColorTable->Count();
++        XColorEntry* pEntry = NULL;
++        Color aColWhite( COL_WHITE );
++        String aStrWhite( ScResId( RID_SVXITEMS_COLOR_WHITE ) );
++        WinBits nBits = ( aTabBgColorSet.GetStyle() | WB_NAMEFIELD | WB_ITEMBORDER | WB_NONEFIELD | WB_3DLOOK | WB_NO_DIRECTSELECT | WB_NOPOINTERFOCUS);
++        aTabBgColorSet.SetText( aTabBgColorNoColorText );
++        aTabBgColorSet.SetStyle( nBits );
++        for ( i = 0; i < nCount; i++ )
++        {
++            pEntry = pColorTable->GetColor(i);
++            aTabBgColorSet.InsertItem( i + 1, pEntry->GetColor(), pEntry->GetName() );
++            if (pEntry->GetColor() == aTabBgColor)
++                nSelectedItem = (i + 1);
++        }
++
++        while ( i < 80 )
++        {
++            aTabBgColorSet.InsertItem( i + 1, aColWhite, aStrWhite );
++            i++;
++        }
++
++        if ( nCount > 80 )
++        {
++            aTabBgColorSet.SetStyle( nBits | WB_VSCROLL );
++        }
++    }
++    aTabBgColorSet.SetColCount( 10 );
++    aTabBgColorSet.SetLineCount( 10 );
++    aTabBgColorSet.CalcWindowSizePixel( aSize15x15 );
++    aTabBgColorSet.Format();
++    aTabBgColorSet.SelectItem(nSelectedItem);
++    aTabBgColorSet.Resize();
++    if ( bOwn )
++        delete pColorTable;
++}
++
++IMPL_LINK( ScTabBgColorDlg, TabBgColorDblClickHdl_Impl, ValueSet*, EMPTYARG )
++/*
++    Handler, called when color selection is changed
++*/
++{
++    USHORT nItemId = aTabBgColorSet.GetSelectItemId();
++    Color aColor = nItemId ? ( aTabBgColorSet.GetItemColor( nItemId ) ) : Color( COL_AUTO );
++    aTabBgColor = aColor;
++    EndDialog( TRUE );
++    return 0;
++}
++
++IMPL_LINK( ScTabBgColorDlg, TabBgColorOKHdl_Impl, OKButton*, EMPTYARG )
++{
++
++//    Handler, called when the OK button is pushed
++
++    USHORT nItemId = aTabBgColorSet.GetSelectItemId();
++    Color aColor = nItemId ? ( aTabBgColorSet.GetItemColor( nItemId ) ) : Color( COL_AUTO );
++    aTabBgColor = aColor;
++    EndDialog( TRUE );
++    return 0;
++}
++
++__EXPORT ScTabBgColorDlg::ScTabBgColorValueSet::ScTabBgColorValueSet( Control* pParent, const ResId& rResId, ScTabBgColorDlg* pTabBgColorDlg ) :
++    ValueSet(pParent, rResId)
++{
++    aTabBgColorDlg = pTabBgColorDlg;
++}
++
++void ScTabBgColorDlg::ScTabBgColorValueSet::KeyInput( const KeyEvent& rKEvt )
++{
++    switch ( rKEvt.GetKeyCode().GetCode() )
++    {
++        case KEY_SPACE:
++        case KEY_RETURN:
++        {
++            USHORT nItemId = GetSelectItemId();
++            const Color& aColor = nItemId ? ( GetItemColor( nItemId ) ) : Color( COL_AUTO );
++            aTabBgColorDlg->aTabBgColor = aColor;
++            aTabBgColorDlg->EndDialog(TRUE);
++        }
++        break;
++    }
++    ValueSet::KeyInput(rKEvt);
++}
+diff --git sc/source/ui/src/globstr.src sc/source/ui/src/globstr.src
+index c5b8cfd..2ae00ca 100644
+--- sc/source/ui/src/globstr.src
++++ sc/source/ui/src/globstr.src
+@@ -1130,6 +1130,14 @@ Resource RID_GLOBSTR
+     {
+         Text [ en-US ] = "Rename Sheet" ;
+     };
++    String STR_UNDO_SET_TAB_BG_COLOR
++    {
++        Text [ en-US ] = "Color Tab" ;
++    };
++    String STR_UNDO_SET_MULTI_TAB_BG_COLOR
++    {
++        Text [ en-US ] = "Color Tabs" ;
++    };
+     String STR_UNDO_MOVE_TAB
+     {
+         Text [ en-US ] = "Move Sheets" ;
+diff --git sc/source/ui/src/miscdlgs.src sc/source/ui/src/miscdlgs.src
+index da8cb03..ef2a8ac 100644
+--- sc/source/ui/src/miscdlgs.src
++++ sc/source/ui/src/miscdlgs.src
+@@ -546,6 +546,96 @@ ModalDialog RID_SCDLG_STRINPUT
+         Size = MAP_APPFONT ( 110 , 8 ) ;
+     };
+ };
++ModalDialog RID_SCDLG_TAB_BG_COLOR
++{
++    OutputSize = TRUE ;
++    SVLook = TRUE ;
++    Size = MAP_APPFONT ( 118 , 167 ) ;
++    Moveable = TRUE ;
++    Closeable = TRUE ;
++    Control TAB_BG_COLOR_CT_BORDER
++    {
++        Border = TRUE ;
++        Pos = MAP_APPFONT ( 1 , 1 ) ; //12, 32
++        Size = MAP_APPFONT ( 116+2 , 145+2 ) ;
++        DialogControl = TRUE;
++    };
++    Control TAB_BG_COLOR_SET_BGDCOLOR
++    {
++        // * HelpId = HID_BACKGROUND_CTL_BGDCOLORSET ;
++        Hide = FALSE ;
++        Pos = MAP_APPFONT ( 0 , 0 ) ;
++        Size = MAP_APPFONT ( 116 , 145 ) ;
++        TabStop = TRUE ;
++    };
++    CancelButton BTN_CANCEL
++    {
++        Pos = MAP_APPFONT ( 82 , 151 ) ;
++        Size = MAP_APPFONT ( 35 , 14 ) ;
++        TabStop = TRUE ;
++        DefButton = FALSE ;
++    };
++    OKButton BTN_OK
++    {
++        Pos = MAP_APPFONT ( 45 , 151 ) ;
++        Size = MAP_APPFONT ( 35 , 14 ) ;
++        TabStop = TRUE ;
++        DefButton = TRUE ;
++    };
++    HelpButton BTN_HELP
++    {
++        Pos = MAP_APPFONT ( 2 , 151 ) ;
++        Size = MAP_APPFONT ( 35 , 14 ) ;
++        TabStop = TRUE ;
++        DefButton = FALSE ;
++    };
++};
++/*
++ModalDialog RID_SCDLG_TAB_BG_COLOR
++{
++    OutputSize = TRUE ;
++    SVLook = TRUE ;
++    Size = MAP_APPFONT ( 180 , 150 ) ;
++    Moveable = TRUE ;
++    Closeable = TRUE ;
++    Control TAB_BG_COLOR_CT_BORDER
++    {
++        Border = TRUE ;
++        Pos = MAP_APPFONT ( 1 , 1 ) ; //12, 32
++        Size = MAP_APPFONT ( 116+2 , 145+2 ) ;
++        DialogControl = TRUE;
++    };
++    Control TAB_BG_COLOR_SET_BGDCOLOR
++    {
++        // * HelpId = HID_BACKGROUND_CTL_BGDCOLORSET ;
++        Hide = FALSE ;
++        Pos = MAP_APPFONT ( 0 , 0 ) ;
++        Size = MAP_APPFONT ( 116 , 145 ) ;
++        TabStop = TRUE ;
++    };
++    OKButton BTN_OK
++    {
++        Pos = MAP_APPFONT ( 125 , 50 ) ;
++        Size = MAP_APPFONT ( 50 , 14 ) ;
++        TabStop = TRUE ;
++        DefButton = TRUE ;
++    };
++    CancelButton BTN_CANCEL
++    {
++        Pos = MAP_APPFONT ( 125 , 67 ) ;
++        Size = MAP_APPFONT ( 50 , 14 ) ;
++        TabStop = TRUE ;
++        DefButton = FALSE ;
++    };
++    HelpButton BTN_HELP
++    {
++        Pos = MAP_APPFONT ( 125 , 84 ) ;
++        Size = MAP_APPFONT ( 50 , 14 ) ;
++        TabStop = TRUE ;
++        DefButton = FALSE ;
++    };
++};
++*/
+ /*
+ ModalDialog RID_SCDLG_MTRINPUT
+ {
+diff --git sc/source/ui/src/popup.src sc/source/ui/src/popup.src
+index 05d10b9..5f19299 100644
+--- sc/source/ui/src/popup.src
++++ sc/source/ui/src/popup.src
+@@ -193,6 +193,15 @@ Menu RID_POPUP_TAB
+             HelpId = FID_TAB_RTL ;
+             Text [ en-US ] = "S~heet Right-To-Left" ;
+         };
++        //------------------------------
++        MenuItem { Separator = TRUE ; };
++        //------------------------------
++        MenuItem
++        {
++            Identifier = FID_TAB_MENU_SET_TAB_BG_COLOR ;
++            HelpId = FID_TAB_MENU_SET_TAB_BG_COLOR ;
++            Text [ en-US ] = "~Tab Color..." ;
++        };
+     };
+ };
+ 
+diff --git sc/source/ui/src/scstring.src sc/source/ui/src/scstring.src
+index c50a304..6fb17a3 100644
+--- sc/source/ui/src/scstring.src
++++ sc/source/ui/src/scstring.src
+@@ -283,6 +283,14 @@ String SCSTR_RENAMETAB
+ {
+     Text [ en-US ] = "Rename Sheet" ;
+ };
++String SCSTR_SET_TAB_BG_COLOR
++{
++    Text [ en-US ] = "Tab Color" ;
++};
++String SCSTR_NO_TAB_BG_COLOR
++{
++    Text [ en-US ] = "Default" ;
++};
+ String SCSTR_RENAMEOBJECT
+ {
+     Text [ en-US ] = "Name Object";
+diff --git sc/source/ui/undo/undotab.cxx sc/source/ui/undo/undotab.cxx
+index 5650376..0e56405 100644
+--- sc/source/ui/undo/undotab.cxx
++++ sc/source/ui/undo/undotab.cxx
+@@ -70,6 +70,9 @@
+ #include "drwlayer.hxx"
+ #include "scresid.hxx"
+ 
++// for set tab bg color
++#include "viewdata.hxx"
++
+ extern BOOL bDrawIsInUndo;			//! irgendwo als Member !!!
+ 
+ using namespace com::sun::star;
+@@ -93,6 +96,7 @@ TYPEINIT1(ScUndoScenarioFlags,	SfxUndoAction);
+ TYPEINIT1(ScUndoRenameObject,	SfxUndoAction);
+ TYPEINIT1(ScUndoLayoutRTL,		SfxUndoAction);
+ //UNUSED2009-05 TYPEINIT1(ScUndoSetGrammar,		SfxUndoAction);
++TYPEINIT1(ScUndoSetTabBgColor,  SfxUndoAction);
+ 
+ 
+ // -----------------------------------------------------------------------
+@@ -779,6 +783,113 @@ BOOL ScUndoCopyTab::CanRepeat(SfxRepeatTarget& /* rTarget */) const
+     return FALSE;
+ }
+ 
++//---------------------------------------------------------------------------------
++//
++//      Tab Bg Color
++//
++
++ScUndoSetTabBgColor::ScUndoSetTabBgColor( ScDocShell* pNewDocShell,
++                                        SCTAB nT,
++                                        const Color& aOTabBgColor,
++                                        const Color& aNTabBgColor) :
++    ScSimpleUndo( pNewDocShell ),
++    nTab 	 ( nT ),
++    bIsMultipleUndo ( FALSE ),
++    aUndoSetTabBgColorInfoList ( NULL )
++{
++    aOldTabBgColor = aOTabBgColor;
++    aNewTabBgColor = aNTabBgColor;
++}
++
++ScUndoSetTabBgColor::ScUndoSetTabBgColor( ScDocShell* pNewDocShell,
++                                        ScUndoSetTabBgColorInfoList* pUndoSetTabBgColorInfoList) :
++    ScSimpleUndo( pNewDocShell ),
++    bIsMultipleUndo ( TRUE )
++{
++    aUndoSetTabBgColorInfoList = pUndoSetTabBgColorInfoList;
++}
++
++__EXPORT ScUndoSetTabBgColor::~ScUndoSetTabBgColor()
++{
++}
++
++String __EXPORT ScUndoSetTabBgColor::GetComment() const
++{
++    if (bIsMultipleUndo && aUndoSetTabBgColorInfoList && aUndoSetTabBgColorInfoList->Count() > 1)
++        return ScGlobal::GetRscString( STR_UNDO_SET_MULTI_TAB_BG_COLOR );
++    return ScGlobal::GetRscString( STR_UNDO_SET_TAB_BG_COLOR );
++}
++
++void ScUndoSetTabBgColor::DoChange( SCTAB nTabP, const Color& rTabBgColor ) const
++{
++    if (bIsMultipleUndo)
++        return;
++    ScTabViewShell* pViewShell = ScTabViewShell::GetActiveViewShell();
++    if (pViewShell)
++    {
++        ScViewData* pViewData = pViewShell->GetViewData();
++        if (pViewData)
++        {
++            pViewData->SetTabBgColor( rTabBgColor, nTabP );
++            pDocShell->PostPaintExtras();
++            pDocShell->PostDataChanged();
++            SFX_APP()->Broadcast( SfxSimpleHint( SC_HINT_TABLES_CHANGED ) );
++            pViewShell->UpdateInputHandler();
++        }
++    }
++}
++
++void ScUndoSetTabBgColor::DoChange(BOOL bUndoType) const
++{
++    if (!bIsMultipleUndo)
++        return;
++    ScTabViewShell* pViewShell = ScTabViewShell::GetActiveViewShell();
++    if (pViewShell)
++    {
++        ScViewData* pViewData = pViewShell->GetViewData();
++        if (pViewData)
++        {
++            ScUndoSetTabBgColorInfo* aUndoSetTabBgColorInfo=NULL;
++            for (USHORT i=0; i < aUndoSetTabBgColorInfoList->Count(); i++)
++            {
++                aUndoSetTabBgColorInfo = aUndoSetTabBgColorInfoList->GetObject(i);
++                pViewData->SetTabBgColor( 
++                    bUndoType ? aUndoSetTabBgColorInfo->aOldTabBgColor : aUndoSetTabBgColorInfo->aNewTabBgColor,
++                    aUndoSetTabBgColorInfo->nTabId);
++            }
++            pDocShell->PostPaintExtras();
++            pDocShell->PostDataChanged();
++            SFX_APP()->Broadcast( SfxSimpleHint( SC_HINT_TABLES_CHANGED ) );
++            pViewShell->UpdateInputHandler();
++        }
++    }
++}
++
++void __EXPORT ScUndoSetTabBgColor::Undo()
++{
++    if ( bIsMultipleUndo )
++        DoChange(TRUE);
++    else
++        DoChange(nTab, aOldTabBgColor);
++}
++
++void __EXPORT ScUndoSetTabBgColor::Redo()
++{
++    if ( bIsMultipleUndo )
++        DoChange(FALSE);
++    else
++        DoChange(nTab, aNewTabBgColor);
++}
++
++void __EXPORT ScUndoSetTabBgColor::Repeat(SfxRepeatTarget& /* rTarget */)
++{
++	//	No Repeat
++}
++
++BOOL __EXPORT ScUndoSetTabBgColor::CanRepeat(SfxRepeatTarget& /* rTarget */) const
++{
++    return FALSE;
++}
+ 
+ // -----------------------------------------------------------------------
+ //
+diff --git sc/source/ui/view/scextopt.cxx sc/source/ui/view/scextopt.cxx
+index 586f934..fd28d95 100644
+--- sc/source/ui/view/scextopt.cxx
++++ sc/source/ui/view/scextopt.cxx
+@@ -61,7 +61,8 @@ ScExtTabSettings::ScExtTabSettings() :
+     mnPageZoom( 0 ),
+     mbSelected( false ),
+     mbFrozenPanes( false ),
+-    mbPageMode( false )
++    mbPageMode( false ),
++    maTabBgColor( COL_AUTO)
+ {
+ }
+ 
+diff --git sc/source/ui/view/tabcont.cxx sc/source/ui/view/tabcont.cxx
+index 1040c10..ec447b1 100644
+--- sc/source/ui/view/tabcont.cxx
++++ sc/source/ui/view/tabcont.cxx
+@@ -69,6 +69,7 @@ ScTabControl::ScTabControl( Window* pParent, ScViewData* pData ) :
+     ScDocument* pDoc = pViewData->GetDocument();
+ 
+     String aString;
++    Color aTabBgColor;
+     SCTAB nCount = pDoc->GetTableCount();
+     for (SCTAB i=0; i<nCount; i++)
+     {
+@@ -80,6 +81,12 @@ ScTabControl::ScTabControl( Window* pParent, ScViewData* pData ) :
+                     InsertPage( static_cast<sal_uInt16>(i)+1, aString, TPB_SPECIAL );
+                 else
+                     InsertPage( static_cast<sal_uInt16>(i)+1, aString );
++                if ( !pViewData->IsDefaultTabBgColor(i) )
++                {
++                    aTabBgColor = pViewData->GetTabBgColor(i);
++                    /*SetTabBgColor(static_cast<sal_uInt16>(i)+1, aTabBgColor, pViewData->IsDefaultTabBgColor(i) );*/
++                    SetTabBgColor( static_cast<sal_uInt16>(i)+1, aTabBgColor );
++                }
+             }
+         }
+     }
+@@ -265,6 +272,7 @@ void ScTabControl::Select()
+     rBind.Invalidate( FID_DELETE_TABLE );
+     rBind.Invalidate( FID_TABLE_SHOW );
+     rBind.Invalidate( FID_TABLE_HIDE );
++    rBind.Invalidate( FID_TAB_SET_TAB_BG_COLOR );
+ 
+         //	SetReference nur wenn der Konsolidieren-Dialog offen ist
+         //	(fuer Referenzen ueber mehrere Tabellen)
+@@ -291,16 +299,22 @@ void ScTabControl::UpdateStatus()
+     SCTAB i;
+     String aString;
+     SCTAB nMaxCnt = Max( nCount, static_cast<SCTAB>(GetMaxId()) );
++    Color aTabBgColor;
+ 
+     BOOL bModified = FALSE;										// Tabellen-Namen
+     for (i=0; i<nMaxCnt && !bModified; i++)
+     {
+         if (pDoc->IsVisible(i))
++        {
+             pDoc->GetName(i,aString);
++            aTabBgColor = pViewData->GetTabBgColor(i);
++        }
+         else
++        {
+             aString.Erase();
++        }
+ 
+-        if (GetPageText(static_cast<sal_uInt16>(i)+1) != aString)
++        if ( (GetPageText(static_cast<sal_uInt16>(i)+1) != aString) || (GetTabBgColor(static_cast<sal_uInt16>(i)+1) != aTabBgColor) )
+             bModified = TRUE;
+     }
+ 
+@@ -317,6 +331,11 @@ void ScTabControl::UpdateStatus()
+                         InsertPage( static_cast<sal_uInt16>(i)+1, aString, TPB_SPECIAL );
+                     else
+                         InsertPage( static_cast<sal_uInt16>(i)+1, aString );
++                    if ( !pViewData->IsDefaultTabBgColor(i) )
++                    {
++                        aTabBgColor = pViewData->GetTabBgColor(i);
++                        SetTabBgColor( static_cast<sal_uInt16>(i)+1, aTabBgColor );
++                    }
+                 }
+             }
+         }
+diff --git sc/source/ui/view/tabvwshf.cxx sc/source/ui/view/tabvwshf.cxx
+index ee49744..c65b62a 100644
+--- sc/source/ui/view/tabvwshf.cxx
++++ sc/source/ui/view/tabvwshf.cxx
+@@ -58,6 +58,10 @@
+ 
+ #include "scabstdlg.hxx" //CHINA001
+ 
++#include "tabbgcolor.hxx" //DBW
++#include "tabbgcolordlg.hxx" //DBW
++#include <svx/colritem.hxx> //DBW
++
+ #define IS_AVAILABLE(WhichId,ppItem) \
+     (pReqArgs->GetItemState((WhichId), TRUE, ppItem ) == SFX_ITEM_SET)
+ 
+@@ -686,6 +690,120 @@ void ScTabViewShell::ExecuteTable( SfxRequest& rReq )
+             }
+             break;
+ 
++        case FID_TAB_SET_TAB_BG_COLOR:
++        case FID_TAB_MENU_SET_TAB_BG_COLOR:
++            {
++                if ( nSlot == FID_TAB_MENU_SET_TAB_BG_COLOR )
++                    nSlot = FID_TAB_SET_TAB_BG_COLOR;
++
++                SCTAB nTabNr = pViewData->GetTabNo();
++                ScMarkData& rMark = pViewData->GetMarkData();
++                SCTAB nTabSelCount = rMark.GetSelectCount();
++
++                ScUndoSetTabBgColorInfo*     aTabBgColorUndoInfo=NULL;
++                ScUndoSetTabBgColorInfoList* aTabBgColorUndoInfoList =NULL;
++
++                if ( !pDoc->IsDocEditable() )
++                    break;
++
++                if ( pDoc->IsTabProtected( nTabNr ) ) // ||nTabSelCount > 1
++                    break;
++
++                if( pReqArgs != NULL )
++                {
++                    BOOL                bDone = FALSE;
++                    const SfxPoolItem*  pItem;
++                    Color               aColor;
++                    if( IS_AVAILABLE( FN_PARAM_1, &pItem ) )
++                        nTabNr = ((const SfxUInt16Item*)pItem)->GetValue();
++
++                    if( IS_AVAILABLE( nSlot, &pItem ) )
++                        aColor = ((const SvxColorItem*)pItem)->GetValue();
++
++                    if ( nTabSelCount > 1 )
++                    {
++                        aTabBgColorUndoInfoList = new ScUndoSetTabBgColorInfoList();
++                        for (SCTAB nTab=0; nTab<nTabCount; nTab++)
++                        {
++                            if ( rMark.GetTableSelect(nTab) && !pDoc->IsTabProtected(nTab) )
++                            {
++                                aTabBgColorUndoInfo = new ScUndoSetTabBgColorInfo();
++                                aTabBgColorUndoInfo->nTabId = nTab;
++                                aTabBgColorUndoInfo->aNewTabBgColor = aColor;
++                                aTabBgColorUndoInfoList->Insert(aTabBgColorUndoInfo);
++                            }
++                        }
++                        bDone = SetTabBgColor( aTabBgColorUndoInfoList );
++                    }
++                    else
++                    {
++                        bDone = SetTabBgColor( aColor, nCurrentTab ); //ScViewFunc.SetTabBgColor
++                    }
++                    if( bDone )
++                    {
++                        rReq.Done( *pReqArgs );
++                    }
++                }
++                else
++                {
++                    USHORT      nRet    = RET_OK; /// temp
++                    BOOL        bDone   = FALSE; /// temp
++                    Color       aTabBgColor;
++                    Color       aNewTabBgColor;
++
++                    aTabBgColor = pViewData->GetTabBgColor( nCurrentTab );
++                    ScAbstractDialogFactory* pFact = ScAbstractDialogFactory::Create();
++                    DBG_ASSERT(pFact, "ScAbstractFactory create fail!");
++                    AbstractScTabBgColorDlg* pDlg = pFact->CreateScTabBgColorDlg(
++                                                                GetDialogParent(),
++                                                                String(ScResId(SCSTR_SET_TAB_BG_COLOR)),
++                                                                String(ScResId(SCSTR_NO_TAB_BG_COLOR)),
++                                                                aTabBgColor,
++                                                                nSlot,RID_SCDLG_TAB_BG_COLOR);
++                    while ( !bDone && nRet == RET_OK )
++                    {
++                        nRet = pDlg->Execute();
++                        if( nRet == RET_OK )
++                        {
++                            Color aSelectedColor;
++                            pDlg->GetSelectedColor(aSelectedColor);
++                            aTabBgColorUndoInfoList = new ScUndoSetTabBgColorInfoList();
++                            if ( nTabSelCount > 1 )
++                            {
++                                for  (SCTAB nTab=0; nTab<nTabCount; nTab++)
++                                {
++                                    if ( rMark.GetTableSelect(nTab) && !pDoc->IsTabProtected(nTab) )
++                                    {
++                                        aTabBgColorUndoInfo = new ScUndoSetTabBgColorInfo();
++                                        aTabBgColorUndoInfo->nTabId = nTab;
++                                        aTabBgColorUndoInfo->aNewTabBgColor = aSelectedColor;
++                                        aTabBgColorUndoInfoList->Insert(aTabBgColorUndoInfo);
++                                    }
++                                }
++                                bDone = SetTabBgColor( aTabBgColorUndoInfoList );
++                            }
++                            else
++                            {
++                                bDone = SetTabBgColor( aSelectedColor, nCurrentTab ); //ScViewFunc.SetTabBgColor
++                            }
++                            if ( bDone )
++                            {
++                                rReq.AppendItem( SvxColorItem( aTabBgColor, nSlot ) );
++                                rReq.Done();
++                            }
++                            else
++                            {
++                                if( rReq.IsAPI() )
++                                {
++                                    StarBASIC::Error( SbERR_SETPROP_FAILED );
++                                }
++                            }
++                        }
++                    }
++                    delete( pDlg );
++                }
++            }
++            break;
+         default:
+             DBG_ERROR("Unbekannte Message bei ViewShell");
+             break;
+@@ -804,6 +922,23 @@ void ScTabViewShell::GetStateTable( SfxItemSet& rSet )
+                         rSet.Put( SfxBoolItem( nWhich, pDoc->IsLayoutRTL( nTab ) ) );
+                 }
+                 break;
++
++            case FID_TAB_MENU_SET_TAB_BG_COLOR:
++                {
++                    if ( !pDoc->IsDocEditable()
++                        || ( pDocShell && pDocShell->IsDocShared() )
++                        || pDoc->IsTabProtected(nTab) )
++                        rSet.DisableItem( nWhich );
++                }
++                break;
++
++            case FID_TAB_SET_TAB_BG_COLOR:
++                {
++                    Color aColor;
++                    aColor = pViewData->GetTabBgColor( nTab );
++                    rSet.Put( SvxColorItem( aColor, nWhich ) );
++                }
++                break;
+         }
+         nWhich = aIter.NextWhich();
+     }
+diff --git sc/source/ui/view/viewdata.cxx sc/source/ui/view/viewdata.cxx
+index fbb1306..d10a48d 100644
+--- sc/source/ui/view/viewdata.cxx
++++ sc/source/ui/view/viewdata.cxx
+@@ -104,7 +104,8 @@ ScViewDataTable::ScViewDataTable() :
+                 nFixPosY( 0 ),
+                 nCurX( 0 ),
+                 nCurY( 0 ),
+-                bOldCurValid( FALSE )
++                bOldCurValid( FALSE ),
++                aTabBgColor( Color(COL_AUTO) )
+ {
+     nPosX[0]=nPosX[1]=0;
+     nPosY[0]=nPosY[1]=0;
+@@ -164,6 +165,11 @@ void ScViewDataTable::WriteUserDataSequence(uno::Sequence <beans::PropertyValue>
+         pSettings[SC_TABLE_PAGE_VIEW_ZOOM_VALUE].Name = rtl::OUString(RTL_CONSTASCII_USTRINGPARAM(SC_PAGEVIEWZOOMVALUE));
+         pSettings[SC_TABLE_PAGE_VIEW_ZOOM_VALUE].Value <<= nPageZoomValue;
+ 
++        if ( !IsDefaultTabBgColor() )
++        {
++            pSettings[SC_TABLE_TAB_BG_COLOR].Name = rtl::OUString(RTL_CONSTASCII_USTRINGPARAM(SC_UNO_TABCOLOR));
++            pSettings[SC_TABLE_TAB_BG_COLOR].Value <<= static_cast<sal_Int32>(aTabBgColor.GetColor());
++        }
+ //        pSettings[SC_TABLE_SELECTED].Name = rtl::OUString(RTL_CONSTASCII_USTRINGPARAM(SC_TABLESELECTED));
+ //        pSettings[SC_TABLE_SELECTED].Value <<= bool(rViewData.GetMarkData().GetTableSelect( nTab ));
+     }
+@@ -276,6 +282,13 @@ void ScViewDataTable::ReadUserDataSequence(const uno::Sequence <beans::PropertyV
+             aSettings[i].Value >>= bSelected;
+             rViewData.GetMarkData().SelectTable( nTab, bSelected );
+         }
++        else if (sName.compareToAscii(SC_UNO_TABCOLOR) == 0)
++        {
++            sal_Int32 nColor = COL_AUTO;
++            aSettings[i].Value >>= nColor;
++            if (nColor != COL_AUTO)
++                aTabBgColor.SetColor(static_cast<ColorData>(nColor));
++        }
+     }
+     if (eHSplitMode == SC_SPLIT_FIX)
+         nFixPosX = SanitizeCol( static_cast<SCCOL>( bHasHSplitInTwips ? nTempPosHTw : nTempPosH ));
+@@ -579,6 +592,36 @@ void ScViewData::MoveTab( SCTAB nSrcTab, SCTAB nDestTab )
+     aMarkData.InsertTab( nInsTab );			// ggf. angepasst
+ }
+ 
++void ScViewData::SetTabBgColor( Color rTabBgColor, SCTAB nTab )
++{
++    if ( rTabBgColor != Color(COL_AUTO) )
++    {
++        if ( !pTabData[nTab] )
++            CreateTabData( nTab );
++        pTabData[nTab]->aTabBgColor = rTabBgColor;
++    }
++    else
++    {
++        if ( pTabData[nTab] )
++            pTabData[nTab]->aTabBgColor = Color( COL_AUTO );
++    }
++}
++
++Color ScViewData::GetTabBgColor( SCTAB nTab ) const
++{
++    if ( !pTabData[nTab] )
++        return Color(COL_AUTO);
++    return pTabData[nTab]->aTabBgColor;
++}
++
++BOOL ScViewData::IsDefaultTabBgColor( SCTAB nTab ) const
++{
++    if ( !pTabData[nTab] )
++        return true;
++    BOOL bResult = pTabData[nTab]->aTabBgColor==Color( COL_AUTO ) ? TRUE : FALSE;
++    return bResult;
++}
++
+ //UNUSED2008-05  void ScViewData::UpdateOle( ScSplitPos /* eWhich */ )
+ //UNUSED2008-05  {
+ //UNUSED2008-05      GetDocShell()->UpdateOle(this);
+@@ -2444,6 +2487,9 @@ void ScViewData::WriteExtOptions( ScExtDocOptions& rDocOpt ) const
+             rTabSett.mbPageMode = bPagebreak;
+             rTabSett.mnNormalZoom = static_cast< long >( pViewTab->aZoomY * Fraction( 100.0 ) );
+             rTabSett.mnPageZoom = static_cast< long >( pViewTab->aPageZoomY * Fraction( 100.0 ) );
++
++            // Tab Bg Color
++            rTabSett.maTabBgColor = pViewTab->aTabBgColor;
+         }
+     }
+ }
+@@ -2598,6 +2644,10 @@ void ScViewData::ReadExtOptions( const ScExtDocOptions& rDocOpt )
+                     update map modes that are needed to draw text correctly. */
+                 SetPagebreakMode( rTabSett.mbPageMode );
+             }
++
++            // Tab Bg Color
++            if( !rTabSett.IsDefaultTabBgColor() )
++                rViewTab.aTabBgColor = rTabSett.maTabBgColor;
+         }
+     }
+ 
+diff --git sc/source/ui/view/viewfun2.cxx sc/source/ui/view/viewfun2.cxx
+index 681f51c..14d58f7 100644
+--- sc/source/ui/view/viewfun2.cxx
++++ sc/source/ui/view/viewfun2.cxx
+@@ -89,6 +89,7 @@
+ #include "funcdesc.hxx"
+ #include "docuno.hxx"
+ 
++#include "tabbgcolor.hxx" //DBW
+ 
+ // STATIC DATA ---------------------------------------------------------------
+ 
+@@ -2276,6 +2277,28 @@ BOOL ScViewFunc::RenameTable( const String& rName, SCTAB nTab )
+ 
+ //----------------------------------------------------------------------------
+ 
++BOOL ScViewFunc::SetTabBgColor( const Color& rColor, SCTAB nTab )
++{
++    BOOL bSuccess = GetViewData()->GetDocShell()->GetDocFunc().SetTabBgColor( nTab, rColor, TRUE, FALSE );
++    if (bSuccess)
++    {
++        GetViewData()->GetViewShell()->UpdateInputHandler();
++    }
++    return bSuccess;
++}
++
++BOOL ScViewFunc::SetTabBgColor( ScUndoSetTabBgColorInfoList* rUndoSetTabBgColorInfoList )
++{
++    BOOL bSuccess = GetViewData()->GetDocShell()->GetDocFunc().SetTabBgColor( rUndoSetTabBgColorInfoList, TRUE, FALSE );
++    if (bSuccess)
++    {
++        GetViewData()->GetViewShell()->UpdateInputHandler();
++    }
++    return bSuccess;
++}
++
++//----------------------------------------------------------------------------
++
+ void ScViewFunc::InsertAreaLink( const String& rFile,
+                                     const String& rFilter, const String& rOptions,
+                                     const String& rSource, ULONG nRefresh )
+diff --git sc/uiconfig/scalc/menubar/menubar.xml sc/uiconfig/scalc/menubar/menubar.xml
+index ab3f121..eed3a97 100644
+--- sc/uiconfig/scalc/menubar/menubar.xml
++++ sc/uiconfig/scalc/menubar/menubar.xml
+@@ -214,6 +214,8 @@
+                     <menu:menuitem menu:id=".uno:Hide"/>
+                     <menu:menuitem menu:id=".uno:Show"/>
+                     <menu:menuitem menu:id=".uno:SheetRightToLeft"/>
++                    <menu:menuseparator/>
++                    <menu:menuitem menu:id=".uno:SetTabBgColor"/>
+                 </menu:menupopup>
+             </menu:menu>
+             <menu:menuitem menu:id=".uno:ToggleMergeCells"/>
+diff --git sc/util/makefile.mk sc/util/makefile.mk
+index db377e5..f4e7973 100644
+--- sc/util/makefile.mk
++++ sc/util/makefile.mk
+@@ -260,6 +260,7 @@ LIB8OBJFILES = \
+         $(SLO)$/attrdlg.obj	\
+         $(SLO)$/scuiimoptdlg.obj	\
+         $(SLO)$/strindlg.obj		\
++        $(SLO)$/tabbgcolordlg.obj   \
+         $(SLO)$/shtabdlg.obj		\
+         $(SLO)$/scendlg.obj		\
+         $(SLO)$/pvfundlg.obj	\
