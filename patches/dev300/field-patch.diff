@@ -328,10 +328,10 @@ index 43dbfff..e74aa50 100644
  
  /*-----------------23.02.98 10:45-------------------
 diff --git sw/source/core/crsr/bookmrk.cxx sw/source/core/crsr/bookmrk.cxx
-index 5e9c7aa..a5e6b5c 100644
+index 5e9c7aa..5658e41 100644
 --- sw/source/core/crsr/bookmrk.cxx
 +++ sw/source/core/crsr/bookmrk.cxx
-@@ -75,19 +75,27 @@ namespace
+@@ -75,19 +75,23 @@ namespace
          const sal_Unicode aStartMark,
          const sal_Unicode aEndMark)
      {
@@ -351,19 +351,28 @@ index 5e9c7aa..a5e6b5c 100644
          if(ch_start != aStartMark)
 +        {
              io_pDoc->Insert(aStartPaM, aStartMark);
-+            // Decrease the start mark index
-+            rStart.nContent--;
+-        if(aEndMark && ch_end != aEndMark)
 +        }
-         if(aEndMark && ch_end != aEndMark)
++        if(aEndMark && ( ch_end != aEndMark ) && ( rStart != rEnd ) )
 +        {
              io_pDoc->Insert(aEndPaM, aEndMark);
-+            // Increase the end mark index
-+            rEnd.nContent++;
 +        }
          io_pDoc->EndUndo(UNDO_UI_REPLACE, NULL);
      };
  }
-@@ -120,6 +128,17 @@ namespace sw { namespace mark
+@@ -108,6 +112,11 @@ namespace sw { namespace mark
+         }
+     }
+ 
++    bool MarkBase::IsCoveringPosition(const SwPosition& rPos) const
++    {
++        return GetMarkStart() <= rPos && rPos <= GetMarkEnd(); 
++    }
++
+     void MarkBase::SetMarkPos(const SwPosition& rNewPos)
+     {
+         ::boost::scoped_ptr<SwPosition>(new SwPosition(rNewPos)).swap(m_pPos1);
+@@ -120,6 +129,17 @@ namespace sw { namespace mark
          //lcl_FixPosition(*m_pPos2);
      }
  
@@ -381,7 +390,7 @@ index 5e9c7aa..a5e6b5c 100644
      MarkBase::~MarkBase()
      { }
  
-@@ -212,6 +231,96 @@ namespace sw { namespace mark
+@@ -212,6 +232,96 @@ namespace sw { namespace mark
          if(!IsExpanded())
              SetOtherMarkPos(GetMarkPos());
      }
@@ -478,6 +487,19 @@ index 5e9c7aa..a5e6b5c 100644
  
      const ::rtl::OUString Fieldmark::our_sNamePrefix = ::rtl::OUString::createFromAscii("__Fieldmark__");
  
+@@ -230,7 +340,11 @@ namespace sw { namespace mark
+ 
+     void CheckboxFieldmark::InitDoc(SwDoc* const io_pDoc)
+     {
+-        lcl_AssureFieldMarksSet(this, io_pDoc, CH_TXT_ATR_FIELDSTART, CH_TXT_ATR_FIELDEND);
++        lcl_AssureFieldMarksSet(this, io_pDoc, CH_TXT_ATR_FORMELEMENT, CH_TXT_ATR_FIELDEND);
++
++        // For some reason the end mark is moved from 1 by the Insert: we don't 
++        // want this for checkboxes
++        this->GetMarkEnd( ).nContent--;
+     }
+ 
+     void CheckboxFieldmark::SetChecked(bool checked)
 diff --git sw/source/core/crsr/crossrefbookmark.cxx sw/source/core/crsr/crossrefbookmark.cxx
 index 8ae112a..0a8929d 100644
 --- sw/source/core/crsr/crossrefbookmark.cxx
@@ -492,10 +514,10 @@ index 8ae112a..0a8929d 100644
          OSL_PRECOND(false,
              "<SwCrossRefBookmark::GetOtherMarkPos(..)>"
 diff --git sw/source/core/crsr/crstrvl.cxx sw/source/core/crsr/crstrvl.cxx
-index 0504672..4a3a681 100644
+index 0504672..9ff996a 100644
 --- sw/source/core/crsr/crstrvl.cxx
 +++ sw/source/core/crsr/crstrvl.cxx
-@@ -1175,6 +1175,18 @@ BOOL SwCrsrShell::GetContentAtPos( const Point& rPt,
+@@ -1175,6 +1175,17 @@ BOOL SwCrsrShell::GetContentAtPos( const Point& rPt,
                      }
                  }
  
@@ -505,8 +527,7 @@ index 0504672..4a3a681 100644
 +            sw::mark::IFieldmark* pFldBookmark = pMarksAccess->getFieldmarkFor( aPos );
 +		    if( bCrsrFoundExact && pTxtNd && pFldBookmark) {
 +			    rCntntAtPos.eCntntAtPos = SwContentAtPos::SW_FORMCTRL;
-+// FIXME cbosdo, commented out during update to m58
-+//    			rCntntAtPos.aFnd.pFldBookmark = pFldBookmark;
++    			rCntntAtPos.aFnd.pFldmark = pFldBookmark;
 +	    		bRet=TRUE;
 +		    }
 +		}
@@ -578,7 +599,7 @@ index 7a8a83e..c5a7344 100644
  {
      return (*a.Start() < *b.Start()) || (*a.Start() == *b.Start() && *a.End() < *b.End()); 
 diff --git sw/source/core/doc/docbm.cxx sw/source/core/doc/docbm.cxx
-index 836cbf0..d594298 100644
+index 836cbf0..752b58c 100644
 --- sw/source/core/doc/docbm.cxx
 +++ sw/source/core/doc/docbm.cxx
 @@ -41,6 +41,7 @@
@@ -617,9 +638,9 @@ index 836cbf0..d594298 100644
          : m_pDoc(&rDoc)
      { }
  
-+    void MarkManager::dumpFieldmarks( )
++    void MarkManager::dumpFieldmarks( ) const
 +    {
-+        container_t::iterator pIt = m_vFieldmarks.begin( );
++        const_iterator_t pIt = m_vFieldmarks.begin( );
 +        for ( ; pIt != m_vFieldmarks.end( ); pIt++ )
 +        {
 +            rtl::OUString str = ( *pIt )->toString( );
@@ -662,6 +683,20 @@ index 836cbf0..d594298 100644
      ::sw::mark::IMark* MarkManager::getMarkForTxtNode(const SwTxtNode& rTxtNode,
          const IDocumentMarkAccess::MarkType eType)
      {
+@@ -767,12 +820,7 @@ namespace sw { namespace mark
+     {
+         const_iterator_t pFieldmark = find_if(
+             m_vFieldmarks.begin(),
+-            // we do not need to check marks starting behind the positon
+-            lower_bound(
+-                m_vFieldmarks.begin(),
+-                m_vFieldmarks.end(),
+-                rPos,
+-                bind(&IMark::StartsAfter, _1, _2)),
++            m_vFieldmarks.end( ),
+             bind(&IMark::IsCoveringPosition, _1, rPos));
+         if(pFieldmark == m_vFieldmarks.end()) return NULL;
+         return dynamic_cast<IFieldmark*>(pFieldmark->get());
 diff --git sw/source/core/edit/edtox.cxx sw/source/core/edit/edtox.cxx
 index 0b72c6f..76e9e32 100644
 --- sw/source/core/edit/edtox.cxx
@@ -703,14 +738,14 @@ index 0b72c6f..76e9e32 100644
       Beschreibung: Aktuelles Verzeichnis vor oder in dem der Cursor
                                     steht
 diff --git sw/source/core/inc/MarkManager.hxx sw/source/core/inc/MarkManager.hxx
-index 605b15d..af7a3e6 100644
+index 605b15d..fd20406 100644
 --- sw/source/core/inc/MarkManager.hxx
 +++ sw/source/core/inc/MarkManager.hxx
 @@ -43,8 +43,18 @@ namespace sw { namespace mark
          public:
              MarkManager(/*[in/out]*/ SwDoc& rDoc);
  
-+            void dumpFieldmarks( );
++            void dumpFieldmarks( ) const;
 +
              // IDocumentMarkAccess
              virtual ::sw::mark::IMark* makeMark(const SwPaM& rPaM, const ::rtl::OUString& rName, IDocumentMarkAccess::MarkType eMark);
@@ -726,10 +761,10 @@ index 605b15d..af7a3e6 100644
  
              virtual void repositionMark(::sw::mark::IMark* io_pMark, const SwPaM& rPaM);
 diff --git sw/source/core/inc/bookmrk.hxx sw/source/core/inc/bookmrk.hxx
-index ef1cc12..943a73c 100644
+index ef1cc12..bd62abe 100644
 --- sw/source/core/inc/bookmrk.hxx
 +++ sw/source/core/inc/bookmrk.hxx
-@@ -46,26 +46,32 @@ namespace sw { namespace mark
+@@ -46,26 +46,31 @@ namespace sw { namespace mark
      {
          public:
              //getters
@@ -738,9 +773,10 @@ index ef1cc12..943a73c 100644
                  { return *m_pPos1; }
              virtual const ::rtl::OUString& GetName() const
                  { return m_aName; }
-             virtual bool IsCoveringPosition(const SwPosition& rPos) const
-                 { return GetMarkStart() <= rPos && rPos <= GetMarkEnd(); };
+-            virtual bool IsCoveringPosition(const SwPosition& rPos) const
+-                { return GetMarkStart() <= rPos && rPos <= GetMarkEnd(); };
 -            virtual const SwPosition& GetOtherMarkPos() const
++            virtual bool IsCoveringPosition(const SwPosition& rPos) const;
 +            virtual SwPosition& GetOtherMarkPos() const
              {
                  OSL_PRECOND(IsExpanded(), "<SwPosition::GetOtherMarkPos(..)> - I have no other Pos set." );
@@ -770,7 +806,7 @@ index ef1cc12..943a73c 100644
              }
              virtual bool IsExpanded() const
                  { return m_pPos2; }
-@@ -78,6 +84,8 @@ namespace sw { namespace mark
+@@ -78,6 +83,8 @@ namespace sw { namespace mark
              virtual void ClearOtherMarkPos()
                  { m_pPos2.reset(); }
  
@@ -779,7 +815,7 @@ index ef1cc12..943a73c 100644
              virtual void Swap()
              {
                  if(m_pPos2)
-@@ -171,18 +179,30 @@ namespace sw { namespace mark
+@@ -171,18 +178,30 @@ namespace sw { namespace mark
      {
          public:
              Fieldmark(const SwPaM& rPaM);
@@ -811,7 +847,7 @@ index ef1cc12..943a73c 100644
          private:
              //int fftype; // Type: 0 = Text, 1 = Check Box, 2 = List
              //bool ffprot;
-@@ -190,7 +210,7 @@ namespace sw { namespace mark
+@@ -190,7 +209,7 @@ namespace sw { namespace mark
              ::rtl::OUString m_aFieldname;
              ::rtl::OUString m_aFieldHelptext;
              static const ::rtl::OUString our_sNamePrefix;
@@ -920,7 +956,7 @@ index 13a05d1..1838124 100644
                  pOutDev->Pop();
              }
 diff --git sw/source/core/text/portxt.cxx sw/source/core/text/portxt.cxx
-index 6eeb549..6981be9 100644
+index 6eeb549..9b24e31 100644
 --- sw/source/core/text/portxt.cxx
 +++ sw/source/core/text/portxt.cxx
 @@ -55,11 +55,13 @@
@@ -937,7 +973,20 @@ index 6eeb549..6981be9 100644
  using namespace ::com::sun::star;
  using namespace ::com::sun::star::i18n::ScriptType;
  
-@@ -781,38 +783,95 @@ sal_Bool SwFieldMarkPortion::Format( SwTxtFormatInfo & )
+@@ -769,9 +771,10 @@ void SwHolePortion::HandlePortion( SwPortionHandler& rPH ) const
+     rPH.Text( GetLen(), GetWhichPor() );
+ }
+ 
+-void SwFieldMarkPortion::Paint( const SwTxtPaintInfo & rInf) const
++void SwFieldMarkPortion::Paint( const SwTxtPaintInfo & /*rInf*/) const
+ {
+-    SwTxtPortion::Paint(rInf);
++    // These shouldn't be painted!
++    // SwTxtPortion::Paint(rInf);
+ }
+ 
+ sal_Bool SwFieldMarkPortion::Format( SwTxtFormatInfo & )
+@@ -781,38 +784,95 @@ sal_Bool SwFieldMarkPortion::Format( SwTxtFormatInfo & )
      return ret;
  }
  
@@ -1063,6 +1112,15 @@ diff --git sw/source/core/unocore/unobkm.cxx sw/source/core/unocore/unobkm.cxx
 index ca27062..519f70d 100644
 --- sw/source/core/unocore/unobkm.cxx
 +++ sw/source/core/unocore/unobkm.cxx
+@@ -7,7 +7,7 @@
+  * OpenOffice.org - a multi-platform office productivity suite
+  *
+  * $RCSfile: unobkm.cxx,v $
+- * $Revision: 1.17 $
++ * $Revision: 1.16 $
+  *
+  * This file is part of OpenOffice.org.
+  *
 @@ -47,6 +47,7 @@
  #endif
  #include <undobj.hxx>
