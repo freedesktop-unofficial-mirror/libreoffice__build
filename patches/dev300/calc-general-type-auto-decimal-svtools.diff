@@ -1,0 +1,122 @@
+diff --git svtools/inc/svtools/zforlist.hxx svtools/inc/svtools/zforlist.hxx
+index bb4a589..069930e 100644
+--- svtools/inc/svtools/zforlist.hxx
++++ svtools/inc/svtools/zforlist.hxx
+@@ -492,11 +492,16 @@ public:
+     void GetOutputString( String& sString, sal_uInt32 nFIndex,
+                           String& sOutString, Color** ppColor );
+ 
++    void GetStringColor( sal_uInt32 nFIndex, Color** ppColor );
++
+     /** Format a number according to the standard default format matching
+         the given format index */
+     void GetInputLineString( const double& fOutNumber,
+                             sal_uInt32 nFIndex, String& sOutString );
+ 
++    void GetInputLineString( const double& fOutNumber,
++                             sal_uInt32 nFIndex, String& sOutString, Color** ppColor );
++
+     /** Format a number according to a format code string to be scanned.
+         @return
+             <FALSE/> if format code contains an error
+diff --git svtools/inc/svtools/zformat.hxx svtools/inc/svtools/zformat.hxx
+index 4c52b10..d502bb6 100644
+--- svtools/inc/svtools/zformat.hxx
++++ svtools/inc/svtools/zformat.hxx
+@@ -241,6 +241,7 @@ public:
+ 
+     BOOL GetOutputString( double fNumber, String& OutString, Color** ppColor );
+     BOOL GetOutputString( String& sString, String& OutString, Color** ppColor );
++    void GetStringColor( Color** ppColor );
+ 
+     // True if type text
+     BOOL IsTextFormat() const { return (eType & NUMBERFORMAT_TEXT) != 0; }
+diff --git svtools/source/numbers/zforlist.cxx svtools/source/numbers/zforlist.cxx
+index 4b13774..ceedb05 100644
+--- svtools/source/numbers/zforlist.cxx
++++ svtools/source/numbers/zforlist.cxx
+@@ -1488,9 +1488,16 @@ void SvNumberFormatter::GetInputLineString(const double& fOutNumber,
+                                            sal_uInt32 nFIndex,
+                                            String& sOutString)
+ {
++    Color* pColor;
++    GetInputLineString(fOutNumber, nFIndex, sOutString, &pColor);
++}
++
++void SvNumberFormatter::GetInputLineString(const double& fOutNumber,
++                                           sal_uInt32 nFIndex,
++                                           String& sOutString, Color** ppColor)
++{
+     SvNumberformat* pFormat;
+     short nOldPrec;
+-    Color* pColor;
+     pFormat = (SvNumberformat*) aFTable.Get(nFIndex);
+     if (!pFormat)
+         pFormat = aFTable.Get(ZF_STANDARD);
+@@ -1531,7 +1538,13 @@ void SvNumberFormatter::GetInputLineString(const double& fOutNumber,
+             nOldPrec = pFormatScanner->GetStandardPrec();
+             ChangeStandardPrec(300);						// Merkwert
+         }
+-        pFormat->GetOutputString(fOutNumber, sOutString, &pColor);
++        if (ppColor)
++            pFormat->GetOutputString(fOutNumber, sOutString, ppColor);
++        else
++        {
++            Color* pColor; // throw away the color info.
++            pFormat->GetOutputString(fOutNumber, sOutString, &pColor);
++        }
+     }
+     if (nOldPrec != -1)
+         ChangeStandardPrec(nOldPrec);
+@@ -1574,6 +1587,21 @@ void SvNumberFormatter::GetOutputString(String& sString,
+     }
+ }
+ 
++void SvNumberFormatter::GetStringColor( sal_uInt32 nFIndex, Color** ppColor)
++{
++    if (!ppColor)
++        return;
++
++    SvNumberformat* pFormat = (SvNumberformat*) aFTable.Get(nFIndex);
++    if (!pFormat)
++        pFormat = aFTable.Get(ZF_STANDARD_TEXT);
++
++    if (pFormat->IsTextFormat() || pFormat->HasTextFormat())
++        pFormat->GetStringColor(ppColor);
++    else
++        *ppColor = NULL;
++}
++
+ BOOL SvNumberFormatter::GetPreviewString(const String& sFormatString,
+                                          double fPreviewNumber,
+                                          String& sOutString,
+diff --git svtools/source/numbers/zformat.cxx svtools/source/numbers/zformat.cxx
+index 368fb16..65c0592 100644
+--- svtools/source/numbers/zformat.cxx
++++ svtools/source/numbers/zformat.cxx
+@@ -1915,6 +1915,25 @@ BOOL SvNumberformat::GetOutputString(String& sString,
+     }
+     return FALSE;
+ }
++
++void SvNumberformat::GetStringColor( Color** ppColor )
++{
++    if (!ppColor)
++        return;
++
++    USHORT nIx;
++    if (eType & NUMBERFORMAT_TEXT)
++        nIx = 0;
++    else if (NumFor[3].GetnAnz() > 0)
++        nIx = 3;
++    else
++    {
++        *ppColor = NULL;        // no change of color
++        return;
++    }
++    *ppColor = NumFor[nIx].GetColor();
++}
++
+ /*
+ void SvNumberformat::GetNextFareyNumber(ULONG nPrec, ULONG x0, ULONG x1,
+                                         ULONG y0, ULONG y1,
