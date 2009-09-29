@@ -1,0 +1,91 @@
+diff --git sc/inc/cellform.hxx sc/inc/cellform.hxx
+index a94ef54..d5c5b20 100644
+--- sc/inc/cellform.hxx
++++ sc/inc/cellform.hxx
+@@ -58,7 +58,7 @@ public:
+                                ScForceTextFmt eForceTextFmt = ftDontForce );
+ 
+     static void		GetInputString( ScBaseCell* pCell, ULONG nFormat, String& rString,
+-                                      SvNumberFormatter& rFormatter );
++                                      SvNumberFormatter& rFormatter, Color** ppColor = NULL );
+ };
+ 
+ 
+diff --git sc/source/core/tool/cellform.cxx sc/source/core/tool/cellform.cxx
+index e6177b0..e17ef9c 100644
+--- sc/source/core/tool/cellform.cxx
++++ sc/source/core/tool/cellform.cxx
+@@ -159,8 +159,11 @@ void ScCellFormat::GetString( ScBaseCell* pCell, ULONG nFormat, String& rString,
+ }
+ 
+ void ScCellFormat::GetInputString( ScBaseCell* pCell, ULONG nFormat, String& rString,
+-                                      SvNumberFormatter& rFormatter )
++                                      SvNumberFormatter& rFormatter, Color** ppColor )
+ {
++    if (ppColor)
++        *ppColor = NULL;
++
+     if (&rFormatter==NULL)
+     {
+         rString.Erase();
+@@ -173,17 +176,19 @@ void ScCellFormat::GetInputString( ScBaseCell* pCell, ULONG nFormat, String& rSt
+         case CELLTYPE_STRING:
+             {
+                 ((ScStringCell*)pCell)->GetString( rString );
++                rFormatter.GetStringColor(nFormat, ppColor);
+             }
+             break;
+         case CELLTYPE_EDIT:
+             {
+                 ((ScEditCell*)pCell)->GetString( rString );
++                rFormatter.GetStringColor(nFormat, ppColor);
+             }
+             break;
+         case CELLTYPE_VALUE:
+             {
+                 double nValue = ((ScValueCell*)pCell)->GetValue();
+-                rFormatter.GetInputLineString( nValue, nFormat, rString );
++                rFormatter.GetInputLineString( nValue, nFormat, rString, ppColor );
+             }
+             break;
+         case CELLTYPE_FORMULA:
+@@ -195,7 +200,7 @@ void ScCellFormat::GetInputString( ScBaseCell* pCell, ULONG nFormat, String& rSt
+                 else if (((ScFormulaCell*)pCell)->IsValue())
+                 {
+                     double nValue = ((ScFormulaCell*)pCell)->GetValue();
+-                    rFormatter.GetInputLineString( nValue, nFormat, rString );
++                    rFormatter.GetInputLineString( nValue, nFormat, rString, ppColor );
+                 }
+                 else
+                 {
+diff --git sc/source/ui/view/output2.cxx sc/source/ui/view/output2.cxx
+index 8942a38..5826bb1 100644
+--- sc/source/ui/view/output2.cxx
++++ sc/source/ui/view/output2.cxx
+@@ -454,12 +454,20 @@ BOOL ScDrawStringsVars::SetText( ScBaseCell* pCell )
+ 
+             Color* pColor;
+             ULONG nFormat = GetValueFormat();
+-            ScCellFormat::GetString( pCell,
+-                                     nFormat, aString, &pColor,
+-                                     *pFormatter,
+-                                     pOutput->bShowNullValues,
+-                                     pOutput->bShowFormulas,
+-                                     ftCheck );
++
++            if (static_cast<NfIndexTableOffset>(nFormat) == NF_NUMBER_STANDARD)
++                // For 'General' format type, display the value the same way it
++                // is displayed in the edit window, which automatically
++                // adjusts the number of decimal places based on the value of
++                // the cell.
++                ScCellFormat::GetInputString(pCell, nFormat, aString, *pFormatter, &pColor);
++            else
++                ScCellFormat::GetString( pCell,
++                                         nFormat, aString, &pColor,
++                                         *pFormatter,
++                                         pOutput->bShowNullValues,
++                                         pOutput->bShowFormulas,
++                                         ftCheck );
+ 
+             if (aString.Len() > DRAWTEXT_MAX)
+                 aString.Erase(DRAWTEXT_MAX);
