@@ -3,7 +3,7 @@ new file mode 100644
 index 0000000..96a6256
 --- /dev/null
 +++ sc/inc/mdds/flatsegmenttree.hxx
-@@ -0,0 +1,761 @@
+@@ -0,0 +1,815 @@
 +/*************************************************************************
 + *
 + * Copyright (c) 2008-2009 Kohei Yoshida
@@ -318,10 +318,11 @@ index 0000000..96a6256
 +    /** 
 +     * Remove a segment specified by the start and end key values, and shift 
 +     * the remaining segments (i.e. those segments that come after the removed
-+     * segment) to left. 
++     * segment) to left.  Note that the start and end positions of the segment 
++     * being removed <b>must</b> be within the base segment span.
 +     *
-+     * @param start start value of the segment being removed.
-+     * @param end end value of the segment being removed. 
++     * @param start start position of the segment being removed.
++     * @param end end position of the segment being removed. 
 +     */
 +    void shift_segment_left(key_type start, key_type end)
 +    {
@@ -351,12 +352,32 @@ index 0000000..96a6256
 +
 +        key_type segment_size = end - start;
 +
++        if (node_pos == m_right_leaf)
++        {
++            // The segment being removed begins after the last node before the 
++            // right-most node.
++
++            if (right_leaf_key <= end)
++            {
++                // The end position equals or is past the right-most node.
++                append_new_segment(start);
++            }
++            else
++            {
++                // The end position stops before the right-most node.  Simply 
++                // append the blank segment to the end.
++                append_new_segment(right_leaf_key - segment_size);
++            }
++            return;
++        }
++
 +        if (end < get_node(node_pos)->value_leaf.key)
 +        {
 +            // The removed segment does not overlap with any nodes.  Simply 
 +            // shift the key values of those nodes that come after the removed
 +            // segment.
 +            shift_leaf_key_left(node_pos, m_right_leaf, segment_size);
++            append_new_segment(right_leaf_key - segment_size);
 +            m_valid_tree = false;
 +            return;
 +        }
@@ -390,6 +411,10 @@ index 0000000..96a6256
 +
 +        shift_leaf_key_left(node_pos, m_right_leaf, segment_size);
 +        m_valid_tree = false;
++
++        // Insert at the end a new segment with the initial base value, for 
++        // the length of the removed segment.
++        append_new_segment(right_leaf_key - segment_size);
 +    }
 +
 +    /** 
@@ -682,6 +707,35 @@ index 0000000..96a6256
 +
 +private:
 +    flat_segment_tree();
++
++    void append_new_segment(key_type start)
++    {
++        if (get_node(m_right_leaf->left)->value_leaf.key == start)
++        {
++            get_node(m_right_leaf->left)->value_leaf.value = m_init_val;
++            return;
++        }
++
++#ifdef UNIT_TEST
++        // The start position must come after the position of the last node 
++        // before the right-most node.
++        assert(get_node(m_right_leaf->left)->value_leaf.key < start);        
++#endif
++
++        if (get_node(m_right_leaf->left)->value_leaf.value == m_init_val)
++            // The existing segment has the same value.  No need to insert a 
++            // new segment.
++            return;
++
++        node_base_ptr new_node(new node(true));
++        get_node(new_node)->value_leaf.key   = start;
++        get_node(new_node)->value_leaf.value = m_init_val;
++        new_node->left = m_right_leaf->left;
++        new_node->right = m_right_leaf;
++        m_right_leaf->left->right = new_node;
++        m_right_leaf->left = new_node;
++        m_valid_tree = false;
++    }
 +
 +    node_base_ptr get_insertion_pos_leaf(key_type key, const node_base_ptr& start_pos) const
 +    {
