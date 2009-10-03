@@ -20,6 +20,7 @@ dist-hook:
 
 clean-local:
 	test -z "$(OOBUILDDIR)" || rm -rf $(OOBUILDDIR)
+	test -z "$(BUILDDIR)/install" || rm -rf $(BUILDDIR)/install
 	for icons in $(OOO_ICONS_VERS) ; do \
 	    test "$(BUILDDIR)/$$icons" = "/" || rm -rf "$(BUILDDIR)/$$icons" ; \
 	done
