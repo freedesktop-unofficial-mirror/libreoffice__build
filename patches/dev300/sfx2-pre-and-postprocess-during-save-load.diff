@@ -1,6 +1,19 @@
+Florian's sfx2-pre-and-postprocess-during-save-load patch
+
+From: Thorsten Behrens <thb@openoffice.org>
+
+
+---
+
+ sfx2/source/doc/objstor.cxx |  225 +++++++++++++++++++++++++++++++++++++++++++
+ 1 files changed, 223 insertions(+), 2 deletions(-)
+
+
+diff --git sfx2/source/doc/objstor.cxx sfx2/source/doc/objstor.cxx
+index d6ce464..509f208 100644
 --- sfx2/source/doc/objstor.cxx
 +++ sfx2/source/doc/objstor.cxx
-@@ -109,6 +109,9 @@
+@@ -110,6 +110,9 @@
  #include <rtl/logfile.hxx>
  #include <basic/modsizeexceeded.hxx>
  #include <osl/file.hxx>
@@ -10,7 +23,7 @@
  
  #include <sfx2/signaturestate.hxx>
  #include <sfx2/app.hxx>
-@@ -154,6 +157,126 @@ using namespace ::cppu;
+@@ -161,6 +164,126 @@ using namespace ::cppu;
  
  namespace css = ::com::sun::star;
  
@@ -137,23 +150,27 @@
  //=========================================================================
  void impl_addToModelCollection(const css::uno::Reference< css::frame::XModel >& xModel)
  {
-@@ -679,7 +802,47 @@ sal_Bool SfxObjectShell::DoLoad( SfxMedi
-         	{
-             	pImp->nLoadedFlags = 0;
- 				pImp->bModelInitialized = sal_False;
--            	bOk = xStorage.is() && LoadOwnFormat( *pMed );
-+				String aUserData=pFilter->GetUserData();
-+				// check whether a prepocessing step is requested in the configuration
-+				static const char PREPROCESS_CONST[]="Preprocess=<";
-+				int pos=aUserData.Search(::rtl::OUString::createFromAscii(PREPROCESS_CONST).getStr(), 0);
-+				int end=aUserData.Search( '>', pos+strlen(PREPROCESS_CONST));
+@@ -693,7 +816,51 @@ sal_Bool SfxObjectShell::DoLoad( SfxMedium *pMed )
+             {
+                 pImp->nLoadedFlags = 0;
+                 pImp->bModelInitialized = sal_False;
+-                bOk = xStorage.is() && LoadOwnFormat( *pMed );
++                int end, pos = STRING_NOTFOUND;
++                String aUserData;
++                static const char PREPROCESS_CONST[]="Preprocess=<";
++                if (pFilter) {
++                    aUserData=pFilter->GetUserData();
++                    // check whether a prepocessing step is requested in the configuration
++                    pos=aUserData.Search(::rtl::OUString::createFromAscii(PREPROCESS_CONST).getStr(), 0);
++                    end=aUserData.Search( '>', pos+strlen(PREPROCESS_CONST));
++                }
 +				if (pos!=STRING_NOTFOUND && end!=STRING_NOTFOUND) {
 +					String aAppName(aUserData, pos+strlen(PREPROCESS_CONST), end-(pos+strlen(PREPROCESS_CONST)));
 +
 +					// setup status bar
-+					SfxItemSet *pSet = pMed->GetItemSet();
++					SfxItemSet *pSet2 = pMed->GetItemSet();
 +					const SfxUnoAnyItem *pItem=NULL;
-+					SfxItemState ret=pSet->GetItemState( SID_PROGRESS_STATUSBAR_CONTROL, TRUE, (const SfxPoolItem**)&pItem);
++					SfxItemState ret=pSet2->GetItemState( SID_PROGRESS_STATUSBAR_CONTROL, TRUE, (const SfxPoolItem**)&pItem);
 +					uno::Reference< ::com::sun::star::task::XStatusIndicator > xStatusIndicator;
 +					if (ret==SFX_ITEM_SET && pItem!=NULL)
 +					{
@@ -183,10 +200,10 @@
 +				} else {
 +            		bOk = xStorage.is() && LoadOwnFormat( *pMed );
 +				}
-             	if ( bOk )
-             	{
+                 if ( bOk )
+                 {
                      // the document loaded from template has no name
-@@ -1121,6 +1284,7 @@ void Lock_Impl( SfxObjectShell* pDoc, BO
+@@ -1126,6 +1293,7 @@ void Lock_Impl( SfxObjectShell* pDoc, BOOL bLock )
  
  }
  
@@ -194,30 +211,9 @@
  //-------------------------------------------------------------------------
  
  sal_Bool SfxObjectShell::SaveTo_Impl
-@@ -1622,11 +1786,11 @@ sal_Bool SfxObjectShell::SaveTo_Impl
-         // transfer data to its destinated location
- 		// the medium commits the storage or the stream it is based on
-         RegisterTransfer( rMedium );
--        bOk = rMedium.Commit();
- 
-         if ( bOk && bScriptSignatureIsCopied )
-         {
-             AddLog( ::rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( OSL_LOG_PREFIX "Script signature check." ) ) );
-+	                bOk = rMedium.Commit();
- 
- 			// if the script signature was copied it should be checked now
- 			// usually it should be ok, so no additional actions will be done
-@@ -1660,7 +1824,6 @@ sal_Bool SfxObjectShell::SaveTo_Impl
- 							if ( xTransact.is() )
- 								xTransact->commit();
- 
--        					bOk = rMedium.Commit();
- 						}
- 					}
- 				}
-@@ -1671,6 +1834,59 @@ sal_Bool SfxObjectShell::SaveTo_Impl
- 			}
- 		}
+@@ -1606,6 +1774,59 @@ sal_Bool SfxObjectShell::SaveTo_Impl
+             bOk = SaveChildren( TRUE );
+     }
  
 +	if (bOk) { // commit *before* we do the conversion!
 +	    bOk = rMedium.Commit();
@@ -234,9 +230,9 @@
 +			String aAppName(aUserData, pos+strlen(POSTPROCESS_CONST), end-(pos+strlen(POSTPROCESS_CONST)));
 +
 +			// setup status bar
-+			SfxItemSet *pSet = rMedium.GetItemSet();
++			SfxItemSet *pSet2 = rMedium.GetItemSet();
 +			const SfxUnoAnyItem *pItem=NULL;
-+			SfxItemState ret=pSet->GetItemState( SID_PROGRESS_STATUSBAR_CONTROL, TRUE, (const SfxPoolItem**)&pItem);
++			SfxItemState ret=pSet2->GetItemState( SID_PROGRESS_STATUSBAR_CONTROL, TRUE, (const SfxPoolItem**)&pItem);
 +			uno::Reference< ::com::sun::star::task::XStatusIndicator > xStatusIndicator;
 +			if (ret==SFX_ITEM_SET && pItem!=NULL)
 +			{
@@ -272,15 +268,19 @@
 +	    rMedium.SetStorage_Impl(xNewTmpStorage);
 +	}
 +
-         if ( bOk )
- 		{
-             // if the target medium is an alien format and the "old" medium was an own format and the "old" medium
-@@ -1701,7 +1917,7 @@ sal_Bool SfxObjectShell::SaveTo_Impl
- 			if ( bNeedsDisconnectionOnFail )
- 				ConnectTmpStorage_Impl( pImp->m_xDocStorage, NULL );
- 		}
--	}
-+    }
+     if ( bOk )
+     {
+         // if ODF version of oasis format changes on saving the signature should not be preserved
+@@ -1713,11 +1934,11 @@ sal_Bool SfxObjectShell::SaveTo_Impl
+         // transfer data to its destinated location
+         // the medium commits the storage or the stream it is based on
+         RegisterTransfer( rMedium );
+-        bOk = rMedium.Commit();
  
-     // unlock user interface
-     Lock_Impl( this, sal_False );
+         if ( bOk )
+         {
+             AddLog( ::rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( OSL_LOG_PREFIX "Storing is successful." ) ) );
++            bOk = rMedium.Commit();
+ 
+             // if the target medium is an alien format and the "old" medium was an own format and the "old" medium
+             // has a name, the object storage must be exchanged, because now we need a new temporary storage
