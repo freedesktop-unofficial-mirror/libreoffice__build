@@ -1,0 +1,546 @@
+diff --git sc/source/ui/app/inputhdl.cxx sc/source/ui/app/inputhdl.cxx
+index 85104d0..af14c64 100644
+--- sc/source/ui/app/inputhdl.cxx
++++ sc/source/ui/app/inputhdl.cxx
+@@ -2055,6 +2055,7 @@ IMPL_LINK( ScInputHandler, ModifyHdl, void *, EMPTYARG )
+ 
+ BOOL ScInputHandler::DataChanging( sal_Unicode cTyped, BOOL bFromCommand )		// return TRUE = new view created
+ {
++    pActiveViewSh->GetViewData()->SetPasteMode( SC_PASTE_NONE );
+     bInOwnChange = TRUE;				// disable ModifyHdl (reset in DataChanged)
+ 
+     if ( eMode == SC_INPUT_NONE )
+diff --git sc/source/ui/inc/gridwin.hxx sc/source/ui/inc/gridwin.hxx
+index 4013e1a..4c701ad 100644
+--- sc/source/ui/inc/gridwin.hxx
++++ sc/source/ui/inc/gridwin.hxx
+@@ -110,6 +110,7 @@ private:
+     // #114409#
+     ::sdr::overlay::OverlayObjectList*				mpOOCursors;
+     ::sdr::overlay::OverlayObjectList*              mpOOSelection;
++    ::sdr::overlay::OverlayObjectList*              mpOOSelectionBorder;
+     ::sdr::overlay::OverlayObjectList*              mpOOAutoFill;
+     ::sdr::overlay::OverlayObjectList*              mpOODragRect;
+     ::sdr::overlay::OverlayObjectList*              mpOOHeader;
+@@ -382,6 +383,8 @@ public:
+     void CursorChanged();
+     void DrawLayerCreated();
+ 
++    void            DeleteCopySourceOverlay();
++    void            UpdateCopySourceOverlay();
+     void            DeleteCursorOverlay();
+     void            UpdateCursorOverlay();
+     void            DeleteSelectionOverlay();
+diff --git sc/source/ui/inc/overlayobject.hxx sc/source/ui/inc/overlayobject.hxx
+new file mode 100644
+index 0000000..f95129c
+--- /dev/null
++++ sc/source/ui/inc/overlayobject.hxx
+@@ -0,0 +1,58 @@
++/*************************************************************************
++ *
++ * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
++ * 
++ * Copyright 2008 by Sun Microsystems, Inc.
++ *
++ * OpenOffice.org - a multi-platform office productivity suite
++ *
++ * $RCSfile: gridwin.hxx,v $
++ * $Revision: 1.30 $
++ *
++ * This file is part of OpenOffice.org.
++ *
++ * OpenOffice.org is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU Lesser General Public License version 3
++ * only, as published by the Free Software Foundation.
++ *
++ * OpenOffice.org is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU Lesser General Public License version 3 for more details
++ * (a copy is included in the LICENSE file that accompanied this code).
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * version 3 along with OpenOffice.org.  If not, see
++ * <http://www.openoffice.org/license.html>
++ * for a copy of the LGPLv3 License.
++ *
++ ************************************************************************/
++
++#ifndef __SC_OVERLAYOBJECT_HXX__
++#define __SC_OVERLAYOBJECT_HXX__
++
++#include "svx/sdr/overlay/overlayobject.hxx"
++
++class OutputDevice;
++class Window;
++
++class ScOverlayDashedBorder : public ::sdr::overlay::OverlayObject
++{
++public:
++    ScOverlayDashedBorder(const ::basegfx::B2DRange& rRange, const Color& rColor, Window* pWin);
++    virtual ~ScOverlayDashedBorder();
++
++    virtual void Trigger(sal_uInt32 nTime);
++
++    virtual void stripeDefinitionHasChanged();
++
++protected:
++    virtual drawinglayer::primitive2d::Primitive2DSequence createOverlayObjectPrimitive2DSequence();
++
++private:
++    ::basegfx::B2DRange maRange;
++    Window* mpParent;
++    bool mbToggle;
++};
++
++#endif
+diff --git sc/source/ui/inc/tabview.hxx sc/source/ui/inc/tabview.hxx
+index 0e1c5ac..da61d29 100644
+--- sc/source/ui/inc/tabview.hxx
++++ sc/source/ui/inc/tabview.hxx
+@@ -437,6 +437,7 @@ public:
+ 
+     void			CreateAnchorHandles(SdrHdlList& rHdl, const ScAddress& rAddress);
+ 
++    void            UpdateCopySourceOverlay();
+     void            UpdateSelectionOverlay();
+     void            UpdateShrinkOverlay();
+     void            UpdateAllOverlays();
+diff --git sc/source/ui/inc/viewdata.hxx sc/source/ui/inc/viewdata.hxx
+index 72fa6e5..eba3f23 100644
+--- sc/source/ui/inc/viewdata.hxx
++++ sc/source/ui/inc/viewdata.hxx
+@@ -89,6 +89,13 @@ enum ScMarkType
+ #endif
+ };
+ 
++enum ScPasteFlags
++{
++    SC_PASTE_NONE   = 0,    // No flags specified
++    SC_PASTE_MODE   = 1,    // Enable paste-mode
++    SC_PASTE_BORDER = 2,    // Show a border around the source cells
++};
++
+ class ScDocShell;
+ class ScDocument;
+ class ScDBFunc;
+@@ -213,6 +220,8 @@ private:
+     SCCOL				nTabStartCol;				// fuer Enter nach Tab
+     ScRange				aDelRange;					// fuer AutoFill-Loeschen
+ 
++    ScPasteFlags        nPasteFlags;
++
+     ScSplitPos          eEditActivePart;            // the part that was active when edit mode was started
+     BOOL				bEditActive[4];				// aktiv?
+     BOOL				bActive;					// aktives Fenster ?
+@@ -302,6 +311,8 @@ public:
+     SCCOL			GetFixPosX() const						{ return pThisTab->nFixPosX; }
+     SCROW			GetFixPosY() const						{ return pThisTab->nFixPosY; }
+     BOOL			IsPagebreakMode() const					{ return bPagebreak; }
++    bool            IsPasteMode() const                     { return nPasteFlags & SC_PASTE_MODE; }
++    bool            ShowPasteSource() const                 { return nPasteFlags & SC_PASTE_BORDER; }
+ 
+     void			SetPosX( ScHSplitPos eWhich, SCCOL nNewPosX );
+     void			SetPosY( ScVSplitPos eWhich, SCROW nNewPosY );
+@@ -316,6 +327,7 @@ public:
+     void			SetFixPosX( SCCOL nPos )						{ pThisTab->nFixPosX = nPos; }
+     void			SetFixPosY( SCROW nPos )						{ pThisTab->nFixPosY = nPos; }
+     void			SetPagebreakMode( BOOL bSet );
++    void            SetPasteMode ( ScPasteFlags nFlags )            { nPasteFlags = nFlags; }
+ 
+     void            SetZoomType( SvxZoomType eNew, BOOL bAll );
+     void            SetZoom( const Fraction& rNewX, const Fraction& rNewY, BOOL bAll );
+diff --git sc/source/ui/view/cellsh1.cxx sc/source/ui/view/cellsh1.cxx
+index 9a40e74..086ff00 100644
+--- sc/source/ui/view/cellsh1.cxx
++++ sc/source/ui/view/cellsh1.cxx
+@@ -1165,11 +1165,16 @@ void ScCellShell::ExecuteEdit( SfxRequest& rReq )
+         //	Clipboard
+         //
+ 
++
+         case SID_COPY:				// fuer Grafiken in DrawShell
+             {
+-                WaitObject aWait( GetViewData()->GetDialogParent() );
++                ScViewData* pViewData = GetViewData();
++                WaitObject aWait( pViewData->GetDialogParent() );
+                 pTabViewShell->CopyToClip( NULL, FALSE, FALSE, TRUE );
+                 rReq.Done();
++                pViewData->SetPasteMode( (ScPasteFlags) (SC_PASTE_MODE | SC_PASTE_BORDER) );
++                pTabViewShell->ShowCursor();
++                pTabViewShell->UpdateCopySourceOverlay();
+             }
+             break;
+ 
+@@ -1178,6 +1183,8 @@ void ScCellShell::ExecuteEdit( SfxRequest& rReq )
+                 WaitObject aWait( GetViewData()->GetDialogParent() );
+                 pTabViewShell->CutToClip( NULL, TRUE );
+                 rReq.Done();
++                GetViewData()->SetPasteMode( SC_PASTE_MODE );
++                pTabViewShell->UpdateCopySourceOverlay();
+             }
+             break;
+ 
+diff --git sc/source/ui/view/gridwin.cxx sc/source/ui/view/gridwin.cxx
+index 42b22a6..5e389ef 100644
+--- sc/source/ui/view/gridwin.cxx
++++ sc/source/ui/view/gridwin.cxx
+@@ -122,6 +122,9 @@
+ #include "tabprotection.hxx"
+ #include "postit.hxx"
+ #include "dpcontrol.hxx"
++#include "clipparam.hxx"
++#include "cellsh.hxx"
++#include "overlayobject.hxx"
+ 
+ #include "drawview.hxx"
+ #include <svx/sdrpagewindow.hxx>
+@@ -361,6 +364,7 @@ ScGridWindow::ScGridWindow( Window* pParent, ScViewData* pData, ScSplitPos eWhic
+             DragSourceHelper( this ),
+             mpOOCursors( NULL ),
+             mpOOSelection( NULL ),
++            mpOOSelectionBorder( NULL ),
+             mpOOAutoFill( NULL ),
+             mpOODragRect( NULL ),
+             mpOOHeader( NULL ),
+@@ -2945,12 +2949,30 @@ void ScGridWindow::SelectForContextMenu( const Point& rPosPixel )
+     }
+ }
+ 
++static void ClearSingleSelection( ScViewData* pViewData )
++{
++    SCCOL nX;
++    SCROW nY;
++    ScTransferObj* pTransObj = ScTransferObj::GetOwnClipboard( 
++        pViewData->GetActiveWin() );
++    if (!pTransObj)
++        return;
++
++    ScDocument* pClipDoc = pTransObj->GetDocument();
++    pClipDoc->GetClipArea( nX, nY, TRUE );
++    if (nX == 0 && nY == 0)
++    {
++        ScTabView* pView = pViewData->GetView();
++        pView->Unmark();
++    }
++}
++
+ void __EXPORT ScGridWindow::KeyInput(const KeyEvent& rKEvt)
+ {
+     // #96965# Cursor control for ref input dialog
++    const KeyCode& rKeyCode = rKEvt.GetKeyCode();
+     if( SC_MOD()->IsRefDialogOpen() )
+     {
+-        const KeyCode& rKeyCode = rKEvt.GetKeyCode();
+         if( !rKeyCode.GetModifier() && (rKeyCode.GetCode() == KEY_F2) )
+         {
+             SC_MOD()->EndReference();
+@@ -2965,9 +2987,35 @@ void __EXPORT ScGridWindow::KeyInput(const KeyEvent& rKEvt)
+             return;
+         }
+     }
++    else if( rKeyCode.GetCode() == KEY_RETURN && pViewData->IsPasteMode() )
++    {
++        ScTabViewShell* pTabViewShell = pViewData->GetViewShell();
++
++        ScCellShell::PasteFromClipboard( pViewData, pTabViewShell, FALSE );
++        ClearSingleSelection( pViewData );
++
++        uno::Reference<datatransfer::clipboard::XClipboard> xSystemClipboard = 
++            TransferableHelper::GetSystemClipboard();
++        if (xSystemClipboard.is())
++        {
++            xSystemClipboard->setContents(
++                    uno::Reference<datatransfer::XTransferable>(),
++                    uno::Reference<datatransfer::clipboard::XClipboardOwner>());
++        }
++
++        // hide the border around the copy source
++        pViewData->SetPasteMode( SC_PASTE_NONE );
++		UpdateCopySourceOverlay();
++        return;
++    }
+     // wenn semi-Modeless-SfxChildWindow-Dialog oben, keine KeyInputs:
+     else if( !pViewData->IsAnyFillMode() )
+     {
++        if (rKeyCode.GetCode() == KEY_ESCAPE)
++        {
++            pViewData->SetPasteMode( SC_PASTE_NONE );
++            UpdateCopySourceOverlay();
++        }
+         //	query for existing note marker before calling ViewShell's keyboard handling
+         //	which may remove the marker
+         BOOL bHadKeyMarker = ( pNoteMarker && pNoteMarker->IsByKeyboard() );
+@@ -5050,6 +5098,7 @@ void ScGridWindow::CursorChanged()
+ void ScGridWindow::ImpCreateOverlayObjects()
+ {
+     UpdateCursorOverlay();
++    UpdateCopySourceOverlay();
+     UpdateSelectionOverlay();
+     UpdateAutoFillOverlay();
+     UpdateDragRectOverlay();
+@@ -5061,6 +5110,7 @@ void ScGridWindow::ImpCreateOverlayObjects()
+ void ScGridWindow::ImpDestroyOverlayObjects()
+ {
+     DeleteCursorOverlay();
++    DeleteCopySourceOverlay();
+     DeleteSelectionOverlay();
+     DeleteAutoFillOverlay();
+     DeleteDragRectOverlay();
+@@ -5081,6 +5131,68 @@ void ScGridWindow::DeleteCursorOverlay()
+     DELETEZ( mpOOCursors );
+ }
+ 
++void ScGridWindow::DeleteCopySourceOverlay()
++{
++    DELETEZ( mpOOSelectionBorder );
++}
++
++void ScGridWindow::UpdateCopySourceOverlay()
++{
++    MapMode aDrawMode = GetDrawMapMode();
++    MapMode aOldMode = GetMapMode();
++    if ( aOldMode != aDrawMode )
++        SetMapMode( aDrawMode );
++
++    DeleteCopySourceOverlay();
++
++    if (!pViewData->ShowPasteSource())
++        return;
++    ::sdr::overlay::OverlayManager* pOverlayManager = getOverlayManager();
++    if (!pOverlayManager)
++        return;
++    ScTransferObj* pTransObj = ScTransferObj::GetOwnClipboard( pViewData->GetActiveWin() );
++    if (!pTransObj)
++        return;
++    ScDocument* pClipDoc = pTransObj->GetDocument();
++    if (!pClipDoc)
++        return;
++
++    SCTAB nCurTab = pViewData->GetCurPos().Tab();
++
++    ScClipParam& rClipParam = pClipDoc->GetClipParam();
++    mpOOSelectionBorder = new ::sdr::overlay::OverlayObjectList;
++    for (ScRange* p = rClipParam.maRanges.First(); p; p = rClipParam.maRanges.Next())
++    {
++        if (p->aStart.Tab() != nCurTab)
++            continue;
++
++        SCCOL nClipStartX = p->aStart.Col();
++        SCROW nClipStartY = p->aStart.Row();
++        SCCOL nClipEndX   = p->aEnd.Col();
++        SCROW nClipEndY   = p->aEnd.Row();
++    
++        Point aClipStartScrPos = pViewData->GetScrPos( nClipStartX, nClipStartY, eWhich );
++        Point aClipEndScrPos   = pViewData->GetScrPos( nClipEndX + 1, nClipEndY + 1, eWhich );
++        aClipStartScrPos -= Point(1, 1);
++        long nSizeXPix = aClipEndScrPos.X() - aClipStartScrPos.X();
++        long nSizeYPix = aClipEndScrPos.Y() - aClipStartScrPos.Y();
++    
++        Rectangle aRect( aClipStartScrPos, Size(nSizeXPix, nSizeYPix) );
++    
++    
++        Color aHighlight = GetSettings().GetStyleSettings().GetHighlightColor();
++
++        Rectangle aLogic = PixelToLogic(aRect, aDrawMode);
++        ::basegfx::B2DRange aRange(aLogic.Left(), aLogic.Top(), aLogic.Right(), aLogic.Bottom());
++        ScOverlayDashedBorder* pDashedBorder = new ScOverlayDashedBorder(aRange, aHighlight, this);
++        pOverlayManager->add(*pDashedBorder);
++        mpOOSelectionBorder->append(*pDashedBorder);
++    }
++
++    if ( aOldMode != aDrawMode )
++        SetMapMode( aOldMode );
++}
++
+ void ScGridWindow::UpdateCursorOverlay()
+ {
+     MapMode aDrawMode = GetDrawMapMode();
+diff --git sc/source/ui/view/makefile.mk sc/source/ui/view/makefile.mk
+index 466ab5d..d59f3ea 100644
+--- sc/source/ui/view/makefile.mk
++++ sc/source/ui/view/makefile.mk
+@@ -98,6 +98,7 @@ SLOFILES =  \
+         $(SLO)$/output.obj \
+         $(SLO)$/output2.obj \
+         $(SLO)$/output3.obj \
++        $(SLO)$/overlayobject.obj \
+         $(SLO)$/gridmerg.obj \
+         $(SLO)$/invmerge.obj \
+         $(SLO)$/select.obj \
+@@ -152,6 +153,7 @@ EXCEPTIONSFILES= \
+     $(SLO)$/gridwin.obj \
+     $(SLO)$/invmerge.obj \
+     $(SLO)$/output2.obj \
++    $(SLO)$/overlayobject.obj \
+     $(SLO)$/pfuncache.obj \
+     $(SLO)$/spelldialog.obj \
+     $(SLO)$/cellsh1.obj \
+diff --git sc/source/ui/view/overlayobject.cxx sc/source/ui/view/overlayobject.cxx
+new file mode 100644
+index 0000000..e5ff9a0
+--- /dev/null
++++ sc/source/ui/view/overlayobject.cxx
+@@ -0,0 +1,104 @@
++/*************************************************************************
++ *
++ * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
++ * 
++ * Copyright 2008 by Sun Microsystems, Inc.
++ *
++ * OpenOffice.org - a multi-platform office productivity suite
++ *
++ * $RCSfile: gridwin.hxx,v $
++ * $Revision: 1.30 $
++ *
++ * This file is part of OpenOffice.org.
++ *
++ * OpenOffice.org is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU Lesser General Public License version 3
++ * only, as published by the Free Software Foundation.
++ *
++ * OpenOffice.org is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU Lesser General Public License version 3 for more details
++ * (a copy is included in the LICENSE file that accompanied this code).
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * version 3 along with OpenOffice.org.  If not, see
++ * <http://www.openoffice.org/license.html>
++ * for a copy of the LGPLv3 License.
++ *
++ ************************************************************************/
++
++// MARKER(update_precomp.py): autogen include statement, do not remove
++#include "precompiled_sc.hxx"
++
++#include "overlayobject.hxx"
++#include "vcl/outdev.hxx"
++#include "vcl/lineinfo.hxx"
++#include "vcl/salbtype.hxx"
++#include "vcl/window.hxx"
++#include "tools/fract.hxx"
++#include "basegfx/range/b2drange.hxx"
++#include "basegfx/polygon/b2dpolygon.hxx"
++#include "basegfx/polygon/b2dpolygontools.hxx"
++#include "svx/sdr/overlay/overlaymanager.hxx"
++#include "drawinglayer/primitive2d/baseprimitive2d.hxx"
++#include "drawinglayer/primitive2d/polypolygonprimitive2d.hxx"
++
++using ::sdr::overlay::OverlayObject;
++using ::sdr::overlay::OverlayManager;
++using ::drawinglayer::primitive2d::Primitive2DSequence;
++
++#define DASH_UPDATE_INTERVAL 180    // in msec
++
++ScOverlayDashedBorder::ScOverlayDashedBorder(const ::basegfx::B2DRange& rRange, const Color& rColor, Window* pWin) :
++    OverlayObject(rColor),
++    mpParent(pWin),
++    mbToggle(true)
++{
++    mbAllowsAnimation = true;
++    maRange = rRange;
++}
++
++ScOverlayDashedBorder::~ScOverlayDashedBorder()
++{
++}
++
++void ScOverlayDashedBorder::Trigger(sal_uInt32 nTime)
++{
++    OverlayManager* pMgr = getOverlayManager();
++    if (pMgr)
++    {
++        SetTime(nTime + DASH_UPDATE_INTERVAL);
++        mbToggle = !mbToggle;
++        pMgr->InsertEvent(this);
++        objectChange();
++    }
++}
++
++void ScOverlayDashedBorder::stripeDefinitionHasChanged()
++{
++    objectChange();
++}
++
++Primitive2DSequence ScOverlayDashedBorder::createOverlayObjectPrimitive2DSequence()
++{
++    using ::basegfx::B2DPolygon;
++    using ::basegfx::B2DPolyPolygon;
++
++    OverlayManager* pMgr = getOverlayManager();
++    if (!pMgr)
++        return Primitive2DSequence();
++
++    basegfx::BColor aColorA = pMgr->getStripeColorA().getBColor();
++    basegfx::BColor aColorB = pMgr->getStripeColorB().getBColor();
++    if (!mbToggle)
++        ::std::swap(aColorA, aColorB);
++
++    const basegfx::B2DPolygon aPoly = basegfx::tools::createPolygonFromRect(maRange);
++    B2DPolyPolygon aPolygon(aPoly);
++    const drawinglayer::primitive2d::Primitive2DReference aReference(
++        new drawinglayer::primitive2d::PolyPolygonMarkerPrimitive2D(
++            aPolygon, aColorA, aColorB, pMgr->getStripeLengthPixel()));
++
++    return drawinglayer::primitive2d::Primitive2DSequence(&aReference, 1);
++}
+diff --git sc/source/ui/view/tabview2.cxx sc/source/ui/view/tabview2.cxx
+index efc28d8..216e5f1 100644
+--- sc/source/ui/view/tabview2.cxx
++++ sc/source/ui/view/tabview2.cxx
+@@ -414,6 +414,13 @@ void ScTabView::MarkCursor( SCCOL nCurX, SCROW nCurY, SCTAB nCurZ,
+         aHdrFunc.SetAnchorFlag( FALSE );
+ }
+ 
++void ScTabView::UpdateCopySourceOverlay()
++{
++    for (sal_uInt8 i = 0; i < 4; ++i)
++        if (pGridWin[i] && pGridWin[i]->IsVisible())
++            pGridWin[i]->UpdateCopySourceOverlay();
++}
++
+ void ScTabView::UpdateSelectionOverlay()
+ {
+     for (USHORT i=0; i<4; i++)
+diff --git sc/source/ui/view/tabview3.cxx sc/source/ui/view/tabview3.cxx
+index ca93f01..daa8a47 100644
+--- sc/source/ui/view/tabview3.cxx
++++ sc/source/ui/view/tabview3.cxx
+@@ -1817,6 +1817,7 @@ void ScTabView::MakeEditView( ScEditEngineDefaulter* pEngine, SCCOL nCol, SCROW
+ 
+                     pGridWin[i]->DeleteCursorOverlay();
+                     pGridWin[i]->DeleteAutoFillOverlay();
++                    pGridWin[i]->DeleteCopySourceOverlay();
+ 
+                     // flush OverlayManager before changing MapMode to text edit
+                     pGridWin[i]->flushOverlayManager();
+diff --git sc/source/ui/view/viewdata.cxx sc/source/ui/view/viewdata.cxx
+index d10a48d..6d0c6b4 100644
+--- sc/source/ui/view/viewdata.cxx
++++ sc/source/ui/view/viewdata.cxx
+@@ -319,6 +319,7 @@ ScViewData::ScViewData( ScDocShell* pDocSh, ScTabViewShell* pViewSh )
+         eRefType	( SC_REFTYPE_NONE ),
+         nTabNo		( 0 ),
+         nRefTabNo	( 0 ),
++        nPasteFlags ( SC_PASTE_NONE ),
+         eEditActivePart( SC_SPLIT_BOTTOMLEFT ),
+         bActive		( TRUE ),					//! wie initialisieren?
+         bIsRefMode	( FALSE ),
+diff --git sc/source/ui/view/viewfunc.cxx sc/source/ui/view/viewfunc.cxx
+index 2842e50..efb3426 100644
+--- sc/source/ui/view/viewfunc.cxx
++++ sc/source/ui/view/viewfunc.cxx
+@@ -1897,6 +1897,10 @@ void ScViewFunc::DeleteMulti( BOOL bRows, BOOL bRecord )
+ 
+ void ScViewFunc::DeleteContents( USHORT nFlags, BOOL bRecord )
+ {
++    ScViewData* pViewData = GetViewData();
++    pViewData->SetPasteMode( SC_PASTE_NONE );
++    pViewData->GetViewShell()->UpdateCopySourceOverlay();
++
+     // nur wegen Matrix nicht editierbar? Attribute trotzdem ok
+     BOOL bOnlyNotBecauseOfMatrix;
+     BOOL bEditable = SelectionEditable( &bOnlyNotBecauseOfMatrix );
