@@ -1,60 +1,36 @@
 #!/bin/bash
 #
-# Doxygen Doc generation script
+# Doxygen Doc generation
 #
-# Last changes: 06/06/2008
-#
-###################################################
-#
-# Config
-#
-###################################################
+
+# binaries that we need
+which doxygen > /dev/null 2>&1 || {
+    echo "You need doxygen for doc generation"
+	exit 1
+}
+which dot > /dev/null 2>&1 || {
+    echo "You need the graphviz tools to create the nice inheritance graphs"
+    exit 1
+}
 
 # otherwise, aliases are not expanded below
 shopt -s expand_aliases
 
 # Title of the documentation
-DOXYGEN_PROJECT_PREFIX="OOo"
+DOXYGEN_PROJECT_PREFIX="ooo-build"
 
-# branch to draw from
-MASTER_BRANCH=DEV300
+# suck setup
+BINDIR=`dirname $0`
+. $BINDIR/setup
 
-# scrape latest milestone from EIS
-LATEST_MWS=`wget -O - http://eis.services.openoffice.org/EIS2/cws.rss.CWSAnnounceNewsFeed/mws 2>/dev/null | grep "<title>${MASTER_BRANCH}_[a-z0-9]\+ ready for use" | head -n1 | sed -e ' s/.*title>\([A-Z]\+[0-9]\+_[a-z0-9]\+\).*/\1/'`
-
-echo "Latest MWS: $LATEST_MWS"
-
-# fiddle milestone
-MILESTONE=`echo $LATEST_MWS | sed -e ' s/[A-Z]\+[0-9]\+_\([a-z0-9]\+\)/\1/'`
-MILESTONE_NUMBER=`echo $LATEST_MWS | sed -e ' s/[A-Z]\+[0-9]\+_[a-z]\([0-9]\+\)/\1/'`
-
-# checkout everything referenced from smoketest
-echo "Checking out $MASTER_BRANCH $MILESTONE ..."
-if test $MILESTONE_NUMBER -gt 32; then
-	svn switch "svn://svn.services.openoffice.org/ooo/tags/${LATEST_MWS}" || {
-		echo "Run this in the toplevel dir of a ooo checkout"
-		exit 1
-	}
-else
-	ooco -v Master=$MASTER_BRANCH -v Milestone=$MILESTONE
-fi
-
-# configure some random build - we need solver minimally populated
-pushd config_office ; ./configure --disable-odk --disable-mozilla ; popd
-
-# we just need a few paths to solver headers
-source Linux*.sh
-./bootstrap
-
-# ...and those headers delivered
-for DIR in *; do if [ -d $DIR ]; then pushd $DIR; deliver; popd; fi; done
+. ./*.Set.sh
 
 # get list of modules in build order - bah, blows RAM & disk, static list below
-#INPUT_PROJECTS=`build --all --show | sed -n -e '/Building module/ s/Building module // p'`
+#INPUT_PROJECTS=`build --all --show | sed -n -e '/Entering module/ s/Entering module // p'`
 INPUT_PROJECTS="o3tl basegfx vcl canvas cppcanvas oox svtools goodies drawinglayer xmloff slideshow sfx2 svx chart2 dbaccess sd sc sw"
 
 # output directory for generated documentation
-BASE_OUTPUT="/tmp/docs"
+BASE_OUTPUT="$1"
 mkdir -p "$BASE_OUTPUT" || {
 	echo "Cannot create $BASE_OUTPUT"
 	exit 1
@@ -62,9 +38,9 @@ mkdir -p "$BASE_OUTPUT" || {
 
 # paths for binary and configuration file
 BASE_PATH=`pwd`
-DOXYGEN_CFG=`dirname $0`/doxygen.cfg
+DOXYGEN_CFG="$2"
 if test ! -f "$DOXYGEN_CFG"; then
-	echo "please put doxygen.cfg next to this script"
+	echo "doxygen.cfg not found"
 	exit 1
 fi
 
@@ -72,7 +48,7 @@ fi
 DOXYGEN_INCLUDE_PATH=`echo $SOLARINC | sed -e ' s/-I\.//'g | sed -e ' s/ -I/ /'g | sed -e ' s|/usr/[^ ]*| |g'`
 
 # setup version string
-DOXYGEN_VERSION="$MASTER_BRANCH $MILESTONE"
+DOXYGEN_VERSION="$GITTAG"
 
 
 ###################################################
@@ -153,4 +129,3 @@ cat - >> $BASE_OUTPUT/index.html <<EOF
 EOF
 
 ## done
-
