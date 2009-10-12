@@ -29,6 +29,273 @@
              <!-- We want the Provider to be the final fallback provider -->
              <node oor:name="Provider999" oor:op="replace" install:module="gio">
                <prop oor:name="ServiceName">
+--- sc/source/ui/docshell/docsh.cxx.old	2009-04-02 10:45:27.000000000 +0000
++++ sc/source/ui/docshell/docsh.cxx	2009-04-06 16:41:46.000000000 +0000
+@@ -823,7 +823,7 @@ BOOL __EXPORT ScDocShell::ConvertFrom( S
+ 	//	Alle Filter brauchen die komplette Datei am Stueck (nicht asynchron),
+ 	//	darum vorher per CreateFileStream dafuer sorgen, dass die komplette
+ 	//	Datei uebertragen wird.
+-	rMedium.GetPhysicalName();	//! CreateFileStream direkt rufen, wenn verfuegbar
++	rMedium.GetPhysicalName( sal_False );	//! CreateFileStream direkt rufen, wenn verfuegbar
+ 
+     SFX_ITEMSET_ARG( rMedium.GetItemSet(), pUpdateDocItem, SfxUInt16Item, SID_UPDATEDOCMODE, sal_False);
+     nCanUpdate = pUpdateDocItem ? pUpdateDocItem->GetValue() : com::sun::star::document::UpdateDocMode::NO_UPDATE;
+--- sfx2/inc/sfx2/docfile.hxx
++++ sfx2/inc/sfx2/docfile.hxx
+@@ -186,7 +186,7 @@ public:
+     ::com::sun::star::util::DateTime GetInitFileDate( sal_Bool bIgnoreOldValue );
+ 
+     ::com::sun::star::uno::Reference< ::com::sun::star::ucb::XContent > GetContent() const;
+-	const String&       GetPhysicalName() const;
++	const String&       GetPhysicalName( sal_Bool bForceCreateTempIfRemote = sal_True ) const;
+     void                SetTemporary( sal_Bool bTemp );
+     sal_Bool            IsTemporary() const;
+     sal_Bool            IsRemote();
+@@ -260,6 +260,8 @@ public:
+     void				SetCharset( ::rtl::OUString );
+     ::rtl::OUString     GetBaseURL( bool bForSaving=false );
+ 
++    sal_Bool            SupportsActiveStreaming( const rtl::OUString &rName ) const;
++
+ #if _SOLAR__PRIVATE
+     SAL_DLLPRIVATE BOOL HasStorage_Impl() const;
+ 
+--- sfx2/source/doc/docfile.cxx
++++ sfx2/source/doc/docfile.cxx
+@@ -533,7 +533,7 @@
+ //------------------------------------------------------------------
+ sal_Bool SfxMedium::DocNeedsFileDateCheck()
+ {
+-    return ( !IsReadOnly() && ::utl::LocalFileHelper::IsLocalFile( GetURLObject().GetMainURL( INetURLObject::NO_DECODE ) ) );
++    return ( !IsReadOnly() && SupportsActiveStreaming( GetURLObject().GetMainURL( INetURLObject::NO_DECODE ) ) );
+ }
+ 
+ //------------------------------------------------------------------
+@@ -749,10 +749,13 @@ sal_Bool SfxMedium::CloseOutStream_Impl(
+ }
+ 
+ //------------------------------------------------------------------
+-const String& SfxMedium::GetPhysicalName() const
++const String& SfxMedium::GetPhysicalName( sal_Bool bForceCreateTempIfRemote ) const
+ {
+     if ( !aName.Len() && aLogicName.Len() )
+-        (( SfxMedium*)this)->CreateFileStream();
++    {
++        if ( bForceCreateTempIfRemote || !SupportsActiveStreaming( aLogicName ) )
++            (( SfxMedium*)this)->CreateFileStream();
++    }
+ 
+     // return the name then
+     return aName;
+@@ -796,8 +799,6 @@ sal_Bool SfxMedium::Commit()
+     if ( bResult && DocNeedsFileDateCheck() )
+         GetInitFileDate( sal_True );
+ 
+-    // remove truncation mode from the flags
+-    nStorOpenMode &= (~STREAM_TRUNC);
+     return bResult;
+ }
+ 
+@@ -928,6 +929,26 @@
+     return bPreview;
+ }
+ 
++//------------------------------------------------------------------
++sal_Bool SfxMedium::SupportsActiveStreaming( const rtl::OUString &rName ) const
++{
++    if ( ::utl::LocalFileHelper::IsLocalFile( rName ) )
++        return sal_True;
++
++    ::ucbhelper::Content aTmpContent;
++    Reference< ::com::sun::star::ucb::XCommandEnvironment > xDummyEnv;
++    if ( ::ucbhelper::Content::create( GetURLObject().GetMainURL( INetURLObject::NO_DECODE ), xDummyEnv, aTmpContent ) )
++    {
++        Any aAny = aTmpContent.getPropertyValue(
++                ::rtl::OUString(RTL_CONSTASCII_USTRINGPARAM( "SupportsActiveStreaming" )) );
++
++        sal_Bool bSupportsStreaming = sal_False;
++        return ( ( aAny >>= bSupportsStreaming ) && bSupportsStreaming );
++    }
++
++    return sal_False;
++}
++
+ //------------------------------------------------------------------
+ void SfxMedium::StorageBackup_Impl()
+ {
+@@ -924,7 +924,7 @@
+ 
+     sal_Bool bBasedOnOriginalFile = ( !pImp->pTempFile && !( aLogicName.Len() && pImp->m_bSalvageMode )
+         && GetURLObject().GetMainURL( INetURLObject::NO_DECODE ).getLength()
+-        && ::utl::LocalFileHelper::IsLocalFile( GetURLObject().GetMainURL( INetURLObject::NO_DECODE ) )
++        && SupportsActiveStreaming( GetURLObject().GetMainURL( INetURLObject::NO_DECODE ) )
+         && ::utl::UCBContentHelper::IsDocument( GetURLObject().GetMainURL( INetURLObject::NO_DECODE ) ) );
+ 
+     if ( bBasedOnOriginalFile && !pImp->m_aBackupURL.getLength()
+@@ -996,10 +1017,119 @@ uno::Reference < embed::XStorage > SfxMe
+ 
+     DBG_ASSERT( !pOutStream, "OutStream in a readonly Medium?!" );
+ 
+-    // TODO/LATER: The current solution is to store the document temporary and then copy it to the target location;
+-    // in future it should be stored directly and then copied to the temporary location, since in this case no
+-    // file attributes have to be preserved and system copying mechanics could be used instead of streaming.
++    // medium based on OutputStream: must work with TempFile
++    if( aLogicName.CompareToAscii( "private:stream", 14 ) == COMPARE_EQUAL
++	  || !::utl::LocalFileHelper::IsLocalFile( aLogicName ) )
+     CreateTempFileNoCopy();
++	// if Medium already contains a stream - TODO/LATER: store stream/outputstream in ImplData, not in Medium
++	else if ( GetItemSet()->GetItemState( SID_STREAM ) < SFX_ITEM_SET )
++	{
++		// check whether the backup should be created
++		StorageBackup_Impl();
++
++		if ( GetError() )
++			return uno::Reference< embed::XStorage >();
++
++        String aOutputURL;
++        if ( aName.Len() )
++        {
++            if ( !::utl::LocalFileHelper::ConvertPhysicalNameToURL( aName, aOutputURL ) )
++            {
++                DBG_ERROR( "Physical name not convertible!" );
++            }
++        }
++        else
++        {
++            aOutputURL = GetURLObject().GetMainURL( INetURLObject::NO_DECODE );
++        }
++
++        SFX_ITEMSET_ARG( GetItemSet(), pOverWrite, SfxBoolItem, SID_OVERWRITE, sal_False );
++        SFX_ITEMSET_ARG( GetItemSet(), pRename, SfxBoolItem, SID_RENAME, sal_False );
++        sal_Bool bRename = pRename ? pRename->GetValue() : FALSE;
++        sal_Bool bOverWrite = pOverWrite ? pOverWrite->GetValue() : !bRename;
++
++        // the target file must be truncated before a storage based on it is created
++        try
++        {
++            uno::Reference< lang::XMultiServiceFactory > xFactory = ::comphelper::getProcessServiceFactory();
++            uno::Reference< ::com::sun::star::ucb::XSimpleFileAccess > xSimpleFileAccess(
++                    xFactory->createInstance( ::rtl::OUString::createFromAscii("com.sun.star.ucb.SimpleFileAccess") ),
++                    uno::UNO_QUERY_THROW );
++
++            uno::Reference< ucb::XCommandEnvironment > xDummyEnv;
++            ::ucbhelper::Content aContent = ::ucbhelper::Content( aOutputURL, xDummyEnv );
++
++            uno::Reference< io::XStream > xStream;
++            sal_Bool bDeleteOnFailure = sal_False;
++
++            try
++            {
++                xStream = aContent.openWriteableStreamNoLock();
++
++                if ( !bOverWrite )
++                {
++                    // the stream should not exist, it should not be possible to open it
++                    if ( xStream->getOutputStream().is() )
++                        xStream->getOutputStream()->closeOutput();
++                    if ( xStream->getInputStream().is() )
++                        xStream->getInputStream()->closeInput();
++
++                    xStream = uno::Reference< io::XStream >();
++                    SetError( ERRCODE_IO_GENERAL, ::rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( OSL_LOG_PREFIX ) ) );
++                }
++            }
++            catch ( ucb::InteractiveIOException const & e )
++            {
++                if ( e.Code == ucb::IOErrorCode_NOT_EXISTING )
++                {
++                    // Create file...
++                    SvMemoryStream aStream(0,0);
++                    uno::Reference< io::XInputStream > xInput( new ::utl::OInputStreamWrapper( aStream ) );
++                    ucb::InsertCommandArgument aInsertArg;
++                    aInsertArg.Data = xInput;
++                    aInsertArg.ReplaceExisting = sal_False;
++                    aContent.executeCommand( rtl::OUString::createFromAscii( "insert" ), uno::makeAny( aInsertArg ) );
++
++                    // Try to open one more time
++                    xStream = aContent.openWriteableStreamNoLock();
++                    bDeleteOnFailure = sal_True;
++                }
++                else
++                    throw;
++            }
++
++            if ( xStream.is() )
++            {
++                if ( !pImp->pTempFile && !( aLogicName.Len() && pImp->m_bSalvageMode )
++                      && GetURLObject().GetMainURL( INetURLObject::NO_DECODE ).getLength()
++                      && SupportsActiveStreaming( GetURLObject().GetMainURL( INetURLObject::NO_DECODE ) )
++                      && ::utl::UCBContentHelper::IsDocument( GetURLObject().GetMainURL( INetURLObject::NO_DECODE ) ) )
++                {
++                    // the storage will be based on original file, the wrapper should be used
++                    xStream = new OPostponedTruncationFileStream( aOutputURL, xFactory, xSimpleFileAccess, xStream, bDeleteOnFailure );
++                }
++                else
++                {
++                    // the storage will be based on the temporary file, the stream can be truncated directly
++                    uno::Reference< io::XOutputStream > xOutStream = xStream->getOutputStream();
++                    uno::Reference< io::XTruncate > xTruncate( xOutStream, uno::UNO_QUERY );
++                    if ( !xTruncate.is() )
++                        throw uno::RuntimeException();
++
++                    xTruncate->truncate();
++                    xOutStream->flush();
++                }
++
++                pImp->xStream = xStream;
++                GetItemSet()->Put( SfxUsrAnyItem( SID_STREAM, makeAny( xStream ) ) );
++            }
++        }
++        catch( uno::Exception& )
++        {
++            // TODO/LATER: try to use the temporary file in case the target content can not be opened, it might happen in case of some FS, the copy functionality might work in this case
++            SetError( ERRCODE_IO_GENERAL, ::rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( OSL_LOG_PREFIX ) ) );
++        }
++    }
+ 
+     return GetStorage();
+ }
+@@ -2210,7 +2326,7 @@ void SfxMedium::Transfer_Impl()
+             xComEnv = new ::ucbhelper::CommandEnvironment( xInteractionHandler,
+                                                       Reference< ::com::sun::star::ucb::XProgressHandler >() );
+ 
+-        if ( ::utl::LocalFileHelper::IsLocalFile( aDest.GetMainURL( INetURLObject::NO_DECODE ) ) || !aDest.removeSegment() )
++        if ( SupportsActiveStreaming( aDest.GetMainURL( INetURLObject::NO_DECODE ) ) || !aDest.removeSegment() )
+         {
+             TransactedTransferForFS_Impl( aSource, aDest, xComEnv );
+         }
+@@ -2542,7 +2658,7 @@ void SfxMedium::GetMedium_Impl()
+                     aMedium.erase( comphelper::MediaDescriptor::PROP_READONLY() );
+                     aMedium.addInputStream();
+                 }
+-                else if ( ::utl::LocalFileHelper::IsLocalFile( GetURLObject().GetMainURL( INetURLObject::NO_DECODE ) ) )
++                else if ( SupportsActiveStreaming( GetURLObject().GetMainURL( INetURLObject::NO_DECODE ) ) )
+                 {
+                     // use the special locking approach only for file URLs
+                     aMedium.addInputStreamOwnLock();
+@@ -3249,7 +3249,7 @@
+     if ( !( nStorOpenMode & STREAM_TRUNC ) )
+     {
+         if ( GetContent().is()
+-          && ::utl::LocalFileHelper::IsLocalFile( GetURLObject().GetMainURL( INetURLObject::NO_DECODE ) )
++          && SupportsActiveStreaming( GetURLObject().GetMainURL( INetURLObject::NO_DECODE ) )
+           && ::utl::UCBContentHelper::IsDocument( GetURLObject().GetMainURL( INetURLObject::NO_DECODE ) ) )
+         {
+             // if there is already such a document, we should copy it
+--- sfx2/source/view/viewfrm.cxx
++++ sfx2/source/view/viewfrm.cxx
+@@ -631,6 +631,11 @@ void SfxViewFrame::ExecReload_Impl( SfxR
+                 sal_Bool bHandsOff =
+                     ( pMedium->GetURLObject().GetProtocol() == INET_PROT_FILE && !xOldObj->IsDocShared() );
+ 
++                // we must do the same for the contents that support active
++                // streaming
++                if ( !bHandsOff && pMedium && pMedium->SupportsActiveStreaming( aURL ) )
++                    bHandsOff = sal_True;
++
+                 // bestehende SfxMDIFrames f"ur dieses Doc leeren
+                 // eigenes Format oder R/O jetzt editierbar "offnen?
+                 SfxViewNotificatedFrameList_Impl aFrames;
 --- tools/inc/tools/urlobj.hxx
 +++ tools/inc/tools/urlobj.hxx
 @@ -141,9 +141,14 @@ enum INetProtocol
