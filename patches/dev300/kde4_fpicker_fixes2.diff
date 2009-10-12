@@ -1,0 +1,239 @@
+diff --git fpicker/source/unx/kde4/KDE4FilePicker.cxx fpicker/source/unx/kde4/KDE4FilePicker.cxx
+index 6c6db9e..61812d5 100644
+--- fpicker/source/unx/kde4/KDE4FilePicker.cxx
++++ fpicker/source/unx/kde4/KDE4FilePicker.cxx
+@@ -165,7 +165,6 @@ KDE4FilePicker::KDE4FilePicker( const uno::Reference<lang::XMultiServiceFactory>
+ 		  _resMgr( CREATEVERSIONRESMGR( fps_office ) )
+ {
+ 	_extraControls = new QWidget();
+-	
+ 	_layout = new QGridLayout(_extraControls);
+ 	
+ 	_dialog = new KFileDialog(KUrl("~"), QString(""), 0, _extraControls);
+@@ -173,6 +172,8 @@ KDE4FilePicker::KDE4FilePicker( const uno::Reference<lang::XMultiServiceFactory>
+ 	
+ 	//default mode
+ 	_dialog->setOperationMode(KFileDialog::Opening);
++	
++	_dialog->setStyleSheet("color: black;");
+ }
+ 
+ KDE4FilePicker::~KDE4FilePicker()
+@@ -218,15 +219,8 @@ sal_Int16 SAL_CALL KDE4FilePicker::execute()
+ 	_dialog->clearFilter();
+ 	_dialog->setFilter(_filter);
+ 	
+-	_dialog->exec();
+-	
+-	//nasty hack to get a local qt event loop going to process the dialog
+-	//otherwise the dialog returns immediately
+-	while (_dialog->isVisible())
+-		kapp->processEvents(QEventLoop::WaitForMoreEvents);
+-	
+ 	//block and wait for user input
+-	if (_dialog->result() == KFileDialog::Accepted)
++	if (_dialog->exec() == KFileDialog::Accepted)
+ 		return ExecutableDialogResults::OK;
+ 	
+ 	return ExecutableDialogResults::CANCEL;
+@@ -288,9 +282,15 @@ uno::Sequence< ::rtl::OUString > SAL_CALL KDE4FilePicker::getFiles()
+ 	// make a true list of files
+ 	const QString dir = "file://" + KUrl(rawFiles[0]).directory();
+ 	
+-	// by appending the dir, we make OO treat all opens like multifile opens
+-	// this makes the code for adding the the OO sequence simpler
+-	files.append(dir);
++	bool singleFile = true;
++	if (rawFiles.size() > 1)
++	{
++		singleFile = false;
++		//for multi file sequences, oo expects the first param to be the directory
++		//can't treat all cases like multi file because in some instances (inserting image)
++		//oo WANTS only one entry in the final list
++		files.append(dir);
++	}
+ 	
+ 	for (USHORT i = 0; i < rawFiles.size(); ++i)
+ 	{
+@@ -298,7 +298,10 @@ uno::Sequence< ::rtl::OUString > SAL_CALL KDE4FilePicker::getFiles()
+ 		// we add the file to list of avail files
+ 		if ((dir + "/") != ("file://" + rawFiles[i]))
+ 		{
+-			const QString filename = KUrl(rawFiles[i]).fileName();
++			QString filename = KUrl(rawFiles[i]).fileName();
++			
++			if (singleFile)
++				filename.prepend(dir + "/");
+ 			
+ 			//prevent extension append if we already have one
+ 			if (filename.endsWith(extension))
+@@ -332,15 +335,18 @@ void SAL_CALL KDE4FilePicker::appendFilter( const ::rtl::OUString &title, const
+ 	//see the docs
+ 	t.replace("/", "\\/");
+ 	
++	// openoffice gives us filters separated by ';' qt dialogs just want space separated
++	f.replace(";", " ");
++	
+ 	_filter.append(QString("%1|%2").arg(f).arg(t));
+ }
+ 
+ void SAL_CALL KDE4FilePicker::setCurrentFilter( const rtl::OUString &title )
+     throw( lang::IllegalArgumentException, uno::RuntimeException )
+ {
+-	QString filter = toQString(title);
+-	filter.replace("/", "\\/");
+-	_dialog->filterWidget()->setCurrentFilter(filter);
++	QString t = toQString(title);
++	t.replace("/", "\\/");
++	_dialog->filterWidget()->setCurrentFilter(t);
+ }
+ 
+ rtl::OUString SAL_CALL KDE4FilePicker::getCurrentFilter()
+@@ -355,26 +361,24 @@ rtl::OUString SAL_CALL KDE4FilePicker::getCurrentFilter()
+ 	return toOUString(filter);
+ }
+ 
+-void SAL_CALL KDE4FilePicker::appendFilterGroup( const rtl::OUString&, const uno::Sequence<beans::StringPair>&)
++void SAL_CALL KDE4FilePicker::appendFilterGroup( const rtl::OUString& , const uno::Sequence<beans::StringPair>& filters)
+     throw( lang::IllegalArgumentException, uno::RuntimeException )
+-{	
+-	//TODO ... don't really like this behavior... Shtylman
+-#if 0
++{
+ 	if (!_filter.isNull())
+ 		_filter.append(QString("\n"));
+ 	
+-	for (USHORT i = 0; i < filters.getLength(); ++i)
++	const USHORT length = filters.getLength();
++	for (USHORT i = 0; i < length; ++i)
+ 	{
+ 		beans::StringPair aPair = filters[i];
+ 		
+ 		_filter.append(QString("%1|%2").arg(
+ 			toQString(aPair.Second).replace(";", " ")).arg(
+-			toQString(aPair.First).replace("/","\\/") + "\n" ));
++			toQString(aPair.First).replace("/","\\/")));
++			
++		if (i != length - 1)
++			_filter.append('\n');
+ 	}
+-	
+-	if (filters.getLength() > 0)
+-		_filter.append(QString("*.*|*.*"));
+-#endif
+ }
+ 
+ void SAL_CALL KDE4FilePicker::setValue( sal_Int16 controlId, sal_Int16, const uno::Any &value )
+diff --git vcl/unx/kde4/KDESalFrame.cxx vcl/unx/kde4/KDESalFrame.cxx
+index 5c18575..a5277a2 100644
+--- vcl/unx/kde4/KDESalFrame.cxx
++++ vcl/unx/kde4/KDESalFrame.cxx
+@@ -180,7 +180,6 @@ void KDESalFrame::UpdateSettings( AllSettings& rSettings )
+ {
+     StyleSettings style( rSettings.GetStyleSettings() );
+ 	BOOL bSetTitleFont = false;
+-
+ 	
+ 	// General settings
+     QPalette pal = kapp->palette();
+@@ -214,6 +213,14 @@ void KDESalFrame::UpdateSettings( AllSettings& rSettings )
+         pKey = "Theme";
+         if ( aGroup.hasKey( pKey ) )
+             style.SetPreferredSymbolsStyleName( readEntryUntranslated( &aGroup, pKey ) );
++		
++		//toolbar
++		pKey = "toolbarFont";
++		if ( aGroup.hasKey( pKey ) )
++		{
++			Font aFont = toFont( aGroup.readEntry( pKey, QFont() ), rSettings.GetUILocale() );
++			style.SetToolFont( aFont );
++		}
+     }
+ 	
+     Color aFore = toColor( pal.color( QPalette::Active, QPalette::WindowText ) );
+@@ -288,7 +295,7 @@ void KDESalFrame::UpdateSettings( AllSettings& rSettings )
+ 	
+ 	style.SetFloatTitleFont( aFont );
+     style.SetMenuFont( aFont ); // will be changed according to pMenuBar
+-    style.SetToolFont( aFont ); // will be changed according to pToolBar
++    //style.SetToolFont( aFont ); //already set above
+     style.SetLabelFont( aFont );
+     style.SetInfoFont( aFont );
+     style.SetRadioCheckFont( aFont );
+@@ -300,11 +307,9 @@ void KDESalFrame::UpdateSettings( AllSettings& rSettings )
+     int flash_time = QApplication::cursorFlashTime();
+     style.SetCursorBlinkTime( flash_time != 0 ? flash_time/2 : STYLE_CURSOR_NOBLINKTIME );
+ 
+-    KMainWindow qMainWindow;
+-
+     // Menu
+     style.SetSkipDisabledInMenus( TRUE );
+-    KMenuBar *pMenuBar = qMainWindow.menuBar();
++    KMenuBar* pMenuBar = new KMenuBar();
+     if ( pMenuBar )
+     {
+         // Color
+@@ -336,15 +341,9 @@ void KDESalFrame::UpdateSettings( AllSettings& rSettings )
+         aFont = toFont( pMenuBar->font(), rSettings.GetUILocale() );
+         style.SetMenuFont( aFont );
+     }
+-
+-    // Tool bar
+-    KToolBar *pToolBar = qMainWindow.toolBar();
+-    if ( pToolBar )
+-    {
+-        aFont = toFont( pToolBar->font(), rSettings.GetUILocale() );
+-        style.SetToolFont( aFont );
+-    }
+-
++	
++	delete pMenuBar;
++	
+     // Scroll bar size
+     style.SetScrollBarSize( kapp->style()->pixelMetric( QStyle::PM_ScrollBarExtent ) );
+     
+diff --git vcl/unx/kde4/KDEXLib.cxx vcl/unx/kde4/KDEXLib.cxx
+index f7bf04f..23e8151 100644
+--- vcl/unx/kde4/KDEXLib.cxx
++++ vcl/unx/kde4/KDEXLib.cxx
+@@ -78,23 +78,29 @@ void KDEXLib::Init()
+ 	pInputMethod->SetLocale();
+ 	XrmInitialize();
+ 
+-	KAboutData *kAboutData = new KAboutData( "OpenOffice.org",
+-			"OpenOffice.org",
++	KAboutData *kAboutData = new KAboutData("OpenOffice.org",
++			"kdelibs4",
+ 			ki18n( "OpenOffice.org" ),
+ 			"3.0.0",
+ 			ki18n( "OpenOffice.org with KDE Native Widget Support." ),
+ 			KAboutData::License_LGPL,
+-			ki18n( "Copyright (c) 2003, 2004, 2005, 2006, 2007, 2008 Novell, Inc"),
++			ki18n( "Copyright (c) 2003, 2004, 2005, 2006, 2007, 2008, 2009 Novell, Inc"),
+ 			ki18n( "OpenOffice.org is an office suite.\n" ),
+ 			"http://kde.openoffice.org/index.html",
+ 			"dev@kde.openoffice.org" );
++			
+ 	kAboutData->addAuthor( ki18n( "Jan Holesovsky" ),
+ 			ki18n( "Original author and maintainer of the KDE NWF." ),
+ 			"kendy@artax.karlin.mff.cuni.cz",
+ 			"http://artax.karlin.mff.cuni.cz/~kendy" );
++	kAboutData->addAuthor( ki18n("Roman Shtylman"),
++			ki18n( "Porting to KDE 4." ),
++			"shtylman@gmail.com", "http://shtylman.com" );
+ 	kAboutData->addAuthor( ki18n("Eric Bischoff"),
+ 			ki18n( "Accessibility fixes, porting to KDE 4." ),
+ 			"bischoff@kde.org" );
++			
++	//kAboutData->setProgramIconName("OpenOffice");
+ 
+     m_nFakeCmdLineArgs = 1;
+ 	USHORT nIdx;
+@@ -136,6 +142,7 @@ void KDEXLib::Init()
+ 	
+ 	m_pApplication = new VCLKDEApplication();
+ 	kapp->disableSessionManagement();
++	KApplication::setQuitOnLastWindowClosed(false);
+ 	
+ 	Display* pDisp = QX11Info::display();
+ 	SalKDEDisplay *pSalDisplay = new SalKDEDisplay(pDisp);
