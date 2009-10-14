@@ -1,0 +1,111 @@
+diff --git svtools/inc/svtools/zformat.hxx svtools/inc/svtools/zformat.hxx
+index 4c52b10..4037a73 100644
+--- svtools/inc/svtools/zformat.hxx
++++ svtools/inc/svtools/zformat.hxx
+@@ -239,6 +239,12 @@ public:
+     // in fact that could be any string used in number formats.
+     static void LoadString( SvStream& rStream, String& rStr );
+ 
++    /** 
++     * Get output string from a numeric value that fits the number of 
++     * characters specified.
++     */
++    bool GetOutputString( double fNumber, sal_uInt16 nCharCount, String& rOutString ) const;
++
+     BOOL GetOutputString( double fNumber, String& OutString, Color** ppColor );
+     BOOL GetOutputString( String& sString, String& OutString, Color** ppColor );
+ 
+@@ -490,6 +496,7 @@ private:
+ 
+     // standard number output
+     SVT_DLLPRIVATE void ImpGetOutputStandard( double& fNumber, String& OutString );
++    SVT_DLLPRIVATE void ImpGetOutputStdToPrecision( double& rNumber, String& rOutString, USHORT nPrecision ) const;
+     // numbers in input line
+     SVT_DLLPRIVATE void ImpGetOutputInputLine( double fNumber, String& OutString );
+ 
+diff --git svtools/source/numbers/zformat.cxx svtools/source/numbers/zformat.cxx
+index 368fb16..831e999 100644
+--- svtools/source/numbers/zformat.cxx
++++ svtools/source/numbers/zformat.cxx
+@@ -57,6 +57,9 @@
+ #include "numhead.hxx"
+ #include <unotools/digitgroupingiterator.hxx>
+ #include "nfsymbol.hxx"
++
++#include <cmath>
++
+ using namespace svt;
+ 
+ namespace {
+@@ -1778,9 +1781,14 @@ void SvNumberformat::Build50Formatstring( String& rStr ) const
+ void SvNumberformat::ImpGetOutputStandard(double& fNumber, String& OutString)
+ {
+     USHORT nStandardPrec = rScan.GetStandardPrec();
+-    if ( fabs(fNumber) > 1.0E15 )       // #58531# war E16
+-        OutString = ::rtl::math::doubleToUString( fNumber,
+-                rtl_math_StringFormat_E, nStandardPrec /*2*/,
++    ImpGetOutputStdToPrecision(fNumber, OutString, nStandardPrec);
++}
++
++void SvNumberformat::ImpGetOutputStdToPrecision(double& rNumber, String& rOutString, USHORT nPrecision) const
++{
++    if ( fabs(rNumber) > 1.0E15 )       // #58531# war E16
++        rOutString = ::rtl::math::doubleToUString( rNumber,
++                rtl_math_StringFormat_E, nPrecision /*2*/,
+                 GetFormatter().GetNumDecimalSep().GetChar(0));
+     else
+     {
+@@ -1809,15 +1817,14 @@ void SvNumberformat::ImpGetOutputStandard(double& fNumber, String& OutString)
+ }
+ #endif
+ 
+-        OutString = ::rtl::math::doubleToUString( fNumber,
+-                rtl_math_StringFormat_F, nStandardPrec /*2*/,
++        rOutString = ::rtl::math::doubleToUString( rNumber,
++                rtl_math_StringFormat_F, nPrecision /*2*/,
+                 GetFormatter().GetNumDecimalSep().GetChar(0), sal_True );
+-        if (OutString.GetChar(0) == '-' &&
+-            OutString.GetTokenCount('0') == OutString.Len())
+-            OutString.EraseLeadingChars('-');            // nicht -0
++        if (rOutString.GetChar(0) == '-' &&
++            rOutString.GetTokenCount('0') == rOutString.Len())
++            rOutString.EraseLeadingChars('-');            // nicht -0
+     }
+-    ImpTransliterate( OutString, NumFor[0].GetNatNum() );
+-    return;
++    ImpTransliterate( rOutString, NumFor[0].GetNatNum() );
+ }
+ 
+ void SvNumberformat::ImpGetOutputInputLine(double fNumber, String& OutString)
+@@ -1958,6 +1965,31 @@ ULONG SvNumberformat::ImpGGTRound(ULONG x, ULONG y)
+     }
+ }
+ 
++bool SvNumberformat::GetOutputString(double fNumber, sal_uInt16 nCharCount, String& rOutString) const
++{
++    using namespace std;
++
++    if (eType != NUMBERFORMAT_NUMBER)
++        return false;
++
++    double fTestNum = fNumber;
++    bool bSign = fTestNum < 0;
++    if (bSign)
++        fTestNum = -fTestNum;
++
++    double nDigitPre = ceil(log10(fTestNum));
++    sal_uInt16 nPrec = nCharCount >= nDigitPre ? nCharCount - nDigitPre : 0;
++    if (nPrec && bSign)
++        // Subtract the negative sign.
++        --nPrec;
++    if (nPrec)
++        // Subtract the decimal point.
++        --nPrec;
++
++    ImpGetOutputStdToPrecision(fNumber, rOutString, nPrec);
++    return true;
++}
++
+ BOOL SvNumberformat::GetOutputString(double fNumber,
+                                      String& OutString,
+                                      Color** ppColor)
