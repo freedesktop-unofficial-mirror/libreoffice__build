@@ -1,3 +1,61 @@
+diff --git sc/inc/docoptio.hxx sc/inc/docoptio.hxx
+index 81b80b9..006c618 100644
+--- sc/inc/docoptio.hxx
++++ sc/inc/docoptio.hxx
+@@ -43,7 +43,7 @@ class SC_DLLPUBLIC ScDocOptions
+ {
+     double fIterEps;				// Epsilon-Wert dazu
+     USHORT nIterCount;				// Anzahl
+-    USHORT nPrecStandardFormat;		// Nachkommastellen Standard
++    sal_uInt16 nPrecStandardFormat; // precision for standard format
+     USHORT nDay;					// Nulldatum:
+     USHORT nMonth;
+     USHORT nYear;
+@@ -63,6 +63,8 @@ class SC_DLLPUBLIC ScDocOptions
+     ::rtl::OUString aFormulaSepArrayCol;
+ 
+ public:
++    static const sal_uInt16 PRECISION_UNSPECIFIED;
++
+                 ScDocOptions();
+                 ScDocOptions( const ScDocOptions& rCpy );
+                 ~ScDocOptions();
+@@ -96,8 +98,8 @@ public:
+     inline int					operator==( const ScDocOptions& rOpt ) const;
+     inline int					operator!=( const ScDocOptions& rOpt ) const;
+ 
+-    USHORT	GetStdPrecision() const 	{ return nPrecStandardFormat; }
+-    void	SetStdPrecision( USHORT n ) { nPrecStandardFormat = n; }
++    sal_uInt16  GetStdPrecision() const { return nPrecStandardFormat; }
++    void        SetStdPrecision( sal_uInt16 n ) { nPrecStandardFormat = n; }
+ 
+     BOOL	IsCalcAsShown() const		{ return bCalcAsShown; }
+     void	SetCalcAsShown( BOOL bVal )	{ bCalcAsShown = bVal; }
+diff --git sc/source/core/tool/docoptio.cxx sc/source/core/tool/docoptio.cxx
+index b0188ee..e1cd909 100644
+--- sc/source/core/tool/docoptio.cxx
++++ sc/source/core/tool/docoptio.cxx
+@@ -83,6 +83,8 @@ USHORT lcl_GetDefaultTabDist()
+ //      ScDocOptions - Dokument-Optionen
+ //========================================================================
+ 
++const sal_uInt16 ScDocOptions::PRECISION_UNSPECIFIED = ::std::numeric_limits<USHORT>::max();
++
+ ScDocOptions::ScDocOptions()
+ {
+     ResetDocOptions();
+diff --git sc/source/ui/inc/optdlg.hrc sc/source/ui/inc/optdlg.hrc
+index aaeb33d..5767bfb 100644
+--- sc/source/ui/inc/optdlg.hrc
++++ sc/source/ui/inc/optdlg.hrc
+@@ -74,6 +74,7 @@
+ #define BTN_MATCH			18
+ #define BTN_LOOKUP			19
+ #define BTN_REGEX           20
++#define BTN_GENERAL_PREC    21
+ 
+ // TP_VIEW:
+ #define BTN_VSCROLL			1
 diff --git sc/source/ui/inc/output.hxx sc/source/ui/inc/output.hxx
 index ea2aadc..07852a2 100644
 --- sc/source/ui/inc/output.hxx
@@ -45,6 +103,181 @@ index ea2aadc..07852a2 100644
  
      void			SetSyntaxColor( Font* pFont, ScBaseCell* pCell );
      void			SetEditSyntaxColor( EditEngine& rEngine, ScBaseCell* pCell );
+diff --git sc/source/ui/inc/tpcalc.hxx sc/source/ui/inc/tpcalc.hxx
+index 7052be4..3253f59 100644
+--- sc/source/ui/inc/tpcalc.hxx
++++ sc/source/ui/inc/tpcalc.hxx
+@@ -79,6 +79,7 @@ private:
+     CheckBox		aBtnMatch;
+     CheckBox        aBtnRegex;
+     CheckBox		aBtnLookUp;
++    CheckBox		aBtnGeneralPrec;
+ 
+     FixedText		aFtPrec;
+     NumericField	aEdPrec;
+diff --git sc/source/ui/optdlg/tpcalc.cxx sc/source/ui/optdlg/tpcalc.cxx
+index 86a4476..dd37c89 100644
+--- sc/source/ui/optdlg/tpcalc.cxx
++++ sc/source/ui/optdlg/tpcalc.cxx
+@@ -91,6 +91,7 @@ ScTpCalcOptions::ScTpCalcOptions( Window*			pParent,
+         aBtnMatch	 	( this, ScResId( BTN_MATCH ) ),
+         aBtnRegex       ( this, ScResId( BTN_REGEX ) ),
+         aBtnLookUp   	( this, ScResId( BTN_LOOKUP ) ),
++        aBtnGeneralPrec ( this, ScResId( BTN_GENERAL_PREC ) ),
+         aFtPrec 		( this, ScResId( FT_PREC ) ),
+         aEdPrec 		( this, ScResId( ED_PREC ) ),
+         pOldOptions 	( new ScDocOptions(
+@@ -119,6 +120,7 @@ __EXPORT ScTpCalcOptions::~ScTpCalcOptions()
+ void ScTpCalcOptions::Init()
+ {
+     aBtnIterate .SetClickHdl( LINK( this, ScTpCalcOptions, CheckClickHdl ) );
++    aBtnGeneralPrec.SetClickHdl( LINK(this, ScTpCalcOptions, CheckClickHdl) );
+     aBtnDateStd .SetClickHdl( LINK( this, ScTpCalcOptions, RadioClickHdl ) );
+     aBtnDateSc10.SetClickHdl( LINK( this, ScTpCalcOptions, RadioClickHdl ) );
+     aBtnDate1904.SetClickHdl( LINK( this, ScTpCalcOptions, RadioClickHdl ) );
+@@ -153,7 +155,6 @@ void __EXPORT ScTpCalcOptions::Reset( const SfxItemSet& /* rCoreAttrs */ )
+     aBtnLookUp .Check( pLocalOptions->IsLookUpColRowNames() );
+     aBtnIterate.Check( pLocalOptions->IsIter() );
+     aEdSteps   .SetValue( pLocalOptions->GetIterCount() );
+-    aEdPrec    .SetValue( pLocalOptions->GetStdPrecision() );
+     aEdEps     .SetValue( pLocalOptions->GetIterEps(), 6 );
+ 
+     pLocalOptions->GetDate( d, m, y );
+@@ -171,6 +172,21 @@ void __EXPORT ScTpCalcOptions::Reset( const SfxItemSet& /* rCoreAttrs */ )
+             break;
+     }
+ 
++    sal_uInt16 nPrec = pLocalOptions->GetStdPrecision();
++    if (nPrec == ScDocOptions::PRECISION_UNSPECIFIED)
++    {
++        aFtPrec.Disable();
++        aEdPrec.Disable();
++        aBtnGeneralPrec.Check(false);
++    }
++    else
++    {
++        aBtnGeneralPrec.Check();
++        aFtPrec.Enable();
++        aEdPrec.Enable();
++        aEdPrec.SetValue(nPrec);
++    }
++
+     CheckClickHdl( &aBtnIterate );
+ }
+ 
+@@ -181,13 +197,18 @@ BOOL __EXPORT ScTpCalcOptions::FillItemSet( SfxItemSet& rCoreAttrs )
+ {
+     // alle weiteren Optionen werden in den Handlern aktualisiert
+     pLocalOptions->SetIterCount( (USHORT)aEdSteps.GetValue() );
+-    pLocalOptions->SetStdPrecision( (USHORT)aEdPrec.GetValue() );
+     pLocalOptions->SetIgnoreCase( !aBtnCase.IsChecked() );
+     pLocalOptions->SetCalcAsShown( aBtnCalc.IsChecked() );
+     pLocalOptions->SetMatchWholeCell( aBtnMatch.IsChecked() );
+     pLocalOptions->SetFormulaRegexEnabled( aBtnRegex.IsChecked() );
+     pLocalOptions->SetLookUpColRowNames( aBtnLookUp.IsChecked() );
+ 
++    if (aBtnGeneralPrec.IsChecked())
++        pLocalOptions->SetStdPrecision(
++            static_cast<sal_uInt16>(aEdPrec.GetValue()) );
++    else
++        pLocalOptions->SetStdPrecision( ScDocOptions::PRECISION_UNSPECIFIED );
++
+     if ( *pLocalOptions != *pOldOptions )
+     {
+         rCoreAttrs.Put( ScTpCalcItem( nWhichCalc, *pLocalOptions ) );
+@@ -248,19 +269,35 @@ IMPL_LINK( ScTpCalcOptions, RadioClickHdl, RadioButton*, pBtn )
+ 
+ //-----------------------------------------------------------------------
+ 
+-IMPL_LINK(  ScTpCalcOptions, CheckClickHdl, CheckBox*, pBtn )
++IMPL_LINK( ScTpCalcOptions, CheckClickHdl, CheckBox*, pBtn )
+ {
+-    if ( pBtn->IsChecked() )
++    if (pBtn == &aBtnGeneralPrec)
+     {
+-        pLocalOptions->SetIter( TRUE );
+-        aFtSteps.Enable();	aEdSteps.Enable();
+-        aFtEps	.Enable();	aEdEps	.Enable();
++        if (pBtn->IsChecked())
++        {
++            aEdPrec.Enable();
++            aFtPrec.Enable();
++        }
++        else
++        {
++            aEdPrec.Disable();
++            aFtPrec.Disable();
++        }
+     }
+-    else
++    else if (pBtn == &aBtnIterate)
+     {
+-        pLocalOptions->SetIter( FALSE );
+-        aFtSteps.Disable(); aEdSteps.Disable();
+-        aFtEps	.Disable(); aEdEps	.Disable();
++        if ( pBtn->IsChecked() )
++        {
++            pLocalOptions->SetIter( TRUE );
++            aFtSteps.Enable();	aEdSteps.Enable();
++            aFtEps	.Enable();	aEdEps	.Enable();
++        }
++        else
++        {
++            pLocalOptions->SetIter( FALSE );
++            aFtSteps.Disable(); aEdSteps.Disable();
++            aFtEps	.Disable(); aEdEps	.Disable();
++        }
+     }
+ 
+     return 0;
+diff --git sc/source/ui/src/optdlg.src sc/source/ui/src/optdlg.src
+index dd4dd34..54bedfa 100644
+--- sc/source/ui/src/optdlg.src
++++ sc/source/ui/src/optdlg.src
+@@ -124,7 +124,7 @@ TabPage RID_SCPAGE_CALC
+     };
+     FixedText FT_PREC
+     {
+-        Pos = MAP_APPFONT ( 150 , 77 ) ;
++        Pos = MAP_APPFONT ( 150 , 148 ) ;
+         Size = MAP_APPFONT ( 72 , 8 ) ;
+         Text [ en-US ] = "~Decimal places" ;
+         Right = TRUE ;
+@@ -132,7 +132,7 @@ TabPage RID_SCPAGE_CALC
+     NumericField ED_PREC
+     {
+         Border = TRUE ;
+-        Pos = MAP_APPFONT ( 226 , 75 ) ;
++        Pos = MAP_APPFONT ( 226 , 146 ) ;
+         Size = MAP_APPFONT ( 25 , 12 ) ;
+         Maximum = 20 ;
+         Spin = TRUE ;
+@@ -168,6 +168,12 @@ TabPage RID_SCPAGE_CALC
+         Size = MAP_APPFONT ( 239 , 10 ) ;
+         Text [ en-US ] = "~Automatically find column and row labels " ;
+     };
++    CheckBox BTN_GENERAL_PREC
++    {
++        Pos = MAP_APPFONT ( 12 , 147 ) ;
++        Size = MAP_APPFONT ( 239 , 10 ) ;
++        Text [ en-US ] = "Limit decimals for general number format" ;
++    };
+ };
+ 
+ /**************************************************************************/
+diff --git sc/source/ui/unoobj/defltuno.cxx sc/source/ui/unoobj/defltuno.cxx
+index f91bb81..a6a4867 100644
+--- sc/source/ui/unoobj/defltuno.cxx
++++ sc/source/ui/unoobj/defltuno.cxx
+@@ -160,7 +160,7 @@ void SAL_CALL ScDocDefaultsObj::setPropertyValue(
+                 sal_Int16 nValue = 0;
+                 if (aValue >>= nValue)
+                 {
+-                    aDocOpt.SetStdPrecision(static_cast<sal_uInt8> (nValue));
++                    aDocOpt.SetStdPrecision(static_cast<sal_uInt16> (nValue));
+                     pDoc->SetDocOptions(aDocOpt);
+                 }
+             }
 diff --git sc/source/ui/view/output2.cxx sc/source/ui/view/output2.cxx
 index ef7f0c9..d67ab6d 100644
 --- sc/source/ui/view/output2.cxx
