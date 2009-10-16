@@ -1,8 +1,8 @@
 #!/usr/bin/perl -w
 
-sub webget($$$)
+sub webget($$$$)
 {
-    my ($src, $dest, $name) = @_;
+    my ($src, $dest, $name, $is_cgit) = @_;
 
     $save_as = '';
     if ( $name ne '' ) {
@@ -10,7 +10,25 @@ sub webget($$$)
     }
 
     print "Get $src -> $dest/$name\n";
-    return ( system ("cd $dest ; $WGET \"$src\" $save_as") == 0 );
+
+    my $result = system( "cd $dest ; $WGET \"$src\" $save_as" );
+    
+    if ( !$is_cgit || $name eq '' ) {
+        return ( $result == 0 );
+    } else {
+        # cgit is known to be broken, we need some additional checks, and
+        # a plan B if they fail
+        if ( $result != 0 || system( "file \"$dest/$name\" | grep 'HTML' > /dev/null 2>&1" ) == 0 ) {
+            ( my $gzip_src = $src ) =~ s/\.bz2$/.gz/;
+            return 0 if ( $gzip_src eq $src );
+
+            print "Bad archive, go for plan B: get $gzip_src -> repack -> $dest/$name\n";
+
+            # it seems that downloading the gzip version is more reliable
+            $result = system( "cd $dest ; $WGET \"$gzip_src\" -O - | gunzip | bzip2 > $name" );
+        }
+        return ( $result == 0 );
+    }
 }
 
 sub usage {
@@ -24,10 +42,10 @@ sub usage {
 
 sub trim($)
 {
-	my $string = shift;
-	$string =~ s/^\s+//;
-	$string =~ s/\s+$//;
-	return $string;
+    my $string = shift;
+    $string =~ s/^\s+//;
+    $string =~ s/\s+$//;
+    return $string;
 }
 
 
@@ -144,11 +162,13 @@ sub source_file
 {
     my $file = shift;
     my $save_as = shift;
+    my $is_cgit = shift;
 
     die "No file?" if ( !defined $file );
     $save_as = '' if ( !defined $save_as );
+    $is_cgit = 0 if ( !defined $is_cgit );
 
-    push @files, { 'file' => "$file", 'save_as' => "$save_as" };
+    push @files, { 'file' => "$file", 'save_as' => "$save_as", 'is_cgit' => $is_cgit };
 }
 
 sub source_file_ooo($)
@@ -187,7 +207,7 @@ sub source_file_ooo($)
         $upstream_tag =~ s/-M/_m/;
 
         source_file( "http://cgit.freedesktop.org/ooo-build/$what/snapshot/ooo/$upstream_tag.tar.bz2",
-            '@CVSTAG@' . "-$what.tar.bz2" );
+            '@CVSTAG@' . "-$what.tar.bz2", 1 );
     }
     else {
         source_file( '@CVSTAG@' . "-$what.tar.bz2" );
@@ -206,6 +226,7 @@ sub download_files($$$)
         for my $record ( @try ) {
             my $file = $record->{'file'};
             my $save_as = $record->{'save_as'};
+            my $is_cgit = $record->{'is_cgit'};
 
             if ( $file ne '' ) {
                 my $to_check = ( $save_as ne '' )? "$dest/$save_as": "$dest/$file";
@@ -231,7 +252,7 @@ sub download_files($$$)
                         $to_get = $file;
                     }
 
-                    if ( !webget( $to_get, $dest, $save_as ) ) {
+                    if ( !webget( $to_get, $dest, $save_as, $is_cgit ) ) {
                         print "Failed to get '$to_get', will retry later.\n";
                         unlink $to_check;
                         push @failed, $record;
@@ -315,10 +336,10 @@ if ('@BUILD_WIN32@' ne '')
 else
 {
     if ('@ENABLE_MONO@' ne 'FALSE') {
-	source_file( 'ooo-cli-prebuilt-3.1.1.tar.bz2' );
+        source_file( 'ooo-cli-prebuilt-3.1.1.tar.bz2' );
     }
     if ( $download_all ) {
-    	source_file( "apache-ant-1.7.0-bin.tar.gz" );
+        source_file( "apache-ant-1.7.0-bin.tar.gz" );
     }
 }
 
