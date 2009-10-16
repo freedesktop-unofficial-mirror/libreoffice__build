@@ -1,0 +1,3405 @@
+The minimal set of changes to read and write store v2 files
+
+(More or less a re-write of the original store-core.diff)
+
+From: Thorsten Behrens <thb@openoffice.org>
+
+
+---
+
+ store/inc/store/store.h   |    6 
+ store/inc/store/store.hxx |    6 
+ store/inc/store/store.inl |   10 
+ store/inc/store/types.h   |   15 +
+ store/source/lockbyte.cxx |    4 
+ store/source/storbase.hxx |   70 +--
+ store/source/storbios.cxx |   92 +++-
+ store/source/storbios.hxx |    7 
+ store/source/stordata.cxx |  412 ++++++-------------
+ store/source/stordata.hxx |  958 +++++++++++++++++++++++++++++++++++++--------
+ store/source/stordir.cxx  |   40 +-
+ store/source/stordir.hxx  |    5 
+ store/source/store.cxx    |   10 
+ store/source/storlckb.cxx |   82 ++--
+ store/source/storlckb.hxx |    9 
+ store/source/storpage.cxx |  173 ++++----
+ store/source/storpage.hxx |   28 +
+ store/source/stortree.cxx |   16 +
+ store/source/stortree.hxx |    6 
+ store/workben/t_base.cxx  |    3 
+ store/workben/t_page.cxx  |    2 
+ 21 files changed, 1244 insertions(+), 710 deletions(-)
+
+
+diff --git store/inc/store/store.h store/inc/store/store.h
+index 18d103b..43e8f00 100644
+--- store/inc/store/store.h
++++ store/inc/store/store.h
+@@ -75,7 +75,8 @@ typedef void* storeFileHandle;
+  */
+ storeError SAL_CALL store_createMemoryFile (
+     sal_uInt16       nPageSize,
+-    storeFileHandle *phFile
++    storeFileHandle *phFile,
++    sal_uInt16       nFormatVersion 
+ ) SAL_THROW_EXTERN_C();
+ 
+ 
+@@ -95,7 +96,8 @@ storeError SAL_CALL store_openFile (
+     rtl_uString     *pFilename,
+     storeAccessMode  eAccessMode,
+     sal_uInt16       nPageSize,
+-    storeFileHandle *phFile
++	storeFileHandle *phFile,
++    sal_uInt16       nFormatVersion = STORE_FORMAT_V1
+ ) SAL_THROW_EXTERN_C();
+ 
+ 
+diff --git store/inc/store/store.hxx store/inc/store/store.hxx
+index 351f6f7..c97d996 100644
+--- store/inc/store/store.hxx
++++ store/inc/store/store.hxx
+@@ -281,14 +281,16 @@ public:
+     inline storeError create (
+         const rtl::OUString &rFilename,
+         storeAccessMode      eAccessMode,
+-        sal_uInt16           nPageSize = STORE_DEFAULT_PAGESIZE
++		sal_uInt16           nPageSize = STORE_DEFAULT_PAGESIZE,
++        sal_uInt16           nFormatVersion = STORE_FORMAT_V1
+     ) SAL_THROW(());
+ 
+     /** Open the temporary file in memory.
+         @see store_createMemoryFile()
+      */
+     inline storeError createInMemory (
+-        sal_uInt16 nPageSize = STORE_DEFAULT_PAGESIZE
++        sal_uInt16 nPageSize = STORE_DEFAULT_PAGESIZE,
++        sal_uInt16 nFormatVersion = STORE_FORMAT_V1
+     ) SAL_THROW(());
+     
+     /** Close the file.
+diff --git store/inc/store/store.inl store/inc/store/store.inl
+index 18a8910..3d1e7a3 100644
+--- store/inc/store/store.inl
++++ store/inc/store/store.inl
+@@ -321,25 +321,27 @@ inline sal_Bool OStoreFile::isValid (void) const SAL_THROW(())
+ inline storeError OStoreFile::create (
+     const rtl::OUString &rFilename,
+     storeAccessMode      eAccessMode,
+-    sal_uInt16           nPageSize) SAL_THROW(())
++	sal_uInt16           nPageSize,
++	sal_uInt16           nFormatVersion) SAL_THROW(())
+ {
+     if (m_hImpl)
+     {
+         store_releaseHandle (m_hImpl);
+         m_hImpl = 0;
+     }
+-    return store_openFile (rFilename.pData, eAccessMode, nPageSize, &m_hImpl);
++    return store_openFile (rFilename.pData, eAccessMode, nPageSize, &m_hImpl, nFormatVersion);
+ }
+ 
+ inline storeError OStoreFile::createInMemory (
+-    sal_uInt16 nPageSize) SAL_THROW(())
++    sal_uInt16 nPageSize,
++	sal_uInt16 nFormatVersion) SAL_THROW(())
+ {
+     if (m_hImpl)
+     {
+         store_releaseHandle (m_hImpl);
+         m_hImpl = 0;
+     }
+-    return store_createMemoryFile (nPageSize, &m_hImpl);
++    return store_createMemoryFile (nPageSize, &m_hImpl, nFormatVersion);
+ }
+ 
+ inline void OStoreFile::close (void) SAL_THROW(())
+diff --git store/inc/store/types.h store/inc/store/types.h
+index 4810838..067bd64 100644
+--- store/inc/store/types.h
++++ store/inc/store/types.h
+@@ -38,16 +38,27 @@
+ extern "C" {
+ #endif
+ 
++/* format version
++   V1 original rdb format, used publicly
++   V2 internal rdb format, which might change during time and
++      should be only used internally for services.rdb, types.rdb
++      and other rdb files shipped with OOo
++*/
++
++#define STORE_FORMAT_V1 1
++#define STORE_FORMAT_V2 2
++
+ /** PageSize (recommended) default.
+     @see store_openFile()
+  */
+-#define STORE_DEFAULT_PAGESIZE ((sal_uInt16)0x0400)
++#define STORE_DEFAULT_PAGESIZE ((sal_uInt16)0x200)
+ 
+ 
+ /** PageSize (enforced) limits.
+     @see store_openFile()
+  */
+-#define STORE_MINIMUM_PAGESIZE ((sal_uInt16)0x0200)
++#define STORE_MINIMUM_PAGESIZE_V1 ((sal_uInt16)0x200)
++#define STORE_MINIMUM_PAGESIZE_V2 ((sal_uInt16)0x80)
+ #define STORE_MAXIMUM_PAGESIZE ((sal_uInt16)0x8000)
+ 
+ 
+diff --git store/source/lockbyte.cxx store/source/lockbyte.cxx
+index a03628b..953a229 100644
+--- store/source/lockbyte.cxx
++++ store/source/lockbyte.cxx
+@@ -63,7 +63,9 @@ using namespace store;
+ 
+ storeError ILockBytes::initialize (rtl::Reference< PageData::Allocator > & rxAllocator, sal_uInt16 nPageSize)
+ {
+-    OSL_PRECOND((STORE_MINIMUM_PAGESIZE <= nPageSize) && (nPageSize <= STORE_MAXIMUM_PAGESIZE), "invalid PageSize");
++    OSL_PRECOND(((STORE_MINIMUM_PAGESIZE_V1 <= nPageSize) 
++                 || (STORE_MINIMUM_PAGESIZE_V2 <= nPageSize))
++                && (nPageSize <= STORE_MAXIMUM_PAGESIZE), "invalid PageSize");
+     return initialize_Impl (rxAllocator, nPageSize);
+ }
+ 
+diff --git store/source/storbase.hxx store/source/storbase.hxx
+index 4a7851f..eb33455 100644
+--- store/source/storbase.hxx
++++ store/source/storbase.hxx
+@@ -455,7 +455,8 @@ struct PageData
+      */
+     static const size_t     theSize     = sizeof(G) + sizeof(D) + 2 * sizeof(L);
+     static const sal_uInt16 thePageSize = theSize;
+-    STORE_STATIC_ASSERT(STORE_MINIMUM_PAGESIZE >= thePageSize);
++    STORE_STATIC_ASSERT(STORE_MINIMUM_PAGESIZE_V1 >= thePageSize);
++    STORE_STATIC_ASSERT(STORE_MINIMUM_PAGESIZE_V2 >= thePageSize);
+ 
+     /** location.
+      */
+@@ -715,6 +716,18 @@ class PageHolderObject
+         return isA<U>(p) ? static_cast<U const *>(p) : 0;
+     }
+ 
++    template< class U >
++    static U * unsafe_page_cast (PageData * p)
++    {
++        return static_cast<U*>(p);
++    }
++
++    template< class U >
++    static U const * unsafe_page_cast (PageData const * p)
++    {
++        return static_cast<U const *>(p);
++    }
++
+ public:
+     bool construct (rtl::Reference< PageData::Allocator > const & rxAllocator)
+     {
+@@ -758,10 +771,8 @@ public:
+         return (m_xPage.get() != 0);
+     }
+ 
+-#if 1  /* EXP */
+     PageHolder & get() { return m_xPage; }
+     PageHolder const & get() const { return m_xPage; }
+-#endif /* EXP */
+ 
+     T * operator->()
+     {
+@@ -802,7 +813,7 @@ public:
+ 
+         return store_E_None;
+     }
+-    static storeError verify (PageHolder const & rxPage, sal_uInt32 nAddr)
++    static storeError verify (PageHolder const & rxPage, sal_uInt32 nAddr, sal_uInt16 nVersion)
+     {
+         PageData const * pHead = rxPage.get();
+         if (!pHead)
+@@ -812,7 +823,11 @@ public:
+         if (eErrCode != store_E_None)
+             return eErrCode;
+ 
+-        T const * pImpl = dynamic_page_cast<T>(pHead);
++        T const * pImpl = 0;
++        if( nVersion == STORE_FORMAT_V2 )
++            pImpl = unsafe_page_cast<T>(pHead);
++        else
++            pImpl = dynamic_page_cast<T>(pHead);
+         if (!pImpl)
+             return store_E_WrongVersion;
+ 
+@@ -820,49 +835,6 @@ public:
+     }
+ };
+ 
+-/*========================================================================
+- *
+- * PageObject.
+- *
+- *======================================================================*/
+-#if 1  /* EXP */
+-class PageObject
+-{
+-public:
+-    explicit PageObject (PageHolder const & rxPage = PageHolder())
+-        : m_xPage (rxPage), m_bDirty (false)
+-    {}
+-
+-    virtual ~PageObject()
+-    {}
+-
+-    PageHolder & get() { return m_xPage; }
+-    PageHolder const & get() const { return m_xPage; }
+-
+-    void clean() { m_bDirty = false; }
+-    void touch() { m_bDirty = true; }
+-
+-    sal_uInt32 location() const
+-    {
+-        PageData const * pagedata = m_xPage.get();
+-        return (pagedata != 0) ? pagedata->location() : STORE_PAGE_NULL;
+-    }
+-    void location (sal_uInt32 nAddr)
+-    {
+-        PageData * pagedata = m_xPage.get();
+-        if (pagedata != 0)
+-            pagedata->location (nAddr);
+-    }
+-
+-protected:
+-    PageHolder m_xPage;
+-    bool       m_bDirty;
+-
+-    virtual storeError guard  (sal_uInt32 nAddr) = 0;
+-    virtual storeError verify (sal_uInt32 nAddr) const = 0;
+-};
+-#endif /* EXP */
+-
+ class OStorePageBIOS;
+ 
+ class OStorePageObject
+@@ -934,7 +906,7 @@ public:
+     PageHolder const & get() const { return m_xPage; }
+ 
+     virtual storeError guard  (sal_uInt32 nAddr) = 0;
+-    virtual storeError verify (sal_uInt32 nAddr) const = 0;
++    virtual storeError verify (sal_uInt32 nAddr, sal_uInt16 nVersion) const = 0;
+ };
+ 
+ inline bool OStorePageObject::dirty (void) const
+diff --git store/source/storbios.cxx store/source/storbios.cxx
+index d1f15dc..368d34d 100644
+--- store/source/storbios.cxx
++++ store/source/storbios.cxx
+@@ -59,7 +59,8 @@ using namespace store;
+  * OStoreSuperBlock.
+  *
+  *======================================================================*/
+-#define STORE_MAGIC_SUPERBLOCK sal_uInt32(0x484D5343)
++#define STORE_MAGIC_SUPERBLOCK_V1 sal_uInt32(0x484D5343)
++#define STORE_MAGIC_SUPERBLOCK_V2 sal_uInt32(0x484D5344)
+ 
+ struct OStoreSuperBlock
+ {
+@@ -82,9 +83,13 @@ struct OStoreSuperBlock
+ 
+     /** Construction.
+      */
+-    explicit OStoreSuperBlock (sal_uInt16 nPageSize)
+-        : m_aGuard  (STORE_MAGIC_SUPERBLOCK),
+-          m_aDescr  (nPageSize, nPageSize, STORE_MINIMUM_PAGESIZE),
++    explicit OStoreSuperBlock (sal_uInt16 nPageSize, sal_uInt16 nFormatVersion)
++        : m_aGuard  (nFormatVersion == STORE_FORMAT_V1 ? 
++                     STORE_MAGIC_SUPERBLOCK_V1 : STORE_MAGIC_SUPERBLOCK_V2),
++          m_aDescr  (nPageSize, 
++                     nPageSize, 
++                     nFormatVersion == STORE_FORMAT_V1 ? 
++                      STORE_MINIMUM_PAGESIZE_V1 : STORE_MINIMUM_PAGESIZE_V2),
+           m_nMarked (store::htonl(0)),
+           m_aMarked (0),
+           m_nUnused (store::htonl(0)),
+@@ -163,10 +168,11 @@ struct OStoreSuperBlock
+ 
+     /** verify (external representation).
+      */
+-    storeError verify() const
++    storeError verify(sal_uInt16 nVersion) const
+     {
+         sal_uInt32 nMagic = store::ntohl(m_aGuard.m_nMagic);
+-        if (nMagic != STORE_MAGIC_SUPERBLOCK)
++		if ((nVersion == STORE_FORMAT_V1 && nMagic != STORE_MAGIC_SUPERBLOCK_V1) ||
++            (nVersion == STORE_FORMAT_V2 && nMagic != STORE_MAGIC_SUPERBLOCK_V2))
+             return store_E_WrongFormat;
+ 
+         sal_uInt32 nCRC32 = 0;
+@@ -177,6 +183,26 @@ struct OStoreSuperBlock
+         else
+             return store_E_None;
+     }
++
++    /** return version of superblock, determined by magic number in guard
++     */
++    sal_uInt16 version () const
++    {
++        sal_uInt16 nVersion;
++
++        switch (m_aGuard.m_nMagic) {
++        case STORE_MAGIC_SUPERBLOCK_V1:
++            nVersion = STORE_FORMAT_V1;
++            break;
++        case STORE_MAGIC_SUPERBLOCK_V2:
++            nVersion = STORE_FORMAT_V2;
++            break;
++        default:
++            nVersion = 0;
++        }
++
++        return nVersion;
++    }
+ };
+ 
+ /*========================================================================
+@@ -266,11 +292,16 @@ struct OStoreSuperBlockPage
+     SuperBlock m_aSuperTwo;
+     StateBlock m_aState;
+ 
++    /** version
++     */
++    sal_uInt32 m_nVersion;
++
+     /** theSize.
+      */
+     static const size_t     theSize     = 2 * SuperBlock::theSize + StateBlock::theSize;
+     static const sal_uInt16 thePageSize = theSize;
+-    STORE_STATIC_ASSERT(STORE_MINIMUM_PAGESIZE >= thePageSize);
++    STORE_STATIC_ASSERT(STORE_MINIMUM_PAGESIZE_V1 >= thePageSize);
++    STORE_STATIC_ASSERT(STORE_MINIMUM_PAGESIZE_V2 >= thePageSize);
+ 
+     /** Allocation.
+      */
+@@ -294,10 +325,11 @@ struct OStoreSuperBlockPage
+ 
+     /** Construction.
+      */
+-    explicit OStoreSuperBlockPage (sal_uInt16 nPageSize = thePageSize)
+-        : m_aSuperOne(nPageSize),
+-          m_aSuperTwo(nPageSize),
+-          m_aState()
++    explicit OStoreSuperBlockPage (sal_uInt16 nPageSize = thePageSize, sal_uInt16 nFormatVersion = STORE_FORMAT_V1)
++        : m_aSuperOne(nPageSize,nFormatVersion),
++          m_aSuperTwo(nPageSize,nFormatVersion),
++          m_aState(),
++          m_nVersion(nFormatVersion)
+     {}
+ 
+     /** guard (external representation).
+@@ -437,11 +469,11 @@ storeError OStoreSuperBlockPage::modified (OStorePageBIOS &rBIOS)
+ storeError OStoreSuperBlockPage::verify (OStorePageBIOS &rBIOS)
+ {
+     // Verify 1st copy.
+-    storeError eErrCode = m_aSuperOne.verify();
++    storeError eErrCode = m_aSuperOne.verify(m_nVersion);
+     if (eErrCode == store_E_None)
+     {
+         // Ok. Verify 2nd copy.
+-        eErrCode = m_aSuperTwo.verify();
++        eErrCode = m_aSuperTwo.verify(m_nVersion);
+         if (eErrCode == store_E_None)
+         {
+             // Ok. Ensure identical copies (1st copy wins).
+@@ -472,7 +504,7 @@ storeError OStoreSuperBlockPage::verify (OStorePageBIOS &rBIOS)
+     else
+     {
+         // Failure. Verify 2nd copy.
+-        eErrCode = m_aSuperTwo.verify();
++        eErrCode = m_aSuperTwo.verify(m_nVersion);
+         if (eErrCode == store_E_None)
+         {
+             // Ok. Replace 1st copy with 2nd copy.
+@@ -685,6 +717,11 @@ storeError OStorePageBIOS::verify (SuperPage *&rpSuper)
+ 
+         if (rpSuper->m_aState.flushPending())
+             OSL_TRACE("OStorePageBIOS::verify(): flush pending.\n");
++
++        // glean file format version from super block magic
++        rpSuper->m_nVersion = rpSuper->m_aSuperOne.version() == 0
++            ? rpSuper->m_aSuperTwo.version()
++            : rpSuper->m_aSuperOne.version();
+     }
+ 
+     // Verify SuperBlock page (with repair).
+@@ -719,15 +756,18 @@ storeError OStorePageBIOS::repair (SuperPage *&rpSuper)
+  * create (SuperBlock).
+  * Internal: Precond: initialized, exclusive access.
+  */
+-storeError OStorePageBIOS::create (sal_uInt16 nPageSize)
++storeError OStorePageBIOS::create (sal_uInt16 nPageSize, sal_uInt16 nFormatVersion)
+ {
+     // Check (internal) precond.
+     OSL_PRECOND(m_xLockBytes.is(), "store::PageBIOS::create(): contract violation");
+ 
++    const sal_uInt16 nMinPageSize=nFormatVersion == STORE_FORMAT_V1 ? 
++        STORE_MINIMUM_PAGESIZE_V1 : STORE_MINIMUM_PAGESIZE_V2;
++
+     // Check PageSize.
+-    if ((STORE_MINIMUM_PAGESIZE > nPageSize) || (nPageSize > STORE_MAXIMUM_PAGESIZE))
++    if ((nMinPageSize > nPageSize) || (nPageSize > STORE_MAXIMUM_PAGESIZE))
+         return store_E_InvalidParameter;
+-    nPageSize = ((nPageSize + STORE_MINIMUM_PAGESIZE - 1) & ~(STORE_MINIMUM_PAGESIZE - 1));
++    nPageSize = ((nPageSize + nMinPageSize - 1) & ~(nMinPageSize - 1));
+ 
+     // Acquire Lock.
+     storeError eErrCode = acquireLock (0, nPageSize);
+@@ -775,7 +815,8 @@ storeError OStorePageBIOS::create (sal_uInt16 nPageSize)
+ storeError OStorePageBIOS::initialize (
+     ILockBytes *    pLockBytes,
+     storeAccessMode eAccessMode,
+-    sal_uInt16 &    rnPageSize)
++    sal_uInt16 &    rnPageSize,
++    sal_uInt16 &    rnFormatVersion )
+ {
+     // Acquire exclusive access.
+     osl::MutexGuard aGuard (m_aMutex);
+@@ -838,13 +879,16 @@ storeError OStorePageBIOS::initialize (
+             return store_E_NotExists;
+ 
+         // Create SuperBlock page.
+-        eErrCode = create (rnPageSize);
++        eErrCode = create (rnPageSize,rnFormatVersion);
+     }
+     if (eErrCode == store_E_None)
+     {
+         // Obtain modified state.
+         m_bModified = m_pSuper->m_aState.flushPending();
+ 
++        // Obtain format version.
++        rnFormatVersion = m_pSuper->m_nVersion;
++
+         // Obtain page size.
+         rnPageSize = store::ntohs(m_pSuper->m_aSuperOne.m_aDescr.m_nSize);
+ 
+@@ -1284,7 +1328,7 @@ storeError OStorePageBIOS::loadObjectAt_Impl (OStorePageObject & rPage, sal_uInt
+         return eErrCode;
+ 
+     // Verify page.
+-    eErrCode = rPage.verify (nAddr);
++    eErrCode = rPage.verify (nAddr, version());
+     if (eErrCode != store_E_None)
+         return eErrCode;
+ 
+@@ -1568,3 +1612,11 @@ storeError OStorePageBIOS::poke (OStorePageData &rData)
+     // Write PageHead.
+     return write (rData.location(), &rData, OStorePageData::theSize);
+ }
++
++sal_uInt32 OStorePageBIOS::version () const
++{
++    if (!m_pSuper)
++        return 0;
++
++    return m_pSuper->m_nVersion;
++}
+diff --git store/source/storbios.hxx store/source/storbios.hxx
+index d9a0f98..bc62c65 100644
+--- store/source/storbios.hxx
++++ store/source/storbios.hxx
+@@ -76,7 +76,8 @@ public:
+     virtual storeError initialize (
+         ILockBytes *    pLockBytes,
+         storeAccessMode eAccessMode,
+-        sal_uInt16 &    rnPageSize);
++        sal_uInt16 &    rnPageSize,
++        sal_uInt16 &    rnFormatVersion);
+ 
+     rtl::Reference< PageData::Allocator > & allocator()
+     {
+@@ -162,6 +163,8 @@ public:
+      */
+     storeError size (sal_uInt32 &rnSize);
+ 
++    sal_uInt32 version () const;
++
+     /** ScanContext.
+      */
+     struct ScanContext
+@@ -240,7 +243,7 @@ private:
+ 
+     /** create (SuperBlock).
+      */
+-    storeError create (sal_uInt16 nPageSize);
++    storeError create (sal_uInt16 nPageSize, sal_uInt16 nFormatVersion);
+ 
+     /** SuperBlock verification and repair.
+      */
+diff --git store/source/stordata.cxx store/source/stordata.cxx
+index 8f37616..07eed5f 100644
+--- store/source/stordata.cxx
++++ store/source/stordata.cxx
+@@ -58,9 +58,31 @@ storeError OStoreDataPageObject::guard (sal_uInt32 nAddr)
+ /*
+  * verify.
+  */
+-storeError OStoreDataPageObject::verify (sal_uInt32 nAddr) const
++storeError OStoreDataPageObject::verify (sal_uInt32 nAddr, sal_uInt16 nVersion) const
+ {
+-    return PageHolderObject< page >::verify (m_xPage, nAddr);
++    return PageHolderObject< page >::verify (m_xPage, nAddr, nVersion);
++}
++
++
++/*========================================================================
++ *
++ * OStorePageLongNameDataPageObject implementation.
++ *
++ *======================================================================*/
++/*
++ * guard.
++ */
++storeError OStorePageLongNameDataPageObject::guard (sal_uInt32 nAddr)
++{
++    return PageHolderObject< page >::guard (m_xPage, nAddr);
++}
++
++/*
++ * verify.
++ */
++storeError OStorePageLongNameDataPageObject::verify (sal_uInt32 nAddr,sal_uInt16 nVersion) const
++{
++    return PageHolderObject< page >::verify (m_xPage, nAddr, nVersion);
+ }
+ 
+ /*========================================================================
+@@ -68,9 +90,10 @@ storeError OStoreDataPageObject::verify (sal_uInt32 nAddr) const
+  * OStoreIndirectionPageObject implementation.
+  *
+  *======================================================================*/
++
+ /*
+-  * store_truncate_Impl (single indirect page).
+-  */
++ * store_truncate_Impl (single indirect page).
++ */
+ static storeError store_truncate_Impl (
+     sal_uInt32      nAddr,
+     sal_uInt16      nSingle,
+@@ -217,9 +240,9 @@ storeError OStoreIndirectionPageObject::guard (sal_uInt32 nAddr)
+ /*
+  * verify.
+  */
+-storeError OStoreIndirectionPageObject::verify (sal_uInt32 nAddr) const
++storeError OStoreIndirectionPageObject::verify (sal_uInt32 nAddr, sal_uInt16 nVersion) const
+ {
+-    return PageHolderObject< page >::verify (m_xPage, nAddr);
++    return PageHolderObject< page >::verify (m_xPage, nAddr, nVersion);
+ }
+ 
+ /*
+@@ -650,179 +673,33 @@ storeError OStoreIndirectionPageObject::truncate (
+  * OStoreDirectoryPageObject implementation.
+  *
+  *======================================================================*/
+-/*
+- * guard.
+- */
+-storeError OStoreDirectoryPageObject::guard (sal_uInt32 nAddr)
+-{
+-    return PageHolderObject< page >::guard (m_xPage, nAddr);
+-}
+ 
+-/*
+- * verify.
+- */
+-storeError OStoreDirectoryPageObject::verify (sal_uInt32 nAddr) const
++storeError OStoreDirectoryPageObject::store_truncate (
++    sal_uInt32      nAddr,
++    sal_uInt16      nSingle,
++    OStorePageBIOS &rBIOS)
+ {
+-    return PageHolderObject< page >::verify (m_xPage, nAddr);
+-    // OLD: m_rPage.verifyVersion (STORE_MAGIC_DIRECTORYPAGE);
++    return store_truncate_Impl(nAddr,nSingle,rBIOS);
+ }
+ 
+-/*
+- * scope (external data page; private).
+- */
+-OStoreDirectoryPageData::ChunkScope
+-OStoreDirectoryPageObject::scope (
+-    sal_uInt32                       nPage,
+-    page::DataBlock::LinkDescriptor &rDescr) const
++storeError OStoreDirectoryPageObject::store_truncate (
++    sal_uInt32       nAddr,
++    sal_uInt16       nDouble,
++    sal_uInt16       nSingle,
++    OStorePageBIOS  &rBIOS)
+ {
+-    page const & rPage = PAGE();
+-    OStoreDirectoryDataBlock const & rDataBlock = rPage.m_aDataBlock;
+-
+-    sal_uInt32 index0, index1, index2, index3;
+-
+-    // direct.
+-    sal_uInt32 nCount = rDataBlock.directCount();
+-    sal_uInt32 nLimit = nCount;
+-    if (nPage < nLimit)
+-    {
+-        // Page to index reduction.
+-        index0 = nPage;
+-
+-        // Setup LinkDescriptor indices.
+-        rDescr.m_nIndex0 = (sal_uInt16)(index0 & 0xffff);
+-
+-        // Done.
+-        return page::SCOPE_DIRECT;
+-    }
+-    nPage -= nLimit;
+-
+-    // single indirect.
+-    sal_uInt32 const nCapacity = indirect::capacityCount(rPage.m_aDescr);
+-    nCount = rDataBlock.singleCount();
+-    nLimit = nCount * nCapacity;
+-    if (nPage < nLimit)
+-    {
+-        // Page to index reduction.
+-        sal_uInt32 n = nPage;
+-
+-        // Reduce to single indirect i(1), direct n = i(0).
+-        index1 = n / nCapacity;
+-        index0 = n % nCapacity;
+-
+-        // Verify reduction.
+-        n = index1 * nCapacity + index0;
+-        OSL_POSTCOND(n == nPage, "wrong math on indirect indices");
+-        if (n != nPage)
+-            return page::SCOPE_UNKNOWN;
+-
+-        // Setup LinkDescriptor indices.
+-        rDescr.m_nIndex0 = (sal_uInt16)(index0 & 0xffff);
+-        rDescr.m_nIndex1 = (sal_uInt16)(index1 & 0xffff);
+-
+-        // Done.
+-        return page::SCOPE_SINGLE;
+-    }
+-    nPage -= nLimit;
+-
+-    // double indirect.
+-    nCount = rDataBlock.doubleCount();
+-    nLimit = nCount * nCapacity * nCapacity;
+-    if (nPage < nLimit)
+-    {
+-        // Page to index reduction.
+-        sal_uInt32 n = nPage;
+-
+-        // Reduce to double indirect i(2), single indirect n = i(0).
+-        index2 = n / (nCapacity * nCapacity);
+-        n      = n % (nCapacity * nCapacity);
+-
+-        // Reduce to single indirect i(1), direct n = i(0).
+-        index1 = n / nCapacity;
+-        index0 = n % nCapacity;
+-
+-        // Verify reduction.
+-        n = index2 * nCapacity * nCapacity +
+-            index1 * nCapacity + index0;
+-        OSL_POSTCOND(n == nPage, "wrong math on double indirect indices");
+-        if (n != nPage)
+-            return page::SCOPE_UNKNOWN;
+-
+-        // Setup LinkDescriptor indices.
+-        rDescr.m_nIndex0 = (sal_uInt16)(index0 & 0xffff);
+-        rDescr.m_nIndex1 = (sal_uInt16)(index1 & 0xffff);
+-        rDescr.m_nIndex2 = (sal_uInt16)(index2 & 0xffff);
+-
+-        // Done.
+-        return page::SCOPE_DOUBLE;
+-    }
+-    nPage -= nLimit;
+-
+-    // triple indirect.
+-    nCount = rDataBlock.tripleCount();
+-    nLimit = nCount * nCapacity * nCapacity * nCapacity;
+-    if (nPage < nLimit)
+-    {
+-        // Page to index reduction.
+-        sal_uInt32 n = nPage;
+-
+-        // Reduce to triple indirect i(3), double indirect n.
+-        index3 = n / (nCapacity * nCapacity * nCapacity);
+-        n      = n % (nCapacity * nCapacity * nCapacity);
+-
+-        // Reduce to double indirect i(2), single indirect n.
+-        index2 = n / (nCapacity * nCapacity);
+-        n      = n % (nCapacity * nCapacity);
+-
+-        // Reduce to single indirect i(1), direct n = i(0).
+-        index1 = n / nCapacity;
+-        index0 = n % nCapacity;
+-
+-        // Verify reduction.
+-        n = index3 * nCapacity * nCapacity * nCapacity +
+-            index2 * nCapacity * nCapacity +
+-            index1 * nCapacity + index0;
+-        OSL_POSTCOND(n == nPage, "wrong math on triple indirect indices");
+-        if (n != nPage)
+-            return page::SCOPE_UNKNOWN;
+-
+-        // Setup LinkDescriptor indices.
+-        rDescr.m_nIndex0 = (sal_uInt16)(index0 & 0xffff);
+-        rDescr.m_nIndex1 = (sal_uInt16)(index1 & 0xffff);
+-        rDescr.m_nIndex2 = (sal_uInt16)(index2 & 0xffff);
+-        rDescr.m_nIndex3 = (sal_uInt16)(index3 & 0xffff);
+-
+-        // Done.
+-        return page::SCOPE_TRIPLE;
+-    }
+-
+-    // Unreachable (more than triple indirect).
+-    return page::SCOPE_UNREACHABLE;
++    return store_truncate_Impl(nAddr,nDouble,nSingle,rBIOS);
+ }
+ 
+-#if 0  /* NYI */
+-/*
+- * chunk (external data page).
+- */
+-inode::ChunkDescriptor OStoreDirectoryPageObject::chunk (sal_uInt32 nOffset)
++storeError OStoreDirectoryPageObject::store_truncate (
++    sal_uInt32       nAddr,
++    sal_uInt16       nTriple,
++    sal_uInt16       nDouble,
++    sal_uInt16       nSingle,
++    OStorePageBIOS  &rBIOS)
+ {
+-    // @@@ INSUFFICIENT: NEED SCOPE AS WELL @@@
+-    sal_uInt32 nCapacity = m_rPage.capacity();
+-    if (nOffset < nCapacity)
+-        // Internal scope (inode page).
+-        return inode::ChunkDescriptor (nOffset, nCapacity);
+-    else
+-        // External scope (data page).
+-        return inode::ChunkDescriptor (nOffset - nCapacity, data::capacity(m_rPage.m_aDescr));
+-
+-    inode::ChunkScope eScope = m_rPage.scope(nOffset);
+-    if (eScope == inode::SCOPE_INTERNAL)
+-        // Inode page (internal scope).
+-        return inode::ChunkDescriptor (nOffset, m_rPage.capacity());
+-    else
+-        // Data page (external scope).
+-        return inode::ChunkDescriptor (nOffset - m_rPage.capacity(), data::capacity(m_rPage.m_aDescr));
++    return store_truncate_Impl(nAddr,nTriple,nDouble,nSingle,rBIOS);
+ }
+-#endif /* NYI */
+ 
+ /*
+  * read (external data page).
+@@ -833,11 +710,11 @@ storeError OStoreDirectoryPageObject::read (
+     OStorePageBIOS        &rBIOS)
+ {
+     // Determine scope and link indices.
+-    page::DataBlock::LinkDescriptor aLink;
+-    page::ChunkScope eScope = scope (nPage, aLink);
++    LinkDescriptor aLink;
++    ChunkScope eScope = scope (nPage, aLink);
+ 
+     storeError eErrCode = store_E_None;
+-    if (eScope == page::SCOPE_DIRECT)
++    if (eScope == SCOPE_DIRECT)
+     {
+         sal_uInt32 const nAddr = directLink (aLink.m_nIndex0);
+         if (nAddr == STORE_PAGE_NULL)
+@@ -845,7 +722,7 @@ storeError OStoreDirectoryPageObject::read (
+ 
+         eErrCode = rBIOS.loadObjectAt (rData, nAddr);
+     }
+-    else if (eScope == page::SCOPE_SINGLE)
++    else if (eScope == SCOPE_SINGLE)
+     {
+         sal_uInt32 const nAddr = singleLink (aLink.m_nIndex1);
+         if (nAddr == STORE_PAGE_NULL)
+@@ -858,7 +735,7 @@ storeError OStoreDirectoryPageObject::read (
+ 
+         eErrCode = aSingle.read (aLink.m_nIndex0, rData, rBIOS);
+     }
+-    else if (eScope == page::SCOPE_DOUBLE)
++    else if (eScope == SCOPE_DOUBLE)
+     {
+         sal_uInt32 const nAddr = doubleLink (aLink.m_nIndex2);
+         if (nAddr == STORE_PAGE_NULL)
+@@ -871,7 +748,7 @@ storeError OStoreDirectoryPageObject::read (
+ 
+         eErrCode = aDouble.read (aLink.m_nIndex1, aLink.m_nIndex0, rData, rBIOS);
+     }
+-    else if (eScope == page::SCOPE_TRIPLE)
++    else if (eScope == SCOPE_TRIPLE)
+     {
+         sal_uInt32 const nAddr = tripleLink (aLink.m_nIndex3);
+         if (nAddr == STORE_PAGE_NULL)
+@@ -884,7 +761,7 @@ storeError OStoreDirectoryPageObject::read (
+ 
+         eErrCode = aTriple.read (aLink.m_nIndex2, aLink.m_nIndex1, aLink.m_nIndex0, rData, rBIOS);
+     }
+-    else if (eScope == page::SCOPE_UNREACHABLE)
++    else if (eScope == SCOPE_UNREACHABLE)
+     {
+         // Out of scope.
+         eErrCode = store_E_CantSeek;
+@@ -909,11 +786,11 @@ storeError OStoreDirectoryPageObject::write (
+     OStorePageBIOS        &rBIOS)
+ {
+     // Determine scope and link indices.
+-    page::DataBlock::LinkDescriptor aLink;
+-    page::ChunkScope eScope = scope (nPage, aLink);
++    LinkDescriptor aLink;
++    ChunkScope eScope = scope (nPage, aLink);
+ 
+     storeError eErrCode = store_E_None;
+-    if (eScope == page::SCOPE_DIRECT)
++    if (eScope == SCOPE_DIRECT)
+     {
+         sal_uInt32 const nAddr = directLink (aLink.m_nIndex0);
+         if (nAddr == STORE_PAGE_NULL)
+@@ -932,7 +809,7 @@ storeError OStoreDirectoryPageObject::write (
+             eErrCode = rBIOS.saveObjectAt (rData, nAddr);
+         }
+     }
+-    else if (eScope == page::SCOPE_SINGLE)
++    else if (eScope == SCOPE_SINGLE)
+     {
+         OStoreIndirectionPageObject aSingle;
+         eErrCode = aSingle.loadOrCreate (singleLink (aLink.m_nIndex1), rBIOS);
+@@ -945,7 +822,7 @@ storeError OStoreDirectoryPageObject::write (
+ 
+         eErrCode = aSingle.write (aLink.m_nIndex0, rData, rBIOS);
+     }
+-    else if (eScope == page::SCOPE_DOUBLE)
++    else if (eScope == SCOPE_DOUBLE)
+     {
+         OStoreIndirectionPageObject aDouble;
+         eErrCode = aDouble.loadOrCreate (doubleLink (aLink.m_nIndex2), rBIOS);
+@@ -958,7 +835,7 @@ storeError OStoreDirectoryPageObject::write (
+ 
+         eErrCode = aDouble.write (aLink.m_nIndex1, aLink.m_nIndex0, rData, rBIOS);
+     }
+-    else if (eScope == page::SCOPE_TRIPLE)
++    else if (eScope == SCOPE_TRIPLE)
+     {
+         OStoreIndirectionPageObject aTriple;
+         eErrCode = aTriple.loadOrCreate (tripleLink (aLink.m_nIndex3), rBIOS);
+@@ -971,7 +848,7 @@ storeError OStoreDirectoryPageObject::write (
+ 
+         eErrCode = aTriple.write (aLink.m_nIndex2, aLink.m_nIndex1, aLink.m_nIndex0, rData, rBIOS);
+     }
+-    else if (eScope == page::SCOPE_UNREACHABLE)
++    else if (eScope == SCOPE_UNREACHABLE)
+     {
+         // Out of scope.
+         eErrCode = store_E_CantSeek;
+@@ -995,39 +872,39 @@ storeError OStoreDirectoryPageObject::truncate (
+     OStorePageBIOS        &rBIOS)
+ {
+     // Determine scope and link indices.
+-    page::DataBlock::LinkDescriptor aLink;
+-    page::ChunkScope eScope = scope (nPage, aLink);
++    LinkDescriptor aLink;
++    ChunkScope eScope = scope (nPage, aLink);
+ 
+     storeError eErrCode = store_E_None;
+-    if (eScope == page::SCOPE_DIRECT)
++    if (eScope == SCOPE_DIRECT)
+     {
+         // Truncate all triple indirect pages.
+-        eErrCode = truncate (page::SCOPE_TRIPLE, 0, rBIOS);
++        eErrCode = truncate (SCOPE_TRIPLE, 0, rBIOS);
+         if (eErrCode != store_E_None)
+             return eErrCode;
+ 
+         // Truncate all double indirect pages.
+-        eErrCode = truncate (page::SCOPE_DOUBLE, 0, rBIOS);
++        eErrCode = truncate (SCOPE_DOUBLE, 0, rBIOS);
+         if (eErrCode != store_E_None)
+             return eErrCode;
+ 
+         // Truncate all single indirect pages.
+-        eErrCode = truncate (page::SCOPE_SINGLE, 0, rBIOS);
++        eErrCode = truncate (SCOPE_SINGLE, 0, rBIOS);
+         if (eErrCode != store_E_None)
+             return eErrCode;
+ 
+         // Truncate direct pages, including 'aLink.m_nIndex0'.
+         eErrCode = truncate (eScope, aLink.m_nIndex0, rBIOS);
+     }
+-    else if (eScope == page::SCOPE_SINGLE)
++    else if (eScope == SCOPE_SINGLE)
+     {
+         // Truncate all triple indirect pages.
+-        eErrCode = truncate (page::SCOPE_TRIPLE, 0, rBIOS);
++        eErrCode = truncate (SCOPE_TRIPLE, 0, rBIOS);
+         if (eErrCode != store_E_None)
+             return eErrCode;
+ 
+         // Truncate all double indirect pages.
+-        eErrCode = truncate (page::SCOPE_DOUBLE, 0, rBIOS);
++        eErrCode = truncate (SCOPE_DOUBLE, 0, rBIOS);
+         if (eErrCode != store_E_None)
+             return eErrCode;
+ 
+@@ -1048,10 +925,10 @@ storeError OStoreDirectoryPageObject::truncate (
+             singleLink (aLink.m_nIndex1, STORE_PAGE_NULL);
+         }
+     }
+-    else if (eScope == page::SCOPE_DOUBLE)
++    else if (eScope == SCOPE_DOUBLE)
+     {
+         // Truncate all triple indirect pages.
+-        eErrCode = truncate (page::SCOPE_TRIPLE, 0, rBIOS);
++        eErrCode = truncate (SCOPE_TRIPLE, 0, rBIOS);
+         if (eErrCode != store_E_None)
+             return eErrCode;
+ 
+@@ -1073,7 +950,7 @@ storeError OStoreDirectoryPageObject::truncate (
+             doubleLink (aLink.m_nIndex2, STORE_PAGE_NULL);
+         }
+     }
+-    else if (eScope == page::SCOPE_TRIPLE)
++    else if (eScope == SCOPE_TRIPLE)
+     {
+         // Truncate triple indirect pages, downto 'aLink.m_nIndex3'.
+         eErrCode = truncate (eScope, aLink.m_nIndex3 + 1, rBIOS);
+@@ -1093,7 +970,7 @@ storeError OStoreDirectoryPageObject::truncate (
+             tripleLink (aLink.m_nIndex3, STORE_PAGE_NULL);
+         }
+     }
+-    else if (eScope == page::SCOPE_UNREACHABLE)
++    else if (eScope == SCOPE_UNREACHABLE)
+     {
+         // Out of scope.
+         eErrCode = store_E_CantSeek;
+@@ -1109,99 +986,80 @@ storeError OStoreDirectoryPageObject::truncate (
+     return eErrCode;
+ }
+ 
+-/*
+- * truncate (external data page scope; private).
+- */
+-storeError OStoreDirectoryPageObject::truncate (
+-    page::ChunkScope       eScope,
+-    sal_uInt16             nRemain,
+-    OStorePageBIOS        &rBIOS)
++sal_uInt32 OStoreDirectoryPageObjectV1::path (void) const
+ {
+-    OStoreDirectoryDataBlock const & rDataBlock = PAGE().m_aDataBlock;
++    const sal_Char * pszName = PAGE().m_aNameBlock.m_pData;
++    sal_uInt32       nPath   = store::ntohl(PAGE().m_aNameBlock.m_aKey.m_nHigh);
++    return rtl_crc32 (nPath, pszName, rtl_str_getLength(pszName));
++}
+ 
+-    // Enter.
+-    storeError eErrCode = store_E_None;
+-    if (eScope == page::SCOPE_DIRECT)
+-    {
+-        // Truncate direct data pages.
+-        sal_uInt16 i, n = rDataBlock.directCount();
+-        for (i = n; i > nRemain; i--)
+-        {
+-            // Obtain data page location.
+-            sal_uInt32 nAddr = directLink (i - 1);
+-            if (nAddr == STORE_PAGE_NULL) continue;
++sal_Size OStoreDirectoryPageObjectV1::getName (sal_Char * pBuffer, sal_Size nBufsiz, OStorePageBIOS &) const
++{
++    sal_Char const * pszName = PAGE().m_aNameBlock.m_pData;
++    sal_Size nLength = rtl_str_getLength(pszName);
++    memcpy (pBuffer, pszName, SAL_MIN(nLength, nBufsiz));
++    return nLength;
++}
+ 
+-            // Free data page.
+-            OStoreDataPageData aData;
+-            eErrCode = rBIOS.free (aData, nAddr);
+-            if (eErrCode != store_E_None)
+-                break;
++void OStoreDirectoryPageObjectV1::setName (sal_Char const * pBuffer, sal_Size nBufsiz)
++{
++    memcpy (PAGE().m_aNameBlock.m_pData, pBuffer, SAL_MIN(STORE_MAXIMUM_NAMESIZE-1, nBufsiz));
++}
+ 
+-            // Clear pointer to data page.
+-            directLink (i - 1, STORE_PAGE_NULL);
+-        }
++sal_uInt32 OStoreDirectoryPageObjectV2::path (void) const
++{
++    const sal_Char * pszName = PAGE().m_aNameBlock.m_pNameData;
++    sal_uInt32       nPath   = store::ntohl(PAGE().m_aNameBlock.m_aKey.m_nHigh);
++    return rtl_crc32 (nPath, pszName, rtl_str_getLength(pszName));
++}
+ 
+-        // Done.
+-        return eErrCode;
+-    }
++static void
++copyAndTerminate( sal_Char *pDest, const sal_Char *pSrc, sal_Int32 nBytes)
++{
++    memcpy (pDest, pSrc, nBytes);
++    pDest[nBytes] = '\0';
++}
+ 
+-    if (eScope == page::SCOPE_SINGLE)
++#define USE_OTHER_BLOCK STORE_MAX_NAMESIZE_V2
++sal_Size OStoreDirectoryPageObjectV2::getName (sal_Char * pBuffer, sal_Size nBufsiz, OStorePageBIOS &rBIOS) const
++{
++    if (PAGE().m_aNameBlock.m_nNameLength >= USE_OTHER_BLOCK)
+     {
+-        // Truncate single indirect pages.
+-        sal_uInt16 i, n = rDataBlock.singleCount();
+-        for (i = n; i > nRemain; i--)
+-        {
+-            // Truncate single indirect page to zero data pages.
+-            eErrCode = store_truncate_Impl (singleLink (i - 1), 0, rBIOS);
+-            if (eErrCode != store_E_None)
+-                break;
+-
+-            // Clear pointer to single indirect page.
+-            singleLink (i - 1, STORE_PAGE_NULL);
+-        }
+-
+-        // Done.
+-        return eErrCode;
+-    }
++        OStorePageLongNameDataPageObject aLongNamePage;
++        storeError eErrCode = rBIOS.loadObjectAt (aLongNamePage, PAGE().m_aNameBlock.m_nNameBlock);
+ 
+-    if (eScope == page::SCOPE_DOUBLE)
+-    {
+-        // Truncate double indirect pages.
+-        sal_uInt16 i, n = rDataBlock.doubleCount();
+-        for (i = n; i > nRemain; i--)
++        if (eErrCode != store_E_None)
+         {
+-            // Truncate double indirect page to zero single indirect pages.
+-            eErrCode = store_truncate_Impl (doubleLink (i - 1), 0, 0, rBIOS);
+-            if (eErrCode != store_E_None)
+-                break;
+-
+-            // Clear pointer to double indirect page.
+-            doubleLink (i - 1, STORE_PAGE_NULL);
++            OSL_TRACE("failed to load name page %d\n", eErrCode);
++            return 0;
+         }
+ 
+-        // Done.
+-        return eErrCode;
++        PageHolderObject<OStorePageLongNameData> xPage (aLongNamePage.get());
++        copyAndTerminate (pBuffer, PAGE().m_aNameBlock.m_pNameData, 
++                          SAL_MIN(USE_OTHER_BLOCK - 1, nBufsiz));
++        nBufsiz -= USE_OTHER_BLOCK - 1;
++        const sal_Size nLength = SAL_MIN(
++            PAGE().m_aNameBlock.m_nNameLength - (USE_OTHER_BLOCK - 1),
++            nBufsiz);
++        copyAndTerminate (pBuffer + USE_OTHER_BLOCK - 1,
++                          xPage->m_nData, 
++                          nLength);
++        return nLength;
+     }
+-
+-    if (eScope == page::SCOPE_TRIPLE)
++    else
+     {
+-        // Truncate triple indirect pages.
+-        sal_uInt16 i, n = rDataBlock.tripleCount();
+-        for (i = n; i > nRemain; i--)
+-        {
+-            // Truncate to zero double indirect pages.
+-            eErrCode = store_truncate_Impl (tripleLink (i - 1), 0, 0, 0, rBIOS);
+-            if (eErrCode != store_E_None)
+-                break;
+-
+-            // Clear pointer to triple indirect page.
+-            tripleLink (i - 1, STORE_PAGE_NULL);
+-        }
+-
+-        // Done.
+-        return eErrCode;
++        sal_Char const * pszName = PAGE().m_aNameBlock.m_pNameData;
++        const sal_Size nLength = SAL_MIN(PAGE().m_aNameBlock.m_nNameLength, nBufsiz);
++        memcpy (pBuffer, pszName, nLength);
++        return nLength;
+     }
++}
+ 
+-    // Invalid scope.
+-    return store_E_InvalidAccess;
++void OStoreDirectoryPageObjectV2::setName (sal_Char const * pBuffer, sal_Size nLen)
++{
++    // TODO TODO TODO - long names not yet written correctly
++    //if (nLen >= USE_OTHER_BLOCK)
++    memcpy (PAGE().m_aNameBlock.m_pNameData, pBuffer, SAL_MIN(STORE_MAX_NAMESIZE_V2-1, nLen));
+ }
++
++
+diff --git store/source/stordata.hxx store/source/stordata.hxx
+index b86287b..c21c4b9 100644
+--- store/source/stordata.hxx
++++ store/source/stordata.hxx
+@@ -33,9 +33,11 @@
+ 
+ #include "sal/types.h"
+ #include "sal/macros.h"
++#include "osl/diagnose.h"
+ 
+ #include "store/types.h"
+ #include "storbase.hxx"
++#include "storbios.hxx"
+ 
+ namespace store
+ {
+@@ -66,7 +68,8 @@ struct OStoreDataPageData : public store::OStorePageData
+     */
+     static const size_t     theSize     = 0;
+     static const sal_uInt16 thePageSize = base::theSize + self::theSize;
+-    STORE_STATIC_ASSERT(STORE_MINIMUM_PAGESIZE >= self::thePageSize);
++    STORE_STATIC_ASSERT(STORE_MINIMUM_PAGESIZE_V1 >= self::thePageSize);
++    STORE_STATIC_ASSERT(STORE_MINIMUM_PAGESIZE_V2 >= self::thePageSize);
+ 
+     /** capacity.
+     */
+@@ -125,7 +128,7 @@ public:
+     /** External representation.
+      */
+     virtual storeError guard  (sal_uInt32 nAddr);
+-    virtual storeError verify (sal_uInt32 nAddr) const;
++    virtual storeError verify (sal_uInt32 nAddr, sal_uInt16 nVersion) const;
+ };
+ 
+ /*========================================================================
+@@ -156,7 +159,8 @@ struct OStoreIndirectionPageData : public store::OStorePageData
+      */
+     static const size_t     theSize     = sizeof(G);
+     static const sal_uInt16 thePageSize = base::theSize + self::theSize;
+-    STORE_STATIC_ASSERT(STORE_MINIMUM_PAGESIZE >= self::thePageSize);
++    STORE_STATIC_ASSERT(STORE_MINIMUM_PAGESIZE_V1 >= self::thePageSize);
++    STORE_STATIC_ASSERT(STORE_MINIMUM_PAGESIZE_V2 >= self::thePageSize);
+ 
+     /** capacity.
+     */
+@@ -239,7 +243,7 @@ public:
+         OStorePageBIOS & rBIOS);
+ 
+     virtual storeError guard  (sal_uInt32 nAddr);
+-    virtual storeError verify (sal_uInt32 nAddr) const;
++    virtual storeError verify (sal_uInt32 nAddr, sal_uInt16 nVersion) const;
+ 
+     /** read (indirect data page).
+     */
+@@ -304,7 +308,7 @@ public:
+  * OStorePageNameBlock.
+  *
+  *======================================================================*/
+-struct OStorePageNameBlock
++struct OStorePageNameBlockV1
+ {
+     typedef OStorePageGuard G;
+     typedef OStorePageKey   K;
+@@ -332,7 +336,7 @@ struct OStorePageNameBlock
+ 
+     /** Construction.
+     */
+-    OStorePageNameBlock (void)
++    OStorePageNameBlockV1 (void)
+         : m_aGuard(), m_aKey(), m_nAttrib (0)
+     {
+         memset (m_pData, 0, sizeof(m_pData));
+@@ -362,51 +366,283 @@ struct OStorePageNameBlock
+     }
+ };
+ 
++#define STORE_MAX_NAMESIZE_V2 32
++
++struct OStorePageNameBlockV2
++{
++    typedef OStorePageGuard G;
++    typedef OStorePageKey   K;
++
++    /** Representation.
++    */
++    G          m_aGuard;
++    K          m_aKey;
++    sal_uInt32 m_nAttrib;
++    sal_Char   m_pNameData[STORE_MAX_NAMESIZE_V2];
++    sal_uInt32 m_nNameLength;
++    sal_uInt32 m_nNameBlock;
++
++    /** size.
++    */
++    static const size_t theSize = sizeof(G) + sizeof(K) + 3*sizeof(sal_uInt32) + sizeof(sal_Char[STORE_MAX_NAMESIZE_V2]);
++
++    /** initialize.
++    */
++    void initialize (void)
++    {
++        m_aGuard  = G();
++        m_aKey    = K();
++        m_nAttrib = 0;
++        memset (m_pNameData, 0, sizeof(m_pNameData));
++        m_nNameLength = 0;
++        m_nNameBlock = 0;
++    }
++
++    /** Construction.
++    */
++    OStorePageNameBlockV2 (void)
++        : m_aGuard(), m_aKey(), m_nAttrib (0), m_nNameLength (0), m_nNameBlock (0)
++    {
++        memset (m_pNameData, 0, sizeof(m_pNameData));
++    }
++
++    /** guard (external representation).
++    */
++    void guard()
++    {
++        sal_uInt32 nCRC32 = 0;
++        nCRC32 = rtl_crc32 (nCRC32, &m_aGuard.m_nMagic, sizeof(sal_uInt32));
++        nCRC32 = rtl_crc32 (nCRC32, &m_aKey, theSize - sizeof(G));
++        m_aGuard.m_nCRC32 = store::htonl(nCRC32);
++    }
++
++    /** verify (external representation).
++    */
++    storeError verify() const
++    {
++        // apparently v2 file format does _not_ correctly setup
++        // checksums
++#if 0
++        sal_uInt32 nCRC32 = 0;
++        nCRC32 = rtl_crc32 (nCRC32, &m_aGuard.m_nMagic, sizeof(sal_uInt32));
++        nCRC32 = rtl_crc32 (nCRC32, &m_aKey, theSize - sizeof(G));
++        if (m_aGuard.m_nCRC32 != store::htonl(nCRC32))
++            return store_E_InvalidChecksum;
++        else
++#endif
++            return store_E_None;
++    }
++};
++
+ /*========================================================================
+  *
+  * OStoreDirectoryDataBlock.
+  *
+  *======================================================================*/
+-#define STORE_LIMIT_DATAPAGE_DIRECT 16
+-#define STORE_LIMIT_DATAPAGE_SINGLE  8
+-#define STORE_LIMIT_DATAPAGE_DOUBLE  1
+-#define STORE_LIMIT_DATAPAGE_TRIPLE  1
+ 
+-struct OStoreDirectoryDataBlock
++/** LinkDescriptor.
++*/
++struct LinkDescriptor
++{
++    /** Representation.
++     */
++    sal_uInt16 m_nIndex0;
++    sal_uInt16 m_nIndex1;
++    sal_uInt16 m_nIndex2;
++    sal_uInt16 m_nIndex3;
++
++    /** Construction.
++     */
++    LinkDescriptor (void)
++        : m_nIndex0 ((sal_uInt16)(~0)),
++          m_nIndex1 ((sal_uInt16)(~0)),
++          m_nIndex2 ((sal_uInt16)(~0)),
++          m_nIndex3 ((sal_uInt16)(~0))
++    {}
++};
++
++#define STORE_LIMIT_DATAPAGE_DIRECT_V1 16
++#define STORE_LIMIT_DATAPAGE_SINGLE_V1  8
++#define STORE_LIMIT_DATAPAGE_DOUBLE_V1  1
++#define STORE_LIMIT_DATAPAGE_TRIPLE_V1  1
++
++struct OStoreDirectoryDataBlockV1
+ {
+     typedef OStorePageGuard G;
+ 
+-    /** LinkDescriptor.
++    /** LinkTable.
+     */
+-    struct LinkDescriptor
++    struct LinkTable
+     {
+         /** Representation.
+         */
+-        sal_uInt16 m_nIndex0;
+-        sal_uInt16 m_nIndex1;
+-        sal_uInt16 m_nIndex2;
+-        sal_uInt16 m_nIndex3;
++        sal_uInt32 m_pDirect[STORE_LIMIT_DATAPAGE_DIRECT_V1];
++        sal_uInt32 m_pSingle[STORE_LIMIT_DATAPAGE_SINGLE_V1];
++        sal_uInt32 m_pDouble[STORE_LIMIT_DATAPAGE_DOUBLE_V1];
++        sal_uInt32 m_pTriple[STORE_LIMIT_DATAPAGE_TRIPLE_V1];
++
++        /** initialize.
++        */
++        void initialize (void)
++        {
++          memset(m_pDirect, STORE_PAGE_NULL, sizeof(m_pDirect));
++          memset(m_pSingle, STORE_PAGE_NULL, sizeof(m_pSingle));
++          memset(m_pDouble, STORE_PAGE_NULL, sizeof(m_pDouble));
++          memset(m_pTriple, STORE_PAGE_NULL, sizeof(m_pTriple));
++        }
+ 
+         /** Construction.
+         */
+-        LinkDescriptor (void)
+-            : m_nIndex0 ((sal_uInt16)(~0)),
+-              m_nIndex1 ((sal_uInt16)(~0)),
+-              m_nIndex2 ((sal_uInt16)(~0)),
+-              m_nIndex3 ((sal_uInt16)(~0))
+-        {}
++        LinkTable (void)
++        {
++          initialize();
++        }
+     };
+ 
++    /** Representation.
++    */
++    G          m_aGuard;
++    LinkTable  m_aTable;
++    sal_uInt32 m_nDataLen;
++
++    /** size.
++     */
++    static const size_t theSize = sizeof(G) + sizeof(LinkTable) + sizeof(sal_uInt32);
++
++    /** initialize.
++    */
++    void initialize (void)
++    {
++        m_aGuard = G();
++        m_aTable.initialize();
++        m_nDataLen = 0;
++    }
++
++    /** Construction.
++    */
++    OStoreDirectoryDataBlockV1 (void)
++        : m_aGuard(), m_aTable(), m_nDataLen (0)
++    {}
++
++    /** guard (external representation).
++    */
++    void guard()
++    {
++        sal_uInt32 nCRC32 = 0;
++        nCRC32 = rtl_crc32 (nCRC32, &m_aGuard.m_nMagic, sizeof(sal_uInt32));
++        nCRC32 = rtl_crc32 (nCRC32, &m_aTable, theSize - sizeof(G));
++        m_aGuard.m_nCRC32 = store::htonl(nCRC32);
++    }
++
++    /** verify (external representation).
++    */
++    storeError verify() const
++    {
++        sal_uInt32 nCRC32 = 0;
++        nCRC32 = rtl_crc32 (nCRC32, &m_aGuard.m_nMagic, sizeof(sal_uInt32));
++        nCRC32 = rtl_crc32 (nCRC32, &m_aTable, theSize - sizeof(G));
++        if (m_aGuard.m_nCRC32 != store::htonl(nCRC32))
++            return store_E_InvalidChecksum;
++        else
++            return store_E_None;
++    }
++
++    /** direct.
++    */
++    static sal_uInt16 directCount (void)
++    {
++        return ((sal_uInt16)(STORE_LIMIT_DATAPAGE_DIRECT_V1));
++    }
++    sal_uInt32 directLink (sal_uInt16 nIndex) const
++    {
++        if (nIndex < directCount())
++            return store::ntohl(m_aTable.m_pDirect[nIndex]);
++        else
++            return STORE_PAGE_NULL;
++    }
++    void directLink (sal_uInt16 nIndex, sal_uInt32 nAddr)
++    {
++        if (nIndex < directCount())
++            m_aTable.m_pDirect[nIndex] = store::htonl(nAddr);
++    }
++
++    /** single.
++    */
++    static sal_uInt16 singleCount (void)
++    {
++        return ((sal_uInt16)(STORE_LIMIT_DATAPAGE_SINGLE_V1));
++    }
++    sal_uInt32 singleLink (sal_uInt16 nIndex) const
++    {
++        if (nIndex < singleCount())
++            return store::ntohl(m_aTable.m_pSingle[nIndex]);
++        else
++            return STORE_PAGE_NULL;
++    }
++    void singleLink (sal_uInt16 nIndex, sal_uInt32 nAddr)
++    {
++        if (nIndex < singleCount())
++            m_aTable.m_pSingle[nIndex] = store::htonl(nAddr);
++    }
++
++    /** double.
++    */
++    static sal_uInt16 doubleCount (void)
++    {
++        return ((sal_uInt16)(STORE_LIMIT_DATAPAGE_DOUBLE_V1));
++    }
++    sal_uInt32 doubleLink (sal_uInt16 nIndex) const
++    {
++        if (nIndex < doubleCount())
++            return store::ntohl(m_aTable.m_pDouble[nIndex]);
++        else
++            return STORE_PAGE_NULL;
++    }
++    void doubleLink (sal_uInt16 nIndex, sal_uInt32 nAddr)
++    {
++        if (nIndex < doubleCount())
++            m_aTable.m_pDouble[nIndex] = store::htonl(nAddr);
++    }
++
++    /** triple.
++    */
++    static sal_uInt16 tripleCount (void)
++    {
++        return ((sal_uInt16)(STORE_LIMIT_DATAPAGE_TRIPLE_V1));
++    }
++    sal_uInt32 tripleLink (sal_uInt16 nIndex) const
++    {
++        if (nIndex < tripleCount())
++            return store::ntohl(m_aTable.m_pTriple[nIndex]);
++        else
++            return STORE_PAGE_NULL;
++    }
++    void tripleLink (sal_uInt16 nIndex, sal_uInt32 nAddr)
++    {
++        if (nIndex < tripleCount())
++            m_aTable.m_pTriple[nIndex] = store::htonl(nAddr);
++    }
++};
++
++#define STORE_LIMIT_DATAPAGE_DIRECT_V2 4
++#define STORE_LIMIT_DATAPAGE_SINGLE_V2 2
++#define STORE_LIMIT_DATAPAGE_DOUBLE_V2 1
++#define STORE_LIMIT_DATAPAGE_TRIPLE_V2 1
++
++struct OStoreDirectoryDataBlockV2
++{
++    typedef OStorePageGuard G;
++
+     /** LinkTable.
+     */
+     struct LinkTable
+     {
+         /** Representation.
+         */
+-        sal_uInt32 m_pDirect[STORE_LIMIT_DATAPAGE_DIRECT];
+-        sal_uInt32 m_pSingle[STORE_LIMIT_DATAPAGE_SINGLE];
+-        sal_uInt32 m_pDouble[STORE_LIMIT_DATAPAGE_DOUBLE];
+-        sal_uInt32 m_pTriple[STORE_LIMIT_DATAPAGE_TRIPLE];
++        sal_uInt32 m_pDirect[STORE_LIMIT_DATAPAGE_DIRECT_V2];
++        sal_uInt32 m_pSingle[STORE_LIMIT_DATAPAGE_SINGLE_V2];
++        sal_uInt32 m_pDouble[STORE_LIMIT_DATAPAGE_DOUBLE_V2];
++        sal_uInt32 m_pTriple[STORE_LIMIT_DATAPAGE_TRIPLE_V2];
+ 
+         /** initialize.
+         */
+@@ -447,7 +683,7 @@ struct OStoreDirectoryDataBlock
+ 
+     /** Construction.
+     */
+-    OStoreDirectoryDataBlock (void)
++    OStoreDirectoryDataBlockV2 (void)
+         : m_aGuard(), m_aTable(), m_nDataLen (0)
+     {}
+ 
+@@ -465,12 +701,16 @@ struct OStoreDirectoryDataBlock
+     */
+     storeError verify() const
+     {
++        // apparently v2 file format does _not_ correctly setup
++        // checksums
++#if 0
+         sal_uInt32 nCRC32 = 0;
+         nCRC32 = rtl_crc32 (nCRC32, &m_aGuard.m_nMagic, sizeof(sal_uInt32));
+         nCRC32 = rtl_crc32 (nCRC32, &m_aTable, theSize - sizeof(G));
+         if (m_aGuard.m_nCRC32 != store::htonl(nCRC32))
+             return store_E_InvalidChecksum;
+         else
++#endif
+             return store_E_None;
+     }
+ 
+@@ -478,7 +718,7 @@ struct OStoreDirectoryDataBlock
+     */
+     static sal_uInt16 directCount (void)
+     {
+-        return ((sal_uInt16)(STORE_LIMIT_DATAPAGE_DIRECT));
++        return ((sal_uInt16)(STORE_LIMIT_DATAPAGE_DIRECT_V2));
+     }
+     sal_uInt32 directLink (sal_uInt16 nIndex) const
+     {
+@@ -497,7 +737,7 @@ struct OStoreDirectoryDataBlock
+     */
+     static sal_uInt16 singleCount (void)
+     {
+-        return ((sal_uInt16)(STORE_LIMIT_DATAPAGE_SINGLE));
++        return ((sal_uInt16)(STORE_LIMIT_DATAPAGE_SINGLE_V2));
+     }
+     sal_uInt32 singleLink (sal_uInt16 nIndex) const
+     {
+@@ -516,7 +756,7 @@ struct OStoreDirectoryDataBlock
+     */
+     static sal_uInt16 doubleCount (void)
+     {
+-        return ((sal_uInt16)(STORE_LIMIT_DATAPAGE_DOUBLE));
++        return ((sal_uInt16)(STORE_LIMIT_DATAPAGE_DOUBLE_V2));
+     }
+     sal_uInt32 doubleLink (sal_uInt16 nIndex) const
+     {
+@@ -535,7 +775,7 @@ struct OStoreDirectoryDataBlock
+     */
+     static sal_uInt16 tripleCount (void)
+     {
+-        return ((sal_uInt16)(STORE_LIMIT_DATAPAGE_TRIPLE));
++        return ((sal_uInt16)(STORE_LIMIT_DATAPAGE_TRIPLE_V2));
+     }
+     sal_uInt32 tripleLink (sal_uInt16 nIndex) const
+     {
+@@ -551,6 +791,7 @@ struct OStoreDirectoryDataBlock
+     }
+ };
+ 
++
+ /*========================================================================
+  *
+  * OStoreDirectoryPageData.
+@@ -558,14 +799,14 @@ struct OStoreDirectoryDataBlock
+  *======================================================================*/
+ #define STORE_MAGIC_DIRECTORYPAGE sal_uInt32(0x62190120)
+ 
+-struct OStoreDirectoryPageData : public store::OStorePageData
++struct OStoreDirectoryPageDataV1 : public store::OStorePageData
+ {
+-    typedef OStorePageData           base;
+-    typedef OStoreDirectoryPageData  self;
++    typedef store::OStorePageData      base;
++    typedef OStoreDirectoryPageDataV1  self;
+ 
+-    typedef OStorePageDescriptor     D;
+-    typedef OStorePageNameBlock      NameBlock;
+-    typedef OStoreDirectoryDataBlock DataBlock;
++    typedef OStorePageDescriptor       D;
++    typedef OStorePageNameBlockV1      NameBlock;
++    typedef OStoreDirectoryDataBlockV1 DataBlock;
+ 
+     /** Representation.
+      */
+@@ -581,7 +822,7 @@ struct OStoreDirectoryPageData : public store::OStorePageData
+      */
+     static const size_t     theSize     = NameBlock::theSize + DataBlock::theSize;
+     static const sal_uInt16 thePageSize = base::theSize + self::theSize;
+-    STORE_STATIC_ASSERT(STORE_MINIMUM_PAGESIZE >= self::thePageSize);
++    STORE_STATIC_ASSERT(STORE_MINIMUM_PAGESIZE_V1 >= self::thePageSize);
+ 
+     /** capacity.
+     */
+@@ -612,7 +853,7 @@ struct OStoreDirectoryPageData : public store::OStorePageData
+ 
+     /** Construction.
+     */
+-    explicit OStoreDirectoryPageData (sal_uInt16 nPageSize)
++    explicit OStoreDirectoryPageDataV1 (sal_uInt16 nPageSize)
+         : base (nPageSize), m_aNameBlock(), m_aDataBlock()
+     {
+         base::m_aGuard.m_nMagic = store::htonl(self::theTypeId);
+@@ -637,201 +878,553 @@ struct OStoreDirectoryPageData : public store::OStorePageData
+             eErrCode = m_aDataBlock.verify();
+         return eErrCode;
+     }
++};
++
++struct OStoreDirectoryPageDataV2 : public store::OStorePageData
++{
++    typedef store::OStorePageData      base;
++    typedef OStoreDirectoryPageDataV2  self;
+ 
+-    /** ChunkDescriptor.
++    typedef OStorePageDescriptor       D;
++    typedef OStorePageNameBlockV2      NameBlock;
++    typedef OStoreDirectoryDataBlockV2 DataBlock;
++
++    /** Representation.
++     */
++    NameBlock m_aNameBlock;
++    DataBlock m_aDataBlock;
++    sal_uInt8 m_pData[1];
++
++    /** type.
++     */
++    static const sal_uInt32 theTypeId = STORE_MAGIC_DIRECTORYPAGE;
++
++    /** size.
++     */
++    static const size_t     theSize     = NameBlock::theSize + DataBlock::theSize;
++    static const sal_uInt16 thePageSize = base::theSize + self::theSize;
++    STORE_STATIC_ASSERT(STORE_MINIMUM_PAGESIZE_V2 >= self::thePageSize);
++
++    /** capacity.
+     */
+-    struct ChunkDescriptor
++    sal_uInt16 capacity() const
+     {
+-        /** Representation.
+-        */
+-        sal_uInt32 m_nPage;
+-        sal_uInt16 m_nOffset;
+-        sal_uInt16 m_nLength;
++        return (store::ntohs(base::m_aDescr.m_nSize) - self::thePageSize);
++    }
+ 
+-        /** Construction.
+-        */
+-        ChunkDescriptor (sal_uInt32 nPosition, sal_uInt16 nCapacity)
+-        {
+-            m_nPage   = nPosition / nCapacity;
+-            m_nOffset = (sal_uInt16)((nPosition % nCapacity) & 0xffff);
+-            m_nLength = nCapacity - m_nOffset;
+-        }
+-    };
++    /** usage.
++    */
++    sal_uInt16 usage() const
++    {
++        return (store::ntohs(base::m_aDescr.m_nUsed) - self::thePageSize);
++    }
+ 
+-    /** ChunkScope.
++    /** initialize.
+     */
+-    enum ChunkScope
++    void initialize (void)
+     {
+-        SCOPE_INTERNAL,
+-        SCOPE_EXTERNAL,
+-        SCOPE_DIRECT,
+-        SCOPE_SINGLE,
+-        SCOPE_DOUBLE,
+-        SCOPE_TRIPLE,
+-        SCOPE_UNREACHABLE,
+-        SCOPE_UNKNOWN
+-    };
++        base::m_aGuard.m_nMagic = store::htonl(self::theTypeId);
++        base::m_aDescr.m_nUsed  = store::htons(self::thePageSize);
+ 
+-    /** scope (internal).
++        m_aNameBlock.initialize();
++        m_aDataBlock.initialize();
++
++        memset (m_pData, 0, capacity());
++    }
++
++    /** Construction.
+     */
+-    ChunkScope scope (sal_uInt32 nPosition) const
++    explicit OStoreDirectoryPageDataV2 (sal_uInt16 nPageSize)
++        : base (nPageSize), m_aNameBlock(), m_aDataBlock()
+     {
+-        sal_uInt32 nCapacity = capacity();
+-        if (nPosition < nCapacity)
+-            return SCOPE_INTERNAL;
+-        else
+-            return SCOPE_EXTERNAL;
++        base::m_aGuard.m_nMagic = store::htonl(self::theTypeId);
++        base::m_aDescr.m_nUsed  = store::htons(self::thePageSize);
++        memset (m_pData, 0, capacity());
++    }
++
++    /** guard (external representation).
++    */
++    void guard()
++    {
++        m_aNameBlock.guard();
++        m_aDataBlock.guard();
++    }
++
++    /** verify (external representation).
++    */
++    storeError verify() const
++    {
++        storeError eErrCode = m_aNameBlock.verify();
++        if (eErrCode == store_E_None)
++            eErrCode = m_aDataBlock.verify();
++        return eErrCode;
++    }
++};
++
++/** ChunkDescriptor.
++ */
++struct ChunkDescriptor
++{
++    /** Representation.
++     */
++    sal_uInt32 m_nPage;
++    sal_uInt16 m_nOffset;
++    sal_uInt16 m_nLength;
++
++    /** Construction.
++     */
++    ChunkDescriptor (sal_uInt32 nPosition, sal_uInt16 nCapacity)
++    {
++        m_nPage   = nPosition / nCapacity;
++        m_nOffset = (sal_uInt16)((nPosition % nCapacity) & 0xffff);
++        m_nLength = nCapacity - m_nOffset;
+     }
+ };
+ 
+ /*========================================================================
+  *
+- * OStoreDirectoryPageObject.
++ * OStorePageLongNameData.
+  *
+  *======================================================================*/
+-class OStoreDirectoryPageObject : public store::OStorePageObject
++
++#define STORE_MAGIC_LONGNAME sal_uInt32 (0x12345678)
++
++struct OStorePageLongNameData : public OStorePageData
+ {
+-    typedef OStorePageObject          base;
+-    typedef OStoreDirectoryPageData   page;
+-    typedef OStoreIndirectionPageData indirect;
++    typedef OStorePageData base;
+ 
+-    typedef OStorePageDescriptor      D;
++    /** Representation
++    */ 
++    sal_Char m_nData[1];
++
++    /** type.
++     */
++    static const sal_uInt32 theTypeId = STORE_MAGIC_LONGNAME;
++
++	explicit OStorePageLongNameData(sal_uInt16 nPageSize) :
++		OStorePageData (nPageSize)
++    {
++        m_aGuard.m_nMagic = STORE_MAGIC_LONGNAME;
++		m_aDescr.m_nUsed = sal::static_int_cast< sal_uInt16 >(
++            m_aDescr.m_nUsed);
++		memset (&m_nData, 0, capacity());
++    }
++
++	/** capacity.
++	*/
++	sal_uInt16 capacity (void)
++	{
++		return (m_aDescr.m_nSize - (base::size()));
++	}
++};
++
++/*========================================================================
++ *
++ * OStorePageLongNameDataPageObject.
++ *
++ *======================================================================*/
++class OStorePageLongNameDataPageObject : public store::OStorePageObject
++{
++    typedef OStorePageObject         base;
++    typedef OStorePageLongNameData   page;
+ 
+ public:
+     /** Construction.
+     */
+-    explicit OStoreDirectoryPageObject (PageHolder const & rxPage = PageHolder())
++    explicit OStorePageLongNameDataPageObject (PageHolder const & rxPage = PageHolder())
+         : OStorePageObject (rxPage)
+     {}
+ 
+     /** External representation.
+-    */
++     */
+     virtual storeError guard  (sal_uInt32 nAddr);
+-    virtual storeError verify (sal_uInt32 nAddr) const;
++    virtual storeError verify (sal_uInt32 nAddr, sal_uInt16 nVersion) const;
++};
+ 
+-    /** attrib.
+-    */
+-    sal_uInt32 attrib (void) const
+-    {
+-        return store::ntohl(PAGE().m_aNameBlock.m_nAttrib);
+-    }
+-    void attrib (sal_uInt32 nAttrib)
++/*========================================================================
++ *
++ * OStoreDirectoryPageObject.
++ *
++ *======================================================================*/
++struct OStoreDirectoryPageObject : public store::OStorePageObject
++{
++    /** ChunkScope.
++     */
++    enum ChunkScope
+     {
+-        PAGE().m_aNameBlock.m_nAttrib = store::htonl(nAttrib);
+-        touch();
+-    }
++        SCOPE_INTERNAL,
++        SCOPE_EXTERNAL,
++        SCOPE_DIRECT,
++        SCOPE_SINGLE,
++        SCOPE_DOUBLE,
++        SCOPE_TRIPLE,
++        SCOPE_UNREACHABLE,
++        SCOPE_UNKNOWN
++    };
+ 
+-    /** key.
+-    */
+-    OStorePageKey key (void) const
+-    {
+-        return PAGE().m_aNameBlock.m_aKey;
+-    }
+-    void key (OStorePageKey const & rKey)
+-    {
+-        PAGE().m_aNameBlock.m_aKey = rKey;
+-        touch();
+-    }
++    virtual OStorePageDescriptor const& getDescriptor (void) const = 0;
++    virtual sal_uInt32 capacity (void) const = 0;
++    virtual sal_uInt32 attrib (void) const = 0;
++    virtual void attrib (sal_uInt32 nAttrib) = 0;
++    virtual OStorePageKey key (void) const = 0;
++    virtual void key (OStorePageKey const & rKey) = 0;
++    virtual sal_uInt32 path (void) const = 0;
++    virtual sal_Size getName (sal_Char * pBuffer, sal_Size nBufsiz, OStorePageBIOS &rBIOS) const = 0;
++    virtual void setName (sal_Char const * pBuffer, sal_Size nBufsiz) = 0;
++    virtual sal_uInt32 dataLength (void) const = 0;
++    virtual void dataLength (sal_uInt32 nLength) = 0;
++    virtual sal_uInt8* getDataBuffer (void) = 0;
++    virtual ChunkScope scope (sal_uInt32     nPage,
++                              LinkDescriptor &rDescr) const = 0;
++    virtual storeError truncate (
++        ChunkScope       eScope,
++        sal_uInt16       nRemain,
++        OStorePageBIOS  &rBIOS) = 0;
++
++    storeError read (
++        sal_uInt32             nPage,
++        OStoreDataPageObject  &rData,
++        OStorePageBIOS        &rBIOS);
++    storeError write (
++        sal_uInt32             nPage,
++        OStoreDataPageObject  &rData,
++        OStorePageBIOS        &rBIOS);
++    storeError truncate (
++        sal_uInt32             nPage,
++        OStorePageBIOS        &rBIOS);
+ 
+-    /** path.
++    /** scope (internal).
+     */
+-    sal_uInt32 path (void) const
++    ChunkScope scope (sal_uInt32 nPosition) const
+     {
+-        page const & rPage = PAGE();
+-        const sal_Char * pszName = rPage.m_aNameBlock.m_pData;
+-        sal_uInt32       nPath   = store::ntohl(rPage.m_aNameBlock.m_aKey.m_nHigh);
+-        return rtl_crc32 (nPath, pszName, rtl_str_getLength(pszName));
++        sal_uInt32 nCapacity = capacity();
++        if (nPosition < nCapacity)
++            return SCOPE_INTERNAL;
++        else
++            return SCOPE_EXTERNAL;
+     }
+ 
+-    sal_Size getName (sal_Char * pBuffer, sal_Size nBufsiz) const
+-    {
+-        sal_Char const * pszName = PAGE().m_aNameBlock.m_pData;
+-        sal_Size nLength = rtl_str_getLength(pszName);
+-        memcpy (pBuffer, pszName, SAL_MIN(nLength, nBufsiz));
+-        return nLength;
+-    }
++private:
++    virtual sal_uInt32 directLink (sal_uInt16 nIndex) const = 0;
++    virtual void directLink (sal_uInt16 nIndex, sal_uInt32 nAddr) = 0;
++    virtual sal_uInt32 singleLink (sal_uInt16 nIndex) const = 0;
++    virtual void singleLink (sal_uInt16 nIndex, sal_uInt32 nAddr) = 0;
++    virtual sal_uInt32 doubleLink (sal_uInt16 nIndex) const = 0;
++    virtual void doubleLink (sal_uInt16 nIndex, sal_uInt32 nAddr) = 0;
++    virtual sal_uInt32 tripleLink (sal_uInt16 nIndex) const = 0;
++    virtual void tripleLink (sal_uInt16 nIndex, sal_uInt32 nAddr) = 0;
++
++protected:
++    storeError store_truncate (
++        sal_uInt32      nAddr,
++        sal_uInt16      nSingle,
++        OStorePageBIOS &rBIOS);
++    storeError store_truncate (
++        sal_uInt32       nAddr,
++        sal_uInt16       nDouble,
++        sal_uInt16       nSingle,
++        OStorePageBIOS  &rBIOS);
++    storeError store_truncate (
++        sal_uInt32       nAddr,
++        sal_uInt16       nTriple,
++        sal_uInt16       nDouble,
++        sal_uInt16       nSingle,
++        OStorePageBIOS  &rBIOS);
++};
+ 
+-    /** dataLength.
+-    */
+-    sal_uInt32 dataLength (void) const
+-    {
+-        return store::ntohl(PAGE().m_aDataBlock.m_nDataLen);
+-    }
+-    void dataLength (sal_uInt32 nLength)
+-    {
+-        PAGE().m_aDataBlock.m_nDataLen = store::htonl(nLength);
+-        touch();
+-    }
++template<class T> class OStoreDirectoryPageObjectTemplate : public OStoreDirectoryPageObject
++{
++    typedef OStorePageObject          base;
++    typedef T                         page;
++    typedef OStoreIndirectionPageData indirect;
+ 
+-    /** direct.
+-    */
+-    sal_uInt32 directLink (sal_uInt16 nIndex) const
++    typedef OStorePageDescriptor      D;
++
++    virtual sal_uInt32 directLink (sal_uInt16 nIndex) const
+     {
+         return PAGE().m_aDataBlock.directLink (nIndex);
+     }
+-    void directLink (sal_uInt16 nIndex, sal_uInt32 nAddr)
++    virtual void directLink (sal_uInt16 nIndex, sal_uInt32 nAddr)
+     {
+         PAGE().m_aDataBlock.directLink (nIndex, nAddr);
+-        touch();
+     }
+-
+-    /** single indirect.
+-    */
+-    sal_uInt32 singleLink (sal_uInt16 nIndex) const
++    virtual sal_uInt32 singleLink (sal_uInt16 nIndex) const
+     {
+         return PAGE().m_aDataBlock.singleLink (nIndex);
+     }
+-    void singleLink (sal_uInt16 nIndex, sal_uInt32 nAddr)
++    virtual void singleLink (sal_uInt16 nIndex, sal_uInt32 nAddr)
+     {
+         PAGE().m_aDataBlock.singleLink (nIndex, nAddr);
+-        touch();
+     }
+-
+-    /** double indirect.
+-    */
+-    sal_uInt32 doubleLink (sal_uInt16 nIndex) const
++    virtual sal_uInt32 doubleLink (sal_uInt16 nIndex) const
+     {
+         return PAGE().m_aDataBlock.doubleLink (nIndex);
+     }
+-    void doubleLink (sal_uInt16 nIndex, sal_uInt32 nAddr)
++    virtual void doubleLink (sal_uInt16 nIndex, sal_uInt32 nAddr)
+     {
+         PAGE().m_aDataBlock.doubleLink (nIndex, nAddr);
+-        touch();
+     }
+-
+-    /** triple indirect.
+-    */
+-    sal_uInt32 tripleLink (sal_uInt16 nIndex) const
++    virtual sal_uInt32 tripleLink (sal_uInt16 nIndex) const
+     {
+         return PAGE().m_aDataBlock.tripleLink (nIndex);
+     }
+-    void tripleLink (sal_uInt16 nIndex, sal_uInt32 nAddr)
++    virtual void tripleLink (sal_uInt16 nIndex, sal_uInt32 nAddr)
+     {
+         PAGE().m_aDataBlock.tripleLink (nIndex, nAddr);
+-        touch();
+     }
++    virtual ChunkScope scope (sal_uInt32     nPage,
++                              LinkDescriptor &rDescr) const
++    {
++        page const & rPage = PAGE();
++        sal_uInt32 index0, index1, index2, index3;
+ 
+-    /** read (external data page).
+-    */
+-    storeError read (
+-        sal_uInt32             nPage,
+-        OStoreDataPageObject  &rData,
+-        OStorePageBIOS        &rBIOS);
++        // direct.
++        sal_uInt32 nCount = rPage.m_aDataBlock.directCount();
++        sal_uInt32 nLimit = nCount;
++        if (nPage < nLimit)
++        {
++            // Page to index reduction.
++            index0 = nPage;
+ 
+-    /** write (external data page).
+-    */
+-    storeError write (
+-        sal_uInt32             nPage,
+-        OStoreDataPageObject  &rData,
+-        OStorePageBIOS        &rBIOS);
++            // Setup LinkDescriptor indices.
++            rDescr.m_nIndex0 = (sal_uInt16)(index0 & 0xffff);
++
++            // Done.
++            return SCOPE_DIRECT;
++        }
++        nPage -= nLimit;
++
++        // single indirect.
++        sal_uInt32 const nCapacity = indirect::capacityCount(rPage.m_aDescr);
++        nCount = rPage.m_aDataBlock.singleCount();
++        nLimit = nCount * nCapacity;
++        if (nPage < nLimit)
++        {
++            // Page to index reduction.
++            sal_uInt32 n = nPage;
++
++            // Reduce to single indirect i(1), direct n = i(0).
++            index1 = n / nCapacity;
++            index0 = n % nCapacity;
++
++            // Verify reduction.
++            n = index1 * nCapacity + index0;
++            OSL_POSTCOND(n == nPage, "wrong math on indirect indices");
++            if (n != nPage)
++                return SCOPE_UNKNOWN;
++
++            // Setup LinkDescriptor indices.
++            rDescr.m_nIndex0 = (sal_uInt16)(index0 & 0xffff);
++            rDescr.m_nIndex1 = (sal_uInt16)(index1 & 0xffff);
++
++            // Done.
++            return SCOPE_SINGLE;
++        }
++        nPage -= nLimit;
++
++        // double indirect.
++        nCount = rPage.m_aDataBlock.doubleCount();
++        nLimit = nCount * nCapacity * nCapacity;
++        if (nPage < nLimit)
++        {
++            // Page to index reduction.
++            sal_uInt32 n = nPage;
++
++            // Reduce to double indirect i(2), single indirect n = i(0).
++            index2 = n / (nCapacity * nCapacity);
++            n      = n % (nCapacity * nCapacity);
++
++            // Reduce to single indirect i(1), direct n = i(0).
++            index1 = n / nCapacity;
++            index0 = n % nCapacity;
++
++            // Verify reduction.
++            n = index2 * nCapacity * nCapacity +
++                index1 * nCapacity + index0;
++            OSL_POSTCOND(n == nPage, "wrong math on double indirect indices");
++            if (n != nPage)
++                return SCOPE_UNKNOWN;
++
++            // Setup LinkDescriptor indices.
++            rDescr.m_nIndex0 = (sal_uInt16)(index0 & 0xffff);
++            rDescr.m_nIndex1 = (sal_uInt16)(index1 & 0xffff);
++            rDescr.m_nIndex2 = (sal_uInt16)(index2 & 0xffff);
++
++            // Done.
++            return SCOPE_DOUBLE;
++        }
++        nPage -= nLimit;
++
++        // triple indirect.
++        nCount = rPage.m_aDataBlock.tripleCount();
++        nLimit = nCount * nCapacity * nCapacity * nCapacity;
++        if (nPage < nLimit)
++        {
++            // Page to index reduction.
++            sal_uInt32 n = nPage;
++
++            // Reduce to triple indirect i(3), double indirect n.
++            index3 = n / (nCapacity * nCapacity * nCapacity);
++            n      = n % (nCapacity * nCapacity * nCapacity);
++
++            // Reduce to double indirect i(2), single indirect n.
++            index2 = n / (nCapacity * nCapacity);
++            n      = n % (nCapacity * nCapacity);
++
++            // Reduce to single indirect i(1), direct n = i(0).
++            index1 = n / nCapacity;
++            index0 = n % nCapacity;
++
++            // Verify reduction.
++            n = index3 * nCapacity * nCapacity * nCapacity +
++                index2 * nCapacity * nCapacity +
++                index1 * nCapacity + index0;
++            OSL_POSTCOND(n == nPage, "wrong math on triple indirect indices");
++            if (n != nPage)
++                return SCOPE_UNKNOWN;
++
++            // Setup LinkDescriptor indices.
++            rDescr.m_nIndex0 = (sal_uInt16)(index0 & 0xffff);
++            rDescr.m_nIndex1 = (sal_uInt16)(index1 & 0xffff);
++            rDescr.m_nIndex2 = (sal_uInt16)(index2 & 0xffff);
++            rDescr.m_nIndex3 = (sal_uInt16)(index3 & 0xffff);
++
++            // Done.
++            return SCOPE_TRIPLE;
++        }
++
++        // Unreachable (more than triple indirect).
++        return SCOPE_UNREACHABLE;
++    }
++
++    /*
++     * truncate (external data page scope; private).
++     */
++    virtual storeError truncate (
++        ChunkScope       eScope,
++        sal_uInt16       nRemain,
++        OStorePageBIOS  &rBIOS)
++    {
++        page const & rPage = PAGE();
++
++        // Enter.
++        storeError eErrCode = store_E_None;
++        if (eScope == SCOPE_DIRECT)
++        {
++            // Truncate direct data pages.
++            sal_uInt16 i, n = rPage.m_aDataBlock.directCount();
++            for (i = n; i > nRemain; i--)
++            {
++                // Obtain data page location.
++                sal_uInt32 nAddr = directLink (i - 1);
++                if (nAddr == STORE_PAGE_NULL) continue;
++
++                // Free data page.
++                OStoreDataPageData aData;
++                eErrCode = rBIOS.free (aData, nAddr);
++                if (eErrCode != store_E_None)
++                    break;
++
++                // Clear pointer to data page.
++                directLink (i - 1, STORE_PAGE_NULL);
++            }
++
++            // Done.
++            return eErrCode;
++        }
++
++        if (eScope == SCOPE_SINGLE)
++        {
++            // Truncate single indirect pages.
++            sal_uInt16 i, n = rPage.m_aDataBlock.singleCount();
++            for (i = n; i > nRemain; i--)
++            {
++                // Truncate single indirect page to zero data pages.
++                eErrCode = store_truncate (singleLink (i - 1), 0, rBIOS);
++                if (eErrCode != store_E_None)
++                    break;
++
++                // Clear pointer to single indirect page.
++                singleLink (i - 1, STORE_PAGE_NULL);
++            }
++
++            // Done.
++            return eErrCode;
++        }
++
++        if (eScope == SCOPE_DOUBLE)
++        {
++            // Truncate double indirect pages.
++            sal_uInt16 i, n = rPage.m_aDataBlock.doubleCount();
++            for (i = n; i > nRemain; i--)
++            {
++                // Truncate double indirect page to zero single indirect pages.
++                eErrCode = store_truncate (doubleLink (i - 1), 0, 0, rBIOS);
++                if (eErrCode != store_E_None)
++                    break;
++
++                // Clear pointer to double indirect page.
++                doubleLink (i - 1, STORE_PAGE_NULL);
++            }
++
++            // Done.
++            return eErrCode;
++        }
++
++        if (eScope == SCOPE_TRIPLE)
++        {
++            // Truncate triple indirect pages.
++            sal_uInt16 i, n = rPage.m_aDataBlock.tripleCount();
++            for (i = n; i > nRemain; i--)
++            {
++                // Truncate to zero double indirect pages.
++                eErrCode = store_truncate (tripleLink (i - 1), 0, 0, 0, rBIOS);
++                if (eErrCode != store_E_None)
++                    break;
++
++                // Clear pointer to triple indirect page.
++                tripleLink (i - 1, STORE_PAGE_NULL);
++            }
++
++            // Done.
++            return eErrCode;
++        }
+ 
+-    /** truncate (external data page).
++        // Invalid scope.
++        return store_E_InvalidAccess;
++    }
++
++public:
++    /** Construction.
+     */
+-    storeError truncate (
+-        sal_uInt32             nPage,
+-        OStorePageBIOS        &rBIOS);
++    OStoreDirectoryPageObjectTemplate ()
++        : OStoreDirectoryPageObject ()
++    {}
+ 
+-private:
++    virtual storeError guard(sal_uInt32 nAddr)
++    { return PageHolderObject< page >::guard (m_xPage, nAddr); }
++    virtual storeError verify(sal_uInt32 nAddr, sal_uInt16 nVersion) const
++    { return PageHolderObject< page >::verify (m_xPage, nAddr, nVersion); }
++    virtual OStorePageDescriptor const& getDescriptor (void) const 
++    { return PAGE().m_aDescr; }
++    virtual sal_uInt32 capacity (void) const
++    { return PAGE().capacity(); }
++    virtual sal_uInt32 attrib (void) const
++    { return store::ntohl(PAGE().m_aNameBlock.m_nAttrib); }
++    virtual void attrib (sal_uInt32 nAttrib)
++    { PAGE().m_aNameBlock.m_nAttrib = store::htonl(nAttrib); }
++    virtual OStorePageKey key (void) const
++    { return PAGE().m_aNameBlock.m_aKey; }
++    virtual void key (OStorePageKey const & rKey)
++    { PAGE().m_aNameBlock.m_aKey = rKey; }
++    virtual sal_uInt32 dataLength (void) const
++    { return store::ntohl(PAGE().m_aDataBlock.m_nDataLen); }
++    virtual void dataLength (sal_uInt32 nLength)
++    { PAGE().m_aDataBlock.m_nDataLen = store::htonl(nLength); }
++    virtual sal_uInt8* getDataBuffer (void) 
++    { return PAGE().m_pData; }
++
++protected:
+     /** Representation.
+     */
+     page & PAGE()
+@@ -846,19 +1439,30 @@ private:
+         OSL_PRECOND(pImpl != 0, "OStoreDirectoryPageObject::PAGE(): Null pointer");
+         return (*pImpl);
+     }
++};
+ 
+-    /** scope (external data page; private).
++struct OStoreDirectoryPageObjectV1 : public OStoreDirectoryPageObjectTemplate<OStoreDirectoryPageDataV1>
++{
++    /** Construction.
+     */
+-    page::ChunkScope scope (
+-        sal_uInt32                       nPage,
+-        page::DataBlock::LinkDescriptor &rDescr) const;
++    OStoreDirectoryPageObjectV1 ()
++    {}
++
++    virtual sal_uInt32 path (void) const;
++    virtual sal_Size getName (sal_Char * pBuffer, sal_Size nBufsiz, OStorePageBIOS &rBIOS) const;
++    virtual void setName (sal_Char const * pBuffer, sal_Size nBufsiz);
++};
+ 
+-    /** truncate (external data page scope; private).
++struct OStoreDirectoryPageObjectV2 : public OStoreDirectoryPageObjectTemplate<OStoreDirectoryPageDataV2>
++{
++    /** Construction.
+     */
+-    storeError truncate (
+-        page::ChunkScope       eScope,
+-        sal_uInt16             nRemain,
+-        OStorePageBIOS        &rBIOS);
++    OStoreDirectoryPageObjectV2 ()
++    {}
++
++    virtual sal_uInt32 path (void) const;
++    virtual sal_Size getName (sal_Char * pBuffer, sal_Size nBufsiz, OStorePageBIOS &rBIOS) const;
++    virtual void setName (sal_Char const * pBuffer, sal_Size nBufsiz);
+ };
+ 
+ /*========================================================================
+diff --git store/source/stordir.cxx store/source/stordir.cxx
+index 0269e9c..cd2d610 100644
+--- store/source/stordir.cxx
++++ store/source/stordir.cxx
+@@ -82,14 +82,14 @@ using namespace store;
+  */
+ inline sal_Size __store_convertTextToUnicode (
+     rtl_TextToUnicodeConverter  hConverter,
+-    const sal_Char *pSrcBuffer, sal_Size nSrcLength,
++    rtl_String     *pSrc,
+     sal_Unicode    *pDstBuffer, sal_Size nDstLength)
+ {
+     sal_uInt32 nCvtInfo = 0;
+     sal_Size nCvtBytes = 0;
+     return rtl_convertTextToUnicode (
+         hConverter, 0,
+-        pSrcBuffer, nSrcLength,
++        pSrc->buffer, pSrc->length,
+         pDstBuffer, nDstLength,
+         OSTRING_TO_OUSTRING_CVTFLAGS,
+         &nCvtInfo, &nCvtBytes);
+@@ -149,28 +149,28 @@ storeError OStoreDirectory_Impl::create (
+     if (!(pPath && pName))
+         return store_E_InvalidParameter;
+ 
+-    OStoreDirectoryPageObject aPage;
++    boost::scoped_ptr<inode> pPage;
++    xManager->createDirectoryPageObject(pPage);
+     storeError eErrCode = xManager->iget (
+-        aPage, STORE_ATTRIB_ISDIR,
++        *pPage, STORE_ATTRIB_ISDIR,
+         pPath, pName, eMode);
+     if (eErrCode != store_E_None)
+         return eErrCode;
+ 
+-    if (!(aPage.attrib() & STORE_ATTRIB_ISDIR))
++    if (!(pPage->attrib() & STORE_ATTRIB_ISDIR))
+         return store_E_NotDirectory;
+ 
+-    inode_holder_type xNode (aPage.get());
+-    eErrCode = xManager->acquirePage (xNode->m_aDescr, store_AccessReadOnly);
++    eErrCode = xManager->acquirePage (pPage->getDescriptor(), store_AccessReadOnly);
+     if (eErrCode != store_E_None)
+         return eErrCode;
+ 
+     // Evaluate iteration path.
+-    m_nPath = aPage.path();
++    m_nPath = pPage->path();
+     m_nPath = rtl_crc32 (m_nPath, "/", 1);
+ 
+     // Save page manager, and descriptor.
+     m_xManager = xManager;
+-    m_aDescr   = xNode->m_aDescr;
++    m_aDescr   = pPage->getDescriptor();
+ 
+     return store_E_None;
+ }
+@@ -208,19 +208,19 @@ storeError OStoreDirectory_Impl::iterate (storeFindData &rFindData)
+         if (!(rFindData.m_nAttrib & STORE_ATTRIB_ISLINK))
+         {
+             // Load page.
+-            OStoreDirectoryPageObject aPage;
+-            eErrCode = m_xManager->loadObjectAt (aPage, aLink.location());
++            boost::scoped_ptr<inode> pPage;
++            m_xManager->createDirectoryPageObject(pPage);
++            eErrCode = m_xManager->loadObjectAt (*pPage, aLink.location());
+             if (eErrCode == store_E_None)
+             {
+-                inode_holder_type xNode (aPage.get());
+-
+                 // Setup FindData.
+-                sal_Char *p = xNode->m_aNameBlock.m_pData;
+-                sal_Size  n = rtl_str_getLength (p);
+-                sal_Size  k = rFindData.m_nLength;
++                rtl_String *pName=0;
++                rtl_string_new_WithLength (&pName, STORE_MAXIMUM_NAMESIZE - 1);
++                sal_Size        n = pPage->getName(pName->buffer, pName->length, *m_xManager);
++                sal_Size        k = rFindData.m_nLength;
+ 
+                 n = __store_convertTextToUnicode (
+-                    m_hTextCvt, p, n,
++                    m_hTextCvt, pName,
+                     rFindData.m_pszName, STORE_MAXIMUM_NAMESIZE - 1);
+                 if (k > n)
+                 {
+@@ -229,8 +229,10 @@ storeError OStoreDirectory_Impl::iterate (storeFindData &rFindData)
+                 }
+ 
+                 rFindData.m_nLength  = n;
+-                rFindData.m_nAttrib |= aPage.attrib();
+-                rFindData.m_nSize    = aPage.dataLength();
++                rFindData.m_nAttrib |= pPage->attrib();
++                rFindData.m_nSize    = pPage->dataLength();
++
++                rtl_string_release (pName);
+ 
+                 // Leave.
+                 rFindData.m_nReserved = store::ntohl(aKey.m_nLow);
+diff --git store/source/stordir.hxx store/source/stordir.hxx
+index acfbf36..48f79b0 100644
+--- store/source/stordir.hxx
++++ store/source/stordir.hxx
+@@ -63,7 +63,7 @@
+ namespace store
+ {
+ 
+-struct OStoreDirectoryPageData;
++struct OStoreDirectoryPageObject;
+ 
+ /*========================================================================
+  *
+@@ -119,8 +119,7 @@ private:
+ 
+     /** Representation.
+      */
+-    typedef OStoreDirectoryPageData   inode;
+-    typedef PageHolderObject< inode > inode_holder_type;
++    typedef OStoreDirectoryPageObject inode;
+ 
+     rtl::Reference<OStorePageManager> m_xManager;
+ 
+diff --git store/source/store.cxx store/source/store.cxx
+index 87e85fc..923ce29 100644
+--- store/source/store.cxx
++++ store/source/store.cxx
+@@ -118,7 +118,8 @@ storeError SAL_CALL store_releaseHandle (
+  */
+ storeError SAL_CALL store_createMemoryFile (
+     sal_uInt16       nPageSize,
+-    storeFileHandle *phFile
++    storeFileHandle *phFile,
++    sal_uInt16       nFormatVersion 
+ ) SAL_THROW_EXTERN_C()
+ {
+     if (!phFile)
+@@ -137,7 +138,7 @@ storeError SAL_CALL store_createMemoryFile (
+         return store_E_OutOfMemory;
+ 
+     eErrCode = xManager->initialize (
+-        &*xLockBytes, store_AccessCreate, nPageSize);
++        &*xLockBytes, store_AccessCreate, nPageSize, nFormatVersion);
+     if (eErrCode != store_E_None)
+         return eErrCode;
+ 
+@@ -154,7 +155,8 @@ storeError SAL_CALL store_openFile (
+     rtl_uString     *pFilename,
+     storeAccessMode  eAccessMode,
+     sal_uInt16       nPageSize,
+-    storeFileHandle *phFile
++    storeFileHandle *phFile,
++    sal_uInt16       nFormatVersion
+ ) SAL_THROW_EXTERN_C()
+ {
+     if (phFile)
+@@ -175,7 +177,7 @@ storeError SAL_CALL store_openFile (
+         return store_E_OutOfMemory;
+ 
+     eErrCode = xManager->initialize (
+-        &*xLockBytes, eAccessMode, nPageSize);
++        &*xLockBytes, eAccessMode, nPageSize, nFormatVersion);
+     if (eErrCode != store_E_None)
+         return eErrCode;
+ 
+diff --git store/source/storlckb.cxx store/source/storlckb.cxx
+index 6175064..4e4adbb 100644
+--- store/source/storlckb.cxx
++++ store/source/storlckb.cxx
+@@ -72,9 +72,9 @@ OStoreLockBytes::~OStoreLockBytes (void)
+ {
+     if (m_xManager.is())
+     {
+-        if (m_xNode.is())
++        if (m_xNode.get())
+         {
+-            OStorePageDescriptor aDescr (m_xNode->m_aDescr);
++            OStorePageDescriptor aDescr (m_xNode->getDescriptor());
+             if (m_bWriteable)
+                 m_xManager->releasePage (aDescr, store_AccessReadWrite);
+             else
+@@ -107,32 +107,30 @@ storeError OStoreLockBytes::create (
+     if (!(pPath && pName))
+         return store_E_InvalidParameter;
+ 
+-    OStoreDirectoryPageObject aPage;
++    xManager->createDirectoryPageObject(m_xNode);
+     storeError eErrCode = xManager->iget (
+-        aPage, STORE_ATTRIB_ISFILE,
++        *m_xNode, STORE_ATTRIB_ISFILE,
+         pPath, pName, eMode);
+     if (eErrCode != store_E_None)
+         return eErrCode;
+ 
+-    if (!(aPage.attrib() & STORE_ATTRIB_ISFILE))
++    if (!(m_xNode->attrib() & STORE_ATTRIB_ISFILE))
+     {
+         // No ISFILE in older versions (backward compatibility).
+-        if (aPage.attrib() & STORE_ATTRIB_ISLINK)
++        if (m_xNode->attrib() & STORE_ATTRIB_ISLINK)
+             return store_E_NotFile;
+     }
+ 
+     // ...
+-    inode_holder_type xNode (aPage.get());
+     if (eMode != store_AccessReadOnly)
+-        eErrCode = xManager->acquirePage (xNode->m_aDescr, store_AccessReadWrite);
++        eErrCode = xManager->acquirePage (m_xNode->getDescriptor(), store_AccessReadWrite);
+     else
+-        eErrCode = xManager->acquirePage (xNode->m_aDescr, store_AccessReadOnly);
++        eErrCode = xManager->acquirePage (m_xNode->getDescriptor(), store_AccessReadOnly);
+     if (eErrCode != store_E_None)
+         return eErrCode;
+ 
+     // ...
+     m_xManager   = xManager;
+-    m_xNode      = xNode;
+     m_bWriteable = (eMode != store_AccessReadOnly);
+ 
+     // Check for truncation.
+@@ -167,9 +165,7 @@ storeError OStoreLockBytes::readAt (
+     osl::MutexGuard aGuard (*m_xManager);
+ 
+     // Determine data length.
+-    OStoreDirectoryPageObject aPage (m_xNode.get());
+-
+-    sal_uInt32 nDataLen = aPage.dataLength();
++    sal_uInt32 nDataLen = m_xNode->dataLength();
+     if ((nOffset + nBytes) > nDataLen)
+         nBytes = nDataLen - nOffset;
+ 
+@@ -183,7 +179,7 @@ storeError OStoreLockBytes::readAt (
+         if (eScope == inode::SCOPE_INTERNAL)
+         {
+             // Read from inode page (internal scope).
+-            inode::ChunkDescriptor aDescr (
++            ChunkDescriptor aDescr (
+                 nOffset, m_xNode->capacity());
+ 
+             sal_uInt32 nLength = sal_uInt32(aDescr.m_nLength);
+@@ -191,7 +187,7 @@ storeError OStoreLockBytes::readAt (
+ 
+             memcpy (
+                 &pData[rnDone],
+-                &m_xNode->m_pData[aDescr.m_nOffset],
++                &m_xNode->getDataBuffer()[aDescr.m_nOffset],
+                 nLength);
+ 
+             // Adjust counters.
+@@ -202,13 +198,13 @@ storeError OStoreLockBytes::readAt (
+         else
+         {
+             // Read from data page (external scope).
+-            inode::ChunkDescriptor aDescr (
+-                nOffset - m_xNode->capacity(), OStoreDataPageData::capacity(m_xNode->m_aDescr)); // @@@
++            ChunkDescriptor aDescr (
++                nOffset - m_xNode->capacity(), OStoreDataPageData::capacity(m_xNode->getDescriptor())); // @@@
+ 
+             sal_uInt32 nLength = sal_uInt32(aDescr.m_nLength);
+             nLength = SAL_MIN(nLength, nBytes);
+ 
+-            storeError eErrCode = aPage.read (aDescr.m_nPage, aData, *m_xManager);
++            storeError eErrCode = m_xNode->read (aDescr.m_nPage, aData, *m_xManager);
+             if (eErrCode != store_E_None)
+             {
+                 if (eErrCode != store_E_NotExists)
+@@ -264,8 +260,8 @@ storeError OStoreLockBytes::writeAt (
+     osl::MutexGuard aGuard (*m_xManager);
+ 
+     // Write data.
+-    OStoreDirectoryPageObject aPage (m_xNode.get());
+     const sal_uInt8 *pData = (const sal_uInt8*)pBuffer;
++    bool bDirty=false;
+ 
+     storeError eErrCode = store_E_None;
+     while (nBytes > 0)
+@@ -275,18 +271,18 @@ storeError OStoreLockBytes::writeAt (
+         if (eScope == inode::SCOPE_INTERNAL)
+         {
+             // Write to inode page (internal scope).
+-            inode::ChunkDescriptor aDescr (
++            ChunkDescriptor aDescr (
+                 nOffset, m_xNode->capacity());
+ 
+             sal_uInt32 nLength = sal_uInt32(aDescr.m_nLength);
+             nLength = SAL_MIN(nLength, nBytes);
+ 
+             memcpy (
+-                &m_xNode->m_pData[aDescr.m_nOffset],
++                &m_xNode->getDataBuffer()[aDescr.m_nOffset],
+                 &pData[rnDone], nLength);
+ 
+             // Mark inode dirty.
+-            aPage.touch();
++            bDirty = true;
+ 
+             // Adjust counters.
+             rnDone  += nLength;
+@@ -294,23 +290,23 @@ storeError OStoreLockBytes::writeAt (
+             nBytes  -= nLength;
+ 
+             // Adjust data length.
+-            if (aPage.dataLength() < nOffset)
+-                aPage.dataLength (nOffset);
++            if (m_xNode->dataLength() < nOffset)
++                m_xNode->dataLength (nOffset);
+         }
+         else
+         {
+             // Write to data page (external scope).
+             OStoreDataPageObject aData;
+ 
+-            inode::ChunkDescriptor aDescr (
+-                nOffset - m_xNode->capacity(), OStoreDataPageData::capacity(m_xNode->m_aDescr)); // @@@
++            ChunkDescriptor aDescr (
++                nOffset - m_xNode->capacity(), OStoreDataPageData::capacity(m_xNode->getDescriptor())); // @@@
+ 
+             sal_uInt32 nLength = sal_uInt32(aDescr.m_nLength);
+             if ((aDescr.m_nOffset > 0) || (nBytes < nLength))
+             {
+                 // Unaligned. Need to load/create data page.
+ // @@@ loadOrCreate()
+-                eErrCode = aPage.read (aDescr.m_nPage, aData, *m_xManager);
++                eErrCode = m_xNode->read (aDescr.m_nPage, aData, *m_xManager);
+                 if (eErrCode != store_E_None)
+                 {
+                     if (eErrCode != store_E_NotExists)
+@@ -338,7 +334,7 @@ storeError OStoreLockBytes::writeAt (
+                 &pData[rnDone], nLength);
+ 
+             // Save data page.
+-            eErrCode = aPage.write (aDescr.m_nPage, aData, *m_xManager);
++            eErrCode = m_xNode->write (aDescr.m_nPage, aData, *m_xManager);
+             if (eErrCode != store_E_None)
+                 return eErrCode;
+ 
+@@ -348,14 +344,14 @@ storeError OStoreLockBytes::writeAt (
+             nBytes  -= nLength;
+ 
+             // Adjust data length.
+-            if (aPage.dataLength() < nOffset)
+-                aPage.dataLength (nOffset);
++            if (m_xNode->dataLength() < nOffset)
++                m_xNode->dataLength (nOffset);
+         }
+     }
+ 
+     // Check for modified inode.
+-    if (aPage.dirty())
+-        return m_xManager->saveObjectAt (aPage, aPage.location());
++    if (bDirty)
++        return m_xManager->saveObjectAt (*m_xNode, m_xNode->location());
+     else
+         return store_E_None;
+ }
+@@ -385,8 +381,7 @@ storeError OStoreLockBytes::setSize (sal_uInt32 nSize)
+     osl::MutexGuard aGuard (*m_xManager);
+ 
+     // Determine current length.
+-    OStoreDirectoryPageObject aPage (m_xNode.get());
+-    sal_uInt32 nDataLen = aPage.dataLength();
++    sal_uInt32 nDataLen = m_xNode->dataLength();
+ 
+     if (nSize == nDataLen)
+         return store_E_None;
+@@ -405,37 +400,37 @@ storeError OStoreLockBytes::setSize (sal_uInt32 nSize)
+             if (eDataScope == inode::SCOPE_EXTERNAL)
+             {
+                 // External 'Data' scope. Truncate all external data pages.
+-                eErrCode = aPage.truncate (0, *m_xManager);
++                eErrCode = m_xNode->truncate (0, *m_xManager);
+                 if (eErrCode != store_E_None)
+                     return eErrCode;
+             }
+ 
+             // Truncate internal data page.
+-            inode::ChunkDescriptor aDescr (nSize, m_xNode->capacity());
++            ChunkDescriptor aDescr (nSize, m_xNode->capacity());
+             memset (
+-                &(m_xNode->m_pData[aDescr.m_nOffset]),
++                &(m_xNode->getDataBuffer()[aDescr.m_nOffset]),
+                 0, aDescr.m_nLength);
+         }
+         else
+         {
+             // External 'Size' scope. Truncate external data pages.
+-            inode::ChunkDescriptor aDescr (
+-                nSize - m_xNode->capacity(), OStoreDataPageData::capacity(m_xNode->m_aDescr)); // @@@
++            ChunkDescriptor aDescr (
++                nSize - m_xNode->capacity(), OStoreDataPageData::capacity(m_xNode->getDescriptor())); // @@@
+ 
+             sal_uInt32 nPage = aDescr.m_nPage;
+             if (aDescr.m_nOffset) nPage += 1;
+ 
+-            eErrCode = aPage.truncate (nPage, *m_xManager);
++            eErrCode = m_xNode->truncate (nPage, *m_xManager);
+             if (eErrCode != store_E_None)
+                 return eErrCode;
+         }
+     }
+ 
+     // Set (extended or truncated) size.
+-    aPage.dataLength (nSize);
++    m_xNode->dataLength (nSize);
+ 
+     // Save modified inode.
+-    return m_xManager->saveObjectAt (aPage, aPage.location());
++    return m_xManager->saveObjectAt (*m_xNode, m_xNode->location());
+ }
+ 
+ /*
+@@ -448,7 +443,6 @@ storeError OStoreLockBytes::stat (sal_uInt32 &rnSize)
+     if (!m_xManager.is())
+         return store_E_InvalidAccess;
+ 
+-    OStoreDirectoryPageObject aPage (m_xNode.get());
+-    rnSize = aPage.dataLength();
++    rnSize = m_xNode->dataLength();
+     return store_E_None;
+ }
+diff --git store/source/storlckb.hxx store/source/storlckb.hxx
+index 217e8d1..7a0a7b7 100644
+--- store/source/storlckb.hxx
++++ store/source/storlckb.hxx
+@@ -44,7 +44,7 @@ namespace store
+ {
+ 
+ struct OStoreDataPageData;
+-struct OStoreDirectoryPageData;
++struct OStoreDirectoryPageObject;
+ 
+ /*========================================================================
+  *
+@@ -137,11 +137,10 @@ private:
+      */
+     rtl::Reference<OStorePageManager> m_xManager;
+ 
+-    typedef OStoreDataPageData        data;
+-    typedef OStoreDirectoryPageData   inode;
++    typedef OStoreDataPageData         data;
++    typedef OStoreDirectoryPageObject  inode;
+ 
+-    typedef PageHolderObject< inode > inode_holder_type;
+-    inode_holder_type                 m_xNode;
++    boost::scoped_ptr<inode> m_xNode;
+ 
+     bool m_bWriteable;
+ 
+diff --git store/source/storpage.cxx store/source/storpage.cxx
+index a7c59be..87d9bae 100644
+--- store/source/storpage.cxx
++++ store/source/storpage.cxx
+@@ -86,7 +86,8 @@ sal_Bool SAL_CALL OStorePageManager::isKindOf (sal_uInt32 nTypeId)
+ storeError OStorePageManager::initialize (
+     ILockBytes *    pLockBytes,
+     storeAccessMode eAccessMode,
+-    sal_uInt16 &    rnPageSize)
++    sal_uInt16 &    rnPageSize,
++    sal_uInt16 &    rnFormatVersion)
+ {
+     // Acquire exclusive access.
+     osl::MutexGuard aGuard(*this);
+@@ -96,7 +97,7 @@ storeError OStorePageManager::initialize (
+         return store_E_InvalidParameter;
+ 
+     // Initialize base.
+-    storeError eErrCode = base::initialize (pLockBytes, eAccessMode, rnPageSize);
++    storeError eErrCode = base::initialize (pLockBytes, eAccessMode, rnPageSize, rnFormatVersion);
+     if (eErrCode != store_E_None)
+         return eErrCode;
+ 
+@@ -104,7 +105,9 @@ storeError OStorePageManager::initialize (
+     if (!base::isWriteable())
+     {
+         // Readonly. Load RootNode.
+-        return base::loadObjectAt (m_aRoot, rnPageSize);
++        eErrCode = base::loadObjectAt (m_aRoot, rnPageSize);
++        m_aRoot.fixup();
++        return eErrCode;
+     }
+ 
+     // Writeable. Load or Create RootNode.
+@@ -207,6 +210,7 @@ storeError OStorePageManager::remove_Impl (entry & rEntry)
+ 
+         // Load next node page.
+         eErrCode = loadObjectAt (aNode, nAddr);
++        aNode.fixup();
+ 
+         PageHolderObject< page > xNext (aNode.get());
+         xNext.swap (xPage);
+@@ -219,6 +223,7 @@ storeError OStorePageManager::remove_Impl (entry & rEntry)
+     {
+         // Load next node page.
+         eErrCode = loadObjectAt (aNode, nAddr);
++        aNode.fixup();
+ 
+         page const & rPage = (*xPage);
+ 
+@@ -266,6 +271,7 @@ storeError OStorePageManager::remove_Impl (entry & rEntry)
+ 
+         // Load link page.
+         storeError eErrCode = loadObjectAt (aNode, nAddr);
++        aNode.fixup();
+         if (eErrCode != store_E_None)
+             return eErrCode;
+ 
+@@ -299,6 +305,23 @@ storeError OStorePageManager::remove_Impl (entry & rEntry)
+     return aNode.remove (i, rEntry, *this);
+ }
+ 
++void OStorePageManager::createDirectoryPageObject(boost::scoped_ptr<inode_type>& rPage)
++{
++    switch(version ())
++    {
++        case STORE_FORMAT_V1:
++            rPage.reset(new OStoreDirectoryPageObjectV1());
++            rPage->construct<OStoreDirectoryPageDataV1>(base::allocator());
++            break;
++        case STORE_FORMAT_V2:
++            rPage.reset(new OStoreDirectoryPageObjectV2());
++            rPage->construct<OStoreDirectoryPageDataV2>(base::allocator());
++            break;
++        default:
++            break;
++    }
++}
++
+ /*
+  * namei.
+  * Precond: none (static).
+@@ -370,19 +393,10 @@ storeError OStorePageManager::iget (
+             return store_E_AccessViolation;
+ 
+         // Create inode page.
+-        eErrCode = rPage.construct< inode >(base::allocator());
+-        if (eErrCode != store_E_None)
+-            return eErrCode;
+-
+-        // Setup inode nameblock.
+-        PageHolderObject< inode > xPage (rPage.get());
+-
+         rPage.key (aKey);
+         rPage.attrib (nAttrib);
+ 
+-        memcpy (
+-            &(xPage->m_aNameBlock.m_pData[0]),
+-            pName->buffer, pName->length);
++        rPage.setName(pName->buffer, pName->length);
+ 
+         // Save inode page.
+         eErrCode = save_dirpage_Impl (aKey, rPage);
+@@ -394,9 +408,8 @@ storeError OStorePageManager::iget (
+     if (rPage.attrib() & STORE_ATTRIB_ISLINK)
+     {
+         // Obtain 'Destination' page key.
+-        PageHolderObject< inode > xPage (rPage.get());
+         OStorePageKey aDstKey;
+-        memcpy (&aDstKey, &(xPage->m_pData[0]), sizeof(aDstKey));
++        memcpy (&aDstKey, rPage.getDataBuffer(), sizeof(aDstKey));
+ 
+         // Load 'Destination' inode.
+         eErrCode = load_dirpage_Impl (aDstKey, rPage);
+@@ -658,34 +671,29 @@ storeError OStorePageManager::symlink (
+         return eErrCode;
+ 
+     // Initialize directory page.
+-    OStoreDirectoryPageObject aPage;
+-    eErrCode = aPage.construct< inode >(base::allocator());
+-    if (eErrCode != store_E_None)
+-        return eErrCode;
++    boost::scoped_ptr<inode_type> pPage;
++    createDirectoryPageObject(pPage);
+ 
+     // Setup as 'Source' directory page.
+-    inode_holder_type xNode (aPage.get());
+-    aPage.key (aSrcKey);
+-    memcpy (
+-        &(xNode->m_aNameBlock.m_pData[0]),
+-        pSrcName->buffer, pSrcName->length);
++    pPage->key (aSrcKey);
++    pPage->setName(pSrcName->buffer, pSrcName->length);
+ 
+     // Store 'Destination' page key.
+     OStorePageKey aDstKey (rDstKey);
+-    memcpy (&(xNode->m_pData[0]), &aDstKey, sizeof(aDstKey));
++    memcpy (pPage->getDataBuffer(), &aDstKey, sizeof(aDstKey));
+ 
+     // Mark 'Source' as symbolic link to 'Destination'.
+-    aPage.attrib (STORE_ATTRIB_ISLINK);
+-    aPage.dataLength (sal_uInt32(sizeof(aDstKey)));
++    pPage->attrib (STORE_ATTRIB_ISLINK);
++    pPage->dataLength (sal_uInt32(sizeof(aDstKey)));
+ 
+     // Allocate and save 'Source' directory page.
+-    eErrCode = base::allocate (aPage);
++    eErrCode = base::allocate (*pPage);
+     if (eErrCode != store_E_None)
+         return eErrCode;
+ 
+     // Insert 'Source' entry.
+     PageHolderObject< page > xSrcNode (aSrcNode.get());
+-    OStorePageLink aSrcLink (aPage.location());
++    OStorePageLink aSrcLink (pPage->location());
+     xSrcNode->insert (i + 1, entry(aSrcKey, aSrcLink));
+ 
+     // Save modified NodePage.
+@@ -734,16 +742,17 @@ storeError OStorePageManager::rename (
+     entry e (xSrcNode->m_pData[i]);
+ 
+     // Check for (not a) hardlink.
+-    OStoreDirectoryPageObject aPage;
++    boost::scoped_ptr<inode_type> pPage;
++    createDirectoryPageObject(pPage);
+     if (!(store::ntohl(e.m_nAttrib) & STORE_ATTRIB_ISLINK))
+     {
+         // Load directory page.
+-        eErrCode = base::loadObjectAt (aPage, e.m_aLink.location());
++        eErrCode = base::loadObjectAt (*pPage, e.m_aLink.location());
+         if (eErrCode != store_E_None)
+             return eErrCode;
+ 
+         // Check for directory.
+-        if (aPage.attrib() & STORE_ATTRIB_ISDIR)
++        if (pPage->attrib() & STORE_ATTRIB_ISDIR)
+         {
+             // Ugly, but necessary (backward compatibility).
+             aDstKey.m_nLow = store::htonl(rtl_crc32 (store::ntohl(aDstKey.m_nLow), "/", 1));
+@@ -771,20 +780,12 @@ storeError OStorePageManager::rename (
+     if (!(store::ntohl(e.m_nAttrib) & STORE_ATTRIB_ISLINK))
+     {
+         // Modify 'Source' directory page.
+-        inode_holder_type xNode (aPage.get());
+-
+         // Setup 'Destination' NameBlock.
+-        sal_Int32 nDstLen = pDstName->length;
+-        memcpy (
+-            &(xNode->m_aNameBlock.m_pData[0]),
+-            pDstName->buffer, pDstName->length);
+-        memset (
+-            &(xNode->m_aNameBlock.m_pData[nDstLen]),
+-            0, STORE_MAXIMUM_NAMESIZE - nDstLen);
+-        aPage.key (e.m_aKey);
++        pPage->setName(pDstName->buffer, pDstName->length);
++        pPage->key (e.m_aKey);
+ 
+         // Save directory page.
+-        eErrCode = base::saveObjectAt (aPage, e.m_aLink.location());
++        eErrCode = base::saveObjectAt (*pPage, e.m_aLink.location());
+         if (eErrCode != store_E_None)
+             return eErrCode;
+     }
+@@ -825,35 +826,34 @@ storeError OStorePageManager::remove (const OStorePageKey &rKey)
+     if (!(store::ntohl(e.m_nAttrib) & STORE_ATTRIB_ISLINK))
+     {
+         // Load directory page.
+-        OStoreDirectoryPageObject aPage;
+-        eErrCode = base::loadObjectAt (aPage, e.m_aLink.location());
++        boost::scoped_ptr<inode_type> pPage;
++        createDirectoryPageObject(pPage);
++        eErrCode = base::loadObjectAt (*pPage, e.m_aLink.location());
+         if (eErrCode != store_E_None)
+             return eErrCode;
+ 
+-        inode_holder_type xNode (aPage.get());
+-
+         // Acquire page write access.
+-        OStorePageDescriptor aDescr (xNode->m_aDescr);
++        OStorePageDescriptor aDescr (pPage->getDescriptor());
+         eErrCode = base::acquirePage (aDescr, store_AccessReadWrite);
+         if (eErrCode != store_E_None)
+             return eErrCode;
+ 
+         // Check for symbolic link.
+-        if (!(aPage.attrib() & STORE_ATTRIB_ISLINK))
++        if (!(pPage->attrib() & STORE_ATTRIB_ISLINK))
+         {
+             // Ordinary inode. Determine 'Data' scope.
+-            inode::ChunkScope eScope = xNode->scope (aPage.dataLength());
+-            if (eScope == inode::SCOPE_EXTERNAL)
++            inode_type::ChunkScope eScope = pPage->scope (pPage->dataLength());
++            if (eScope == inode_type::SCOPE_EXTERNAL)
+             {
+                 // External 'Data' scope. Truncate all external data pages.
+-                eErrCode = aPage.truncate (0, *this);
++                eErrCode = pPage->truncate (0, *this);
+                 if (eErrCode != store_E_None)
+                     return eErrCode;
+             }
+ 
+             // Truncate internal data page.
+-            memset (&(xNode->m_pData[0]), 0, xNode->capacity());
+-            aPage.dataLength (0);
++            memset (pPage->getDataBuffer(), 0, pPage->capacity());
++            pPage->dataLength (0);
+         }
+ 
+         // Release page write access.
+@@ -861,7 +861,7 @@ storeError OStorePageManager::remove (const OStorePageKey &rKey)
+ 
+         // Release and free directory page.
+         OStorePageData aPageHead;
+-        eErrCode = base::free (aPageHead, aPage.location());
++        eErrCode = base::free (aPageHead, pPage->location());
+     }
+ 
+     // Remove entry.
+@@ -878,12 +878,14 @@ struct RebuildContext
+     rtl::Reference<OStorePageBIOS> m_xBIOS;
+     OStorePageBIOS::ScanContext    m_aCtx;
+     sal_uInt16                     m_nPageSize;
++    sal_uInt16                     m_nFormatVersion;
+ 
+     /** Construction.
+      */
+     RebuildContext (void)
+-        : m_xBIOS     (new OStorePageBIOS()),
+-          m_nPageSize (0)
++        : m_xBIOS         (new OStorePageBIOS()),
++          m_nPageSize     (0),
++          m_nFormatVersion(STORE_FORMAT_V1)
+     {}
+ 
+     /** initialize (PageBIOS and ScanContext).
+@@ -893,7 +895,7 @@ struct RebuildContext
+         storeError eErrCode = store_E_InvalidParameter;
+         if (pLockBytes)
+         {
+-            m_xBIOS->initialize (pLockBytes, store_AccessReadOnly, m_nPageSize);
++            m_xBIOS->initialize (pLockBytes, store_AccessReadOnly, m_nPageSize, m_nFormatVersion);
+             eErrCode = m_xBIOS->scanBegin (m_aCtx, nMagic);
+         }
+         return eErrCode;
+@@ -940,52 +942,57 @@ storeError OStorePageManager::rebuild (
+     rtl::Reference<OStorePageBIOS> xSrcBIOS (aCtx.m_xBIOS);
+ 
+     // Initialize as 'Destination' with 'Source' page size.
+-    eErrCode = self::initialize (pDstLB, store_AccessCreate, aCtx.m_nPageSize);
++    // Force V1 format, we migrate away from the V2 version
++    sal_uInt16 nFormat=STORE_FORMAT_V1;
++    eErrCode = self::initialize (pDstLB, store_AccessCreate, aCtx.m_nPageSize, nFormat);
+     if (eErrCode != store_E_None)
+         return eErrCode;
+ 
++    rtl_String* pStr=0;
++    rtl_string_new_WithLength(&pStr, STORE_MAXIMUM_NAMESIZE);
++
+     // Pass One: Scan 'Source' directory pages.
+     {
+         // Scan 'Source' directory pages.
+-        OStoreDirectoryPageObject aSrcPage;
+-        while ((eErrCode = aCtx.load(aSrcPage)) == store_E_None)
++        boost::scoped_ptr<inode_type> pSrcPage;
++        createDirectoryPageObject(pSrcPage);
++        while ((eErrCode = aCtx.load(*pSrcPage)) == store_E_None)
+         {
+-            OStoreDirectoryPageObject aDstPage;
+-            eErrCode = aDstPage.construct< inode >(base::allocator());
+-            if (eErrCode != store_E_None)
+-                break;
+-
+-            inode_holder_type xSrcDir (aSrcPage.get());
+-            inode_holder_type xDstDir (aDstPage.get());
++            boost::scoped_ptr<inode_type> pDstPage;
++            createDirectoryPageObject(pDstPage);
+ 
+             // Copy NameBlock @@@ OLD @@@
+-            memcpy (&(xDstDir->m_aNameBlock), &(xSrcDir->m_aNameBlock), sizeof(xSrcDir->m_aNameBlock));
++            pSrcPage->getName(pStr->buffer, pStr->length, *xSrcBIOS);
++            pDstPage->setName(pStr->buffer, pStr->length);
+ 
+             // Obtain 'Source' data length.
+-            sal_uInt32 nDataLen = aSrcPage.dataLength();
++            sal_uInt32 nDataLen = pSrcPage->dataLength();
+             if (nDataLen > 0)
+             {
+                 // Copy internal data area @@@ OLD @@@
+-                memcpy (&(xDstDir->m_pData[0]), &(xSrcDir->m_pData[0]), xSrcDir->capacity());
++                memcpy (pDstPage->getDataBuffer(), pSrcPage->getDataBuffer(), pSrcPage->capacity());
+             }
+ 
+             // Insert 'Destination' directory page.
+-            eErrCode = save_dirpage_Impl (aDstPage.key(), aDstPage);
++            eErrCode = save_dirpage_Impl (pDstPage->key(), *pDstPage);
+             if (eErrCode != store_E_None)
+                 break;
+ 
+             // Check for external data page scope.
+-            if (xSrcDir->scope(nDataLen) != inode::SCOPE_INTERNAL)
++            if (pSrcPage->scope(nDataLen) != inode_type::SCOPE_INTERNAL)
+             {
+                 // Initialize 'Destination' data page.
+                 typedef OStoreDataPageData data;
+                 PageHolderObject< data > xData;
+                 if (!xData.construct(base::allocator()))
++                {
++                    rtl_string_release(pStr);
+                     return store_E_OutOfMemory;
++                }
+ 
+                 // Determine data page count.
+-                inode::ChunkDescriptor aDescr (
+-                    nDataLen - xDstDir->capacity(), xData->capacity());
++                ChunkDescriptor aDescr (
++                    nDataLen - pDstPage->capacity(), xData->capacity());
+                 
+                 sal_uInt32 i, n = aDescr.m_nPage;
+                 if (aDescr.m_nOffset) n += 1;
+@@ -997,23 +1004,24 @@ storeError OStorePageManager::rebuild (
+                     // Read 'Source' data page.
+                     osl::MutexGuard aSrcGuard (*xSrcBIOS);
+ 
+-                    eErrCode = aSrcPage.read (i, aData, *xSrcBIOS);
++                    eErrCode = pSrcPage->read (i, aData, *xSrcBIOS);
+                     if (eErrCode != store_E_None)
+                         continue;
+ 
+                     // Write 'Destination' data page. @@@ READONLY @@@
+-                    eErrCode = aDstPage.write (i, aData, *this);
++                    eErrCode = pDstPage->write (i, aData, *this);
+                 }
+             }
+ 
+             // Update 'Destination' directory page.
+-            aDstPage.dataLength (nDataLen);
+-            eErrCode = base::saveObjectAt (aDstPage, aDstPage.location());
++            pDstPage->dataLength (nDataLen);
++            eErrCode = base::saveObjectAt (*pDstPage, pDstPage->location());
+         }
+ 
+         // Save directory scan results.
+         flush();
+     }
++    rtl_string_release(pStr);
+ 
+     // Pass Two: Scan 'Source' BTree nodes.
+     {
+@@ -1037,11 +1045,12 @@ storeError OStorePageManager::rebuild (
+                     if (e.m_nAttrib & STORE_ATTRIB_ISLINK)
+                     {
+                         // Load the hard link destination.
+-                        OStoreDirectoryPageObject aSrcPage;
+-                        eErrCode = xSrcBIOS->loadObjectAt (aSrcPage, e.m_aLink.location());
++                        boost::scoped_ptr<inode_type> pSrcPage;
++                        createDirectoryPageObject(pSrcPage);
++                        eErrCode = xSrcBIOS->loadObjectAt (*pSrcPage, e.m_aLink.location());
+                         if (eErrCode == store_E_None)
+                         {
+-                            OStorePageKey aDstKey (aSrcPage.key());
++                            OStorePageKey aDstKey (pSrcPage->key());
+                             eErrCode = link (e.m_aKey, aDstKey);
+                         }
+                         e.m_nAttrib &= ~STORE_ATTRIB_ISLINK;
+diff --git store/source/storpage.hxx store/source/storpage.hxx
+index 4ebf05b..f5adae2 100644
+--- store/source/storpage.hxx
++++ store/source/storpage.hxx
+@@ -40,11 +40,12 @@
+ #include "storbios.hxx"
+ #include "stortree.hxx"
+ 
++#include <boost/scoped_ptr.hpp>
++
+ namespace store
+ {
+ 
+-struct OStoreDirectoryPageData;
+-class  OStoreDirectoryPageObject;
++class OStoreDirectoryPageObject;
+ 
+ /*========================================================================
+  *
+@@ -54,6 +55,8 @@ class  OStoreDirectoryPageObject;
+ class OStorePageManager : public store::OStorePageBIOS
+ {
+ public:
++    typedef OStoreDirectoryPageObject inode_type;
++
+     /** Construction.
+      */
+     OStorePageManager (void);
+@@ -63,7 +66,8 @@ public:
+     virtual storeError initialize (
+         ILockBytes *    pLockBytes,
+         storeAccessMode eAccessMode,
+-        sal_uInt16 &    rnPageSize);
++        sal_uInt16 &    rnPageSize,
++        sal_uInt16 &    rnFormatVersion);
+ 
+     /** isValid.
+      *  @return sal_True  upon successful initialization,
+@@ -71,6 +75,11 @@ public:
+      */
+     inline sal_Bool isValid (void) const;
+ 
++    /** createDirectoryPageObject.
++     *  creates impl object of dir page, differs for v1 and v2 
++     */
++    void createDirectoryPageObject(boost::scoped_ptr<inode_type>& rPage);
++
+     /** DirectoryPage I/O (managed).
+      */
+     static storeError namei (
+@@ -79,11 +88,11 @@ public:
+         OStorePageKey    &rKey);
+ 
+     storeError iget (
+-        OStoreDirectoryPageObject & rPage, // [out]
+-        sal_uInt32                  nAttrib,
+-        const rtl_String *          pPath,
+-        const rtl_String *          pName,
+-        storeAccessMode             eMode);
++        inode_type       & rPage, // [in/out]
++        sal_uInt32         nAttrib,
++        const rtl_String * pPath,
++        const rtl_String * pName,
++        storeAccessMode    eMode);
+ 
+     storeError iterate (
+         OStorePageKey &  rKey,
+@@ -158,9 +167,6 @@ private:
+     typedef OStoreBTreeNodeData       page;
+     typedef OStoreBTreeNodeObject     node;
+ 
+-    typedef OStoreDirectoryPageData   inode;
+-    typedef PageHolderObject< inode > inode_holder_type;
+-
+     /** IStoreHandle TypeId.
+      */
+     static const sal_uInt32 m_nTypeId;
+diff --git store/source/stortree.cxx store/source/stortree.cxx
+index 71cdb47..413bc1a 100644
+--- store/source/stortree.cxx
++++ store/source/stortree.cxx
+@@ -182,9 +182,9 @@ storeError OStoreBTreeNodeObject::guard (sal_uInt32 nAddr)
+ /*
+  * verify.
+  */
+-storeError OStoreBTreeNodeObject::verify (sal_uInt32 nAddr) const
++storeError OStoreBTreeNodeObject::verify (sal_uInt32 nAddr, sal_uInt16 nVersion) const
+ {
+-    return PageHolderObject< page >::verify (m_xPage, nAddr);
++    return PageHolderObject< page >::verify (m_xPage, nAddr, nVersion);
+ }
+ 
+ /*
+@@ -311,6 +311,7 @@ storeError OStoreBTreeNodeObject::remove (
+         // Load link node.
+         self aNodeL;
+         eErrCode = rBIOS.loadObjectAt (aNodeL, aEntryL.m_aLink.location());
++        aNodeL.fixup();
+         if (eErrCode != store_E_None)
+         {
+             rBIOS.releaseLock (aDescr.m_nAddr, aDescr.m_nSize);
+@@ -352,6 +353,7 @@ storeError OStoreBTreeNodeObject::remove (
+                 // Load right link node.
+                 self aNodeR;
+                 eErrCode = rBIOS.loadObjectAt (aNodeR, rPage.m_pData[nIndexR].m_aLink.location());
++                aNodeR.fixup();
+                 if (eErrCode == store_E_None)
+                 {
+                     if (rPageL.queryMerge (rPageR))
+@@ -406,6 +408,11 @@ storeError OStoreBTreeNodeObject::remove (
+     return rBIOS.releaseLock (aDescr.m_nAddr, aDescr.m_nSize);
+ }
+ 
++void OStoreBTreeNodeObject::fixup (void)
++{
++    m_xPage->m_aGuard.m_nMagic = STORE_MAGIC_BTREENODE;
++}
++
+ /*========================================================================
+  *
+  * OStoreBTreeRootObject implementation.
+@@ -431,6 +438,7 @@ storeError OStoreBTreeRootObject::loadOrCreate (
+     OStorePageBIOS & rBIOS)
+ {
+     storeError eErrCode = rBIOS.loadObjectAt (*this, nAddr);
++    fixup();
+     if (eErrCode != store_E_NotExists)
+         return eErrCode;
+ 
+@@ -562,6 +570,7 @@ storeError OStoreBTreeRootObject::find_lookup (
+ 
+         // Load next page.
+         storeError eErrCode = rBIOS.loadObjectAt (rNode, nAddr);
++        rNode.fixup();
+         if (eErrCode != store_E_None)
+             return eErrCode;
+     }
+@@ -646,6 +655,7 @@ storeError OStoreBTreeRootObject::find_insert (
+         // Load next page.
+         OStoreBTreeNodeObject aNext;
+         storeError eErrCode = rBIOS.loadObjectAt (aNext, nAddr);
++        aNext.fixup();
+         if (eErrCode != store_E_None)
+             return eErrCode;
+ 
+@@ -686,3 +696,5 @@ storeError OStoreBTreeRootObject::find_insert (
+     (void) testInvariant("OStoreBTreeRootObject::find_insert(): leave");
+     return store_E_None;
+ }
++
++
+diff --git store/source/stortree.hxx store/source/stortree.hxx
+index 34c49aa..4e6304c 100644
+--- store/source/stortree.hxx
++++ store/source/stortree.hxx
+@@ -131,7 +131,7 @@ struct OStoreBTreeNodeData : public store::OStorePageData
+      */
+     static const size_t     theSize     = sizeof(G);
+     static const sal_uInt16 thePageSize = base::theSize + self::theSize;
+-    STORE_STATIC_ASSERT(STORE_MINIMUM_PAGESIZE >= self::thePageSize);
++    STORE_STATIC_ASSERT(STORE_MINIMUM_PAGESIZE_V1 >= self::thePageSize);
+ 
+     /** capacity.
+     */
+@@ -262,7 +262,7 @@ public:
+     /** External representation.
+     */
+     virtual storeError guard  (sal_uInt32 nAddr);
+-    virtual storeError verify (sal_uInt32 nAddr) const;
++    virtual storeError verify (sal_uInt32 nAddr, sal_uInt16 nVersion) const;
+ 
+     /** split.
+      *
+@@ -279,6 +279,8 @@ public:
+         sal_uInt16         nIndexL,
+         OStoreBTreeEntry & rEntryL,
+         OStorePageBIOS &   rBIOS);
++
++    void fixup (void);
+ };
+ 
+ /*========================================================================
+diff --git store/workben/t_base.cxx store/workben/t_base.cxx
+index 548ee86..1282da7 100644
+--- store/workben/t_base.cxx
++++ store/workben/t_base.cxx
+@@ -132,7 +132,8 @@ sal_Bool SAL_CALL OTestBIOS::isKindOf (sal_uInt32 nTypeId)
+ storeError OTestBIOS::initialize (
+     ILockBytes *pLockBytes, storeAccessMode eAccessMode, sal_uInt16 & rnPageSize)
+ {
+-    return base::initialize (pLockBytes, eAccessMode, rnPageSize);
++    sal_uInt16 nVersion=STORE_FORMAT_V1;
++    return base::initialize (pLockBytes, eAccessMode, rnPageSize, nVersion);
+ }
+ 
+ namespace store
+diff --git store/workben/t_page.cxx store/workben/t_page.cxx
+index a0645f0..2dcdeec 100644
+--- store/workben/t_page.cxx
++++ store/workben/t_page.cxx
+@@ -155,7 +155,7 @@ struct PageData
+      */
+     static const size_t     theSize     = sizeof(G) + sizeof(D) + 2 * sizeof(L);
+     static const sal_uInt16 thePageSize = theSize;
+-    STORE_STATIC_ASSERT(STORE_MINIMUM_PAGESIZE >= thePageSize);
++    STORE_STATIC_ASSERT(STORE_MINIMUM_PAGESIZE_V1 >= thePageSize);
+ 
+     /** type.
+      */
