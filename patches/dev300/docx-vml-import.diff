@@ -1,0 +1,243 @@
+diff --git oox/inc/oox/helper/helper.hxx oox/inc/oox/helper/helper.hxx
+index f08f807..2a8bd6f 100644
+--- oox/inc/oox/helper/helper.hxx
++++ oox/inc/oox/helper/helper.hxx
+@@ -75,8 +75,8 @@ namespace oox {
+ // ============================================================================
+ 
+ const sal_Int32 API_RGB_TRANSPARENT         = -1;       /// Transparent color for API calls.
+-const sal_Int32 API_RGB_BLACK               = 0x00000;  /// Black color for API calls.
+-const sal_Int32 API_RGB_WHITE               = 0xFFFFF;  /// White color for API calls.
++const sal_Int32 API_RGB_BLACK               = 0x000000;  /// Black color for API calls.
++const sal_Int32 API_RGB_WHITE               = 0xFFFFFF;  /// White color for API calls.
+ 
+ const sal_Int16 API_LINE_NONE               = 0;
+ const sal_Int16 API_LINE_HAIR               = 2;
+diff --git oox/inc/oox/vml/vmlshape.hxx oox/inc/oox/vml/vmlshape.hxx
+index 323e643..606711f 100644
+--- oox/inc/oox/vml/vmlshape.hxx
++++ oox/inc/oox/vml/vmlshape.hxx
+@@ -219,6 +219,8 @@ protected:
+                             const ::com::sun::star::uno::Reference< ::com::sun::star::drawing::XShapes >& rxShapes,
+                             const ::com::sun::star::awt::Rectangle& rShapeRect ) const;
+ 
++    void setService( rtl::OUString aService ) { maService = aService; }
++
+ private:
+     ::rtl::OUString     maService;          /// Name of the UNO shape service.
+ };
+@@ -230,6 +232,8 @@ class RectangleShape : public SimpleShape
+ {
+ public:
+     explicit            RectangleShape( const Drawing& rDrawing );
++    void setService( rtl::OUString aService ) 
++        { SimpleShape::setService( aService ); }
+ };
+ 
+ // ============================================================================
+diff --git oox/inc/oox/vml/vmlshapecontext.hxx oox/inc/oox/vml/vmlshapecontext.hxx
+index dbc5e1a..169e613 100644
+--- oox/inc/oox/vml/vmlshapecontext.hxx
++++ oox/inc/oox/vml/vmlshapecontext.hxx
+@@ -43,6 +43,7 @@ struct ShapeClientData;
+ struct ShapeModel;
+ class ShapeBase;
+ class GroupShape;
++class RectangleShape;
+ 
+ class ShapeContainer;
+ 
+@@ -141,6 +142,22 @@ private:
+ 
+ // ============================================================================
+ 
++class RectangleShapeContext : public ShapeContext
++{
++public:
++    explicit            RectangleShapeContext(
++                            ::oox::core::ContextHandler2Helper& rParent,
++                            const AttributeList& rAttribs,
++                            RectangleShape& rShape );
++
++    virtual ::oox::core::ContextHandlerRef
++                        onCreateContext( sal_Int32 nElement, const AttributeList& rAttribs );
++
++private:
++    RectangleShape&     mrShape;
++};
++// ============================================================================
++
+ } // namespace vml
+ } // namespace oox
+ 
+diff --git oox/source/vml/vmldrawingfragment.cxx oox/source/vml/vmldrawingfragment.cxx
+index 6eab7ef..67fabce 100644
+--- oox/source/vml/vmldrawingfragment.cxx
++++ oox/source/vml/vmldrawingfragment.cxx
+@@ -62,7 +62,7 @@ ContextHandlerRef DrawingFragment::onCreateContext( sal_Int32 nElement, const At
+     {
+         // DOCX filter handles plain shape elements with this fragment handler
+         case VMLDRAWING_WORD:
+-            if( isRootElement() )
++            if ( getNamespace( nElement ) == NMSP_VML )
+                 return ShapeContextBase::createShapeContext( *this, nElement, rAttribs, mrDrawing.getShapes() );
+         break;
+ 
+diff --git oox/source/vml/vmlshape.cxx oox/source/vml/vmlshape.cxx
+index fe07172..7227843 100644
+--- oox/source/vml/vmlshape.cxx
++++ oox/source/vml/vmlshape.cxx
+@@ -32,12 +32,20 @@
+ #include <rtl/math.hxx>
+ #include <com/sun/star/lang/XMultiServiceFactory.hpp>
+ #include <com/sun/star/beans/PropertyValues.hpp>
++#include <com/sun/star/beans/XPropertySet.hpp>
+ #include <com/sun/star/awt/XControlModel.hpp>
+ #include <com/sun/star/drawing/PointSequenceSequence.hpp>
+ #include <com/sun/star/drawing/XControlShape.hpp>
+ #include <com/sun/star/drawing/XEnhancedCustomShapeDefaulter.hpp>
+ #include <com/sun/star/drawing/XShapes.hpp>
+ #include <com/sun/star/graphic/XGraphic.hpp>
++#include <com/sun/star/text/HoriOrientation.hpp>
++#include <com/sun/star/text/RelOrientation.hpp>
++#include <com/sun/star/text/SizeType.hpp>
++#include <com/sun/star/text/VertOrientation.hpp>
++#include <com/sun/star/text/XTextContent.hpp>
++#include <com/sun/star/text/XTextDocument.hpp>
++#include <com/sun/star/text/XTextFrame.hpp>
+ #include "properties.hxx"
+ #include "oox/helper/propertymap.hxx"
+ #include "oox/helper/propertyset.hxx"
+@@ -49,6 +57,8 @@
+ #include "oox/vml/vmlshapecontainer.hxx"
+ 
+ using ::rtl::OUString;
++using ::com::sun::star::beans::XPropertySet;
++using ::com::sun::star::uno::Any;
+ using ::com::sun::star::uno::Exception;
+ using ::com::sun::star::uno::Reference;
+ using ::com::sun::star::uno::UNO_QUERY;
+@@ -67,6 +77,8 @@ using ::com::sun::star::drawing::XShape;
+ using ::com::sun::star::drawing::XShapes;
+ using ::oox::core::XmlFilterBase;
+ 
++using namespace ::com::sun::star::text;
++
+ namespace oox {
+ namespace vml {
+ 
+@@ -126,13 +138,62 @@ void lclInsertXShape( const Reference< XShapes >& rxShapes, const Reference< XSh
+     }
+ }
+ 
++void lclInsertTextFrame( const XmlFilterBase& rFilter, const Reference< XShape >& rxShape )
++{
++    OSL_ENSURE( rxShape.is(), "lclInsertTextFrame - missing XShape" );
++    if ( rxShape.is( ) )
++    {
++        try
++        {
++            Reference< XTextDocument > xDoc( rFilter.getModel( ), UNO_QUERY_THROW );
++            Reference< XTextContent > xCtnt( rxShape, UNO_QUERY_THROW );
++            xCtnt->attach( xDoc->getText( )->getStart( ) );
++        } 
++        catch( Exception& )
++        {
++        }
++    }
++}
++
+ void lclSetXShapeRect( const Reference< XShape >& rxShape, const Rectangle& rShapeRect )
+ {
+     OSL_ENSURE( rxShape.is(), "lclSetXShapeRect - missing XShape" );
+     if( rxShape.is() )
+     {
+-        rxShape->setPosition( Point( rShapeRect.X, rShapeRect.Y ) );
+-        rxShape->setSize( Size( rShapeRect.Width, rShapeRect.Height ) );
++        Reference< XTextFrame > xTextFrame( rxShape, UNO_QUERY );
++        if ( !xTextFrame.is( ) )
++        {
++            rxShape->setPosition( Point( rShapeRect.X, rShapeRect.Y ) );
++            rxShape->setSize( Size( rShapeRect.Width, rShapeRect.Height ) );
++        }
++        else
++        {
++            Reference< XPropertySet > xProps( xTextFrame, UNO_QUERY_THROW );
++            try 
++            {
++                // The size
++                xProps->setPropertyValue( OUString::createFromAscii( "SizeType" ), Any( SizeType::FIX ) );
++                xProps->setPropertyValue( OUString::createFromAscii( "FrameIsAutomaticHeight" ), Any( sal_False ) );
++                xProps->setPropertyValue( OUString::createFromAscii( "Height" ), Any( rShapeRect.Height ) );
++                xProps->setPropertyValue( OUString::createFromAscii( "Width" ), Any( rShapeRect.Width ) );
++
++                // The position
++                xProps->setPropertyValue( OUString::createFromAscii( "HoriOrientPosition" ), Any( rShapeRect.X ) );
++                xProps->setPropertyValue( OUString::createFromAscii( "HoriOrientRelation" ), 
++                        Any( RelOrientation::FRAME ) );
++                xProps->setPropertyValue( OUString::createFromAscii( "HoriOrient" ), 
++                        Any( HoriOrientation::NONE ) );
++
++                xProps->setPropertyValue( OUString::createFromAscii( "VertOrientPosition" ), Any( rShapeRect.Y ) );
++                xProps->setPropertyValue( OUString::createFromAscii( "VertOrientRelation" ), 
++                        Any( RelOrientation::FRAME ) );
++                xProps->setPropertyValue( OUString::createFromAscii( "VertOrient" ), 
++                        Any( VertOrientation::NONE ) );
++            }
++            catch ( Exception& )
++            {
++            }
++        }
+     }
+ }
+ 
+@@ -140,8 +201,12 @@ Reference< XShape > lclCreateAndInsertXShape( const XmlFilterBase& rFilter,
+         const Reference< XShapes >& rxShapes, const OUString& rService, const Rectangle& rShapeRect )
+ {
+     Reference< XShape > xShape = lclCreateXShape( rFilter, rService );
+-    lclInsertXShape( rxShapes, xShape );
++    if ( rService.equalsAscii( "com.sun.star.text.TextFrame" ) ) 
++        lclInsertTextFrame( rFilter, xShape );
++    else
++        lclInsertXShape( rxShapes, xShape );
+     lclSetXShapeRect( xShape, rShapeRect );
++
+     return xShape;
+ }
+ 
+diff --git oox/source/vml/vmlshapecontext.cxx oox/source/vml/vmlshapecontext.cxx
+index 725af97..92cb5d7 100644
+--- oox/source/vml/vmlshapecontext.cxx
++++ oox/source/vml/vmlshapecontext.cxx
+@@ -158,6 +158,7 @@ ShapeContextBase::ShapeContextBase( ContextHandler2Helper& rParent ) :
+         case VML_TOKEN( shape ):
+             return new ShapeContext( rParent, rAttribs, rShapes.createShape< ComplexShape >() );
+         case VML_TOKEN( rect ):
++            return new RectangleShapeContext( rParent, rAttribs, rShapes.createShape< RectangleShape >() );
+         case VML_TOKEN( roundrect ):
+             return new ShapeContext( rParent, rAttribs, rShapes.createShape< RectangleShape >() );
+         case VML_TOKEN( oval ):
+@@ -320,6 +321,23 @@ ContextHandlerRef GroupShapeContext::onCreateContext( sal_Int32 nElement, const
+ 
+ // ============================================================================
+ 
++RectangleShapeContext::RectangleShapeContext( ContextHandler2Helper& rParent, const AttributeList& rAttribs, RectangleShape& rShape ) :
++    ShapeContext( rParent, rAttribs, rShape ),
++    mrShape( rShape )
++{
++}
++
++ContextHandlerRef RectangleShapeContext::onCreateContext( sal_Int32 nElement, const AttributeList& rAttribs )
++{
++    if ( nElement == ( NMSP_VML + XML_textbox ) )
++        mrShape.setService( 
++            OUString::createFromAscii( "com.sun.star.text.TextFrame" ) );
++
++    // The parent class's context is fine
++    return ShapeContext::onCreateContext( nElement, rAttribs );
++}
++// ============================================================================
++
+ } // namespace vml
+ } // namespace oox
+ 
