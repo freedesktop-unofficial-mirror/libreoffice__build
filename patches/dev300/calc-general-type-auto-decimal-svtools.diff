@@ -1,122 +1,332 @@
 diff --git svtools/inc/svtools/zforlist.hxx svtools/inc/svtools/zforlist.hxx
-index bb4a589..069930e 100644
+index bb4a589..2ae53fc 100644
 --- svtools/inc/svtools/zforlist.hxx
 +++ svtools/inc/svtools/zforlist.hxx
-@@ -492,11 +492,16 @@ public:
-     void GetOutputString( String& sString, sal_uInt32 nFIndex,
-                           String& sOutString, Color** ppColor );
+@@ -336,6 +336,11 @@ class SvNumberFormatterRegistry_Impl;
+ class SVT_DLLPUBLIC SvNumberFormatter
+ {
+ public:
++    /** 
++     * We can't technically have an "infinite" value, so we use an arbitrary 
++     * upper precision threshold to represent the "unlimited" precision. 
++     */ 
++    static const sal_uInt16 UNLIMITED_PRECISION;
  
-+    void GetStringColor( sal_uInt32 nFIndex, Color** ppColor );
-+
-     /** Format a number according to the standard default format matching
-         the given format index */
-     void GetInputLineString( const double& fOutNumber,
-                             sal_uInt32 nFIndex, String& sOutString );
- 
-+    void GetInputLineString( const double& fOutNumber,
-+                             sal_uInt32 nFIndex, String& sOutString, Color** ppColor );
-+
-     /** Format a number according to a format code string to be scanned.
-         @return
-             <FALSE/> if format code contains an error
+     /// Preferred ctor with service manager and language/country enum
+     SvNumberFormatter(
+@@ -586,7 +591,7 @@ public:
+     /// Return the reference date
+     Date* GetNullDate();
+     /// Return the standard decimal precision
+-    short GetStandardPrec();
++    sal_uInt16 GetStandardPrec();
+     /// Return whether zero suppression is switched on
+     BOOL GetNoZero() { return bNoZero; }
+     /** Get the type of a format (or NUMBERFORMAT_UNDEFINED if no entry),
 diff --git svtools/inc/svtools/zformat.hxx svtools/inc/svtools/zformat.hxx
-index 4c52b10..d502bb6 100644
+index 4c52b10..8158524 100644
 --- svtools/inc/svtools/zformat.hxx
 +++ svtools/inc/svtools/zformat.hxx
-@@ -241,6 +241,7 @@ public:
+@@ -239,6 +239,12 @@ public:
+     // in fact that could be any string used in number formats.
+     static void LoadString( SvStream& rStream, String& rStr );
  
++    /** 
++     * Get output string from a numeric value that fits the number of 
++     * characters specified.
++     */
++    bool GetOutputString( double fNumber, sal_uInt16 nCharCount, String& rOutString ) const;
++
      BOOL GetOutputString( double fNumber, String& OutString, Color** ppColor );
      BOOL GetOutputString( String& sString, String& OutString, Color** ppColor );
-+    void GetStringColor( Color** ppColor );
  
-     // True if type text
-     BOOL IsTextFormat() const { return (eType & NUMBERFORMAT_TEXT) != 0; }
+@@ -490,6 +496,7 @@ private:
+ 
+     // standard number output
+     SVT_DLLPRIVATE void ImpGetOutputStandard( double& fNumber, String& OutString );
++    SVT_DLLPRIVATE void ImpGetOutputStdToPrecision( double& rNumber, String& rOutString, sal_uInt16 nPrecision ) const;
+     // numbers in input line
+     SVT_DLLPRIVATE void ImpGetOutputInputLine( double fNumber, String& OutString );
+ 
 diff --git svtools/source/numbers/zforlist.cxx svtools/source/numbers/zforlist.cxx
-index 4b13774..ceedb05 100644
+index 4b13774..85807ce 100644
 --- svtools/source/numbers/zforlist.cxx
 +++ svtools/source/numbers/zforlist.cxx
-@@ -1488,9 +1488,16 @@ void SvNumberFormatter::GetInputLineString(const double& fOutNumber,
-                                            sal_uInt32 nFIndex,
-                                            String& sOutString)
+@@ -70,6 +70,7 @@
+ #include <rtl/instance.hxx>
+ 
+ #include <math.h>
++#include <limits>
+ 
+ using namespace ::com::sun::star;
+ using namespace ::com::sun::star::uno;
+@@ -192,6 +193,8 @@ SV_IMPL_PTRARR( NfWSStringsDtor, String* );
+ 
+ /***********************Funktionen SvNumberFormatter**************************/
+ 
++const sal_uInt16 SvNumberFormatter::UNLIMITED_PRECISION = ::std::numeric_limits<sal_uInt16>::max();
++
+ SvNumberFormatter::SvNumberFormatter(
+             const Reference< XMultiServiceFactory >& xSMgr,
+             LanguageType eLang )
+@@ -352,7 +355,7 @@ void SvNumberFormatter::ChangeStandardPrec(short nPrec)
+     pFormatScanner->ChangeStandardPrec(nPrec);
+ }
+ 
+-short SvNumberFormatter::GetStandardPrec()
++sal_uInt16 SvNumberFormatter::GetStandardPrec()
  {
-+    Color* pColor;
-+    GetInputLineString(fOutNumber, nFIndex, sOutString, &pColor);
+     return pFormatScanner->GetStandardPrec();
+ }
+@@ -1508,7 +1511,7 @@ void SvNumberFormatter::GetInputLineString(const double& fOutNumber,
+         if (eType != NUMBERFORMAT_PERCENT)	// spaeter Sonderbehandlung %
+             eType = NUMBERFORMAT_NUMBER;
+         nOldPrec = pFormatScanner->GetStandardPrec();
+-        ChangeStandardPrec(300);						// Merkwert
++        ChangeStandardPrec(UNLIMITED_PRECISION);						// Merkwert
+     }
+     sal_uInt32 nKey = nFIndex;
+     switch ( eType )
+@@ -1529,7 +1532,7 @@ void SvNumberFormatter::GetInputLineString(const double& fOutNumber,
+         if ( eType == NUMBERFORMAT_TIME && pFormat->GetFormatPrecision() )
+         {
+             nOldPrec = pFormatScanner->GetStandardPrec();
+-            ChangeStandardPrec(300);						// Merkwert
++            ChangeStandardPrec(UNLIMITED_PRECISION);						// Merkwert
+         }
+         pFormat->GetOutputString(fOutNumber, sOutString, &pColor);
+     }
+diff --git svtools/source/numbers/zformat.cxx svtools/source/numbers/zformat.cxx
+index 368fb16..2be8168 100644
+--- svtools/source/numbers/zformat.cxx
++++ svtools/source/numbers/zformat.cxx
+@@ -57,6 +57,9 @@
+ #include "numhead.hxx"
+ #include <unotools/digitgroupingiterator.hxx>
+ #include "nfsymbol.hxx"
++
++#include <cmath>
++
+ using namespace svt;
+ 
+ namespace {
+@@ -66,6 +69,9 @@ struct Gregorian
+         return ::rtl::OUString(RTL_CONSTASCII_USTRINGPARAM("gregorian"));
+     }
+ };
++
++const sal_uInt16 UPPER_PRECISION = 300; // entirely arbitrary...
++
+ }
+ 
+ const double _D_MAX_U_LONG_ = (double) 0xffffffff;      // 4294967295.0
+@@ -1777,47 +1783,62 @@ void SvNumberformat::Build50Formatstring( String& rStr ) const
+ 
+ void SvNumberformat::ImpGetOutputStandard(double& fNumber, String& OutString)
+ {
+-    USHORT nStandardPrec = rScan.GetStandardPrec();
++    sal_uInt16 nStandardPrec = rScan.GetStandardPrec();
++
+     if ( fabs(fNumber) > 1.0E15 )       // #58531# war E16
++    {
++        nStandardPrec = ::std::min(nStandardPrec, static_cast<sal_uInt16>(14)); // limits to 14 decimals
+         OutString = ::rtl::math::doubleToUString( fNumber,
+                 rtl_math_StringFormat_E, nStandardPrec /*2*/,
+                 GetFormatter().GetNumDecimalSep().GetChar(0));
++    }
+     else
+-    {
++        ImpGetOutputStdToPrecision(fNumber, OutString, nStandardPrec);
 +}
 +
-+void SvNumberFormatter::GetInputLineString(const double& fOutNumber,
-+                                           sal_uInt32 nFIndex,
-+                                           String& sOutString, Color** ppColor)
++void SvNumberformat::ImpGetOutputStdToPrecision(double& rNumber, String& rOutString, sal_uInt16 nPrecision) const
 +{
-     SvNumberformat* pFormat;
-     short nOldPrec;
--    Color* pColor;
-     pFormat = (SvNumberformat*) aFTable.Get(nFIndex);
-     if (!pFormat)
-         pFormat = aFTable.Get(ZF_STANDARD);
-@@ -1531,7 +1538,13 @@ void SvNumberFormatter::GetInputLineString(const double& fOutNumber,
-             nOldPrec = pFormatScanner->GetStandardPrec();
-             ChangeStandardPrec(300);						// Merkwert
-         }
--        pFormat->GetOutputString(fOutNumber, sOutString, &pColor);
-+        if (ppColor)
-+            pFormat->GetOutputString(fOutNumber, sOutString, ppColor);
-+        else
-+        {
-+            Color* pColor; // throw away the color info.
-+            pFormat->GetOutputString(fOutNumber, sOutString, &pColor);
-+        }
-     }
-     if (nOldPrec != -1)
-         ChangeStandardPrec(nOldPrec);
-@@ -1574,6 +1587,21 @@ void SvNumberFormatter::GetOutputString(String& sString,
++    // Make sure the precision doesn't go over the maximum allowable precision.
++    nPrecision = ::std::min(UPPER_PRECISION, nPrecision);
++
+ #if 0
+ {
+-        // debugger test case for ANSI standard correctness
+-        ::rtl::OUString aTest;
+-        // expect 0.00123   OK
+-        aTest = ::rtl::math::doubleToUString( 0.001234567,
+-                rtl_math_StringFormat_G, 3, '.', sal_True );
+-        // expect 123       OK
+-        aTest = ::rtl::math::doubleToUString( 123.4567,
+-                rtl_math_StringFormat_G, 3, '.', sal_True );
+-        // expect 123.5     OK
+-        aTest = ::rtl::math::doubleToUString( 123.4567,
+-                rtl_math_StringFormat_G, 4, '.', sal_True );
+-        // expect 1e+03 (as 999.6 rounded to 3 significant digits results in
+-        // 1000 with an exponent equal to significant digits)
+-        // Currently (24-Jan-2003) we do fail in this case and output 1000
+-        // instead, negligible.
+-        aTest = ::rtl::math::doubleToUString( 999.6,
+-                rtl_math_StringFormat_G, 3, '.', sal_True );
+-        // expect what? result is 1.2e+004
+-        aTest = ::rtl::math::doubleToUString( 12345.6789,
+-                rtl_math_StringFormat_G, -3, '.', sal_True );
++    // debugger test case for ANSI standard correctness
++    ::rtl::OUString aTest;
++    // expect 0.00123   OK
++    aTest = ::rtl::math::doubleToUString( 0.001234567,
++            rtl_math_StringFormat_G, 3, '.', sal_True );
++    // expect 123       OK
++    aTest = ::rtl::math::doubleToUString( 123.4567,
++            rtl_math_StringFormat_G, 3, '.', sal_True );
++    // expect 123.5     OK
++    aTest = ::rtl::math::doubleToUString( 123.4567,
++            rtl_math_StringFormat_G, 4, '.', sal_True );
++    // expect 1e+03 (as 999.6 rounded to 3 significant digits results in
++    // 1000 with an exponent equal to significant digits)
++    // Currently (24-Jan-2003) we do fail in this case and output 1000
++    // instead, negligible.
++    aTest = ::rtl::math::doubleToUString( 999.6,
++            rtl_math_StringFormat_G, 3, '.', sal_True );
++    // expect what? result is 1.2e+004
++    aTest = ::rtl::math::doubleToUString( 12345.6789,
++            rtl_math_StringFormat_G, -3, '.', sal_True );
+ }
+ #endif
+ 
+-        OutString = ::rtl::math::doubleToUString( fNumber,
+-                rtl_math_StringFormat_F, nStandardPrec /*2*/,
+-                GetFormatter().GetNumDecimalSep().GetChar(0), sal_True );
+-        if (OutString.GetChar(0) == '-' &&
+-            OutString.GetTokenCount('0') == OutString.Len())
+-            OutString.EraseLeadingChars('-');            // nicht -0
+-    }
+-    ImpTransliterate( OutString, NumFor[0].GetNatNum() );
+-    return;
++    // If truncating the value to desired precision alters the original value,
++    // we should show the trailing zeros, otherwise strip them.
++    double fRounded = ::rtl::math::round(rNumber, nPrecision);
++    bool bRemoveZeros = ::rtl::math::approxEqual(fRounded, rNumber);
++
++    rOutString = ::rtl::math::doubleToUString( rNumber,
++            rtl_math_StringFormat_F, nPrecision /*2*/,
++            GetFormatter().GetNumDecimalSep().GetChar(0), bRemoveZeros );
++    if (rOutString.GetChar(0) == '-' &&
++        rOutString.GetTokenCount('0') == rOutString.Len())
++        rOutString.EraseLeadingChars('-');            // nicht -0
++
++    ImpTransliterate( rOutString, NumFor[0].GetNatNum() );
+ }
+ 
+ void SvNumberformat::ImpGetOutputInputLine(double fNumber, String& OutString)
+@@ -1958,6 +1979,62 @@ ULONG SvNumberformat::ImpGGTRound(ULONG x, ULONG y)
      }
  }
  
-+void SvNumberFormatter::GetStringColor( sal_uInt32 nFIndex, Color** ppColor)
++namespace {
++
++void lcl_GetOutputStringScientific(
++    double fNumber, sal_uInt16 nCharCount, const SvNumberFormatter& rFormatter, String& rOutString)
 +{
-+    if (!ppColor)
-+        return;
++    bool bSign = ::rtl::math::isSignBitSet(fNumber);
 +
-+    SvNumberformat* pFormat = (SvNumberformat*) aFTable.Get(nFIndex);
-+    if (!pFormat)
-+        pFormat = aFTable.Get(ZF_STANDARD_TEXT);
++    // 1.000E+015 (one digit and the decimal point, and the five chars for the exponential part, totalling 7).
++    sal_uInt16 nPrec = nCharCount > 7 ? nCharCount - 7 : 0;
++    if (nPrec && bSign)
++        // Make room for the negative sign.
++        --nPrec;
 +
-+    if (pFormat->IsTextFormat() || pFormat->HasTextFormat())
-+        pFormat->GetStringColor(ppColor);
-+    else
-+        *ppColor = NULL;
++    nPrec = ::std::min(nPrec, static_cast<sal_uInt16>(14)); // limit to 14 decimals.
++
++    rOutString = ::rtl::math::doubleToUString(
++        fNumber, rtl_math_StringFormat_E, nPrec, rFormatter.GetNumDecimalSep().GetChar(0));
 +}
 +
- BOOL SvNumberFormatter::GetPreviewString(const String& sFormatString,
-                                          double fPreviewNumber,
-                                          String& sOutString,
-diff --git svtools/source/numbers/zformat.cxx svtools/source/numbers/zformat.cxx
-index 368fb16..65c0592 100644
---- svtools/source/numbers/zformat.cxx
-+++ svtools/source/numbers/zformat.cxx
-@@ -1915,6 +1915,25 @@ BOOL SvNumberformat::GetOutputString(String& sString,
-     }
-     return FALSE;
- }
++}
 +
-+void SvNumberformat::GetStringColor( Color** ppColor )
++bool SvNumberformat::GetOutputString(double fNumber, sal_uInt16 nCharCount, String& rOutString) const
 +{
-+    if (!ppColor)
-+        return;
++    using namespace std;
 +
-+    USHORT nIx;
-+    if (eType & NUMBERFORMAT_TEXT)
-+        nIx = 0;
-+    else if (NumFor[3].GetnAnz() > 0)
-+        nIx = 3;
-+    else
++    if (eType != NUMBERFORMAT_NUMBER)
++        return false;
++
++    double fTestNum = fNumber;
++    bool bSign = ::rtl::math::isSignBitSet(fTestNum);
++    if (bSign)
++        fTestNum = -fTestNum;
++
++    sal_uInt16 nDigitPre = static_cast<sal_uInt16>(ceil(log10(fTestNum)));
++    if (nDigitPre > 15)
 +    {
-+        *ppColor = NULL;        // no change of color
-+        return;
++        lcl_GetOutputStringScientific(fNumber, nCharCount, GetFormatter(), rOutString);
++        return true;
 +    }
-+    *ppColor = NumFor[nIx].GetColor();
++
++    sal_uInt16 nPrec = nCharCount >= nDigitPre ? nCharCount - nDigitPre : 0;
++    if (nPrec && bSign)
++        // Subtract the negative sign.
++        --nPrec;
++    if (nPrec)
++        // Subtract the decimal point.
++        --nPrec;
++
++    ImpGetOutputStdToPrecision(fNumber, rOutString, nPrec);
++    if (rOutString.Len() > nCharCount)
++        // String still wider than desired.  Switch to scientific notation.
++        lcl_GetOutputStringScientific(fNumber, nCharCount, GetFormatter(), rOutString);
++
++    return true;
 +}
 +
- /*
- void SvNumberformat::GetNextFareyNumber(ULONG nPrec, ULONG x0, ULONG x1,
-                                         ULONG y0, ULONG y1,
+ BOOL SvNumberformat::GetOutputString(double fNumber,
+                                      String& OutString,
+                                      Color** ppColor)
+@@ -1981,7 +2058,7 @@ BOOL SvNumberformat::GetOutputString(double fNumber,
+     BOOL bHadStandard = FALSE;
+     if (bStandard)                              // einzelne Standardformate
+     {
+-        if (rScan.GetStandardPrec() == 300)     // alle Zahlformate InputLine
++        if (rScan.GetStandardPrec() == SvNumberFormatter::UNLIMITED_PRECISION)     // alle Zahlformate InputLine
+         {
+             ImpGetOutputInputLine(fNumber, OutString);
+             return FALSE;
+diff --git svtools/source/numbers/zforscan.cxx svtools/source/numbers/zforscan.cxx
+index ab780cd..7bd764e 100644
+--- svtools/source/numbers/zforscan.cxx
++++ svtools/source/numbers/zforscan.cxx
+@@ -468,7 +468,7 @@ void ImpSvNumberformatScan::ChangeNullDate(USHORT nDay, USHORT nMonth, USHORT nY
+         pNullDate = new Date(nDay, nMonth, nYear);
+ }
+ 
+-void ImpSvNumberformatScan::ChangeStandardPrec(short nPrec)
++void ImpSvNumberformatScan::ChangeStandardPrec(sal_uInt16 nPrec)
+ {
+     nStandardPrec = nPrec;
+ }
+diff --git svtools/source/numbers/zforscan.hxx svtools/source/numbers/zforscan.hxx
+index df243f1..6a69675 100644
+--- svtools/source/numbers/zforscan.hxx
++++ svtools/source/numbers/zforscan.hxx
+@@ -57,7 +57,7 @@ public:
+ 
+     void ChangeNullDate(USHORT nDay, USHORT nMonth, USHORT nYear);
+                                                 // tauscht Referenzdatum aus
+-    void ChangeStandardPrec(short nPrec);		// tauscht Standardprecision aus
++    void ChangeStandardPrec(sal_uInt16 nPrec);  // tauscht Standardprecision aus
+ 
+     xub_StrLen ScanFormat( String& rString, String& rComment );	// Aufruf der Scan-Analyse
+ 
+@@ -96,7 +96,7 @@ public:
+                 InitKeywords();
+             return sNameStandardFormat;
+         }
+-    short GetStandardPrec() const				{ return nStandardPrec; }
++    sal_uInt16 GetStandardPrec() const          { return nStandardPrec; }
+     const Color& GetRedColor() const			{ return StandardColor[4]; }
+     Color* GetColor(String& sStr);			// Setzt Hauptfarben oder
+                                                 // definierte Farben
+@@ -161,7 +161,7 @@ private:							// ---- privater Teil
+                                                 // Array der Standardfarben
+     Date* pNullDate;							// 30Dec1899
+     String sNameStandardFormat;				// "Standard"
+-    short nStandardPrec;						// default Precision fuer Standardformat (2)
++    sal_uInt16 nStandardPrec;                   // default Precision for Standardformat
+     SvNumberFormatter* pFormatter;				// Pointer auf die Formatliste
+ 
+     String sStrArray[NF_MAX_FORMAT_SYMBOLS];    // Array der Symbole
