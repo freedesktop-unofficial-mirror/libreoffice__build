@@ -1290,7 +1290,7 @@ index fc11495..c4160ba 100644
              {
                  continue;
 diff --git sw/source/filter/ww8/wrtw8nds.cxx sw/source/filter/ww8/wrtw8nds.cxx
-index ab8ff01..a8f5157 100644
+index 611f913..7726efb 100644
 --- sw/source/filter/ww8/wrtw8nds.cxx
 +++ sw/source/filter/ww8/wrtw8nds.cxx
 @@ -112,6 +112,45 @@ using namespace sw::util;
@@ -1339,14 +1339,36 @@ index ab8ff01..a8f5157 100644
  /*  */
  
  WW8_AttrIter::WW8_AttrIter(SwWW8Writer& rWr)
-@@ -288,19 +327,17 @@ xub_StrLen WW8_SwAttrIter::SearchNext( xub_StrLen nStartPos )
+@@ -284,22 +323,40 @@ WW8_SwAttrIter::WW8_SwAttrIter(SwWW8Writer& rWr, const SwTxtNode& rTxtNd) :
+     nAktSwPos = SearchNext(1);
+ }
+ 
++xub_StrLen lcl_getMinPos( xub_StrLen pos1, xub_StrLen pos2 )
++{
++    xub_StrLen min = STRING_NOTFOUND;
++    if ( pos1 == STRING_NOTFOUND && pos2 != STRING_NOTFOUND )
++        min = pos2;
++    else if ( pos2 == STRING_NOTFOUND && pos1 != STRING_NOTFOUND )
++        min = pos1;
++    else if ( pos2 != STRING_NOTFOUND && pos2 != STRING_NOTFOUND )
++    {
++        if ( pos1 < pos2 )
++            min = pos1;
++        else
++            min = pos2;
++    }
++
++    return min;
++}
++
+ xub_StrLen WW8_SwAttrIter::SearchNext( xub_StrLen nStartPos )
  {
      xub_StrLen nPos;
      xub_StrLen nMinPos = STRING_MAXLEN;
 +    xub_StrLen i=0;
 +
- 	const String aTxt = rNd.GetTxt();
- 	xub_StrLen pos = aTxt.Search(CH_TXT_ATR_FIELDSTART, nStartPos);
+     const String aTxt = rNd.GetTxt();
+-    xub_StrLen pos = aTxt.Search(CH_TXT_ATR_FIELDSTART, nStartPos);
 -	if( pos==STRING_NOTFOUND )
 -    {
 -		pos = aTxt.Search(CH_TXT_ATR_FIELDEND, nStartPos);
@@ -1354,22 +1376,24 @@ index ab8ff01..a8f5157 100644
 -            pos = aTxt.Search(CH_TXT_ATR_FORMELEMENT, nStartPos);
 -    }
 -	if( pos!=STRING_NOTFOUND )
-+	if (pos==STRING_NOTFOUND) 
-+		pos=aTxt.Search(CH_TXT_ATR_FIELDEND, nStartPos);
-+	if (pos==STRING_NOTFOUND) 
-+		pos=aTxt.Search(CH_TXT_ATR_FORMELEMENT, nStartPos);
-+	if (pos!=STRING_NOTFOUND)  
- 		nMinPos=pos;
+-        nMinPos=pos;
++    xub_StrLen fieldEndPos = aTxt.Search(CH_TXT_ATR_FIELDEND, nStartPos);
++    xub_StrLen fieldStartPos = aTxt.Search(CH_TXT_ATR_FIELDSTART, nStartPos);
++    xub_StrLen formElementPos = aTxt.Search(CH_TXT_ATR_FORMELEMENT, nStartPos);
  
 -    xub_StrLen i=0;
--
++    xub_StrLen pos = lcl_getMinPos( fieldEndPos, fieldStartPos );
++    pos = lcl_getMinPos( pos, formElementPos );
++
++	if (pos!=STRING_NOTFOUND)  
++        nMinPos=pos;
+ 
      // first the redline, then the attributes
      if( pCurRedline )
-     {
-@@ -1558,36 +1595,49 @@ Writer& OutWW8_SwTxtNode( Writer& rWrt, SwCntntNode& rNode )
- 				ASSERT(pFieldmark!=NULL, "Looks like this doc is broken...; where is the Fieldmark for the FIELDSTART??");
+@@ -1558,36 +1615,49 @@ Writer& OutWW8_SwTxtNode( Writer& rWrt, SwCntntNode& rNode )
+                 ASSERT(pFieldmark!=NULL, "Looks like this doc is broken...; where is the Fieldmark for the FIELDSTART??");
  
- 				if (pFieldmark!=NULL) {
+                 if (pFieldmark!=NULL) {
 -					rWW8Wrt.AppendBookmark( pFieldmark->GetName(), 1);
 +				  if (pFieldmark->isType(ECMA_FORMTEXT)) {
 +				    rWW8Wrt.AppendBookmark( pFieldmark->GetName(), 0);
@@ -1381,31 +1405,31 @@ index ab8ff01..a8f5157 100644
 +				  if (pFieldmark->isType(ECMA_HYPERLINK)) {
 +					rWW8Wrt.WriteHyperlinkData( *pFieldmark );
 +				  }
-+				  rWW8Wrt.OutField(NULL, lcl_getFieldId(pFieldmark), String(), WRITEFIELD_CMD_END);
- 				}
++    			  rWW8Wrt.OutField(NULL, lcl_getFieldId(pFieldmark), String(), WRITEFIELD_CMD_END);
+                 }
 -				rWW8Wrt.OutField(NULL, ww::eFORMTEXT, String::CreateFromAscii(" FORMTEXT "), WRITEFIELD_START | WRITEFIELD_CMD_START);
 -				if (pFieldmark!=NULL) {
 -					rWW8Wrt.WriteFormData( *pFieldmark );
 -				}
 -				rWW8Wrt.OutField(NULL, ww::eFORMTEXT, String(), WRITEFIELD_CMD_END);
- 			} else if (ch==CH_TXT_ATR_FIELDEND) {
- 				SwPosition aPosition( *pNd, SwIndex( (SwTxtNode*)pNd, nAktPos ) );
- 				SwFieldBookmark* pFieldmark=(SwFieldBookmark*)rWW8Wrt.pDoc->getFieldBookmarkFor( aPosition );
- 				ASSERT(pFieldmark!=NULL, "Looks like this doc is broken...; where is the Fieldmark for the FIELDSTART??");
+             } else if (ch==CH_TXT_ATR_FIELDEND) {
+                 SwPosition aPosition( *pNd, SwIndex( (SwTxtNode*)pNd, nAktPos ) );
+                 SwFieldBookmark* pFieldmark=(SwFieldBookmark*)rWW8Wrt.pDoc->getFieldBookmarkFor( aPosition );
+                 ASSERT(pFieldmark!=NULL, "Looks like this doc is broken...; where is the Fieldmark for the FIELDSTART??");
 -				rWW8Wrt.OutField(NULL, ww::eFORMTEXT, String(), WRITEFIELD_CLOSE);
- 				if (pFieldmark!=NULL) {
+                 if (pFieldmark!=NULL) {
 -					rWW8Wrt.AppendBookmark( pFieldmark->GetName(), 0);
 +				  rWW8Wrt.OutField(NULL, lcl_getFieldId(pFieldmark), String(), WRITEFIELD_CLOSE);
 +				  if (pFieldmark->isType(ECMA_FORMTEXT)) {
 +				    
 +				    rWW8Wrt.AppendBookmark( pFieldmark->GetName(), 0);
 +				  }
- 				}
- 			} else if (ch==CH_TXT_ATR_FORMELEMENT) {
- 				SwPosition aPosition( *pNd, SwIndex( (SwTxtNode*)pNd, nAktPos ) );
- 				SwFieldBookmark* pFieldmark=rWW8Wrt.pDoc->getFormFieldBookmarkFor( aPosition );
- 				ASSERT(pFieldmark!=NULL, "Looks like this doc is broken...; where is the Fieldmark for the FIELDSTART??");
- 				if (pFieldmark!=NULL) {
+                 }
+             } else if (ch==CH_TXT_ATR_FORMELEMENT) {
+                 SwPosition aPosition( *pNd, SwIndex( (SwTxtNode*)pNd, nAktPos ) );
+                 SwFieldBookmark* pFieldmark=rWW8Wrt.pDoc->getFormFieldBookmarkFor( aPosition );
+                 ASSERT(pFieldmark!=NULL, "Looks like this doc is broken...; where is the Fieldmark for the FIELDSTART??");
+                 if (pFieldmark!=NULL) {
 -					rWW8Wrt.AppendBookmark( pFieldmark->GetName(), 1);
 -				}
 -				rWW8Wrt.OutField(NULL, ww::eFORMCHECKBOX, String::CreateFromAscii(" FORMCHECKBOX "), WRITEFIELD_START | WRITEFIELD_CMD_START);
@@ -1427,13 +1451,13 @@ index ab8ff01..a8f5157 100644
 +				    rWW8Wrt.WriteFormData( *pFieldmark );
 +
 +				  }
-+				  rWW8Wrt.OutField(NULL, lcl_getFieldId(pFieldmark), String(), WRITEFIELD_CMD_END | WRITEFIELD_CLOSE);
++    			  rWW8Wrt.OutField(NULL, lcl_getFieldId(pFieldmark), String(), WRITEFIELD_CLOSE );
 +				  if (pFieldmark->isType(ECMA_FORMDROPDOWN) || pFieldmark->isType(ECMA_FORMCHECKBOX)) {				    
 +				    rWW8Wrt.AppendBookmark( pFieldmark->GetName(), 0);
 +				  }
- 				}
- 			}
- 			nLen-=static_cast<USHORT>(ofs);
+                 }
+             }
+             nLen-=static_cast<USHORT>(ofs);
 diff --git sw/source/filter/ww8/wrtww8.cxx sw/source/filter/ww8/wrtww8.cxx
 index ca1d344..0d99564 100644
 --- sw/source/filter/ww8/wrtww8.cxx
