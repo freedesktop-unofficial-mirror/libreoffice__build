@@ -29,9 +29,9 @@
              <!-- We want the Provider to be the final fallback provider -->
              <node oor:name="Provider999" oor:op="replace" install:module="gio">
                <prop oor:name="ServiceName">
---- sc/source/ui/docshell/docsh.cxx.old	2009-04-02 10:45:27.000000000 +0000
-+++ sc/source/ui/docshell/docsh.cxx	2009-04-06 16:41:46.000000000 +0000
-@@ -823,7 +823,7 @@ BOOL __EXPORT ScDocShell::ConvertFrom( S
+--- sc/source/ui/docshell/docsh.cxx
++++ sc/source/ui/docshell/docsh.cxx
+@@ -856,7 +856,7 @@ BOOL __EXPORT ScDocShell::ConvertFrom( S
  	//	Alle Filter brauchen die komplette Datei am Stueck (nicht asynchron),
  	//	darum vorher per CreateFileStream dafuer sorgen, dass die komplette
  	//	Datei uebertragen wird.
@@ -42,7 +42,7 @@
      nCanUpdate = pUpdateDocItem ? pUpdateDocItem->GetValue() : com::sun::star::document::UpdateDocMode::NO_UPDATE;
 --- sfx2/inc/sfx2/docfile.hxx
 +++ sfx2/inc/sfx2/docfile.hxx
-@@ -186,7 +186,7 @@ public:
+@@ -187,7 +187,7 @@ public:
      ::com::sun::star::util::DateTime GetInitFileDate( sal_Bool bIgnoreOldValue );
  
      ::com::sun::star::uno::Reference< ::com::sun::star::ucb::XContent > GetContent() const;
@@ -51,7 +51,7 @@
      void                SetTemporary( sal_Bool bTemp );
      sal_Bool            IsTemporary() const;
      sal_Bool            IsRemote();
-@@ -260,6 +260,8 @@ public:
+@@ -257,6 +257,8 @@ public:
      void				SetCharset( ::rtl::OUString );
      ::rtl::OUString     GetBaseURL( bool bForSaving=false );
  
@@ -62,7 +62,7 @@
  
 --- sfx2/source/doc/docfile.cxx
 +++ sfx2/source/doc/docfile.cxx
-@@ -533,7 +533,7 @@
+@@ -582,7 +582,7 @@
  //------------------------------------------------------------------
  sal_Bool SfxMedium::DocNeedsFileDateCheck()
  {
@@ -71,7 +71,7 @@
  }
  
  //------------------------------------------------------------------
-@@ -749,10 +749,13 @@
+@@ -804,10 +804,13 @@
  }
  
  //------------------------------------------------------------------
@@ -87,7 +87,7 @@
  
      // return the name then
      return aName;
-@@ -928,6 +929,26 @@
+@@ -916,15 +916,35 @@
      return bPreview;
  }
  
@@ -114,7 +114,8 @@
  //------------------------------------------------------------------
  void SfxMedium::StorageBackup_Impl()
  {
-@@ -924,7 +924,7 @@
+     ::ucbhelper::Content aOriginalContent;
+     Reference< ::com::sun::star::ucb::XCommandEnvironment > xDummyEnv;
  
      sal_Bool bBasedOnOriginalFile = ( !pImp->pTempFile && !( aLogicName.Len() && pImp->m_bSalvageMode )
          && GetURLObject().GetMainURL( INetURLObject::NO_DECODE ).getLength()
@@ -123,7 +124,7 @@
          && ::utl::UCBContentHelper::IsDocument( GetURLObject().GetMainURL( INetURLObject::NO_DECODE ) ) );
  
      if ( bBasedOnOriginalFile && !pImp->m_aBackupURL.getLength()
-@@ -2210,7 +2326,7 @@ void SfxMedium::Transfer_Impl()
+@@ -1995,7 +1995,7 @@ void SfxMedium::Transfer_Impl()
              xComEnv = new ::ucbhelper::CommandEnvironment( xInteractionHandler,
                                                        Reference< ::com::sun::star::ucb::XProgressHandler >() );
  
@@ -132,7 +133,50 @@
          {
              TransactedTransferForFS_Impl( aSource, aDest, xComEnv );
          }
-@@ -2542,7 +2658,7 @@ void SfxMedium::GetMedium_Impl()
+@@ -2108,11 +2108,20 @@ void SfxMedium::DoInternalBackup_Impl( const ::ucbhelper::Content& aOriginalCont
+ 	if ( pImp->m_aBackupURL.getLength() )
+ 		return; // the backup was done already
+ 
+-	::utl::TempFile aTransactTemp( aPrefix, &aExtension, &aDestDir );
+-	aTransactTemp.EnableKillingFile( sal_False );
++	::rtl::OUString aBackupName;
++	::rtl::OUString aBackupURL;
++	{
++		// a living aTransactTemp kills WebDAV with SAL_ENABLE_FILE_LOCKING=1,
++		// because then it attempts to have 2 file handles pointing to the same
++		// file name...
++		::utl::TempFile aTransactTemp( aPrefix, &aExtension, &aDestDir );
++		aTransactTemp.EnableKillingFile( sal_True );
+ 
+-	INetURLObject aBackObj( aTransactTemp.GetURL() );
+-	::rtl::OUString aBackupName = aBackObj.getName( INetURLObject::LAST_SEGMENT, true, INetURLObject::DECODE_WITH_CHARSET );
++		INetURLObject aBackObj( aTransactTemp.GetURL() );
++
++		aBackupName = aBackObj.getName( INetURLObject::LAST_SEGMENT, true, INetURLObject::DECODE_WITH_CHARSET );
++		aBackupURL = aBackObj.GetMainURL( INetURLObject::NO_DECODE );
++	}
+ 
+ 	Reference < ::com::sun::star::ucb::XCommandEnvironment > xDummyEnv;
+ 	::ucbhelper::Content aBackupCont;
+@@ -2125,16 +2125,13 @@ void SfxMedium::DoInternalBackup_Impl( const ::ucbhelper::Content& aOriginalCont
+ 											aBackupName,
+ 											NameClash::OVERWRITE ) )
+ 			{
+-				pImp->m_aBackupURL = aBackObj.GetMainURL( INetURLObject::NO_DECODE );
++				pImp->m_aBackupURL = aBackupURL;
+ 				pImp->m_bRemoveBackup = sal_True;
+ 			}
+ 		}
+ 		catch( Exception& )
+ 		{}
+ 	}
+-
+-	if ( !pImp->m_aBackupURL.getLength() )
+-		aTransactTemp.EnableKillingFile( sal_True );
+ }
+ 
+ //------------------------------------------------------------------
+@@ -2327,7 +2327,7 @@ void SfxMedium::GetMedium_Impl()
                      aMedium.erase( comphelper::MediaDescriptor::PROP_READONLY() );
                      aMedium.addInputStream();
                  }
@@ -141,7 +185,7 @@
                  {
                      // use the special locking approach only for file URLs
                      aMedium.addInputStreamOwnLock();
-@@ -3249,7 +3249,7 @@
+@@ -3423,7 +3423,7 @@
      if ( !( nStorOpenMode & STREAM_TRUNC ) )
      {
          if ( GetContent().is()
@@ -152,7 +196,7 @@
              // if there is already such a document, we should copy it
 --- sfx2/source/view/viewfrm.cxx
 +++ sfx2/source/view/viewfrm.cxx
-@@ -631,6 +631,11 @@ void SfxViewFrame::ExecReload_Impl( SfxR
+@@ -632,6 +632,11 @@ void SfxViewFrame::ExecReload_Impl( SfxR
                  sal_Bool bHandsOff =
                      ( pMedium->GetURLObject().GetProtocol() == INET_PROT_FILE && !xOldObj->IsDocShared() );
  
@@ -258,7 +302,7 @@
          }
          m_aScheme.set(aSynAbsURIRef, aSynScheme, aSynAbsURIRef.getLength());
          aSynAbsURIRef.append(sal_Unicode(':'));
-@@ -2120,6 +2134,8 @@ INetURLObject::getPrefix(sal_Unicode con
+@@ -2127,6 +2127,8 @@ INetURLObject::getPrefix(sal_Unicode con
  			  PrefixInfo::INTERNAL },
  			{ "cid:", 0, INET_PROT_CID, PrefixInfo::OFFICIAL },
  			{ "data:", 0, INET_PROT_DATA, PrefixInfo::OFFICIAL },
@@ -267,7 +311,7 @@
  			{ "db:", "staroffice.db:", INET_PROT_DB, PrefixInfo::INTERNAL },
  			{ "file:", 0, INET_PROT_FILE, PrefixInfo::OFFICIAL },
  			{ "ftp:", 0, INET_PROT_FTP, PrefixInfo::OFFICIAL },
-@@ -2201,6 +2217,8 @@ INetURLObject::getPrefix(sal_Unicode con
+@@ -2208,6 +2208,8 @@ INetURLObject::getPrefix(sal_Unicode con
  			  PrefixInfo::OFFICIAL },
  			{ "vnd.sun.star.wfs:", 0, INET_PROT_VND_SUN_STAR_WFS,
  			  PrefixInfo::OFFICIAL },
@@ -276,7 +320,7 @@
  			{ "wfs:", "vnd.sun.star.wfs:", INET_PROT_VND_SUN_STAR_WFS,
  			  PrefixInfo::ALIAS } };
  	PrefixInfo const * pFirst = aMap + 1;
-@@ -3004,6 +3022,10 @@ bool INetURLObject::parsePath(INetProtoc
+@@ -3011,6 +3011,10 @@ bool INetURLObject::parsePath(INetProtoc
  		case INET_PROT_VND_SUN_STAR_WEBDAV:
  		case INET_PROT_HTTPS:
          case INET_PROT_SMB:
@@ -287,7 +331,7 @@
  			if (pPos < pEnd && *pPos != '/')
  				return false;
  			while (pPos < pEnd && *pPos != nQueryDelimiter
-@@ -3422,6 +3444,7 @@ bool INetURLObject::parsePath(INetProtoc
+@@ -3429,6 +3429,7 @@ bool INetURLObject::parsePath(INetProtoc
  			break;
  
          case INET_PROT_GENERIC:
@@ -295,7 +339,7 @@
  			while (pPos < pEnd && *pPos != nFragmentDelimiter)
  			{
  				EscapeType eEscapeType;
-@@ -4133,10 +4156,13 @@ bool INetURLObject::ConcatData(INetProto
+@@ -4140,10 +4140,13 @@ bool INetURLObject::ConcatData(INetProto
  {
  	setInvalid();
  	m_eScheme = eTheScheme;
@@ -313,7 +357,7 @@
  	{
 --- tools/workben/urltest.cxx
 +++ tools/workben/urltest.cxx
-@@ -1476,7 +1476,7 @@ main()
+@@ -1495,7 +1495,7 @@ main()
  
          url = rtl::OUString(RTL_CONSTASCII_USTRINGPARAM("A-b.3:/%2f?x#y"));
          urlobj = INetURLObject(url);
@@ -322,7 +366,7 @@
          bSuccess &= assertEqual(
              url, rtl::OUString(RTL_CONSTASCII_USTRINGPARAM("a-b.3:/%2F?x#y")),
              rtl::OUString(urlobj.GetMainURL(INetURLObject::NO_DECODE)));
-@@ -1504,7 +1504,7 @@ main()
+@@ -1523,7 +1523,7 @@ main()
  
          url = rtl::OUString(RTL_CONSTASCII_USTRINGPARAM("foo:/"));
          urlobj = INetURLObject(url);
@@ -331,7 +375,7 @@
          bSuccess &= assertEqual(
              url, url,
              rtl::OUString(urlobj.GetMainURL(INetURLObject::NO_DECODE)));
-@@ -1542,7 +1542,7 @@ main()
+@@ -1561,7 +1561,7 @@ main()
  
          url = rtl::OUString(RTL_CONSTASCII_USTRINGPARAM("A-b.3:/%2f?x#y"));
          urlobj = INetURLObject(url, INET_PROT_CID);
@@ -340,7 +384,7 @@
          bSuccess &= assertEqual(
              url, rtl::OUString(RTL_CONSTASCII_USTRINGPARAM("a-b.3:/%2F?x#y")),
              rtl::OUString(urlobj.GetMainURL(INetURLObject::NO_DECODE)));
-@@ -1563,7 +1563,7 @@ main()
+@@ -1582,7 +1582,7 @@ main()
  
          url = rtl::OUString(RTL_CONSTASCII_USTRINGPARAM("foo:/"));
          urlobj = INetURLObject(url, INET_PROT_CID);
@@ -388,7 +432,7 @@
  using namespace webdav_ucp;
  using namespace com::sun::star;
  
-@@ -61,11 +64,18 @@ int DAVAuthListener_Impl::authenticate(
+@@ -63,11 +63,18 @@ int DAVAuthListener_Impl::authenticate(
      sal_Bool bAllowPersistentStoring,
      sal_Bool bCanUseSystemCredentials )
  {
@@ -1083,13 +1127,13 @@
 --- ucb/source/ucp/webdav/NeonSession.cxx
 +++ ucb/source/ucp/webdav/NeonSession.cxx
 @@ -65,6 +65,7 @@
- #ifndef _SIMPLECERTIFICATIONVALIDATIONREQUEST_HXX_
+ #include "rtl/ustrbuf.hxx"
+ #include "comphelper/sequence.hxx"
  #include "ucbhelper/simplecertificatevalidationrequest.hxx"
- #endif
-+#include <ucbhelper/cancelcommandexecution.hxx>
++#include "ucbhelper/cancelcommandexecution.hxx"
  
- #include <cppuhelper/bootstrap.hxx> 
- 
+ #include "DAVAuthListener.hxx"
+ #include "NeonTypes.hxx"
 @@ -153,6 +154,12 @@ static sal_uInt16 makeStatusCode( const
      return sal_uInt16( rStatusText.copy( 0, nPos ).toInt32() );
  }
@@ -1154,8 +1198,8 @@
                  {
                      theUserName = aUserInfo;
 @@ -564,6 +572,8 @@ extern "C" void NeonSession_PreSendReque
-     }
- }
+ 
+ } // namespace
  
 +NeonLockStore * NeonSession::s_aNeonLockStore = NULL;
 +
@@ -2046,7 +2090,7 @@
      sal_Bool bOpenFolder = ( ( rArg.Mode == ucb::OpenMode::ALL ) ||
                               ( rArg.Mode == ucb::OpenMode::FOLDERS ) ||
                               ( rArg.Mode == ucb::OpenMode::DOCUMENTS ) );
-@@ -2092,13 +2308,17 @@ uno::Any Content::open(
+@@ -2092,13 +2308,16 @@ uno::Any Content::open(
          }
      }
  
@@ -2058,8 +2102,9 @@
 +
 +       // Open document.
  
-         if ( ( rArg.Mode == ucb::OpenMode::DOCUMENT_SHARE_DENY_NONE ) ||
-              ( rArg.Mode == ucb::OpenMode::DOCUMENT_SHARE_DENY_WRITE ) )
+-    if ( ( rArg.Mode == ucb::OpenMode::DOCUMENT_SHARE_DENY_NONE ) ||
+-         ( rArg.Mode == ucb::OpenMode::DOCUMENT_SHARE_DENY_WRITE ) )
++    if ( rArg.Mode == ucb::OpenMode::DOCUMENT_SHARE_DENY_WRITE )
          {
 +#if OSL_DEBUG_LEVEL > 0
 +            fprintf( stderr, "WebDAV: rArg.Mode currently(?) unsupported\n" );
