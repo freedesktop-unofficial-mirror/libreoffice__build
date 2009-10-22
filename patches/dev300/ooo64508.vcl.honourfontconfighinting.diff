@@ -1,1017 +1,187 @@
-diff --git psprint/inc/psprint/fontmanager.hxx psprint/inc/psprint/fontmanager.hxx
-index bf4e51a..3e9bf61 100644
---- psprint/inc/psprint/fontmanager.hxx
-+++ psprint/inc/psprint/fontmanager.hxx
-@@ -142,6 +142,33 @@ enum type {
- };
- }
- 
-+namespace fchint
-+{
-+enum type {
-+    Nohint = 0,
-+    Slight = 1,
-+    Medium = 2,
-+    Full = 3
-+};
-+}
-+
-+struct FontConfigHints
-+{
-+    fcstatus::type m_eEmbeddedbitmap;
-+    fcstatus::type m_eAntialias;
-+    fcstatus::type m_eAutoHint;
-+    fcstatus::type m_eHinting;
-+    fchint::type m_eHintStyle;
-+
-+    FontConfigHints() :
-+        m_eEmbeddedbitmap( fcstatus::isunset ),
-+        m_eAntialias( fcstatus::isunset ),
-+        m_eAutoHint( fcstatus::isunset ),
-+        m_eHinting( fcstatus::isunset ),
-+        m_eHintStyle( fchint::Full )
-+        {}
-+};
-+
- /*
-  *  the difference between FastPrintFontInfo and PrintFontInfo
-  *  is that the information in FastPrintFontInfo can usually
-@@ -167,8 +194,6 @@ struct FastPrintFontInfo
-     weight::type            			m_eWeight;
-     pitch::type             			m_ePitch;
-     rtl_TextEncoding        			m_aEncoding;
--    fcstatus::type                      m_eEmbeddedbitmap;
--    fcstatus::type                      m_eAntialias;
- 
-     FastPrintFontInfo() :
-             m_nID( 0 ),
-@@ -178,9 +203,7 @@ struct FastPrintFontInfo
-             m_eWidth( width::Unknown ),
-             m_eWeight( weight::Unknown ),
-             m_ePitch( pitch::Unknown ),
--            m_aEncoding( RTL_TEXTENCODING_DONTKNOW ),
--            m_eEmbeddedbitmap( fcstatus::isunset ),
--            m_eAntialias( fcstatus::isunset )
-+            m_aEncoding( RTL_TEXTENCODING_DONTKNOW )
-     {}
- };
- 
-@@ -297,9 +320,6 @@ class PrintFontManager
-         bool										m_bHaveVerticalSubstitutedGlyphs;
-         bool                                        m_bUserOverride;
- 
--        fcstatus::type                              m_eEmbeddedbitmap;
--        fcstatus::type                              m_eAntialias;
+Caolan's fontconfig/cairo patches
+
+From: Thorsten Behrens <thb@openoffice.org>
+
+
+---
+
+ vcl/inc/vcl/glyphcache.hxx               |    3 ++-
+ vcl/inc/vcl/settings.hxx                 |    6 ++++++
+ vcl/source/app/settings.cxx              |    2 ++
+ vcl/source/window/winproc.cxx            |    6 ++++++
+ vcl/unx/gtk/gdi/salnativewidgets-gtk.cxx |    5 +++++
+ vcl/unx/gtk/window/gtkframe.cxx          |    3 +++
+ vcl/unx/source/gdi/salgdi3.cxx           |   11 ++++++++++-
+ 7 files changed, 34 insertions(+), 2 deletions(-)
+
+
+diff --git vcl/inc/vcl/glyphcache.hxx vcl/inc/vcl/glyphcache.hxx
+index 8420cce..901c8c3 100644
+--- vcl/inc/vcl/glyphcache.hxx
++++ vcl/inc/vcl/glyphcache.hxx
+@@ -99,8 +99,9 @@ private:
+     struct IFSD_Hash{ size_t operator()( const ImplFontSelectData& ) const; };
+     typedef ::std::hash_map<ImplFontSelectData,ServerFont*,IFSD_Hash,IFSD_Equal > FontList;
+     FontList                    maFontList;
 -
-         std::map< sal_Unicode, sal_Int32 >			m_aEncodingVector;
-         std::map< sal_Unicode, rtl::OString >		m_aNonEncoded;
- 
-@@ -742,6 +762,7 @@ public:
-     false else
-      */
-     bool matchFont( FastPrintFontInfo& rInfo, const com::sun::star::lang::Locale& rLocale );
-+    FontConfigHints getFontConfigHints(const FastPrintFontInfo& rInfo, int nSize);
- 
-     rtl::OUString Substitute( const rtl::OUString& rFontName, rtl::OUString& rMissingCodes, 
-         const rtl::OString& rLangAttrib, italic::type eItalic, weight::type eWeight, 
-diff --git psprint/source/fontmanager/fontcache.cxx psprint/source/fontmanager/fontcache.cxx
-index f9e192f..a245797 100644
---- psprint/source/fontmanager/fontcache.cxx
-+++ psprint/source/fontmanager/fontcache.cxx
-@@ -214,9 +214,9 @@ void FontCache::flush()
-                 aLine.Append( ';' );
-                 aLine.Append( (*it)->m_bUserOverride ? "1" : "0" );
-                 aLine.Append( ';' );
--                aLine.Append( ByteString::CreateFromInt32( (*it)->m_eEmbeddedbitmap ) );
-+                aLine.Append( ByteString::CreateFromInt32( 0 ) );
-                 aLine.Append( ';' );
--                aLine.Append( ByteString::CreateFromInt32( (*it)->m_eAntialias ) );
-+                aLine.Append( ByteString::CreateFromInt32( 0 ) );
- 
-                 switch( (*it)->m_eType )
-                 {
-@@ -426,9 +426,6 @@ void FontCache::read()
-                                     = atoi( pLine + nTokenPos[14] );
-                 pFont->m_bUserOverride
-                                     = (atoi( pLine + nTokenPos[15] ) != 0);
--                pFont->m_eEmbeddedbitmap
--                                    = (fcstatus::type)atoi(pLine+nTokenPos[16]);
--                pFont->m_eAntialias = (fcstatus::type)atoi(pLine+nTokenPos[17]);
-                 int nStyleTokenNr = 18;
-                 switch( eType )
-                 {
-@@ -560,8 +557,6 @@ void FontCache::copyPrintFont( const PrintFontManager::PrintFont* pFrom, PrintFo
-     pTo->m_nYMax			= pFrom->m_nYMax;
-     pTo->m_bHaveVerticalSubstitutedGlyphs = pFrom->m_bHaveVerticalSubstitutedGlyphs;
-     pTo->m_bUserOverride    = pFrom->m_bUserOverride;
--    pTo->m_eEmbeddedbitmap  = pFrom->m_eEmbeddedbitmap;
--    pTo->m_eAntialias       = pFrom->m_eAntialias;
- }
- 
- /*
-@@ -623,9 +618,7 @@ bool FontCache::equalsPrintFont( const PrintFontManager::PrintFont* pLeft, Print
-         pRight->m_nXMax				!= pLeft->m_nXMax			||
-         pRight->m_nYMax				!= pLeft->m_nYMax			||
-         pRight->m_bHaveVerticalSubstitutedGlyphs != pLeft->m_bHaveVerticalSubstitutedGlyphs ||
--        pRight->m_bUserOverride     != pLeft->m_bUserOverride   ||
--        pRight->m_eEmbeddedbitmap   != pLeft->m_eEmbeddedbitmap ||
--        pRight->m_eAntialias        != pLeft->m_eAntialias
-+        pRight->m_bUserOverride     != pLeft->m_bUserOverride
-         )
-         return false;
-     std::list< int >::const_iterator lit, rit;
-diff --git psprint/source/fontmanager/fontconfig.cxx psprint/source/fontmanager/fontconfig.cxx
-index 409b9ab..718b3f9 100644
---- psprint/source/fontmanager/fontconfig.cxx
-+++ psprint/source/fontmanager/fontconfig.cxx
-@@ -121,6 +121,7 @@ class FontCfgWrapper
-     FcBool			(*m_pFcConfigAppFontAddDir)(FcConfig*, const FcChar8*);
-     FcBool			(*m_pFcConfigSubstitute)(FcConfig*,FcPattern*,FcMatchKind);
-     FcBool			(*m_pFcPatternAddInteger)(FcPattern*,const char*,int);
-+    FcBool                    (*m_pFcPatternAddDouble)(FcPattern*,const char*,double);
-     FcBool                    (*m_pFcPatternAddBool)(FcPattern*,const char*,FcBool);
-     FcBool                    (*m_pFcPatternAddCharSet)(FcPattern*,const char*,const FcCharSet*);
-     FcBool			(*m_pFcPatternAddString)(FcPattern*,const char*,const FcChar8*);
-@@ -224,6 +225,8 @@ public:
-     { return m_pFcConfigSubstitute( pConfig, pPattern, eKind ); }
-     FcBool FcPatternAddInteger( FcPattern* pPattern, const char* pObject, int nValue )
-     { return m_pFcPatternAddInteger( pPattern, pObject, nValue ); }
-+    FcBool FcPatternAddDouble( FcPattern* pPattern, const char* pObject, double nValue )
-+    { return m_pFcPatternAddDouble( pPattern, pObject, nValue ); }
-     FcBool FcPatternAddString( FcPattern* pPattern, const char* pObject, const FcChar8* pString )
-     { return m_pFcPatternAddString( pPattern, pObject, pString ); }
-     FcBool FcPatternAddBool( FcPattern* pPattern, const char* pObject, bool nValue )
-@@ -324,6 +327,8 @@ FontCfgWrapper::FontCfgWrapper()
-         loadSymbol( "FcConfigSubstitute" );
-     m_pFcPatternAddInteger = (FcBool(*)(FcPattern*,const char*,int))
-         loadSymbol( "FcPatternAddInteger" );
-+    m_pFcPatternAddDouble = (FcBool(*)(FcPattern*,const char*,double))
-+        loadSymbol( "FcPatternAddDouble" );
-     m_pFcPatternAddBool = (FcBool(*)(FcPattern*,const char*,FcBool))
-         loadSymbol( "FcPatternAddBool" );
-     m_pFcPatternAddCharSet = (FcBool(*)(FcPattern*,const char*,const FcCharSet *))
-@@ -361,6 +366,7 @@ FontCfgWrapper::FontCfgWrapper()
-             m_pFcDefaultSubstitute			&&
-             m_pFcConfigSubstitute			&&
-             m_pFcPatternAddInteger			&&
-+            m_pFcPatternAddDouble                     &&
-             m_pFcPatternAddCharSet			&&
-             m_pFcPatternAddBool 			&&
-             m_pFcPatternAddString
-@@ -576,7 +582,7 @@ int PrintFontManager::countFontconfigFonts()
-             int weight = 0;
-             int spacing = 0;
-             int nCollectionEntry = -1;
--            FcBool outline = false, embitmap = true, antialias = true;
-+            FcBool outline = false;
-             
-             FcResult eFileRes	      = rWrapper.FcPatternGetString( pFSet->fonts[i], FC_FILE, 0, &file );
-             FcResult eFamilyRes       = lcl_FamilyFromPattern(rWrapper, pFSet->fonts[i], &family, rWrapper.m_aFontconfigNameToLocalized );
-@@ -586,8 +592,6 @@ int PrintFontManager::countFontconfigFonts()
-             FcResult eSpacRes	      = rWrapper.FcPatternGetInteger( pFSet->fonts[i], FC_SPACING, 0, &spacing );
-             FcResult eOutRes	      = rWrapper.FcPatternGetBool( pFSet->fonts[i], FC_OUTLINE, 0, &outline );
-             FcResult eIndexRes        = rWrapper.FcPatternGetInteger( pFSet->fonts[i], FC_INDEX, 0, &nCollectionEntry );
--            FcResult eEmbeddedBitmap  = rWrapper.FcPatternGetBool( pFSet->fonts[i], FC_EMBEDDED_BITMAP, 0, &embitmap );
--            FcResult eAntialias       = rWrapper.FcPatternGetBool( pFSet->fonts[i], FC_ANTIALIAS, 0, &antialias );
-             
-             if( eFileRes != FcResultMatch || eFamilyRes != FcResultMatch || eOutRes != FcResultMatch )
-                 continue;
-@@ -727,15 +731,6 @@ int PrintFontManager::countFontconfigFonts()
-                 {
-                     pUpdate->m_aStyleName = OStringToOUString( OString( (sal_Char*)style ), RTL_TEXTENCODING_UTF8 );
-                 }
--                if( eEmbeddedBitmap == FcResultMatch )
--                {
--                  pUpdate->m_eEmbeddedbitmap = embitmap ? fcstatus::istrue : fcstatus::isfalse;
--                }
--                if( eAntialias == FcResultMatch )
--                {
--                  pUpdate->m_eAntialias = antialias ? fcstatus::istrue : fcstatus::isfalse;
--                }
--
-                 
-                 // update font cache
-                 m_pFontCache->updateFontCacheEntry( pUpdate, false );
-@@ -972,6 +967,78 @@ rtl::OUString PrintFontManager::Substitute(const rtl::OUString& rFontName,
-     return aName;
- }
- 
-+#ifdef ENABLE_FONTCONFIG
-+static void lcl_InfoToPattern( const FastPrintFontInfo& rInfo, FontCfgWrapper& rWrapper, FcPattern* pPattern )
-+{
-+    OString aFamily = OUStringToOString( rInfo.m_aFamilyName, RTL_TEXTENCODING_UTF8 );
-+    if( aFamily.getLength() )
-+        rWrapper.FcPatternAddString( pPattern, FC_FAMILY, (FcChar8*)aFamily.getStr() );
-+
-+    addtopattern(rWrapper, pPattern, rInfo.m_eItalic, rInfo.m_eWeight, rInfo.m_eWidth, rInfo.m_ePitch);
-+
-+}
-+#endif
-+
-+
-+FontConfigHints PrintFontManager::getFontConfigHints( const FastPrintFontInfo& rInfo, int nSize)
-+{
-+    FontConfigHints aHints;
-+#ifdef ENABLE_FONTCONFIG
-+    FontCfgWrapper& rWrapper = FontCfgWrapper::get();
-+    if( ! rWrapper.isValid() )
-+        return aHints;
-+
-+    FcConfig* pConfig = rWrapper.FcConfigGetCurrent();
-+    FcPattern* pPattern = rWrapper.FcPatternCreate();
-+
-+    lcl_InfoToPattern( rInfo, rWrapper, pPattern );
-+    rWrapper.FcPatternAddDouble( pPattern, FC_PIXEL_SIZE, nSize);
-+
-+    FcBool embitmap = true, antialias = true, autohint = true, hinting = true;
-+    int hintstyle = FC_HINT_FULL;
-+
-+    rWrapper.FcConfigSubstitute( pConfig, pPattern, FcMatchFont );
-+    rWrapper.FcDefaultSubstitute( pPattern );
-+    FcResult eEmbeddedBitmap = rWrapper.FcPatternGetBool( pPattern, FC_EMBEDDED_BITMAP, 0, &embitmap );
-+    FcResult eAntialias = rWrapper.FcPatternGetBool( pPattern, FC_ANTIALIAS, 0, &antialias );
-+    FcResult eAutoHint = rWrapper.FcPatternGetBool( pPattern, FC_AUTOHINT, 0, &autohint );
-+    FcResult eHinting = rWrapper.FcPatternGetBool( pPattern, FC_HINTING, 0, &hinting );
-+    FcResult eHintStyle = rWrapper.FcPatternGetInteger( pPattern, FC_HINT_STYLE, 0, &hintstyle );
-+    rWrapper.FcPatternDestroy(pPattern);
-+ 
-+    if( eEmbeddedBitmap == FcResultMatch )
-+        aHints.m_eEmbeddedbitmap = embitmap ? fcstatus::istrue : fcstatus::isfalse;
-+    if( eAntialias == FcResultMatch )
-+        aHints.m_eAntialias = antialias ? fcstatus::istrue : fcstatus::isfalse;
-+    if( eAutoHint == FcResultMatch )
-+        aHints.m_eAutoHint = autohint ? fcstatus::istrue : fcstatus::isfalse;
-+    if( eHinting == FcResultMatch )
-+        aHints.m_eHinting = hinting ? fcstatus::istrue : fcstatus::isfalse;
-+    if (eHintStyle != FcResultMatch)
-+        aHints.m_eHintStyle = fchint::Full;
-+    else
-+    {
-+        switch (hintstyle)
-+        {
-+            case FC_HINT_NONE:
-+                aHints.m_eHintStyle = fchint::Nohint;
-+                break;
-+            case FC_HINT_SLIGHT:
-+                aHints.m_eHintStyle = fchint::Slight;
-+                break;
-+            case FC_HINT_MEDIUM:
-+                aHints.m_eHintStyle = fchint::Medium;
-+                break;
-+            case FC_HINT_FULL:
-+            default:
-+                aHints.m_eHintStyle = fchint::Full;
-+                break;
-+        }
-+    }
-+#endif
-+    return aHints;
-+}
-+
- bool PrintFontManager::matchFont( FastPrintFontInfo& rInfo, const com::sun::star::lang::Locale& rLocale )
- {
-     FontCfgWrapper& rWrapper = FontCfgWrapper::get();
-@@ -997,11 +1064,7 @@ bool PrintFontManager::matchFont( FastPrintFontInfo& rInfo, const com::sun::star
-     if( aLangAttrib.getLength() )
-         rWrapper.FcPatternAddString( pPattern, FC_LANG, (FcChar8*)aLangAttrib.getStr() );
- 
--    OString aFamily = OUStringToOString( rInfo.m_aFamilyName, RTL_TEXTENCODING_UTF8 );
--    if( aFamily.getLength() )
--        rWrapper.FcPatternAddString( pPattern, FC_FAMILY, (FcChar8*)aFamily.getStr() );
--
--    addtopattern(rWrapper, pPattern, rInfo.m_eItalic, rInfo.m_eWeight, rInfo.m_eWidth, rInfo.m_ePitch);
-+    lcl_InfoToPattern( rInfo, rWrapper, pPattern );
- 
-     rWrapper.FcConfigSubstitute( pConfig, pPattern, FcMatchPattern );
-     rWrapper.FcDefaultSubstitute( pPattern );
-diff --git psprint/source/fontmanager/fontmanager.cxx psprint/source/fontmanager/fontmanager.cxx
-index 4ba510f..2b1c911 100644
---- psprint/source/fontmanager/fontmanager.cxx
-+++ psprint/source/fontmanager/fontmanager.cxx
-@@ -355,9 +355,7 @@ PrintFontManager::PrintFont::PrintFont( fonttype::type eType ) :
-         m_nXMax( 0 ),
-         m_nYMax( 0 ),
-         m_bHaveVerticalSubstitutedGlyphs( false ),
--        m_bUserOverride( false ),
--        m_eEmbeddedbitmap( fcstatus::isunset ),
--        m_eAntialias( fcstatus::isunset )
-+        m_bUserOverride( false )
- {
- }
- 
-@@ -2751,8 +2749,6 @@ void PrintFontManager::fillPrintFontInfo( PrintFont* pFont, FastPrintFontInfo& r
-     rInfo.m_eWeight         = pFont->m_eWeight;
-     rInfo.m_ePitch          = pFont->m_ePitch;
-     rInfo.m_aEncoding       = pFont->m_aEncoding;
--    rInfo.m_eEmbeddedbitmap = pFont->m_eEmbeddedbitmap;
--    rInfo.m_eAntialias      = pFont->m_eAntialias;
-     rInfo.m_aAliases.clear();
-     for( ::std::list< int >::iterator it = pFont->m_aAliases.begin(); it != pFont->m_aAliases.end(); ++it )
-         rInfo.m_aAliases.push_back( m_pAtoms->getString( ATOM_FAMILYNAME, *it ) );
-@@ -3996,8 +3992,6 @@ bool PrintFontManager::readOverrideMetrics()
-         BuiltinFont* pFont = new BuiltinFont();
-         pFont->m_nDirectory = 0;
-         pFont->m_bUserOverride = false;
--        pFont->m_eEmbeddedbitmap = fcstatus::isunset;
--        pFont->m_eAntialias = fcstatus::isunset;
-         pFont->m_pMetrics = new PrintFontMetrics;
-         memset( pFont->m_pMetrics->m_aPages, 0xff, sizeof( pFont->m_pMetrics->m_aPages ) );
-         pFont->m_pMetrics->m_bKernPairsQueried = true;
-diff --git vcl/inc/vcl/impfont.hxx vcl/inc/vcl/impfont.hxx
-index 7e0d289..bb620ff 100644
---- vcl/inc/vcl/impfont.hxx
-+++ vcl/inc/vcl/impfont.hxx
-@@ -135,6 +135,42 @@ public:
-     bool    operator==( const ImplFontMetric& ) const;
- };
- 
-+// ------------------
-+// - ImplFontHints -
-+// ------------------
-+
-+class ImplFontHints
-+{
 +public:
-+    FontEmbeddedBitmap meEmbeddedBitmap; // whether the embedded bitmaps should be used
-+    FontAntiAlias      meAntiAlias;      // whether the font should be antialiased
-+    FontAutoHint       meAutoHint;       // whether the font should be autohinted
-+    FontHinting        meHinting;        // whether the font should be hinted
-+    FontHintStyle      meHintStyle;      // type of font hinting to be used
-+public:
-+    ImplFontHints() :
-+        meEmbeddedBitmap(EMBEDDEDBITMAP_DONTKNOW), 
-+        meAntiAlias(ANTIALIAS_DONTKNOW), 
-+        meAutoHint(AUTOHINT_DONTKNOW), 
-+        meHinting(HINTING_DONTKNOW), 
-+        meHintStyle(HINT_FULL)
-+    {}
-+    ImplFontHints(FontEmbeddedBitmap eEmbeddedBitmap, FontAntiAlias eAntiAlias, 
-+        FontAutoHint eAutoHint, FontHinting eHinting, FontHintStyle eHintStyle) :
-+        meEmbeddedBitmap(eEmbeddedBitmap), 
-+        meAntiAlias(eAntiAlias), 
-+        meAutoHint(eAutoHint), 
-+        meHinting(eHinting), 
-+        meHintStyle(eHintStyle)
-+    {}
-+    FontAutoHint GetUseAutoHint() const { return meAutoHint; }
-+    FontHintStyle GetHintStyle() const { return meHintStyle; }
-+    bool DontUseEmbeddedBitmaps() const { return meEmbeddedBitmap == EMBEDDEDBITMAP_FALSE; }
-+    bool DontUseAntiAlias() const { return meAntiAlias == ANTIALIAS_FALSE; }
-+    bool DontUseHinting() const { return (meHinting == HINTING_FALSE) || (GetHintStyle() == HINT_NONE); }
-+};
-+
-+
- // -------------------
- // - ImplFontCharMap -
- // -------------------
-diff --git vcl/inc/vcl/outdev.hxx vcl/inc/vcl/outdev.hxx
-index 2922de6..49828e2 100644
---- vcl/inc/vcl/outdev.hxx
-+++ vcl/inc/vcl/outdev.hxx
-@@ -77,6 +77,8 @@ class AlphaMask;
- class FontCharMap;
- class SalLayout;
- class ImplLayoutArgs;
-+class ImplFontHints;
-+class ImplFontAttributes;
- class VirtualDevice;
- 
- namespace com {
-@@ -549,6 +551,7 @@ public:
- 
-     SAL_DLLPRIVATE static FontEmphasisMark ImplGetEmphasisMarkStyle( const Font& rFont );
-     SAL_DLLPRIVATE static BOOL ImplIsUnderlineAbove( const Font& );
-+    SAL_DLLPRIVATE void ImplGetFontHints( const ImplFontAttributes& rFontAttributes, int nSize, ImplFontHints& rFontHints) const;
-     
-     
-     // tells whether this output device is RTL in an LTR UI or LTR in a RTL UI
-diff --git vcl/inc/vcl/outfont.hxx vcl/inc/vcl/outfont.hxx
-index e6e5eab..abc3df6 100644
---- vcl/inc/vcl/outfont.hxx
-+++ vcl/inc/vcl/outfont.hxx
-@@ -101,8 +101,6 @@ public: // TODO: create matching interface class
-     bool               IsDeviceFont() const      { return mbDevice; }
-     bool               IsEmbeddable() const      { return mbEmbeddable; }
-     bool               IsSubsettable() const     { return mbSubsettable; }
--    FontEmbeddedBitmap UseEmbeddedBitmap() const { return meEmbeddedBitmap; }
--    FontAntiAlias      UseAntiAlias() const      { return meAntiAlias; }
- 
- public: // TODO: hide members behind accessor methods
-     String             maMapNames;       // List of family name aliass separated with ';'
-@@ -111,8 +109,6 @@ public: // TODO: hide members behind accessor methods
-     bool               mbDevice;         // true: built in font
-     bool               mbSubsettable;    // true: a subset of the font can be created
-     bool               mbEmbeddable;     // true: the font can be embedded
--    FontEmbeddedBitmap meEmbeddedBitmap; // whether the embedded bitmaps should be used
--    FontAntiAlias      meAntiAlias;      // whether the font should be antialiased
+     ULONG                       mnMaxSize;      // max overall cache size in bytes
++private:
+     mutable ULONG               mnBytesUsed;
+     mutable long                mnLruIndex;
+     mutable int                 mnGlyphCount;
+diff --git vcl/inc/vcl/settings.hxx vcl/inc/vcl/settings.hxx
+index 319cdf7..128c643 100644
+--- vcl/inc/vcl/settings.hxx
++++ vcl/inc/vcl/settings.hxx
+@@ -439,6 +439,7 @@ private:
+     ULONG                           mnPreferredSymbolsStyle;
+     USHORT                          mnSkipDisabledInMenus;
+     Wallpaper                       maWorkspaceGradient;
++    const void*                     mpFontOptions;
  };
  
- // ----------------
-diff --git vcl/inc/vcl/salgdi.hxx vcl/inc/vcl/salgdi.hxx
-index 68e7745..2da80a1 100644
---- vcl/inc/vcl/salgdi.hxx
-+++ vcl/inc/vcl/salgdi.hxx
-@@ -227,6 +227,8 @@ public:
-     void                   ReleaseFonts() { SetFont( NULL, 0 ); }
-     // get the current font's metrics
-     virtual void			GetFontMetric( ImplFontMetricData* ) = 0;
-+    virtual void 			GetFontHints( const ImplFontAttributes& rFontAttributes, int nSize, ImplFontHints& rFontHints) const = 0;
-+
-     // get kernign pairs of the current font
-     // return only PairCount if (pKernPairs == NULL)
-     virtual ULONG			GetKernPairs( ULONG nPairs, ImplKernPairData* pKernPairs ) = 0;
-diff --git vcl/inc/vcl/vclenum.hxx vcl/inc/vcl/vclenum.hxx
-index ac76f8a..db6927d 100644
---- vcl/inc/vcl/vclenum.hxx
-+++ vcl/inc/vcl/vclenum.hxx
-@@ -284,6 +284,27 @@ enum FontAntiAlias { ANTIALIAS_DONTKNOW, ANTIALIAS_FALSE, ANTIALIAS_TRUE };
+ #define DEFAULT_WORKSPACE_GRADIENT_START_COLOR Color( 0xa3, 0xae, 0xb8 )
+@@ -756,6 +757,11 @@ public:
+     BOOL							GetSkipDisabledInMenus() const
+                                         { return (BOOL) mpData->mnSkipDisabledInMenus; }
  
- #endif
++    void                            SetCairoFontOptions( const void *pOptions )
++                                        { CopyData(); mpData->mpFontOptions = pOptions;  }
++    const void*                     GetCairoFontOptions() const
++                                        { return mpData->mpFontOptions; }
++
+     void                            SetAppFont( const Font& rFont )
+                                         { CopyData(); mpData->maAppFont = rFont; }
+     const Font&                     GetAppFont() const
+diff --git vcl/source/app/settings.cxx vcl/source/app/settings.cxx
+index 53eb67a..124133f 100644
+--- vcl/source/app/settings.cxx
++++ vcl/source/app/settings.cxx
+@@ -436,6 +436,7 @@ ImplStyleData::ImplStyleData()
+     mnToolbarIconSize			= STYLE_TOOLBAR_ICONSIZE_UNKNOWN;
+     mnSymbolsStyle				= STYLE_SYMBOLS_AUTO;
+     mnPreferredSymbolsStyle			= STYLE_SYMBOLS_AUTO;
++    mpFontOptions              = NULL;
  
-+#ifndef ENUM_FONTAUTOHINT_DECLARED
-+#define ENUM_FONTAUTOHINT_DECLARED
-+
-+enum FontAutoHint { AUTOHINT_DONTKNOW, AUTOHINT_FALSE, AUTOHINT_TRUE };
-+
-+#endif
-+
-+#ifndef ENUM_FONTHINTING_DECLARED
-+#define ENUM_FONTHINTING_DECLARED
-+
-+enum FontHinting { HINTING_DONTKNOW, HINTING_FALSE, HINTING_TRUE };
-+
-+#endif
-+
-+#ifndef ENUM_FONTHINTSTYLE_DECLARED
-+#define ENUM_FONTHINTSTYLE_DECLARED
-+
-+enum FontHintStyle { HINT_NONE, HINT_SLIGHT, HINT_MEDIUM, HINT_FULL };
-+
-+#endif
-+
- // ------------------------------------------------------------
- 
- #ifndef ENUM_KEYFUNCTYPE_DECLARED
-diff --git vcl/source/gdi/outdev3.cxx vcl/source/gdi/outdev3.cxx
-index a000d8f..43a38c0 100644
---- vcl/source/gdi/outdev3.cxx
-+++ vcl/source/gdi/outdev3.cxx
-@@ -7483,6 +7483,14 @@ BOOL OutputDevice::IsFontAvailable( const String& rFontName ) const
+     SetStandardStyles();
+ }
+@@ -542,6 +543,7 @@ ImplStyleData::ImplStyleData( const ImplStyleData& rData ) :
+     mnToolbarIconSize			= rData.mnToolbarIconSize;
+     mnSymbolsStyle				= rData.mnSymbolsStyle;
+     mnPreferredSymbolsStyle			= rData.mnPreferredSymbolsStyle;
++    mpFontOptions               = rData.mpFontOptions;
+ }
  
  // -----------------------------------------------------------------------
+diff --git vcl/source/window/winproc.cxx vcl/source/window/winproc.cxx
+index 2870687..44589c4 100644
+--- vcl/source/window/winproc.cxx
++++ vcl/source/window/winproc.cxx
+@@ -64,6 +64,7 @@
+ #include <vcl/dockwin.hxx>
+ #include <vcl/salgdi.hxx>
+ #include <vcl/menu.hxx>
++#include <vcl/glyphcache.hxx>
  
-+void OutputDevice::ImplGetFontHints( const ImplFontAttributes& rFontAttributes, int nSize, ImplFontHints &rHints) const
-+{
-+    if ( mpGraphics )
-+        mpGraphics->GetFontHints( rFontAttributes, nSize, rHints );
-+}
+ #include <dndlcon.hxx>
+ #include <com/sun/star/datatransfer/dnd/XDragSource.hpp>
+@@ -2227,9 +2228,14 @@ static void ImplHandleSalSettings( Window* pWindow, USHORT nEvent )
+                 nType = DATACHANGED_DISPLAY;
+                 break;
+             case SALEVENT_FONTCHANGED:
++            {
++                ULONG nOldSize = GlyphCache::GetInstance().mnMaxSize;
++                GlyphCache::GetInstance().mnMaxSize = 0;
+                 OutputDevice::ImplUpdateAllFontData( TRUE );
++                GlyphCache::GetInstance().mnMaxSize = nOldSize;
+                 nType = DATACHANGED_FONTS;
+                 break;
++            }
+             case SALEVENT_DATETIMECHANGED:
+                 nType = DATACHANGED_DATETIME;
+                 break;
+diff --git vcl/unx/gtk/gdi/salnativewidgets-gtk.cxx vcl/unx/gtk/gdi/salnativewidgets-gtk.cxx
+index 88e7f6a..0cdfb42 100644
+--- vcl/unx/gtk/gdi/salnativewidgets-gtk.cxx
++++ vcl/unx/gtk/gdi/salnativewidgets-gtk.cxx
+@@ -3465,6 +3465,11 @@ void GtkSalGraphics::updateSettings( AllSettings& rSettings )
+     //  FIXME: need some way of fetching toolbar icon size.
+ //	aStyleSet.SetToolbarIconSize( STYLE_TOOLBAR_ICONSIZE_SMALL );
+ 
++    const cairo_font_options_t *pNewOptions = 0;
++    if (GdkScreen* pScreen = gdk_display_get_screen( gdk_display_get_default(), m_nScreen ))
++        pNewOptions = gdk_screen_get_font_options(pScreen);
++    aStyleSet.SetCairoFontOptions( pNewOptions );
 +
-+// -----------------------------------------------------------------------
-+
- FontMetric OutputDevice::GetFontMetric() const
- {
-     DBG_TRACE( "OutputDevice::GetFontMetric()" );
-diff --git vcl/source/glyphs/gcach_ftyp.cxx vcl/source/glyphs/gcach_ftyp.cxx
-index 45ebf39..274b1bc 100644
---- vcl/source/glyphs/gcach_ftyp.cxx
-+++ vcl/source/glyphs/gcach_ftyp.cxx
-@@ -43,6 +43,7 @@
- #include <vcl/impfont.hxx>
- #include <vcl/bitmap.hxx>
- #include <vcl/bmpacc.hxx>
-+#include <vcl/virdev.hxx>
+     // finally update the collected settings
+     rSettings.SetStyleSettings( aStyleSet );
  
- #include <tools/poly.hxx>
- #include <basegfx/matrix/b2dhommatrix.hxx>
-@@ -623,9 +624,6 @@ long FreetypeManager::AddFontDir( const String& rUrlName )
-             aDFA.mbSubsettable= false;
-             aDFA.mbEmbeddable = false;
- 
--            aDFA.meEmbeddedBitmap = EMBEDDEDBITMAP_DONTKNOW;
--            aDFA.meAntiAlias = ANTIALIAS_DONTKNOW;
--
-             FT_Done_Face( aFaceFT );
-             AddFontFile( aCFileName, nFaceNum, ++mnNextFontId, aDFA, NULL );
-             ++nCount;
-@@ -705,6 +703,7 @@ FreetypeServerFont::FreetypeServerFont( const ImplFontSelectData& rFSD, FtFontIn
- :   ServerFont( rFSD ),
-     mnPrioEmbedded(nDefaultPrioEmbedded),
-     mnPrioAntiAlias(nDefaultPrioAntiAlias),
-+    mnPrioAutoHint(nDefaultPrioAutoHint),
-     mpFontInfo( pFI ),
-     maFaceFT( NULL ),
-     maSizeFT( NULL ),
-@@ -834,42 +833,69 @@ FreetypeServerFont::FreetypeServerFont( const ImplFontSelectData& rFSD, FtFontIn
- 
-     mbArtItalic = (rFSD.meItalic != ITALIC_NONE && pFI->GetFontAttributes().GetSlant() == ITALIC_NONE);
-     mbArtBold = (rFSD.meWeight > WEIGHT_MEDIUM && pFI->GetFontAttributes().GetWeight() <= WEIGHT_MEDIUM);
-+    mbUseGamma = false;
-+    if (mbArtBold)
+diff --git vcl/unx/gtk/window/gtkframe.cxx vcl/unx/gtk/window/gtkframe.cxx
+index 7f0417e..f4daf9c 100644
+--- vcl/unx/gtk/window/gtkframe.cxx
++++ vcl/unx/gtk/window/gtkframe.cxx
+@@ -3131,10 +3131,13 @@ void GtkSalFrame::signalStyleSet( GtkWidget*, GtkStyle* pPrevious, gpointer fram
+     // redraw itself to adjust to the new style
+     // where there IS no new style resulting in tremendous unnecessary flickering
+     if( pPrevious != NULL )
 +    {
-+	    //static const int TT_CODEPAGE_RANGE_874  = (1L << 16); // Thai
-+	    //static const int TT_CODEPAGE_RANGE_932  = (1L << 17); // JIS/Japan
-+	    //static const int TT_CODEPAGE_RANGE_936  = (1L << 18); // Chinese: Simplified
-+	    //static const int TT_CODEPAGE_RANGE_949  = (1L << 19); // Korean Wansung
-+	    //static const int TT_CODEPAGE_RANGE_950  = (1L << 20); // Chinese: Traditional
-+	    //static const int TT_CODEPAGE_RANGE_1361 = (1L << 21); // Korean Johab
-+	    static const int TT_CODEPAGE_RANGES1_CJKT = 0x3F0000; // all of the above
-+	    const TT_OS2* pOs2 = (const TT_OS2*)FT_Get_Sfnt_Table( maFaceFT, ft_sfnt_os2 );
-+	    if ((pOs2) && (pOs2->ulCodePageRange1 & TT_CODEPAGE_RANGES1_CJKT )
-+		&& rFSD.mnHeight < 20)
-+		mbUseGamma = true;
+         // signalStyleSet does NOT usually have the gdk lock
+         // so post user event to safely dispatch the SALEVENT_SETTINGSCHANGED
+         // note: settings changed for multiple frames is avoided in winproc.cxx ImplHandleSettings
+         pThis->getDisplay()->SendInternalEvent( pThis, NULL, SALEVENT_SETTINGSCHANGED );
++        pThis->getDisplay()->SendInternalEvent( pThis, NULL, SALEVENT_FONTCHANGED );
 +    }
  
--    //static const int TT_CODEPAGE_RANGE_874  = (1L << 16); // Thai
--    //static const int TT_CODEPAGE_RANGE_932  = (1L << 17); // JIS/Japan
--    //static const int TT_CODEPAGE_RANGE_936  = (1L << 18); // Chinese: Simplified
--    //static const int TT_CODEPAGE_RANGE_949  = (1L << 19); // Korean Wansung
--    //static const int TT_CODEPAGE_RANGE_950  = (1L << 20); // Chinese: Traditional
--    //static const int TT_CODEPAGE_RANGE_1361 = (1L << 21); // Korean Johab
--    static const int TT_CODEPAGE_RANGES1_CJKT = 0x3F0000; // all of the above
--    const TT_OS2* pOs2 = (const TT_OS2*)FT_Get_Sfnt_Table( maFaceFT, ft_sfnt_os2 );
--    if ((pOs2) && (pOs2->ulCodePageRange1 & TT_CODEPAGE_RANGES1_CJKT )
--        && rFSD.mnHeight < 20)
--        mbUseGamma = true;
--    else
--        mbUseGamma = false;
-+    ImplFontHints aHints;
-+    VirtualDevice vdev( 1 );
-+    vdev.ImplGetFontHints( pFI->GetFontAttributes(), mnWidth, aHints );
- 
--    if (mbUseGamma)
-+    FontAutoHint eHint = aHints.GetUseAutoHint();
-+    if (eHint == AUTOHINT_DONTKNOW)
-+        eHint = mbUseGamma ? AUTOHINT_TRUE : AUTOHINT_FALSE;
-+
-+    if (eHint == AUTOHINT_TRUE)
-         mnLoadFlags |= FT_LOAD_FORCE_AUTOHINT;
- 
-     if( (mnSin != 0) && (mnCos != 0) ) // hinting for 0/90/180/270 degrees only
-         mnLoadFlags |= FT_LOAD_NO_HINTING;
-     mnLoadFlags |= FT_LOAD_IGNORE_GLOBAL_ADVANCE_WIDTH; //#88334#
- 
--    if (mpFontInfo->DontUseAntiAlias())
--        mnPrioAntiAlias = 0;
--    if (mpFontInfo->DontUseEmbeddedBitmaps())
--        mnPrioEmbedded = 0;
-+    if (aHints.DontUseAntiAlias())
-+      mnPrioAntiAlias = 0;
-+    if (aHints.DontUseEmbeddedBitmaps())
-+      mnPrioEmbedded = 0;
-+    if (aHints.DontUseHinting())
-+      mnPrioAutoHint = 0;
- 
- #if (FTVERSION >= 2005) || defined(TT_CONFIG_OPTION_BYTECODE_INTERPRETER)
--    if( nDefaultPrioAutoHint <= 0 )
-+    if( mnPrioAutoHint <= 0 )
- #endif
-         mnLoadFlags |= FT_LOAD_NO_HINTING;
- 
--#ifdef FT_LOAD_TARGET_LIGHT
--    // enable "light hinting" if available
-+#if defined(FT_LOAD_TARGET_LIGHT) && defined(FT_LOAD_TARGET_NORMAL)
-     if( !(mnLoadFlags & FT_LOAD_NO_HINTING) && (nFTVERSION >= 2103))
--        mnLoadFlags |= FT_LOAD_TARGET_LIGHT;
-+    {
-+       mnLoadFlags |= FT_LOAD_TARGET_NORMAL;
-+       switch (aHints.GetHintStyle())
-+       {
-+           case HINT_NONE:
-+                mnLoadFlags |= FT_LOAD_NO_HINTING;
-+                break;
-+           case HINT_SLIGHT:
-+                mnLoadFlags |= FT_LOAD_TARGET_LIGHT;
-+                break;
-+           case HINT_MEDIUM:
-+                break;
-+           case HINT_FULL:
-+           default:
-+                break;
-+       }
-+    }
-+
- #endif
- 
-     if( ((mnCos != 0) && (mnSin != 0)) || (mnPrioEmbedded <= 0) )
-@@ -1353,11 +1379,11 @@ bool FreetypeServerFont::GetGlyphBitmap1( int nGlyphIndex, RawBitmap& rRawBitmap
- #if (FTVERSION >= 2002)
-     // for 0/90/180/270 degree fonts enable autohinting even if not advisable
-     // non-hinted and non-antialiased bitmaps just look too ugly
--    if( (mnCos==0 || mnSin==0) && (nDefaultPrioAutoHint > 0) )
-+    if( (mnCos==0 || mnSin==0) && (mnPrioAutoHint > 0) )
-         nLoadFlags &= ~FT_LOAD_NO_HINTING;
- #endif
- 
--    if( mnPrioEmbedded <= nDefaultPrioAutoHint )
-+    if( mnPrioEmbedded <= mnPrioAutoHint )
-         nLoadFlags |= FT_LOAD_NO_BITMAP;
- 
-     FT_Error rc = -1;
-@@ -1508,7 +1534,7 @@ bool FreetypeServerFont::GetGlyphBitmap8( int nGlyphIndex, RawBitmap& rRawBitmap
-     // autohinting in FT<=2.0.4 makes antialiased glyphs look worse
-     nLoadFlags |= FT_LOAD_NO_HINTING;
- #else
--    if( (nGlyphFlags & GF_UNHINTED) || (nDefaultPrioAutoHint < mnPrioAntiAlias) )
-+    if( (nGlyphFlags & GF_UNHINTED) || (mnPrioAutoHint < mnPrioAntiAlias) )
-         nLoadFlags |= FT_LOAD_NO_HINTING;
- #endif
- 
-diff --git vcl/source/glyphs/gcach_ftyp.hxx vcl/source/glyphs/gcach_ftyp.hxx
-index a7f96bf..9353a1e 100644
---- vcl/source/glyphs/gcach_ftyp.hxx
-+++ vcl/source/glyphs/gcach_ftyp.hxx
-@@ -88,10 +88,6 @@ public:
-     int                   GetFaceNum() const        { return mnFaceNum; }
-     int                   GetSynthetic() const      { return mnSynthetic; }
-     sal_IntPtr            GetFontId() const         { return mnFontId; }
--    bool                  DontUseAntiAlias() const  
--        { return maDevFontAttributes.UseAntiAlias() == ANTIALIAS_FALSE; }
--    bool                  DontUseEmbeddedBitmaps() const 
--        { return maDevFontAttributes.UseEmbeddedBitmap() == EMBEDDEDBITMAP_FALSE; }
-     bool                  IsSymbolFont() const      { return maDevFontAttributes.IsSymbolFont(); }
-     const ImplFontAttributes& GetFontAttributes() const { return maDevFontAttributes; }
- 
-@@ -216,6 +212,7 @@ private:
-     int                         mnWidth;
-     int                         mnPrioEmbedded;
-     int                         mnPrioAntiAlias;
-+    int                         mnPrioAutoHint;
-     FtFontInfo*                 mpFontInfo;
-     FT_Int                      mnLoadFlags;
-     double                      mfStretch;
-diff --git vcl/unx/headless/svpgdi.cxx vcl/unx/headless/svpgdi.cxx
-index 8c2c605..c54055d 100644
---- vcl/unx/headless/svpgdi.cxx
-+++ vcl/unx/headless/svpgdi.cxx
-@@ -571,3 +571,7 @@ bool SvpSalGraphics::supportsOperation( OutDevSupportType ) const
- {
-     return false;
- }
-+
-+void SvpSalGraphics::GetFontHints( const ImplFontAttributes& , int , ImplFontHints& ) const
-+{
-+}
-diff --git vcl/unx/headless/svpgdi.hxx vcl/unx/headless/svpgdi.hxx
-index f10ac54..5ee8cbd 100644
---- vcl/unx/headless/svpgdi.hxx
-+++ vcl/unx/headless/svpgdi.hxx
-@@ -168,6 +168,8 @@ public:
- 
-     virtual BOOL			drawEPS( long nX, long nY, long nWidth, long nHeight, void* pPtr, ULONG nSize );
- 
-+    virtual void			GetFontHints( const ImplFontAttributes& rFontAttributes,int nSize, ImplFontHints& rFontHints) const;
-+
-     virtual SystemGraphicsData GetGraphicsData() const;
- };
- 
-diff --git vcl/unx/headless/svppspgraphics.cxx vcl/unx/headless/svppspgraphics.cxx
-index a0e5aa5..ea98cf5 100644
---- vcl/unx/headless/svppspgraphics.cxx
-+++ vcl/unx/headless/svppspgraphics.cxx
-@@ -1189,32 +1189,6 @@ ImplDevFontAttributes PspGraphics::Info2DevFontAttributes( const psp::FastPrintF
-     aDFA.mePitch        = ToFontPitch (rInfo.m_ePitch);
-     aDFA.mbSymbolFlag   = (rInfo.m_aEncoding == RTL_TEXTENCODING_SYMBOL);
- 
--    switch (rInfo.m_eEmbeddedbitmap)
--    {
--        default:
--            aDFA.meEmbeddedBitmap = EMBEDDEDBITMAP_DONTKNOW;
--            break;
--        case psp::fcstatus::istrue:
--            aDFA.meEmbeddedBitmap = EMBEDDEDBITMAP_TRUE;
--            break;
--        case psp::fcstatus::isfalse:
--            aDFA.meEmbeddedBitmap = EMBEDDEDBITMAP_FALSE;
--            break;
--    }
--
--    switch (rInfo.m_eAntialias)
--    {
--        default:
--            aDFA.meAntiAlias = ANTIALIAS_DONTKNOW;
--            break;
--        case psp::fcstatus::istrue:
--            aDFA.meAntiAlias = ANTIALIAS_TRUE;
--            break;
--        case psp::fcstatus::isfalse:
--            aDFA.meAntiAlias = ANTIALIAS_FALSE;
--            break;
--    }
--
-     switch( rInfo.m_eType )
-     {
-         case psp::fonttype::Builtin:
-@@ -1405,3 +1379,7 @@ SystemGraphicsData PspGraphics::GetGraphicsData() const
-     return aRes;
- }
- 
-+void PspGraphics::GetFontHints( const ImplFontAttributes& , int , ImplFontHints& ) const
-+{
-+}
-+
-diff --git vcl/unx/headless/svppspgraphics.hxx vcl/unx/headless/svppspgraphics.hxx
-index f689523..05b43d1 100644
---- vcl/unx/headless/svppspgraphics.hxx
-+++ vcl/unx/headless/svppspgraphics.hxx
-@@ -196,6 +196,7 @@ public:
- 
-     virtual BOOL			drawEPS( long nX, long nY, long nWidth, long nHeight, void* pPtr, ULONG nSize );
-     virtual bool            filterText( const String& rOrigText, String& rNewText, xub_StrLen nIndex, xub_StrLen& rLen, xub_StrLen& rCutStart, xub_StrLen& rCutStop );
-+    virtual void			GetFontHints( const ImplFontAttributes& rFontAttributes,int nSize, ImplFontHints& rFontHints) const;
-     virtual SystemGraphicsData 		GetGraphicsData() const;
- };
- 
-diff --git vcl/unx/inc/pspgraphics.h vcl/unx/inc/pspgraphics.h
-index ccd7f27..12614aa 100644
---- vcl/unx/inc/pspgraphics.h
-+++ vcl/unx/inc/pspgraphics.h
-@@ -117,6 +117,7 @@ public:
-     virtual void			SetTextColor( SalColor nSalColor );
-     virtual USHORT          SetFont( ImplFontSelectData*, int nFallbackLevel );
-     virtual void			GetFontMetric( ImplFontMetricData* );
-+    virtual void                        GetFontHints( const ImplFontAttributes& rFontAttributes, int nSize, ImplFontHints& rFontHints) const;
-     virtual ULONG			GetKernPairs( ULONG nPairs, ImplKernPairData* pKernPairs );
-     virtual ImplFontCharMap* GetImplFontCharMap() const;
-     virtual void			GetDevFontList( ImplDevFontList* );
-diff --git vcl/unx/inc/salgdi.h vcl/unx/inc/salgdi.h
-index 2950f6f..62bc5b8 100644
---- vcl/unx/inc/salgdi.h
-+++ vcl/unx/inc/salgdi.h
-@@ -250,6 +250,7 @@ public:
-     virtual void			SetTextColor( SalColor nSalColor );
-     virtual USHORT         SetFont( ImplFontSelectData*, int nFallbackLevel );
-     virtual void			GetFontMetric( ImplFontMetricData* );
-+    virtual void                        GetFontHints( const ImplFontAttributes& rFontAttributes, int nSize, ImplFontHints& rFontHints) const;
-     virtual ULONG			GetKernPairs( ULONG nPairs, ImplKernPairData* pKernPairs );
-     virtual ImplFontCharMap* GetImplFontCharMap() const;
-     virtual void			GetDevFontList( ImplDevFontList* );
-diff --git vcl/unx/source/gdi/pspgraphics.cxx vcl/unx/source/gdi/pspgraphics.cxx
-index 1290764..11f8382 100644
---- vcl/unx/source/gdi/pspgraphics.cxx
-+++ vcl/unx/source/gdi/pspgraphics.cxx
-@@ -858,6 +858,10 @@ void PspGraphics::GetDevFontSubstList( OutputDevice* pOutDev )
-     }
- }
- 
-+void PspGraphics::GetFontHints( const ImplFontAttributes& rFontAttributes, int nSize, ImplFontHints& rFontHints) const
-+{
-+}
-+
- void PspGraphics::GetFontMetric( ImplFontMetricData *pMetric )
- {
-     const psp::PrintFontManager& rMgr = psp::PrintFontManager::get();
-@@ -1270,32 +1274,6 @@ ImplDevFontAttributes PspGraphics::Info2DevFontAttributes( const psp::FastPrintF
-     aDFA.mePitch        = ToFontPitch (rInfo.m_ePitch);
-     aDFA.mbSymbolFlag   = (rInfo.m_aEncoding == RTL_TEXTENCODING_SYMBOL);
- 
--    switch (rInfo.m_eEmbeddedbitmap)
--    {
--        default:
--            aDFA.meEmbeddedBitmap = EMBEDDEDBITMAP_DONTKNOW;
--            break;
--        case psp::fcstatus::istrue:
--            aDFA.meEmbeddedBitmap = EMBEDDEDBITMAP_TRUE;
--            break;
--        case psp::fcstatus::isfalse:
--            aDFA.meEmbeddedBitmap = EMBEDDEDBITMAP_FALSE;
--            break;
--    }
--
--    switch (rInfo.m_eAntialias)
--    {
--        default:
--            aDFA.meAntiAlias = ANTIALIAS_DONTKNOW;
--            break;
--        case psp::fcstatus::istrue:
--            aDFA.meAntiAlias = ANTIALIAS_TRUE;
--            break;
--        case psp::fcstatus::isfalse:
--            aDFA.meAntiAlias = ANTIALIAS_FALSE;
--            break;
--    }
--
-     switch( rInfo.m_eType )
-     {
-         case psp::fonttype::Builtin:
+     /* #i64117# gtk sets a nice background pixmap
+     *  but we actually don't really want that, so save
 diff --git vcl/unx/source/gdi/salgdi3.cxx vcl/unx/source/gdi/salgdi3.cxx
-index a40fc78..c247e78 100644
+index 1757f80..bd1539e 100644
 --- vcl/unx/source/gdi/salgdi3.cxx
 +++ vcl/unx/source/gdi/salgdi3.cxx
-@@ -1613,6 +1613,174 @@ void X11SalGraphics::GetDevFontSubstList( OutputDevice* )
+@@ -743,6 +743,7 @@ private:
+     void (*mp_set_font_matrix)(cairo_t *, const cairo_matrix_t *);
+     void (*mp_show_glyphs)(cairo_t *, const cairo_glyph_t *, int );
+     void (*mp_set_source_rgb)(cairo_t *, double , double , double );
++    void (*mp_set_font_options)(cairo_t *, const void *);
  
- // ----------------------------------------------------------------------------
+     bool canEmbolden() const { return false; }
  
-+void X11SalGraphics::GetFontHints( const ImplFontAttributes& rFontAttributes, int nSize, ImplFontHints& rFontHints) const
-+{
-+    psp::FastPrintFontInfo aInfo;
-+    // set family name
-+    aInfo.m_aFamilyName = rFontAttributes.GetFamilyName();
-+    // set italic
-+    switch( rFontAttributes.GetSlant() )
-+    {
-+        case ITALIC_NONE:
-+            aInfo.m_eItalic = psp::italic::Upright;
-+            break;
-+        case ITALIC_NORMAL:
-+            aInfo.m_eItalic = psp::italic::Italic;
-+            break;
-+        case ITALIC_OBLIQUE:
-+            aInfo.m_eItalic = psp::italic::Oblique;
-+            break;
-+        default:
-+            aInfo.m_eItalic = psp::italic::Unknown;
-+            break;
-+
-+    }
-+    // set weight
-+    switch( rFontAttributes.GetWeight() )
-+    {
-+        case WEIGHT_THIN:
-+            aInfo.m_eWeight = psp::weight::Thin;
-+            break;
-+        case WEIGHT_ULTRALIGHT:
-+            aInfo.m_eWeight = psp::weight::UltraLight;
-+            break;
-+        case WEIGHT_LIGHT:
-+            aInfo.m_eWeight = psp::weight::Light;
-+            break;
-+        case WEIGHT_SEMILIGHT:
-+            aInfo.m_eWeight = psp::weight::SemiLight;
-+            break;
-+        case WEIGHT_NORMAL:
-+            aInfo.m_eWeight = psp::weight::Normal;
-+            break;
-+        case WEIGHT_MEDIUM:
-+            aInfo.m_eWeight = psp::weight::Medium;
-+            break;
-+        case WEIGHT_SEMIBOLD:
-+            aInfo.m_eWeight = psp::weight::SemiBold;
-+            break;
-+        case WEIGHT_BOLD:
-+            aInfo.m_eWeight = psp::weight::Bold;
-+            break;
-+        case WEIGHT_ULTRABOLD:
-+            aInfo.m_eWeight = psp::weight::UltraBold;
-+            break;
-+        case WEIGHT_BLACK:
-+            aInfo.m_eWeight = psp::weight::Black;
-+            break;
-+        default:
-+            aInfo.m_eWeight = psp::weight::Unknown;
-+            break;
-+    }
-+    // set width
-+    switch( rFontAttributes.GetWidthType() )
-+    {
-+        case WIDTH_ULTRA_CONDENSED:
-+            aInfo.m_eWidth = psp::width::UltraCondensed;
-+            break;
-+        case WIDTH_EXTRA_CONDENSED:
-+            aInfo.m_eWidth = psp::width::ExtraCondensed;
-+            break;
-+        case WIDTH_CONDENSED:
-+            aInfo.m_eWidth = psp::width::Condensed;
-+            break;
-+        case WIDTH_SEMI_CONDENSED:
-+            aInfo.m_eWidth = psp::width::SemiCondensed;
-+            break;
-+        case WIDTH_NORMAL:
-+            aInfo.m_eWidth = psp::width::Normal;
-+            break;
-+        case WIDTH_SEMI_EXPANDED:
-+            aInfo.m_eWidth = psp::width::SemiExpanded;
-+            break;
-+        case WIDTH_EXPANDED:
-+            aInfo.m_eWidth = psp::width::Expanded;
-+            break;
-+        case WIDTH_EXTRA_EXPANDED:
-+            aInfo.m_eWidth = psp::width::ExtraExpanded;
-+            break;
-+        case WIDTH_ULTRA_EXPANDED:
-+            aInfo.m_eWidth = psp::width::UltraExpanded;
-+            break;
-+        default:
-+            aInfo.m_eWidth = psp::width::Unknown;
-+            break;
-+    }
-+
-+    psp::FontConfigHints aHints(psp::PrintFontManager::get().getFontConfigHints(aInfo, nSize));
-+
-+    switch (aHints.m_eEmbeddedbitmap)
-+    {
-+        default: 
-+            rFontHints.meEmbeddedBitmap = EMBEDDEDBITMAP_DONTKNOW;
-+            break;
-+        case psp::fcstatus::istrue: 
-+            rFontHints.meEmbeddedBitmap = EMBEDDEDBITMAP_TRUE;
-+            break;
-+        case psp::fcstatus::isfalse: 
-+            rFontHints.meEmbeddedBitmap = EMBEDDEDBITMAP_FALSE;
-+            break;
-+    }
-+
-+    switch (aHints.m_eAntialias)
-+    {
-+        default: 
-+            rFontHints.meAntiAlias = ANTIALIAS_DONTKNOW;
-+            break;
-+        case psp::fcstatus::istrue: 
-+            rFontHints.meAntiAlias = ANTIALIAS_TRUE;
-+            break;
-+        case psp::fcstatus::isfalse: 
-+            rFontHints.meAntiAlias = ANTIALIAS_FALSE;
-+            break;
-+    }
-+
-+    switch (aHints.m_eAutoHint)
-+    {
-+        default: 
-+            rFontHints.meAutoHint = AUTOHINT_DONTKNOW;
-+            break;
-+        case psp::fcstatus::istrue: 
-+            rFontHints.meAutoHint = AUTOHINT_TRUE;
-+            break;
-+        case psp::fcstatus::isfalse: 
-+            rFontHints.meAutoHint = AUTOHINT_FALSE;
-+            break;
-+    }
-+
-+    switch (aHints.m_eHinting)
-+    {
-+        default: 
-+            rFontHints.meHinting = HINTING_DONTKNOW;
-+            break;
-+        case psp::fcstatus::istrue: 
-+            rFontHints.meHinting = HINTING_TRUE;
-+            break;
-+        case psp::fcstatus::isfalse: 
-+            rFontHints.meHinting = HINTING_FALSE;
-+            break;
-+    }
-+
-+    switch (aHints.m_eHintStyle)
-+    {
-+        case psp::fchint::Nohint: 
-+            rFontHints.meHintStyle = HINT_NONE;
-+            break;
-+        case psp::fchint::Slight: 
-+            rFontHints.meHintStyle = HINT_SLIGHT;
-+            break;
-+        case psp::fchint::Medium: 
-+            rFontHints.meHintStyle = HINT_MEDIUM;
-+            break;
-+        default: 
-+        case psp::fchint::Full: 
-+            rFontHints.meHintStyle = HINT_FULL;
-+            break;
-+    }
-+}
-+
-+// ----------------------------------------------------------------------------
-+
- void
- X11SalGraphics::GetFontMetric( ImplFontMetricData *pMetric )
- {
-diff --git vcl/unx/source/gdi/xlfd_extd.cxx vcl/unx/source/gdi/xlfd_extd.cxx
-index 2e51e9d..834123e 100644
---- vcl/unx/source/gdi/xlfd_extd.cxx
-+++ vcl/unx/source/gdi/xlfd_extd.cxx
-@@ -105,9 +105,6 @@ ExtendedXlfd::ExtendedXlfd( bool bScalable )
-     mbSubsettable  = false;
-     mbEmbeddable   = false;
+@@ -778,6 +779,8 @@ public:
+         { (*mp_show_glyphs)(cr, glyphs, no_glyphs); }
+     void set_source_rgb(cairo_t *cr, double red, double green, double blue)
+         { (*mp_set_source_rgb)(cr, red, green, blue); }
++    void set_font_options(cairo_t *cr, const void *options)
++        { (*mp_set_font_options)(cr, options); }
+ };
  
--    meEmbeddedBitmap = EMBEDDEDBITMAP_DONTKNOW;
--    meAntiAlias = ANTIALIAS_DONTKNOW;
--
-     mnQuality      = -1;
- }
+ static CairoWrapper* pCairoInstance = NULL;
+@@ -847,6 +850,8 @@ CairoWrapper::CairoWrapper()
+         osl_getAsciiFunctionSymbol( mpCairoLib, "cairo_show_glyphs" );
+     mp_set_source_rgb = (void (*)(cairo_t *, double , double , double ))
+         osl_getAsciiFunctionSymbol( mpCairoLib, "cairo_set_source_rgb" );
++    mp_set_font_options = (void (*)(cairo_t *, const void *options ))
++        osl_getAsciiFunctionSymbol( mpCairoLib, "cairo_set_font_options" );
  
-diff --git vcl/win/inc/salgdi.h vcl/win/inc/salgdi.h
-index f2c4926..d090462 100644
---- vcl/win/inc/salgdi.h
-+++ vcl/win/inc/salgdi.h
-@@ -274,6 +274,7 @@ public:
-     virtual USHORT         SetFont( ImplFontSelectData*, int nFallbackLevel );
-     // get the current font's etrics
-     virtual void			GetFontMetric( ImplFontMetricData* );
-+    virtual void                        GetFontHints( const ImplFontAttributes& rFontAttributes, int nHints, ImplFontHints& rFontHints);
-     // get kernign pairs of the current font
-     // return only PairCount if (pKernPairs == NULL)
-     virtual ULONG			GetKernPairs( ULONG nPairs, ImplKernPairData* pKernPairs );
-diff --git vcl/win/source/gdi/salgdi3.cxx vcl/win/source/gdi/salgdi3.cxx
-index 9be0cc0..ccb4aba 100644
---- vcl/win/source/gdi/salgdi3.cxx
-+++ vcl/win/source/gdi/salgdi3.cxx
-@@ -1442,6 +1442,12 @@ USHORT WinSalGraphics::SetFont( ImplFontSelectData* pFont, int nFallbackLevel )
+     if( !( 
+             mp_xlib_surface_create_with_xrender_format &&
+@@ -863,7 +868,8 @@ CairoWrapper::CairoWrapper()
+             mp_matrix_rotate &&
+             mp_set_font_matrix &&
+             mp_show_glyphs &&
+-            mp_set_source_rgb
++            mp_set_source_rgb &&
++            mp_set_font_options
+         ) )
+     {
+         osl_unloadModule( mpCairoLib );
+@@ -971,6 +977,9 @@ void X11SalGraphics::DrawCairoAAFontString( const ServerFontLayout& rLayout )
+     cairo_t *cr = rCairo.create(surface);
+     rCairo.surface_destroy(surface);
  
- // -----------------------------------------------------------------------
- 
-+void WinSalGraphics::GetFontHints( const ImplFontAttributes& rFontAttributes, int nSize, ImplFontHints& rFontHints)
-+{
-+}
++    if (const void *pOptions = Application::GetSettings().GetStyleSettings().GetCairoFontOptions())
++        rCairo.set_font_options(cr, pOptions);
 +
-+// -----------------------------------------------------------------------
-+
- void WinSalGraphics::GetFontMetric( ImplFontMetricData* pMetric )
- {
-     if ( aSalShlData.mbWNT )
+     if( pClipRegion_ && !XEmptyRegion( pClipRegion_ ) )
+     {
+     for (long i = 0; i < pClipRegion_->numRects; ++i)
