@@ -1,0 +1,275 @@
+diff --git oovbaapi/ooo/vba/excel/XWorksheet.idl oovbaapi/ooo/vba/excel/XWorksheet.idl
+index 1f07f9f..4e037a5 100644
+--- oovbaapi/ooo/vba/excel/XWorksheet.idl
++++ oovbaapi/ooo/vba/excel/XWorksheet.idl
+@@ -64,6 +64,7 @@ interface XWorksheet
+ 	interface ::com::sun::star::container::XNamed;
+ 
+     [attribute] boolean Visible; 
++    [attribute] boolean AutoFilterMode; 
+     [attribute, readonly] long StandardHeight;
+     [attribute, readonly] long StandardWidth;
+     [attribute, readonly] boolean ProtectionMode;
+diff --git sc/source/ui/vba/excelvbahelper.cxx sc/source/ui/vba/excelvbahelper.cxx
+index 49d1e34..9cb844a 100644
+--- sc/source/ui/vba/excelvbahelper.cxx
++++ sc/source/ui/vba/excelvbahelper.cxx
+@@ -44,6 +44,55 @@ namespace vba
+ {
+ namespace excel
+ {
++
++
++uno::Reference< sheet::XDatabaseRanges > 
++GetDataBaseRanges( ScDocShell* pShell ) throw ( uno::RuntimeException )
++{
++    uno::Reference< frame::XModel > xModel;
++    if ( pShell )
++        xModel.set( pShell->GetModel(), uno::UNO_QUERY_THROW );
++    uno::Reference< beans::XPropertySet > xModelProps( xModel, uno::UNO_QUERY_THROW );
++    uno::Reference< sheet::XDatabaseRanges > xDBRanges( xModelProps->getPropertyValue( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM("DatabaseRanges") ) ), uno::UNO_QUERY_THROW );
++    return xDBRanges;
++}
++
++// returns the XDatabaseRange for the autofilter on sheet (nSheet)
++// also populates sName with the name of range
++uno::Reference< sheet::XDatabaseRange > 
++GetAutoFiltRange( ScDocShell* pShell, sal_Int16 nSheet, rtl::OUString& sName ) throw ( uno::RuntimeException )
++{
++    uno::Reference< container::XIndexAccess > xIndexAccess( GetDataBaseRanges( pShell ), uno::UNO_QUERY_THROW );
++    uno::Reference< sheet::XDatabaseRange > xDataBaseRange;
++    table::CellRangeAddress dbAddress;
++    for ( sal_Int32 index=0; index < xIndexAccess->getCount(); ++index )
++    {
++        uno::Reference< sheet::XDatabaseRange > xDBRange( xIndexAccess->getByIndex( index ), uno::UNO_QUERY_THROW );
++        uno::Reference< container::XNamed > xNamed( xDBRange, uno::UNO_QUERY_THROW ); 
++        // autofilters work weirdly with openoffice, unnamed is the default 
++        // named range which is used to create an autofilter, but
++        // its also possible that another name could be used
++        //     this also causes problems when an autofilter is created on
++        //     another sheet
++        // ( but.. you can use any named range )
++        dbAddress = xDBRange->getDataArea();
++        if ( dbAddress.Sheet == nSheet )
++        {
++            sal_Bool bHasAuto = sal_False;
++            uno::Reference< beans::XPropertySet > xProps( xDBRange, uno::UNO_QUERY_THROW );
++            xProps->getPropertyValue( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM("AutoFilter") ) ) >>= bHasAuto;
++            if ( bHasAuto )
++            {
++                sName = xNamed->getName();	
++                xDataBaseRange=xDBRange;
++                break;
++            }
++        }
++    }
++    return xDataBaseRange;
++} 
++
++
+ void implSetZoom( const uno::Reference< frame::XModel >& xModel, sal_Int16 nZoom, std::vector< SCTAB >& nTabs )
+ {
+     ScTabViewShell* pViewSh = excel::getBestViewShell( xModel );
+@@ -217,6 +266,7 @@ ScVbaCellRangeAccess::GetDataSet( ScCellRangeObj* pRangeObj )
+ 	return pDataSet;
+ 	
+ }
++
+ } //excel
+ } //vba 
+ } //ooo 
+diff --git sc/source/ui/vba/excelvbahelper.hxx sc/source/ui/vba/excelvbahelper.hxx
+index 9c95501..d97721e 100644
+--- sc/source/ui/vba/excelvbahelper.hxx
++++ sc/source/ui/vba/excelvbahelper.hxx
+@@ -32,6 +32,8 @@
+ 
+ #include<vbahelper/vbahelper.hxx>
+ #include <docsh.hxx>
++#include <com/sun/star/sheet/XDatabaseRanges.hpp>
++#include <com/sun/star/sheet/XDatabaseRange.hpp>
+ 
+ class ScCellRangeObj;
+ 
+@@ -51,6 +53,10 @@ namespace ooo
+ 		ScDocShell* getDocShell( const css::uno::Reference< css::frame::XModel>& xModel ) ;
+ 		ScTabViewShell* getCurrentBestViewShell( const css::uno::Reference< css::uno::XComponentContext >& xContext );
+ 		SfxViewFrame* getViewFrame( const css::uno::Reference< css::frame::XModel >& xModel );
++
++                css::uno::Reference< css::sheet::XDatabaseRanges > GetDataBaseRanges( ScDocShell* pShell ) throw ( css::uno::RuntimeException );
++
++                css::uno::Reference< css::sheet::XDatabaseRange > GetAutoFiltRange( ScDocShell* pShell, sal_Int16 nSheet, rtl::OUString& sName ) throw ( css::uno::RuntimeException );
+             class ScVbaCellRangeAccess
+             {
+             public:
+diff --git sc/source/ui/vba/vbarange.cxx sc/source/ui/vba/vbarange.cxx
+index 23c9598..4f68d10 100644
+--- sc/source/ui/vba/vbarange.cxx
++++ sc/source/ui/vba/vbarange.cxx
+@@ -3943,56 +3943,12 @@ ScVbaRange::ApplicationRange( const uno::Reference< uno::XComponentContext >& xC
+     return pRange->Range( Cell1, Cell2, true ); 
+ }
+ 
+-uno::Reference< sheet::XDatabaseRanges > 
+-lcl_GetDataBaseRanges( ScDocShell* pShell ) throw ( uno::RuntimeException )
+-{
+-    uno::Reference< frame::XModel > xModel;
+-    if ( pShell )
+-        xModel.set( pShell->GetModel(), uno::UNO_QUERY_THROW );
+-    uno::Reference< beans::XPropertySet > xModelProps( xModel, uno::UNO_QUERY_THROW );
+-    uno::Reference< sheet::XDatabaseRanges > xDBRanges( xModelProps->getPropertyValue( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM("DatabaseRanges") ) ), uno::UNO_QUERY_THROW );
+-    return xDBRanges;	
+-}
+-// returns the XDatabaseRange for the autofilter on sheet (nSheet)
+-// also populates sName with the name of range
+-uno::Reference< sheet::XDatabaseRange > 
+-lcl_GetAutoFiltRange( ScDocShell* pShell, sal_Int16 nSheet, rtl::OUString& sName )
+-{
+-    uno::Reference< container::XIndexAccess > xIndexAccess( lcl_GetDataBaseRanges( pShell ), uno::UNO_QUERY_THROW );
+-    uno::Reference< sheet::XDatabaseRange > xDataBaseRange;
+-    table::CellRangeAddress dbAddress;
+-    for ( sal_Int32 index=0; index < xIndexAccess->getCount(); ++index )
+-    {
+-        uno::Reference< sheet::XDatabaseRange > xDBRange( xIndexAccess->getByIndex( index ), uno::UNO_QUERY_THROW );
+-        uno::Reference< container::XNamed > xNamed( xDBRange, uno::UNO_QUERY_THROW ); 
+-        // autofilters work weirdly with openoffice, unnamed is the default 
+-        // named range which is used to create an autofilter, but
+-        // its also possible that another name could be used
+-        //     this also causes problems when an autofilter is created on
+-        //     another sheet
+-        // ( but.. you can use any named range )
+-        dbAddress = xDBRange->getDataArea();
+-        if ( dbAddress.Sheet == nSheet )
+-        {
+-            sal_Bool bHasAuto = sal_False;
+-            uno::Reference< beans::XPropertySet > xProps( xDBRange, uno::UNO_QUERY_THROW );
+-            xProps->getPropertyValue( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM("AutoFilter") ) ) >>= bHasAuto;
+-            if ( bHasAuto )
+-            {
+-                sName = xNamed->getName();	
+-                xDataBaseRange=xDBRange;
+-                break;
+-            }
+-        }
+-    }
+-    return xDataBaseRange;
+-} 
+ 
+ // Helper functions for AutoFilter
+ ScDBData* lcl_GetDBData_Impl( ScDocShell* pDocShell, sal_Int16 nSheet )
+ {
+     rtl::OUString sName;
+-    lcl_GetAutoFiltRange( pDocShell, nSheet, sName );
++    excel::GetAutoFiltRange( pDocShell, nSheet, sName );
+     OSL_TRACE("lcl_GetDBData_Impl got autofilter range %s for sheet %d",
+         rtl::OUStringToOString( sName, RTL_TEXTENCODING_UTF8 ).getStr() , nSheet );
+     ScDBData* pRet = NULL;
+@@ -4159,7 +4115,7 @@ ScVbaRange::AutoFilter( const uno::Any& Field, const uno::Any& Criteria1, const
+     ScDocShell* pShell = getScDocShell();
+     sal_Bool bHasAuto = sal_False;	
+     rtl::OUString sAutofiltRangeName;
+-    uno::Reference< sheet::XDatabaseRange > xDataBaseRange = lcl_GetAutoFiltRange( pShell, nSheet, sAutofiltRangeName );
++    uno::Reference< sheet::XDatabaseRange > xDataBaseRange = excel::GetAutoFiltRange( pShell, nSheet, sAutofiltRangeName );
+     if ( xDataBaseRange.is() )
+         bHasAuto = true;	
+ 
+@@ -4192,7 +4148,7 @@ ScVbaRange::AutoFilter( const uno::Any& Field, const uno::Any& Criteria1, const
+             autoFiltAddress = multiCellRange.getCellRangeAddressable()->getRangeAddress();
+         }
+ 
+-        uno::Reference< sheet::XDatabaseRanges > xDBRanges = lcl_GetDataBaseRanges( pShell );
++        uno::Reference< sheet::XDatabaseRanges > xDBRanges = excel::GetDataBaseRanges( pShell );
+         if ( xDBRanges.is() )
+         {
+             rtl::OUString sGenName( RTL_CONSTASCII_USTRINGPARAM("VBA_Autofilter_") );
+diff --git sc/source/ui/vba/vbawindow.cxx sc/source/ui/vba/vbawindow.cxx
+index c05b314..a612f59 100644
+--- sc/source/ui/vba/vbawindow.cxx
++++ sc/source/ui/vba/vbawindow.cxx
+@@ -59,7 +59,7 @@ using namespace ::ooo::vba;
+ using namespace ::ooo::vba::excel::XlWindowState;
+ 
+ // nameExists defined in vbaworksheet.cxx
+-bool nameExists( uno::Reference <sheet::XSpreadsheetDocument>& xSpreadDoc, ::rtl::OUString & name, SCTAB& nTab ) throw ( lang::IllegalArgumentException );
++bool nameExists( const uno::Reference <sheet::XSpreadsheetDocument>& xSpreadDoc, const ::rtl::OUString & name, SCTAB& nTab ) throw ( lang::IllegalArgumentException );
+ 
+ typedef  std::hash_map< rtl::OUString,
+ SCTAB, ::rtl::OUStringHash,
+diff --git sc/source/ui/vba/vbaworksheet.cxx sc/source/ui/vba/vbaworksheet.cxx
+index 015e68f..3a38bd3 100644
+--- sc/source/ui/vba/vbaworksheet.cxx
++++ sc/source/ui/vba/vbaworksheet.cxx
+@@ -99,7 +99,7 @@
+ using namespace com::sun::star;
+ using namespace ooo::vba;
+ bool
+-nameExists( uno::Reference <sheet::XSpreadsheetDocument>& xSpreadDoc, ::rtl::OUString & name, SCTAB& nTab ) throw ( lang::IllegalArgumentException )
++nameExists( const uno::Reference <sheet::XSpreadsheetDocument>& xSpreadDoc, const ::rtl::OUString & name, SCTAB& nTab ) throw ( lang::IllegalArgumentException )
+ {
+     if (!xSpreadDoc.is())
+         throw lang::IllegalArgumentException( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( "nameExists() xSpreadDoc is null" ) ), uno::Reference< uno::XInterface  >(), 1 );
+@@ -993,6 +993,50 @@ ScVbaWorksheet::PrintOut( const uno::Any& From, const uno::Any& To, const uno::A
+ 	PrintOutHelper( excel::getBestViewShell( xModel ), From, To, Copies, Preview, ActivePrinter, PrintToFile, Collate, PrToFileName, bSelection );
+ }
+ 
++uno::Reference< sheet::XDatabaseRange > lcl_getXDatabase( const uno::Reference< frame::XModel >& xModel, const rtl::OUString& aSheetName ) throw ( uno::RuntimeException)
++
++{
++    uno::Reference< sheet::XDatabaseRange > xDBRange;
++    uno::Reference <sheet::XSpreadsheetDocument> xSpreadDoc( xModel, uno::UNO_QUERY_THROW );
++    SCTAB nTab(0);
++    bool bSheetExists = nameExists (xSpreadDoc, aSheetName, nTab);
++    if ( bSheetExists )    
++    {
++        rtl::OUString sAutofilterRngName;
++	ScDocShell* pShell = excel::getDocShell( xModel );
++
++        xDBRange = excel::GetAutoFiltRange( pShell, static_cast<  sal_Int16 >( nTab ), sAutofilterRngName );
++            
++    }
++    return xDBRange;
++}
++
++::sal_Bool SAL_CALL 
++ScVbaWorksheet::getAutoFilterMode() throw (uno::RuntimeException)
++{
++    if ( lcl_getXDatabase( getModel(), getName() ).is() )
++        return sal_True; 
++    return sal_False;
++}
++
++void SAL_CALL 
++ScVbaWorksheet::setAutoFilterMode( ::sal_Bool _autofiltermode ) throw (uno::RuntimeException)
++{
++    if ( !_autofiltermode )
++    {
++        uno::Reference< sheet::XDatabaseRange >xAutoFilt = lcl_getXDatabase( getModel(), getName() );
++        
++       if ( xAutoFilt.is() )
++       {
++           uno::Reference< beans::XPropertySet > xProps( xAutoFilt, uno::UNO_QUERY_THROW );
++           xProps->setPropertyValue( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM("AutoFilter") ), uno::makeAny( sal_False ) );
++       }
++    }
++    // Not possible to set to true
++    else
++        throw uno::RuntimeException();
++}
++
+ namespace worksheet
+ {
+ namespace sdecl = comphelper::service_decl;
+diff --git sc/source/ui/vba/vbaworksheet.hxx sc/source/ui/vba/vbaworksheet.hxx
+index cf696a3..3324753 100644
+--- sc/source/ui/vba/vbaworksheet.hxx
++++ sc/source/ui/vba/vbaworksheet.hxx
+@@ -82,6 +82,9 @@ public:
+     { return mxSheet; }
+ 
+     // Attributes
++    virtual ::sal_Bool SAL_CALL getAutoFilterMode() throw (::com::sun::star::uno::RuntimeException);
++    virtual void SAL_CALL setAutoFilterMode( ::sal_Bool _autofiltermode ) throw (::com::sun::star::uno::RuntimeException);
++
+     virtual ::rtl::OUString SAL_CALL getName() throw (css::uno::RuntimeException);
+     virtual void SAL_CALL setName( const ::rtl::OUString &rName ) throw (css::uno::RuntimeException);
+     virtual sal_Bool SAL_CALL getVisible() throw (css::uno::RuntimeException);
