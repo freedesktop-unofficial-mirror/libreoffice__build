@@ -278,7 +278,7 @@ index f91bb81..a6a4867 100644
                  }
              }
 diff --git sc/source/ui/view/output2.cxx sc/source/ui/view/output2.cxx
-index ef7f0c9..e51cda1 100644
+index ef7f0c9..a3ac69c 100644
 --- sc/source/ui/view/output2.cxx
 +++ sc/source/ui/view/output2.cxx
 @@ -56,6 +56,7 @@
@@ -289,15 +289,17 @@ index ef7f0c9..e51cda1 100644
  #include <vcl/svapp.hxx>
  #include <vcl/metric.hxx>
  #include <vcl/outdev.hxx>
-@@ -111,6 +112,7 @@ class ScDrawStringsVars
+@@ -111,6 +112,9 @@ class ScDrawStringsVars
      String				aString;				// Inhalte
      Size				aTextSize;
      long				nOriginalWidth;
 +    long                nMaxDigitWidth;
++    long                nSignWidth;
++    long                nDotWidth;
  
      ScBaseCell*			pLastCell;
      ULONG				nValueFormat;
-@@ -135,7 +137,7 @@ public:
+@@ -135,7 +139,7 @@ public:
      void		SetPatternSimple( const ScPatternAttr* pNew, const SfxItemSet* pSet );
  
      BOOL		SetText( ScBaseCell* pCell );	// TRUE -> pOldPattern vergessen
@@ -306,7 +308,7 @@ index ef7f0c9..e51cda1 100644
      void		SetAutoText( const String& rAutoText );
  
      const ScPatternAttr*	GetPattern() const		{ return pPattern; }
-@@ -164,6 +166,11 @@ public:
+@@ -164,6 +168,13 @@ public:
                                          pCondSet->GetItemState( ATTR_FONT_HEIGHT, TRUE ); }
  
      BOOL    HasEditCharacters() const;
@@ -314,35 +316,44 @@ index ef7f0c9..e51cda1 100644
 +private:
 +    void        SetHashText();
 +    long        GetMaxDigitWidth();
++    long        GetSignWidth();
++    long        GetDotWidth();
 +    void        TextChanged();
  };
  
  //==================================================================
-@@ -179,6 +186,7 @@ ScDrawStringsVars::ScDrawStringsVars(ScOutputData* pData, BOOL bPTL) :
+@@ -179,6 +190,9 @@ ScDrawStringsVars::ScDrawStringsVars(ScOutputData* pData, BOOL bPTL) :
      nIndent		( 0 ),
      bRotated	( FALSE ),
      nOriginalWidth( 0 ),
 +    nMaxDigitWidth( 0 ),
++    nSignWidth( 0 ),
++    nDotWidth( 0 ),
      pLastCell	( NULL ),
      nValueFormat( 0 ),
      bLineBreak	( FALSE ),
-@@ -245,6 +253,7 @@ void ScDrawStringsVars::SetShrinkScale( long nScale, BYTE nScript )
+@@ -245,6 +259,10 @@ void ScDrawStringsVars::SetShrinkScale( long nScale, BYTE nScript )
  void ScDrawStringsVars::SetPattern( const ScPatternAttr* pNew, const SfxItemSet* pSet,
                                      ScBaseCell* pCell, BYTE nScript )
  {
 +    nMaxDigitWidth = 0;
++    nSignWidth     = 0;
++    nDotWidth      = 0;
++
      pPattern = pNew;
      pCondSet = pSet;
  
-@@ -396,6 +405,7 @@ void ScDrawStringsVars::SetPattern( const ScPatternAttr* pNew, const SfxItemSet*
+@@ -396,6 +414,9 @@ void ScDrawStringsVars::SetPattern( const ScPatternAttr* pNew, const SfxItemSet*
  
  void ScDrawStringsVars::SetPatternSimple( const ScPatternAttr* pNew, const SfxItemSet* pSet )
  {
 +    nMaxDigitWidth = 0;
++    nSignWidth     = 0;
++    nDotWidth      = 0;
      //	wird gerufen, wenn sich die Font-Variablen nicht aendern (!StringDiffer)
  
      pPattern = pNew;
-@@ -470,28 +480,7 @@ BOOL ScDrawStringsVars::SetText( ScBaseCell* pCell )
+@@ -470,28 +491,7 @@ BOOL ScDrawStringsVars::SetText( ScBaseCell* pCell )
                  pLastCell = NULL;		// naechstes Mal wieder hierherkommen
              }
  
@@ -372,7 +383,7 @@ index ef7f0c9..e51cda1 100644
          }
          //	sonst String/Groesse behalten
      }
-@@ -511,6 +500,52 @@ void ScDrawStringsVars::SetHashText()
+@@ -511,6 +511,60 @@ void ScDrawStringsVars::SetHashText()
      SetAutoText( String::CreateFromAscii(RTL_CONSTASCII_STRINGPARAM("###")) );
  }
  
@@ -406,6 +417,14 @@ index ef7f0c9..e51cda1 100644
 +        return;
 +
 +    long nMaxDigit = GetMaxDigitWidth();
++    // Compensate for the width differences of '.' and '-' which are usually 
++    // narrower than the digits, by increasing the maximum width.
++    if (ceil(fVal) != fVal)
++        nWidth += nMaxDigit - GetDotWidth();
++
++    if (fVal < 0.0)
++        nWidth += nMaxDigit - GetSignWidth();
++
 +    sal_uInt16 nNumDigits = static_cast<sal_uInt16>(nWidth / nMaxDigit);
 +
 +    if (!pNumFormat->GetOutputString(fVal, nNumDigits, aString))
@@ -425,7 +444,7 @@ index ef7f0c9..e51cda1 100644
  void ScDrawStringsVars::SetAutoText( const String& rAutoText )
  {
      aString = rAutoText;
-@@ -541,6 +576,47 @@ void ScDrawStringsVars::SetAutoText( const String& rAutoText )
+@@ -541,6 +595,65 @@ void ScDrawStringsVars::SetAutoText( const String& rAutoText )
      pLastCell = NULL;		// derselbe Text kann in der naechsten Zelle wieder passen
  }
  
@@ -442,6 +461,24 @@ index ef7f0c9..e51cda1 100644
 +        nMaxDigitWidth = ::std::max(nMaxDigitWidth, n);
 +    }
 +    return nMaxDigitWidth;
++}
++
++long ScDrawStringsVars::GetSignWidth()
++{
++    if (nSignWidth > 0)
++        return nSignWidth;
++
++    nSignWidth = pOutput->pFmtDevice->GetTextWidth(String('-'));
++    return nSignWidth;
++}
++
++long ScDrawStringsVars::GetDotWidth()
++{
++    if (nDotWidth > 0)
++        return nDotWidth;
++
++    nDotWidth = pOutput->pFmtDevice->GetTextWidth(String('.'));
++    return nDotWidth;
 +}
 +
 +void ScDrawStringsVars::TextChanged()
@@ -473,7 +510,7 @@ index ef7f0c9..e51cda1 100644
  BOOL ScDrawStringsVars::HasEditCharacters() const
  {
      static const sal_Unicode pChars[] =
-@@ -922,29 +998,25 @@ BOOL ScOutputData::IsAvailable( SCCOL nX, SCROW nY )
+@@ -922,29 +1035,25 @@ BOOL ScOutputData::IsAvailable( SCCOL nX, SCROW nY )
  // bCellIsValue:	if set, don't extend into empty cells
  // bBreak:			if set, don't extend, and don't set clip marks (but rLeftClip/rRightClip is set)
  // bOverwrite:		if set, also extend into non-empty cells (for rotated text)
@@ -512,7 +549,7 @@ index ef7f0c9..e51cda1 100644
          long nColWidth = ( nCompCol <= nX2 ) ?
                  pRowInfo[0].pCellInfo[nCompCol+1].nWidth :
                  (long) ( pDoc->GetColWidth( nCompCol, nTab ) * nPPTX );
-@@ -960,7 +1032,7 @@ void ScOutputData::GetOutputArea( SCCOL nX, SCSIZE nArrY, long nPosX, long nPosY
+@@ -960,7 +1069,7 @@ void ScOutputData::GetOutputArea( SCCOL nX, SCSIZE nArrY, long nPosX, long nPosY
          nCellPosX -= nColWidth * nLayoutSign;
      }
  
@@ -521,7 +558,7 @@ index ef7f0c9..e51cda1 100644
      SCSIZE nCompArr = nArrY;
      SCROW nCompRow = pRowInfo[nCompArr].nRowNo;
      while ( nCellY > nCompRow )
-@@ -1005,28 +1077,30 @@ void ScOutputData::GetOutputArea( SCCOL nX, SCSIZE nArrY, long nPosX, long nPosY
+@@ -1005,28 +1114,30 @@ void ScOutputData::GetOutputArea( SCCOL nX, SCSIZE nArrY, long nPosX, long nPosY
      {
          // take first row's height from row info
          nMergeSizeY += rThisRowInfo.nHeight;
@@ -562,7 +599,7 @@ index ef7f0c9..e51cda1 100644
      if ( nNeeded > nMergeSizeX )
      {
          SvxCellHorJustify eHorJust = (SvxCellHorJustify)nHorJustify;
-@@ -1060,14 +1134,14 @@ void ScOutputData::GetOutputArea( SCCOL nX, SCSIZE nArrY, long nPosX, long nPosY
+@@ -1060,14 +1171,14 @@ void ScOutputData::GetOutputArea( SCCOL nX, SCSIZE nArrY, long nPosX, long nPosY
          SCCOL nLeftX = nCellX;
          if ( !bMerged && !bCellIsValue && !bBreak )
          {
@@ -579,7 +616,7 @@ index ef7f0c9..e51cda1 100644
  
                  if ( rThisRowInfo.nRowNo == nCellY && nRightX >= nX1 && nRightX <= nX2 )
                      rThisRowInfo.pCellInfo[nRightX].bHideGrid = TRUE;
-@@ -1081,33 +1155,33 @@ void ScOutputData::GetOutputArea( SCCOL nX, SCSIZE nArrY, long nPosX, long nPosY
+@@ -1081,33 +1192,33 @@ void ScOutputData::GetOutputArea( SCCOL nX, SCSIZE nArrY, long nPosX, long nPosY
                  --nLeftX;
                  long nAdd = (long) ( pDoc->GetColWidth( nLeftX, nTab ) * nPPTX );
                  nLeftMissing -= nAdd;
@@ -621,7 +658,7 @@ index ef7f0c9..e51cda1 100644
  
          // leave space for AutoFilter on screen
          // (for automatic line break: only if not formatting for printer, as in ScColumn::GetNeededSize)
-@@ -1123,30 +1197,30 @@ void ScOutputData::GetOutputArea( SCCOL nX, SCSIZE nArrY, long nPosX, long nPosY
+@@ -1123,30 +1234,30 @@ void ScOutputData::GetOutputArea( SCCOL nX, SCSIZE nArrY, long nPosX, long nPosY
                  // content fits even in the remaining area without the filter button
                  // -> align within that remaining area
  
@@ -660,7 +697,7 @@ index ef7f0c9..e51cda1 100644
      pDev->Pop();
      //! Test !!!
  #endif
-@@ -1187,12 +1261,9 @@ void ScOutputData::DrawStrings( BOOL bPixelToLogic )
+@@ -1187,12 +1298,9 @@ void ScOutputData::DrawStrings( BOOL bPixelToLogic )
          --nLoopStartX;			// start before nX1 for rest of long text to the left
  
      // variables for GetOutputArea
@@ -674,7 +711,7 @@ index ef7f0c9..e51cda1 100644
      SvxCellHorJustify eOutHorJust = SVX_HOR_JUSTIFY_STANDARD;
      const ScPatternAttr* pPattern = NULL;
      const SfxItemSet* pCondSet = NULL;
-@@ -1363,6 +1434,7 @@ void ScOutputData::DrawStrings( BOOL bPixelToLogic )
+@@ -1363,6 +1471,7 @@ void ScOutputData::DrawStrings( BOOL bPixelToLogic )
                      bNeedEdit = aVars.HasEditCharacters() ||
                                      (bFormulaCell && ((ScFormulaCell*)pCell)->IsMultilineResult());                
                  }
@@ -682,7 +719,7 @@ index ef7f0c9..e51cda1 100644
                  if (bDoCell && !bNeedEdit)
                  {
                      CellType eCellType = pCell->GetCellType();
-@@ -1384,14 +1456,17 @@ void ScOutputData::DrawStrings( BOOL bPixelToLogic )
+@@ -1384,14 +1493,17 @@ void ScOutputData::DrawStrings( BOOL bPixelToLogic )
                      BOOL bRepeat = aVars.IsRepeat() && !bBreak;
                      BOOL bShrink = aVars.IsShrink() && !bBreak && !bRepeat;
  
@@ -705,7 +742,7 @@ index ef7f0c9..e51cda1 100644
  
                      if ( bShrink )
                      {
-@@ -1401,9 +1476,9 @@ void ScOutputData::DrawStrings( BOOL bPixelToLogic )
+@@ -1401,9 +1513,9 @@ void ScOutputData::DrawStrings( BOOL bPixelToLogic )
                              // DrawEdit is used to vertically scale 90 deg rotated text.
                              bNeedEdit = TRUE;
                          }
@@ -717,7 +754,7 @@ index ef7f0c9..e51cda1 100644
                              long nScaleSize = aVars.GetTextSize().Width();         // without margin
  
                              if ( nScaleSize > 0 )       // 0 if the text is empty (formulas, number formats)
-@@ -1427,16 +1502,16 @@ void ScOutputData::DrawStrings( BOOL bPixelToLogic )
+@@ -1427,16 +1539,16 @@ void ScOutputData::DrawStrings( BOOL bPixelToLogic )
                                  // If even at half the size the font still isn't rendered smaller,
                                  // fall back to normal clipping (showing ### for numbers).
                                  if ( nNewSize <= nAvailable )
@@ -737,7 +774,7 @@ index ef7f0c9..e51cda1 100644
                          long nRepeatSize = aVars.GetTextSize().Width();         // without margin
                          // When formatting for the printer, the text sizes don't always add up.
                          // Round down (too few repetitions) rather than exceeding the cell size then:
-@@ -1460,13 +1535,13 @@ void ScOutputData::DrawStrings( BOOL bPixelToLogic )
+@@ -1460,13 +1572,13 @@ void ScOutputData::DrawStrings( BOOL bPixelToLogic )
                      if ( bBreak )
                      {
                          if ( aVars.GetOrient() == SVX_ORIENTATION_STANDARD )
@@ -753,7 +790,7 @@ index ef7f0c9..e51cda1 100644
                          }
                      }
                  }
-@@ -1482,48 +1557,49 @@ void ScOutputData::DrawStrings( BOOL bPixelToLogic )
+@@ -1482,48 +1594,49 @@ void ScOutputData::DrawStrings( BOOL bPixelToLogic )
                  }
                  if ( bDoCell )
                  {
@@ -823,7 +860,7 @@ index ef7f0c9..e51cda1 100644
                          bVClip = TRUE;
                      }
  
-@@ -1606,27 +1682,27 @@ void ScOutputData::DrawStrings( BOOL bPixelToLogic )
+@@ -1606,27 +1719,27 @@ void ScOutputData::DrawStrings( BOOL bPixelToLogic )
  
                              if (!bHClip)
                              {
@@ -858,7 +895,7 @@ index ef7f0c9..e51cda1 100644
                          }
  
                          Point aURLStart( nJustPosX, nJustPosY );    // copy before modifying for orientation
-@@ -1830,7 +1906,7 @@ long lcl_GetEditSize( EditEngine& rEngine, BOOL bWidth, BOOL bSwap, long nAttrRo
+@@ -1830,7 +1943,7 @@ long lcl_GetEditSize( EditEngine& rEngine, BOOL bWidth, BOOL bSwap, long nAttrRo
  void ScOutputData::ShrinkEditEngine( EditEngine& rEngine, const Rectangle& rAlignRect,
              long nLeftM, long nTopM, long nRightM, long nBottomM,
              BOOL bWidth, USHORT nOrient, long nAttrRotate, BOOL bPixelToLogic,
@@ -867,7 +904,7 @@ index ef7f0c9..e51cda1 100644
  {
      if ( !bWidth )
      {
-@@ -2152,10 +2228,7 @@ void ScOutputData::DrawEdit(BOOL bPixelToLogic)
+@@ -2152,10 +2265,7 @@ void ScOutputData::DrawEdit(BOOL bPixelToLogic)
                                  nPosY = nScrY;
                              }
  
@@ -879,7 +916,7 @@ index ef7f0c9..e51cda1 100644
  
                              //
                              //	Initial page size - large for normal text, cell size for automatic line breaks
-@@ -2170,23 +2243,22 @@ void ScOutputData::DrawEdit(BOOL bPixelToLogic)
+@@ -2170,23 +2280,22 @@ void ScOutputData::DrawEdit(BOOL bPixelToLogic)
  
                                  //!	handle nArrY == 0
                                  GetOutputArea( nXForPos, nArrYForPos, nPosX, nPosY, nCellX, nCellY, 0,
@@ -908,7 +945,7 @@ index ef7f0c9..e51cda1 100644
                                  }
                              }
                              if (bPixelToLogic)
-@@ -2375,26 +2447,26 @@ void ScOutputData::DrawEdit(BOOL bPixelToLogic)
+@@ -2375,26 +2484,26 @@ void ScOutputData::DrawEdit(BOOL bPixelToLogic)
                              {
                                  // for break, the first GetOutputArea call is sufficient
                                  GetOutputArea( nXForPos, nArrYForPos, nPosX, nPosY, nCellX, nCellY, nNeededPixel,
@@ -942,7 +979,7 @@ index ef7f0c9..e51cda1 100644
                                      if ( nAvailable >= 2 * nFormatted )
                                      {
                                          // "repeat" is handled with unformatted text (for performance reasons)
-@@ -2428,7 +2500,7 @@ void ScOutputData::DrawEdit(BOOL bPixelToLogic)
+@@ -2428,7 +2537,7 @@ void ScOutputData::DrawEdit(BOOL bPixelToLogic)
                                      }
                                  }
  
@@ -951,7 +988,7 @@ index ef7f0c9..e51cda1 100644
                                  {
                                      pEngine->SetText( String::CreateFromAscii(RTL_CONSTASCII_STRINGPARAM("###")) );
                                      nEngineWidth = (long) pEngine->CalcTextWidth();
-@@ -2451,11 +2523,11 @@ void ScOutputData::DrawEdit(BOOL bPixelToLogic)
+@@ -2451,11 +2560,11 @@ void ScOutputData::DrawEdit(BOOL bPixelToLogic)
                                  }
                              }
  
@@ -967,7 +1004,7 @@ index ef7f0c9..e51cda1 100644
  
                              if ( bBreak || eOrient != SVX_ORIENTATION_STANDARD || bAsianVertical )
                              {
-@@ -2475,21 +2547,21 @@ void ScOutputData::DrawEdit(BOOL bPixelToLogic)
+@@ -2475,21 +2584,21 @@ void ScOutputData::DrawEdit(BOOL bPixelToLogic)
                                      nStartX += nLeftM;
                              }
  
@@ -997,7 +1034,7 @@ index ef7f0c9..e51cda1 100644
                                  BOOL bSimClip = FALSE;
  
                                  if ( bWrapFields )
-@@ -2498,14 +2570,14 @@ void ScOutputData::DrawEdit(BOOL bPixelToLogic)
+@@ -2498,14 +2607,14 @@ void ScOutputData::DrawEdit(BOOL bPixelToLogic)
                                      bClip = TRUE;
                                  }
  
@@ -1016,7 +1053,7 @@ index ef7f0c9..e51cda1 100644
                                      bClip = TRUE;
                                  }
  
-@@ -2557,8 +2629,8 @@ void ScOutputData::DrawEdit(BOOL bPixelToLogic)
+@@ -2557,8 +2666,8 @@ void ScOutputData::DrawEdit(BOOL bPixelToLogic)
                                          bAnyClipped = TRUE;
  
                                          long nMarkPixel = (long)( SC_CLIPMARK_SIZE * nPPTX );
@@ -1027,7 +1064,7 @@ index ef7f0c9..e51cda1 100644
                                      }
                                  }
  
-@@ -2582,9 +2654,9 @@ void ScOutputData::DrawEdit(BOOL bPixelToLogic)
+@@ -2582,9 +2691,9 @@ void ScOutputData::DrawEdit(BOOL bPixelToLogic)
                                      // Clip marks are already handled in GetOutputArea
  
                                      if (bPixelToLogic)
@@ -1039,7 +1076,7 @@ index ef7f0c9..e51cda1 100644
  
                                      if (bClip)	// bei bSimClip nur aClipRect initialisieren
                                      {
-@@ -3218,10 +3290,7 @@ void ScOutputData::DrawRotated(BOOL bPixelToLogic)
+@@ -3218,10 +3327,7 @@ void ScOutputData::DrawRotated(BOOL bPixelToLogic)
  
                                  // use GetOutputArea to hide the grid
                                  // (clip region is done manually below)
@@ -1051,7 +1088,7 @@ index ef7f0c9..e51cda1 100644
  
                                  SCCOL nCellX = nX;
                                  SCROW nCellY = nY;
-@@ -3234,8 +3303,7 @@ void ScOutputData::DrawRotated(BOOL bPixelToLogic)
+@@ -3234,8 +3340,7 @@ void ScOutputData::DrawRotated(BOOL bPixelToLogic)
  
                                  GetOutputArea( nX, nArrY, nCellStartX, nPosY, nCellX, nCellY, nNeededWidth,
                                                  *pPattern, sal::static_int_cast<USHORT>(eOutHorJust),
@@ -1061,7 +1098,7 @@ index ef7f0c9..e51cda1 100644
  
                                  if ( bShrink )
                                  {
-@@ -3243,19 +3311,19 @@ void ScOutputData::DrawRotated(BOOL bPixelToLogic)
+@@ -3243,19 +3348,19 @@ void ScOutputData::DrawRotated(BOOL bPixelToLogic)
                                          pRefDevice->LogicToPixel(Size(nEngineWidth,0)).Width() : nEngineWidth;
                                      long nNeededPixel = nPixelWidth + nLeftM + nRightM;
  
@@ -1086,7 +1123,7 @@ index ef7f0c9..e51cda1 100644
                                      }
  
                                      // nEngineWidth/nEngineHeight is updated in ShrinkEditEngine
-@@ -3309,19 +3377,19 @@ void ScOutputData::DrawRotated(BOOL bPixelToLogic)
+@@ -3309,19 +3414,19 @@ void ScOutputData::DrawRotated(BOOL bPixelToLogic)
                                      }
  
                                      if (bPixelToLogic)
