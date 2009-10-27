@@ -35,6 +35,19 @@ index 323e643..606711f 100644
  };
  
  // ============================================================================
+diff --git oox/inc/oox/vml/vmlshapecontainer.hxx oox/inc/oox/vml/vmlshapecontainer.hxx
+index caa8a1a..70241f5 100644
+--- oox/inc/oox/vml/vmlshapecontainer.hxx
++++ oox/inc/oox/vml/vmlshapecontainer.hxx
+@@ -98,6 +98,8 @@ public:
+                             const ::com::sun::star::uno::Reference< ::com::sun::star::drawing::XShapes >& rxShapes,
+                             const ShapeParentAnchor* pParentAnchor = 0 ) const;
+ 
++    inline void                clearShapes( ) { maShapes.clear( ); }
++
+ private:
+     typedef RefVector< ShapeType >                  ShapeTypeVector;
+     typedef RefVector< ShapeBase >                  ShapeVector;
 diff --git oox/inc/oox/vml/vmlshapecontext.hxx oox/inc/oox/vml/vmlshapecontext.hxx
 index dbc5e1a..169e613 100644
 --- oox/inc/oox/vml/vmlshapecontext.hxx
@@ -70,6 +83,21 @@ index dbc5e1a..169e613 100644
  } // namespace vml
  } // namespace oox
  
+diff --git oox/source/shape/ShapeContextHandler.cxx oox/source/shape/ShapeContextHandler.cxx
+index 71c2558..74c42ff 100644
+--- oox/source/shape/ShapeContextHandler.cxx
++++ oox/source/shape/ShapeContextHandler.cxx
+@@ -240,7 +240,10 @@ ShapeContextHandler::getShape() throw (uno::RuntimeException)
+         {
+             mpDrawing->finalizeFragmentImport();
+             if( const ::oox::vml::ShapeBase* pShape = mpDrawing->getShapes().getFirstShape() )
++            {
++                mpDrawing->getShapes( ).clearShapes( );
+                 xResult = pShape->convertAndInsert( xShapes );
++            }
+         }
+         else if (mpShape.get() != NULL)
+         {
 diff --git oox/source/vml/vmldrawingfragment.cxx oox/source/vml/vmldrawingfragment.cxx
 index 6eab7ef..67fabce 100644
 --- oox/source/vml/vmldrawingfragment.cxx
@@ -84,7 +112,7 @@ index 6eab7ef..67fabce 100644
          break;
  
 diff --git oox/source/vml/vmlshape.cxx oox/source/vml/vmlshape.cxx
-index fe07172..7227843 100644
+index fe07172..13ec216 100644
 --- oox/source/vml/vmlshape.cxx
 +++ oox/source/vml/vmlshape.cxx
 @@ -32,12 +32,20 @@
@@ -205,6 +233,26 @@ index fe07172..7227843 100644
      return xShape;
  }
  
+@@ -199,11 +264,17 @@ Rectangle ShapeType::getRectangle( const ShapeParentAnchor* pParentAnchor ) cons
+ Rectangle ShapeType::getAbsRectangle() const
+ {
+     const XmlFilterBase& rFilter = mrDrawing.getFilter();
++
++    sal_Int32 nWidth = ConversionHelper::decodeMeasureToHmm( rFilter, maTypeModel.maWidth, 0, true, true );
++    if ( nWidth == 0 )  nWidth = 1;
++
++    sal_Int32 nHeight = ConversionHelper::decodeMeasureToHmm( rFilter, maTypeModel.maHeight, 0, true, true );
++    if ( nHeight == 0 )  nHeight = 1;
++
+     return Rectangle(
+         ConversionHelper::decodeMeasureToHmm( rFilter, maTypeModel.maLeft, 0, true, true ) + ConversionHelper::decodeMeasureToHmm( rFilter, maTypeModel.maMarginLeft, 0, true, true ),
+         ConversionHelper::decodeMeasureToHmm( rFilter, maTypeModel.maTop, 0, false, true ) + ConversionHelper::decodeMeasureToHmm( rFilter, maTypeModel.maMarginTop, 0, false, true ),
+-        ConversionHelper::decodeMeasureToHmm( rFilter, maTypeModel.maWidth, 0, true, true ),
+-        ConversionHelper::decodeMeasureToHmm( rFilter, maTypeModel.maHeight, 0, false, true ) );
++        nWidth, nHeight );
+ }
+ 
+ Rectangle ShapeType::getRelRectangle() const
 diff --git oox/source/vml/vmlshapecontext.cxx oox/source/vml/vmlshapecontext.cxx
 index 725af97..92cb5d7 100644
 --- oox/source/vml/vmlshapecontext.cxx
@@ -241,3 +289,97 @@ index 725af97..92cb5d7 100644
  } // namespace vml
  } // namespace oox
  
+diff --git writerfilter/inc/ooxml/OOXMLDocument.hxx writerfilter/inc/ooxml/OOXMLDocument.hxx
+index 803ebec..5242dd7 100644
+--- writerfilter/inc/ooxml/OOXMLDocument.hxx
++++ writerfilter/inc/ooxml/OOXMLDocument.hxx
+@@ -44,6 +44,7 @@
+ #endif
+ #include <com/sun/star/xml/sax/XFastParser.hpp>
+ #include <com/sun/star/xml/sax/XFastTokenHandler.hpp>
++#include <com/sun/star/xml/sax/XFastShapeContextHandler.hpp>
+ #include <com/sun/star/frame/XModel.hpp>
+ #include <com/sun/star/drawing/XDrawPage.hpp>
+ 
+@@ -253,6 +254,8 @@ public:
+     virtual void setXNoteType(const Id & nId) = 0;
+     virtual const Id & getXNoteType() const = 0;
+     virtual const ::rtl::OUString & getTarget() const = 0;
++    virtual uno::Reference<xml::sax::XFastShapeContextHandler> getShapeContext( ) = 0;
++    virtual void setShapeContext( uno::Reference<xml::sax::XFastShapeContextHandler> xContext ) = 0;
+ };
+ 
+ 
+diff --git writerfilter/source/ooxml/OOXMLDocumentImpl.cxx writerfilter/source/ooxml/OOXMLDocumentImpl.cxx
+index 4ae36eb..97ba13c 100644
+--- writerfilter/source/ooxml/OOXMLDocumentImpl.cxx
++++ writerfilter/source/ooxml/OOXMLDocumentImpl.cxx
+@@ -381,6 +381,16 @@ uno::Reference<io::XInputStream> OOXMLDocumentImpl::getStorageStream()
+     return mpStream->getStorageStream();
+ }
+ 
++void OOXMLDocumentImpl::setShapeContext( uno::Reference<xml::sax::XFastShapeContextHandler> xContext )
++{
++    mxShapeContext = xContext;
++}
++
++uno::Reference<xml::sax::XFastShapeContextHandler> OOXMLDocumentImpl::getShapeContext( )
++{
++    return mxShapeContext;
++}
++
+ OOXMLDocument *
+ OOXMLDocumentFactory::createDocument
+ (OOXMLStream::Pointer_t pStream)
+diff --git writerfilter/source/ooxml/OOXMLDocumentImpl.hxx writerfilter/source/ooxml/OOXMLDocumentImpl.hxx
+index 9649376..3a9c9d1 100644
+--- writerfilter/source/ooxml/OOXMLDocumentImpl.hxx
++++ writerfilter/source/ooxml/OOXMLDocumentImpl.hxx
+@@ -52,6 +52,7 @@ class OOXMLDocumentImpl : public OOXMLDocument
+ 
+     uno::Reference<frame::XModel> mxModel;
+     uno::Reference<drawing::XDrawPage> mxDrawPage;
++    uno::Reference<xml::sax::XFastShapeContextHandler> mxShapeContext;
+ 
+     bool mbIsSubstream;
+ 
+@@ -114,6 +115,8 @@ public:
+     virtual void setXNoteType(const Id & rId);
+     virtual const Id & getXNoteType() const;
+     virtual const ::rtl::OUString & getTarget() const;
++    virtual uno::Reference<xml::sax::XFastShapeContextHandler> getShapeContext( );
++    virtual void setShapeContext( uno::Reference<xml::sax::XFastShapeContextHandler> xContext );
+ };
+ }}
+ #endif // OOXML_DOCUMENT_IMPL_HXX
+diff --git writerfilter/source/ooxml/OOXMLFastContextHandler.cxx writerfilter/source/ooxml/OOXMLFastContextHandler.cxx
+index fdaf476..4882436 100644
+--- writerfilter/source/ooxml/OOXMLFastContextHandler.cxx
++++ writerfilter/source/ooxml/OOXMLFastContextHandler.cxx
+@@ -1973,13 +1973,19 @@ OOXMLFastContextHandlerShape::OOXMLFastContextHandlerShape
+         uno::Reference<XMultiComponentFactory> rServiceManager
+             (xContext->getServiceManager());
+ 
+-        mrShapeContext.set
+-            (rServiceManager->
+-              createInstanceWithContext
+-              (::rtl::OUString
+-               (RTL_CONSTASCII_USTRINGPARAM
+-                ("com.sun.star.xml.sax.FastShapeContextHandler")), xContext),
+-              uno::UNO_QUERY);
++        mrShapeContext.set( getDocument( )->getShapeContext( ) );
++        if ( !mrShapeContext.is( ) )
++        {
++            // Define the shape context for the whole document
++            mrShapeContext.set
++                (rServiceManager->
++                  createInstanceWithContext
++                  (::rtl::OUString
++                   (RTL_CONSTASCII_USTRINGPARAM
++                    ("com.sun.star.xml.sax.FastShapeContextHandler")), xContext),
++                  uno::UNO_QUERY);
++            getDocument()->setShapeContext( mrShapeContext );
++        }
+ 
+         if (mrShapeContext.is())
+         {
