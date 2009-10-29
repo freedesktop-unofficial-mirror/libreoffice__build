@@ -1,0 +1,102 @@
+diff -rup oox-orig/inc/oox/drawingml/shape.hxx oox/inc/oox/drawingml/shape.hxx
+--- oox-orig/inc/oox/drawingml/shape.hxx	2009-10-29 15:55:23.000000000 +0100
++++ oox/inc/oox/drawingml/shape.hxx	2009-10-29 17:27:19.000000000 +0100
+@@ -170,7 +170,8 @@ protected:
+                             const ::rtl::OUString& rServiceName,
+                             const ThemePtr& rxTheme,
+                             const ::com::sun::star::uno::Reference< ::com::sun::star::drawing::XShapes >& rxShapes,
+-                            const ::com::sun::star::awt::Rectangle* pShapeRect );
++                            const ::com::sun::star::awt::Rectangle* pShapeRect,
++			    sal_Bool bClearText );
+ 
+     void                addChildren(
+                             const ::oox::core::XmlFilterBase& rFilterBase,
+diff -rup oox-orig/source/drawingml/shape.cxx oox/source/drawingml/shape.cxx
+--- oox-orig/source/drawingml/shape.cxx	2009-10-29 15:55:25.000000000 +0100
++++ oox/source/drawingml/shape.cxx	2009-10-29 17:30:43.000000000 +0100
+@@ -167,7 +167,7 @@ void Shape::addShape(
+         rtl::OUString sServiceName( msServiceName );
+         if( sServiceName.getLength() )
+         {
+-            Reference< XShape > xShape( createAndInsert( rFilterBase, sServiceName, rxTheme, rxShapes, pShapeRect ) );
++            Reference< XShape > xShape( createAndInsert( rFilterBase, sServiceName, rxTheme, rxShapes, pShapeRect, sal_False ) );
+ 
+             if( pShapeMap && msId.getLength() )
+             {
+@@ -279,7 +279,8 @@ Reference< XShape > Shape::createAndInse
+         const rtl::OUString& rServiceName,
+         const ThemePtr& rxTheme,
+         const ::com::sun::star::uno::Reference< ::com::sun::star::drawing::XShapes >& rxShapes,
+-        const awt::Rectangle* pShapeRect )
++        const awt::Rectangle* pShapeRect,
++        sal_Bool bClearText )
+ {
+     basegfx::B2DHomMatrix aTransformation;
+ 
+@@ -429,6 +430,17 @@ Reference< XShape > Shape::createAndInse
+         }
+         rxShapes->add( mxShape );
+ 
++        // sj: removing default text of placeholder objects such as SlideNumberShape or HeaderShape
++        if ( bClearText )
++        {
++            uno::Reference< text::XText > xText( mxShape, uno::UNO_QUERY );
++            if ( xText.is() )
++            {
++                OUString aEmpty;
++                xText->setString( aEmpty );
++            }
++        }
++
+         LineProperties aLineProperties;
+         aLineProperties.maLineFill.moFillType = XML_noFill;
+         sal_Int32 nLinePhClr = -1;
+diff -rup oox-orig/source/ppt/pptshape.cxx oox/source/ppt/pptshape.cxx
+--- oox-orig/source/ppt/pptshape.cxx	2009-10-29 15:55:25.000000000 +0100
++++ oox/source/ppt/pptshape.cxx	2009-10-29 17:29:38.000000000 +0100
+@@ -84,6 +84,7 @@ void PPTShape::addShape(
+         {
+             oox::drawingml::TextListStylePtr aMasterTextListStyle;
+             Reference< lang::XMultiServiceFactory > xServiceFact( rFilterBase.getModel(), UNO_QUERY_THROW );
++	    sal_Bool bClearText = sal_False;
+ 
+ 			if ( sServiceName != OUString::createFromAscii( "com.sun.star.drawing.GraphicObjectShape" ) &&
+ 			     sServiceName != OUString::createFromAscii( "com.sun.star.drawing.OLE2Shape" ) )
+@@ -131,24 +132,28 @@ void PPTShape::addShape(
+                     {
+                         const rtl::OUString sDateTimeShapeService( RTL_CONSTASCII_USTRINGPARAM( "com.sun.star.presentation.DateTimeShape" ) );
+                         sServiceName = sDateTimeShapeService;
++			bClearText = sal_True;
+                     }
+                     break;
+                     case XML_hdr :
+                     {
+                         const rtl::OUString sHeaderShapeService( RTL_CONSTASCII_USTRINGPARAM( "com.sun.star.presentation.HeaderShape" ) );
+                         sServiceName = sHeaderShapeService;
++			bClearText = sal_True;
+                     }
+                     break;
+                     case XML_ftr :
+                     {
+                         const rtl::OUString sFooterShapeService( RTL_CONSTASCII_USTRINGPARAM( "com.sun.star.presentation.FooterShape" ) );
+                         sServiceName = sFooterShapeService;
++			bClearText = sal_True;
+                     }
+                     break;
+                     case XML_sldNum :
+                     {
+                         const rtl::OUString sSlideNumberShapeService( RTL_CONSTASCII_USTRINGPARAM( "com.sun.star.presentation.SlideNumberShape" ) );
+                         sServiceName = sSlideNumberShapeService;
++			bClearText = sal_True;
+                     }
+                     break;
+                     case XML_sldImg :
+@@ -191,7 +196,7 @@ void PPTShape::addShape(
+ 			} else
+ 			    setMasterTextListStyle( aMasterTextListStyle );
+ 
+-            Reference< XShape > xShape( createAndInsert( rFilterBase, sServiceName, rxTheme, rxShapes, pShapeRect ) );
++			Reference< XShape > xShape( createAndInsert( rFilterBase, sServiceName, rxTheme, rxShapes, pShapeRect, bClearText ) );
+ 
+             if( pShapeMap && msId.getLength() )
+             {
