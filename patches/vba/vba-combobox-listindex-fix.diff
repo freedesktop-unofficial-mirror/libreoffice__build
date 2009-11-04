@@ -1,25 +1,68 @@
 diff --git vbahelper/source/msforms/vbacombobox.cxx vbahelper/source/msforms/vbacombobox.cxx
-index f1ea440..7c27734 100644
+index 7c27734..c4146f7 100644
 --- vbahelper/source/msforms/vbacombobox.cxx
 +++ vbahelper/source/msforms/vbacombobox.cxx
-@@ -63,9 +63,17 @@ ScVbaComboBox::getValue() throw (uno::RuntimeException)
- void SAL_CALL 
- ScVbaComboBox::setListIndex( const uno::Any& _value ) throw (uno::RuntimeException)
- {
--    uno::Sequence< sal_Int16 > sSelection(1);
--    _value >>= sSelection[ 0 ];
--    m_xProps->setPropertyValue( SELECTEDITEMS, uno::makeAny( sSelection ) );
-+    sal_Int16 nIndex = 0;
-+    if( _value >>= nIndex )
-+    {
-+	    uno::Sequence< rtl::OUString > sItems;
-+    	m_xProps->getPropertyValue( ITEMS ) >>= sItems;
-+        if( ( nIndex >= 0 ) && ( sItems.getLength() > nIndex ) )
-+        {
-+            rtl::OUString sText = sItems[ nIndex ];
-+            m_xProps->setPropertyValue( TEXT, uno::makeAny( sText ) );
-+        }
-+    }
- }
+@@ -29,6 +29,9 @@
+  ************************************************************************/
+ #include "vbacombobox.hxx"
+ #include <vector>
++#include <svx/msvbahelper.hxx>
++#include <basic/sbstar.hxx>
++#include <basic/sbmod.hxx>
  
- uno::Any SAL_CALL 
+ using namespace com::sun::star;
+ using namespace ooo::vba;
+@@ -66,12 +69,41 @@ ScVbaComboBox::setListIndex( const uno::Any& _value ) throw (uno::RuntimeExcepti
+     sal_Int16 nIndex = 0;
+     if( _value >>= nIndex )
+     {
++        sal_Int32 nOldIndex = -1;
++        getListIndex() >>= nOldIndex;
+ 	    uno::Sequence< rtl::OUString > sItems;
+     	m_xProps->getPropertyValue( ITEMS ) >>= sItems;
+         if( ( nIndex >= 0 ) && ( sItems.getLength() > nIndex ) )
+         {
+             rtl::OUString sText = sItems[ nIndex ];
+             m_xProps->setPropertyValue( TEXT, uno::makeAny( sText ) );
++
++            // fire the _Change event
++            if( nOldIndex != nIndex )
++            {
++                rtl::OUString sControlName = getName();
++                // get active module
++                SbModule* pModule = StarBASIC::GetActiveModule();
++                StarBASIC* pLib = pModule ? dynamic_cast< StarBASIC* >( pModule->GetParent() ) : NULL;
++                if( pModule && pLib )
++                {
++                    rtl::OUString sMacroName = pModule->GetParent()->GetName();
++                    rtl::OUString sModuleName = pModule->GetName();
++                    sMacroName = sMacroName.concat(  rtl::OUString::createFromAscii(".") ).concat( sModuleName ).concat(  rtl::OUString::createFromAscii(".") ).concat( sControlName ).concat( rtl::OUString::createFromAscii("_Change") );
++                    OSL_TRACE("ScVbaComboBox::setListIndex, fire the event %s", 
++                        rtl::OUStringToOString( sMacroName, RTL_TEXTENCODING_UTF8 ).getStr() );
++                    //static const rtl::OUString sThisComponent( RTL_CONSTASCII_USTRINGPARAM("ThisComponent" ) );
++                    //uno::Reference< frame::XModel > xModel = getCurrentDoc( sThisComponent );
++                    VBAMacroResolvedInfo aMacroInfo = resolveVBAMacro( getSfxObjShell( m_xModel ), sMacroName );
++                    if( aMacroInfo.IsResolved() )
++                    {
++                        uno::Sequence< uno::Any > aArgs;
++                        uno::Any aRet;
++                        uno::Any aDummyCaller;
++                        executeMacro( aMacroInfo.MacroDocContext(), aMacroInfo.ResolvedMacro(), aArgs, aRet, aDummyCaller );
++                    }
++                }
++            }
+         }
+     }
+ }
+diff --git vbahelper/util/makefile.mk vbahelper/util/makefile.mk
+index 796af0a..9180676 100644
+--- vbahelper/util/makefile.mk
++++ vbahelper/util/makefile.mk
+@@ -95,6 +95,7 @@ SHL2STDLIBS= \
+         $(VCLLIB) \
+         $(TKLIB) \
+                 $(BASICLIB) \
++        $(SVXMSFILTERLIB) \
+ 
+ SHL2DEPN=$(SHL1TARGETN)
+ SHL2LIBS=$(SLB)$/$(TARGET_MSFORMS).lib
