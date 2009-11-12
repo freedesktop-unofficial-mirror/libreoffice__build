@@ -1,0 +1,176 @@
+diff --git basic/source/runtime/stdobj.cxx basic/source/runtime/stdobj.cxx
+index 38ba7cd..4c8c807 100644
+--- basic/source/runtime/stdobj.cxx
++++ basic/source/runtime/stdobj.cxx
+@@ -73,6 +73,45 @@ struct Methods {
+     USHORT		nHash;		// Hashcode
+ };
+ 
++struct StringHashCode
++{
++    size_t operator()( const String& rStr ) const
++    {
++        return rtl_ustr_hashCode_WithLength( rStr.GetBuffer(), rStr.Len() );
++    }
++};
++
++class VBABlacklist
++{
++friend class VBABlackListQuery;
++    std::hash_map< String, bool, StringHashCode > mBlackList;
++    VBABlacklist()
++    {
++        const char* list[] = { "Red" };
++        sal_Int32 nSize = sizeof( list ) / sizeof( list[ 0 ] );
++        for ( sal_Int32 index = 0; index < nSize; ++index )
++        {
++            mBlackList[ String::CreateFromAscii( list[ index ] ).ToLowerAscii() ] = true;
++        }
++    } 
++public:
++    bool isBlackListed( const String& sName )
++    {
++        String sNameLower( sName );
++        sNameLower.ToLowerAscii();
++        return ( mBlackList.find( sNameLower ) != mBlackList.end() );
++    }
++};
++
++class VBABlackListQuery
++{
++public:
++    static bool isBlackListed( const String& sName )
++    {
++        static VBABlacklist blackList;
++        return blackList.isBlackListed( sName );
++    }
++};
+ static Methods aMethods[] = {
+ 
+ { "AboutStarBasic", SbxNULL,      1 | _FUNCTION, RTLNAME(AboutStarBasic),0  },
+@@ -759,13 +798,15 @@ SbxVariable* SbiStdObject::Find( const String& rName, SbxClassType t )
+              && ( p->nHash == nHash_ )
+              && ( rName.EqualsIgnoreCaseAscii( p->pName ) ) )
+             {
++                SbiInstance* pInst = pINST;
+                 bFound = TRUE;
+                 if( p->nArgs & _COMPTMASK )
+                 {
+-                    SbiInstance* pInst = pINST;
+                     if( !pInst || !pInst->IsCompatibility() )
+                         bFound = FALSE;
+                 }
++                if ( pInst && pInst->IsCompatibility() && VBABlackListQuery::isBlackListed( rName ) )
++                            bFound = FALSE;
+                 break;
+             }
+             nIndex += ( p->nArgs & _ARGSMASK ) + 1;
+diff --git sc/source/ui/vba/vbarange.cxx sc/source/ui/vba/vbarange.cxx
+index d09c699..7ba906e 100644
+--- sc/source/ui/vba/vbarange.cxx
++++ sc/source/ui/vba/vbarange.cxx
+@@ -2555,8 +2555,6 @@ ScVbaRange::PasteSpecial( const uno::Any& Paste, const uno::Any& Operation, cons
+   
+         uno::Reference< frame::XModel > xModel( ( pShell ? pShell->GetModel() : NULL ), uno::UNO_QUERY_THROW );
+ 	uno::Reference< view::XSelectionSupplier > xSelection( xModel->getCurrentController(), uno::UNO_QUERY_THROW );
+-    // save old selection
+-	uno::Reference< uno::XInterface > xSel( xModel->getCurrentSelection() );
+     // select this range
+     xSelection->select( uno::makeAny( mxRange ) );
+     // set up defaults	
+@@ -2577,8 +2575,6 @@ ScVbaRange::PasteSpecial( const uno::Any& Paste, const uno::Any& Operation, cons
+     USHORT nFlags = getPasteFlags(nPaste);
+     USHORT nFormulaBits = getPasteFormulaBits(nOperation);
+ 	excel::implnPasteSpecial(pShell->GetModel(), nFlags,nFormulaBits,bSkipBlanks,bTranspose);
+-    // restore selection
+-    xSelection->select( uno::makeAny( xSel ) );
+ }
+ 
+ uno::Reference< excel::XRange > 
+diff --git scripting/source/basprov/basprov.cxx scripting/source/basprov/basprov.cxx
+index 562e605..562a8e5 100644
+--- scripting/source/basprov/basprov.cxx
++++ scripting/source/basprov/basprov.cxx
+@@ -374,7 +374,33 @@ namespace basprov
+             ::rtl::OUString::createFromAscii( "location" ) );
+ 
+         sal_Int32 nIndex = 0;
+-        ::rtl::OUString aLibrary = aDescription.getToken( 0, (sal_Unicode)'.', nIndex );
++        // In some strange circumstances the Library name can have an 
++        // apparantly illegal '.' in it ( in imported VBA )
++     
++        BasicManager* pBasicMgr =  NULL;
++        if ( aLocation.equals( ::rtl::OUString::createFromAscii("document") ) )
++        {
++            pBasicMgr = m_pDocBasicManager;
++        }
++        else if ( aLocation.equals( ::rtl::OUString::createFromAscii("application") ) )
++        {
++            pBasicMgr = m_pAppBasicManager;
++        }
++        rtl::OUString sProjectName;
++        if (  pBasicMgr )
++            sProjectName = pBasicMgr->GetName();
++
++        ::rtl::OUString aLibrary;
++        if ( sProjectName.getLength() && aDescription.match( sProjectName ) )
++        {
++            OSL_TRACE("LibraryName %s is part of the url %s",
++                rtl::OUStringToOString( sProjectName, RTL_TEXTENCODING_UTF8 ).getStr(),
++                rtl::OUStringToOString( aDescription, RTL_TEXTENCODING_UTF8 ).getStr() );
++            aLibrary = sProjectName;            
++            nIndex = sProjectName.getLength() + 1;
++        }
++        else
++            aLibrary = aDescription.getToken( 0, (sal_Unicode)'.', nIndex );
+         ::rtl::OUString aModule;
+         if ( nIndex != -1 )
+             aModule = aDescription.getToken( 0, (sal_Unicode)'.', nIndex );
+@@ -384,15 +410,6 @@ namespace basprov
+ 
+         if ( aLibrary.getLength() != 0 && aModule.getLength() != 0 && aMethod.getLength() != 0 && aLocation.getLength() != 0 )
+         {
+-            BasicManager* pBasicMgr =  NULL;
+-            if ( aLocation.equals( ::rtl::OUString::createFromAscii("document") ) )
+-            {
+-                pBasicMgr = m_pDocBasicManager;
+-            }
+-            else if ( aLocation.equals( ::rtl::OUString::createFromAscii("application") ) )
+-            {
+-                pBasicMgr = m_pAppBasicManager;
+-            }
+ 
+             if ( pBasicMgr )
+             {
+diff --git svx/source/msfilter/msvbahelper.cxx svx/source/msfilter/msvbahelper.cxx
+index d02746f..cf66309 100644
+--- svx/source/msfilter/msvbahelper.cxx
++++ svx/source/msfilter/msvbahelper.cxx
+@@ -98,7 +98,17 @@ SfxObjectShell* findShellForUrl( const rtl::OUString& sMacroURLOrPath )
+             }
+             else
+             {
+-                if ( aURL.equals( xModel->getURL() ) )
++                // sometimes just the name of the document ( without the path
++                // is used
++                bool bDocNameNoPathMatch = false;
++                if ( aURL.getLength() && aURL.indexOf( '/' ) == -1 )
++                {
++                    sal_Int32 lastSlashIndex = xModel->getURL().lastIndexOf( '/' );
++                    if ( lastSlashIndex > -1 )
++                        bDocNameNoPathMatch = xModel->getURL().copy( lastSlashIndex + 1 ).equals( aURL );
++                } 
++                             
++                if ( aURL.equals( xModel->getURL() ) || bDocNameNoPathMatch )
+                 {
+                     pFoundShell = pShell; 
+                     break;
+@@ -207,7 +217,7 @@ VBAMacroResolvedInfo resolveVBAMacro( SfxObjectShell* pShell, const rtl::OUStrin
+         OSL_TRACE("doc search, current shell is 0x%x", pShell );
+         SfxObjectShell* pFoundShell = findShellForUrl( sDocUrlOrPath );
+         OSL_TRACE("doc search, after find, found shell is 0x%x", pFoundShell );
+-        aRes = resolveVBAMacro( pFoundShell, sMacroUrl ); 
++        return resolveVBAMacro( pFoundShell, sMacroUrl ); 
+     }    
+     else
+     {
