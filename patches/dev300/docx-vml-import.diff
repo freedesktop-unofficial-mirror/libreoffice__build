@@ -14,27 +14,18 @@ index f08f807..2a8bd6f 100644
  const sal_Int16 API_LINE_NONE               = 0;
  const sal_Int16 API_LINE_HAIR               = 2;
 diff --git oox/inc/oox/vml/vmlshape.hxx oox/inc/oox/vml/vmlshape.hxx
-index 323e643..606711f 100644
+index 323e643..09a5296 100644
 --- oox/inc/oox/vml/vmlshape.hxx
 +++ oox/inc/oox/vml/vmlshape.hxx
-@@ -219,6 +219,8 @@ protected:
-                             const ::com::sun::star::uno::Reference< ::com::sun::star::drawing::XShapes >& rxShapes,
-                             const ::com::sun::star::awt::Rectangle& rShapeRect ) const;
+@@ -212,6 +212,8 @@ class SimpleShape : public ShapeBase
+ public:
+     explicit            SimpleShape( const Drawing& rDrawing, const ::rtl::OUString& rService );
  
 +    void setService( rtl::OUString aService ) { maService = aService; }
 +
- private:
-     ::rtl::OUString     maService;          /// Name of the UNO shape service.
- };
-@@ -230,6 +232,8 @@ class RectangleShape : public SimpleShape
- {
- public:
-     explicit            RectangleShape( const Drawing& rDrawing );
-+    void setService( rtl::OUString aService ) 
-+        { SimpleShape::setService( aService ); }
- };
- 
- // ============================================================================
+ protected:
+     /** Creates the corresponding XShape and inserts it into the passed container. */
+     virtual ::com::sun::star::uno::Reference< ::com::sun::star::drawing::XShape >
 diff --git oox/inc/oox/vml/vmlshapecontainer.hxx oox/inc/oox/vml/vmlshapecontainer.hxx
 index caa8a1a..70241f5 100644
 --- oox/inc/oox/vml/vmlshapecontainer.hxx
@@ -49,7 +40,7 @@ index caa8a1a..70241f5 100644
      typedef RefVector< ShapeType >                  ShapeTypeVector;
      typedef RefVector< ShapeBase >                  ShapeVector;
 diff --git oox/inc/oox/vml/vmlshapecontext.hxx oox/inc/oox/vml/vmlshapecontext.hxx
-index dbc5e1a..169e613 100644
+index dbc5e1a..3b63685 100644
 --- oox/inc/oox/vml/vmlshapecontext.hxx
 +++ oox/inc/oox/vml/vmlshapecontext.hxx
 @@ -43,6 +43,7 @@ struct ShapeClientData;
@@ -60,7 +51,17 @@ index dbc5e1a..169e613 100644
  
  class ShapeContainer;
  
-@@ -141,6 +142,22 @@ private:
+@@ -118,6 +119,9 @@ private:
+     /** Processes the 'points' attribute. */
+     void                setPoints( const ::rtl::OUString& rPoints );
+ 
++protected:
++    ShapeBase&          mrShape;
++
+ private:
+     ShapeModel&         mrShapeModel;
+ };
+@@ -141,6 +145,19 @@ private:
  
  // ============================================================================
  
@@ -74,9 +75,6 @@ index dbc5e1a..169e613 100644
 +
 +    virtual ::oox::core::ContextHandlerRef
 +                        onCreateContext( sal_Int32 nElement, const AttributeList& rAttribs );
-+
-+private:
-+    RectangleShape&     mrShape;
 +};
 +// ============================================================================
 +
@@ -254,7 +252,7 @@ index fe07172..13ec216 100644
  
  Rectangle ShapeType::getRelRectangle() const
 diff --git oox/source/vml/vmlshapecontext.cxx oox/source/vml/vmlshapecontext.cxx
-index 725af97..92cb5d7 100644
+index 725af97..31280f1 100644
 --- oox/source/vml/vmlshapecontext.cxx
 +++ oox/source/vml/vmlshapecontext.cxx
 @@ -158,6 +158,7 @@ ShapeContextBase::ShapeContextBase( ContextHandler2Helper& rParent ) :
@@ -265,20 +263,39 @@ index 725af97..92cb5d7 100644
          case VML_TOKEN( roundrect ):
              return new ShapeContext( rParent, rAttribs, rShapes.createShape< RectangleShape >() );
          case VML_TOKEN( oval ):
-@@ -320,6 +321,23 @@ ContextHandlerRef GroupShapeContext::onCreateContext( sal_Int32 nElement, const
+@@ -273,6 +274,7 @@ void ShapeTypeContext::setStyle( const OUString& rStyle )
+ 
+ ShapeContext::ShapeContext( ContextHandler2Helper& rParent, const AttributeList& rAttribs, ShapeBase& rShape ) :
+     ShapeTypeContext( rParent, rAttribs, rShape ),
++    mrShape( rShape ),
+     mrShapeModel( rShape.getShapeModel() )
+ {
+     // collect shape specific attributes
+@@ -283,6 +285,11 @@ ShapeContext::ShapeContext( ContextHandler2Helper& rParent, const AttributeList&
+ 
+ ContextHandlerRef ShapeContext::onCreateContext( sal_Int32 nElement, const AttributeList& rAttribs )
+ {
++    // Custom shape in Writer with a textbox are transformed into a frame
++    if ( nElement == ( NMSP_VML + XML_textbox ) )
++        dynamic_cast<SimpleShape&>( mrShape ).setService( 
++            OUString::createFromAscii( "com.sun.star.text.TextFrame" ) );
++
+     // Excel specific shape client data
+     if( isRootElement() && (nElement == VMLX_TOKEN( ClientData )) )
+         return new ShapeClientDataContext( *this, rAttribs, mrShapeModel.createClientData() );
+@@ -320,6 +327,22 @@ ContextHandlerRef GroupShapeContext::onCreateContext( sal_Int32 nElement, const
  
  // ============================================================================
  
 +RectangleShapeContext::RectangleShapeContext( ContextHandler2Helper& rParent, const AttributeList& rAttribs, RectangleShape& rShape ) :
-+    ShapeContext( rParent, rAttribs, rShape ),
-+    mrShape( rShape )
++    ShapeContext( rParent, rAttribs, rShape )
 +{
 +}
 +
 +ContextHandlerRef RectangleShapeContext::onCreateContext( sal_Int32 nElement, const AttributeList& rAttribs )
 +{
 +    if ( nElement == ( NMSP_VML + XML_textbox ) )
-+        mrShape.setService( 
++        dynamic_cast< SimpleShape &>( mrShape ).setService( 
 +            OUString::createFromAscii( "com.sun.star.text.TextFrame" ) );
 +
 +    // The parent class's context is fine
@@ -310,6 +327,19 @@ index 803ebec..5242dd7 100644
  };
  
  
+diff --git writerfilter/source/dmapper/OLEHandler.cxx writerfilter/source/dmapper/OLEHandler.cxx
+index 491a1c3..d5c351a 100644
+--- writerfilter/source/dmapper/OLEHandler.cxx
++++ writerfilter/source/dmapper/OLEHandler.cxx
+@@ -57,7 +57,7 @@ using namespace ::com::sun::star;
+ OLEHandler::OLEHandler() :
+     m_nDxaOrig(0),
+     m_nDyaOrig(0),
+-    m_nWrapMode(0)
++    m_nWrapMode(1)
+ {
+ }
+ /*-- 23.04.2008 10:46:14---------------------------------------------------
 diff --git writerfilter/source/ooxml/OOXMLDocumentImpl.cxx writerfilter/source/ooxml/OOXMLDocumentImpl.cxx
 index 4ae36eb..97ba13c 100644
 --- writerfilter/source/ooxml/OOXMLDocumentImpl.cxx
@@ -353,10 +383,10 @@ index 9649376..3a9c9d1 100644
  }}
  #endif // OOXML_DOCUMENT_IMPL_HXX
 diff --git writerfilter/source/ooxml/OOXMLFastContextHandler.cxx writerfilter/source/ooxml/OOXMLFastContextHandler.cxx
-index fdaf476..4882436 100644
+index b2080d5..fce56a9 100644
 --- writerfilter/source/ooxml/OOXMLFastContextHandler.cxx
 +++ writerfilter/source/ooxml/OOXMLFastContextHandler.cxx
-@@ -1973,13 +1973,19 @@ OOXMLFastContextHandlerShape::OOXMLFastContextHandlerShape
+@@ -1976,13 +1976,19 @@ OOXMLFastContextHandlerShape::OOXMLFastContextHandlerShape
          uno::Reference<XMultiComponentFactory> rServiceManager
              (xContext->getServiceManager());
  
