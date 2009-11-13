@@ -1,0 +1,93 @@
+diff --git oox/inc/oox/xls/stylesbuffer.hxx oox/inc/oox/xls/stylesbuffer.hxx
+index e9d17db..4f288f5 100644
+--- oox/inc/oox/xls/stylesbuffer.hxx
++++ oox/inc/oox/xls/stylesbuffer.hxx
+@@ -434,6 +434,8 @@ public:
+     /** Writes all border attributes to the passed property set. */
+     void                writeToPropertySet( PropertySet& rPropSet ) const;
+ 
++    bool                hasBorder() const;
++
+ private:
+     /** Returns the border line struct specified by the passed XML token identifier. */
+     OoxBorderLineData*  getBorderLine( sal_Int32 nElement );
+@@ -857,6 +859,7 @@ public:
+     /** Writes the cell formatting attributes of the specified style XF to the passed property set. */
+     void                writeStyleXfToPropertySet( PropertySet& rPropSet, sal_Int32 nXfId ) const;
+ 
++    bool                hasBorder( sal_Int32 nBorderId ) const;
+ private:
+     void                insertCellStyle( CellStyleRef xCellStyle );
+ 
+diff --git oox/source/xls/stylesbuffer.cxx oox/source/xls/stylesbuffer.cxx
+index 5627c78..00411bb 100644
+--- oox/source/xls/stylesbuffer.cxx
++++ oox/source/xls/stylesbuffer.cxx
+@@ -40,6 +40,7 @@
+ #include <com/sun/star/style/XStyle.hpp>
+ #include <com/sun/star/text/WritingMode2.hpp>
+ #include <com/sun/star/text/XText.hpp>
++#include <com/sun/star/table/CellVertJustify.hpp>
+ #include <rtl/tencinfo.h>
+ #include <rtl/ustrbuf.hxx>
+ #include "oox/helper/attributelist.hxx"
+@@ -1599,6 +1600,34 @@ void Border::writeToPropertySet( PropertySet& rPropSet ) const
+     getStylesPropertyHelper().writeBorderProperties( rPropSet, maApiData );
+ }
+ 
++namespace {
++
++bool lcl_isBorder(const ::com::sun::star::table::BorderLine& rBorder)
++{
++    return (rBorder.InnerLineWidth > 0) || (rBorder.OuterLineWidth > 0);
++}
++
++}
++
++bool Border::hasBorder() const
++{
++    const ApiBorderData::ApiTableBorder& rTabBorder = maApiData.maBorder;
++
++    if (rTabBorder.IsBottomLineValid && lcl_isBorder(rTabBorder.BottomLine))
++        return true;
++
++    if (rTabBorder.IsTopLineValid && lcl_isBorder(rTabBorder.TopLine))
++        return true;
++
++    if (rTabBorder.IsLeftLineValid && lcl_isBorder(rTabBorder.LeftLine))
++        return true;
++
++    if (rTabBorder.IsRightLineValid && lcl_isBorder(rTabBorder.RightLine))
++        return true;
++
++    return false;
++}
++
+ OoxBorderLineData* Border::getBorderLine( sal_Int32 nElement )
+ {
+     switch( nElement )
+@@ -2255,6 +2284,11 @@ void Xf::writeToPropertySet( PropertySet& rPropSet ) const
+         rStyles.writeBorderToPropertySet( rPropSet, maOoxData.mnBorderId );
+     if( maOoxData.mbAreaUsed )
+         rStyles.writeFillToPropertySet( rPropSet, maOoxData.mnFillId );
++
++    ::com::sun::star::table::CellVertJustify eRotRef = ::com::sun::star::table::CellVertJustify_STANDARD;
++    if (maOoxData.mbBorderUsed && rStyles.hasBorder(maOoxData.mnBorderId) && maAlignment.getApiData().mnRotation)
++        eRotRef = ::com::sun::star::table::CellVertJustify_BOTTOM;
++    rPropSet.setProperty( CREATE_OUSTRING("RotateReference"), eRotRef );
+ }
+ 
+ void Xf::setBiffUsedFlags( sal_uInt8 nUsedFlags )
+@@ -3150,6 +3184,12 @@ void StylesBuffer::writeCellXfToPropertySet( PropertySet& rPropSet, sal_Int32 nX
+         pXf->writeToPropertySet( rPropSet );
+ }
+ 
++bool StylesBuffer::hasBorder( sal_Int32 nBorderId ) const
++{
++    Border* pBorder = maBorders.get( nBorderId ).get();
++    return pBorder && pBorder->hasBorder();
++}
++
+ void StylesBuffer::writeStyleXfToPropertySet( PropertySet& rPropSet, sal_Int32 nXfId ) const
+ {
+     if( Xf* pXf = maStyleXfs.get( nXfId ).get() )
