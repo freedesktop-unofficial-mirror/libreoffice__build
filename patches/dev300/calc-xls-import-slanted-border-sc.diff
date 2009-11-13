@@ -1,0 +1,76 @@
+diff --git sc/source/filter/excel/xistyle.cxx sc/source/filter/excel/xistyle.cxx
+index 9f38dda..ac5e956 100644
+--- sc/source/filter/excel/xistyle.cxx
++++ sc/source/filter/excel/xistyle.cxx
+@@ -765,7 +765,6 @@ void XclImpCellAlign::FillToItemSet( SfxItemSet& rItemSet, const XclImpFont* pFo
+     sal_uInt8 nXclRot = (mnOrient == EXC_ORIENT_NONE) ? mnRotation : XclTools::GetXclRotFromOrient( mnOrient );
+     bool bStacked = (nXclRot == EXC_ROT_STACKED);
+     ScfTools::PutItem( rItemSet, SfxBoolItem( ATTR_STACKED, bStacked ), bSkipPoolDefs );
+-    ScfTools::PutItem( rItemSet, SvxRotateModeItem( SVX_ROTATE_MODE_STANDARD, ATTR_ROTATE_MODE ), bSkipPoolDefs );
+     // set an angle in the range from -90 to 90 degrees
+     sal_Int32 nAngle = XclTools::GetScRotation( nXclRot, 0 );
+     ScfTools::PutItem( rItemSet, SfxInt32Item( ATTR_ROTATE_VALUE, nAngle ), bSkipPoolDefs );
+@@ -863,6 +862,15 @@ void XclImpCellBorder::FillFromCF8( sal_uInt16 nLineStyle, sal_uInt32 nLineColor
+     mbDiagUsed    = false;
+ }
+ 
++bool XclImpCellBorder::HasAnyOuterBorder() const
++{
++    return
++        (mbLeftUsed   && (mnLeftLine != EXC_LINE_NONE)) ||
++        (mbRightUsed  && (mnRightLine != EXC_LINE_NONE)) ||
++        (mbTopUsed    && (mnTopLine != EXC_LINE_NONE)) ||
++        (mbBottomUsed && (mnBottomLine != EXC_LINE_NONE));
++}
++
+ namespace {
+ 
+ /** Converts the passed line style to a SvxBorderLine, or returns false, if style is "no line". */
+@@ -1094,11 +1102,12 @@ const ScPatternAttr& XclImpXF::CreatePattern( bool bSkipPoolDefs )
+     // create new pattern attribute set
+     mpPattern.reset( new ScPatternAttr( GetDoc().GetPool() ) );
+     SfxItemSet& rItemSet = mpPattern->GetItemSet();
++    XclImpXF* pParentXF = IsCellXF() ? GetXFBuffer().GetXF( mnParent ) : 0;
+ 
+     // parent cell style
+     if( IsCellXF() && !mpStyleSheet )
+     {
+         mpStyleSheet = GetXFBuffer().CreateStyleSheet( mnParent );
+         if( XclImpXF* pParentXF = GetXFBuffer().GetXF( mnParent ) )
+             UpdateUsedFlags( *pParentXF );
+     }
+@@ -1292,6 +1301,20 @@ const ScPatternAttr& XclImpXF::CreatePattern( bool bSkipPoolDefs )
+             maArea.mnPattern != EXC_PATT_SOLID);
+     }
+ 
++    /*  #i38709# Decide which rotation reference mode to use. If any outer
++        border line of the cell is set (either explicitly or via cell style),
++        and the cell contents are rotated, set rotation reference to bottom of
++        cell. This causes the borders to be painted rotated with the text. */
++    if( mbAlignUsed || mbBorderUsed )
++    {
++        SvxRotateMode eRotateMode = SVX_ROTATE_MODE_STANDARD;
++        const XclImpCellAlign* pAlign = mbAlignUsed ? &maAlignment : (pParentXF ? &pParentXF->maAlignment : 0);
++        const XclImpCellBorder* pBorder = mbBorderUsed ? &maBorder : (pParentXF ? &pParentXF->maBorder : 0);
++        if( pAlign && pBorder && (0 < pAlign->mnRotation) && (pAlign->mnRotation <= 180) && pBorder->HasAnyOuterBorder() )
++            eRotateMode = SVX_ROTATE_MODE_BOTTOM;
++        ScfTools::PutItem( rItemSet, SvxRotateModeItem( eRotateMode, ATTR_ROTATE_MODE ), bSkipPoolDefs );
++    }
++
+     return *mpPattern;
+ }
+ 
+diff --git sc/source/filter/inc/xistyle.hxx sc/source/filter/inc/xistyle.hxx
+index 91d9265..92ceca6 100644
+--- sc/source/filter/inc/xistyle.hxx
++++ sc/source/filter/inc/xistyle.hxx
+@@ -321,6 +321,9 @@ struct XclImpCellBorder : public XclCellBorder
+     /** Fills this struct with BIFF8 CF (conditional format) record data. */
+     void                FillFromCF8( sal_uInt16 nLineStyle, sal_uInt32 nLineColor, sal_uInt32 nFlags );
+ 
++    /** Returns true, if any of the outer border lines is visible. */
++    bool                HasAnyOuterBorder() const;
++
+     /** Inserts a box item representing this border style into the item set.
+         @param bSkipPoolDefs  true = Do not put items equal to pool default; false = Put all items. */
+     void                FillToItemSet(
