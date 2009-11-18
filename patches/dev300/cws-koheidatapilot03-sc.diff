@@ -4674,7 +4674,7 @@ index 626b11b..0a078a4 100644
  // ----------------------------------------------------------------------------
  
 diff --git sc/source/filter/xml/XMLExportDataPilot.cxx sc/source/filter/xml/XMLExportDataPilot.cxx
-index a382a95..eeecd3b 100644
+index a382a95..f01685d 100644
 --- sc/source/filter/xml/XMLExportDataPilot.cxx
 +++ sc/source/filter/xml/XMLExportDataPilot.cxx
 @@ -68,6 +68,7 @@
@@ -4685,18 +4685,22 @@ index a382a95..eeecd3b 100644
  
  ScXMLExportDataPilot::ScXMLExportDataPilot(ScXMLExport& rTempExport)
      : rExport(rTempExport),
-@@ -448,7 +449,10 @@ void ScXMLExportDataPilot::WriteLayoutInfo(ScDPSaveDimension* pDim)
+@@ -448,7 +449,14 @@ void ScXMLExportDataPilot::WriteLayoutInfo(ScDPSaveDimension* pDim)
  
  void ScXMLExportDataPilot::WriteSubTotals(ScDPSaveDimension* pDim)
  {
 +    using sheet::GeneralFunction;
 +
      sal_Int32 nSubTotalCount = pDim->GetSubTotalsCount();
-+    const OUString* pLayoutName = pDim->GetSubtotalName();
++    const OUString* pLayoutName = NULL;
++    if (rExport.getDefaultVersion() == SvtSaveOptions::ODFVER_LATEST)
++        // Export display names only for 1.2 extended or later.
++        pLayoutName = pDim->GetSubtotalName();
++
      if (nSubTotalCount > 0)
      {
          SvXMLElementExport aElemSTs(rExport, XML_NAMESPACE_TABLE, XML_DATA_PILOT_SUBTOTALS, sal_True, sal_True);
-@@ -456,8 +460,11 @@ void ScXMLExportDataPilot::WriteSubTotals(ScDPSaveDimension* pDim)
+@@ -456,8 +464,11 @@ void ScXMLExportDataPilot::WriteSubTotals(ScDPSaveDimension* pDim)
          for (sal_Int32 nSubTotal = 0; nSubTotal < nSubTotalCount; nSubTotal++)
          {
              rtl::OUString sFunction;
@@ -4705,32 +4709,42 @@ index a382a95..eeecd3b 100644
 +			ScXMLConverter::GetStringFromFunction( sFunction, nFunc);
              rExport.AddAttribute(XML_NAMESPACE_TABLE, XML_FUNCTION, sFunction);
 +            if (pLayoutName && nFunc == sheet::GeneralFunction_AUTO)
-+                rExport.AddAttribute(XML_NAMESPACE_TABLE, XML_DISPLAY_NAME, *pLayoutName);
++                rExport.AddAttribute(XML_NAMESPACE_TABLE_EXT, XML_DISPLAY_NAME, *pLayoutName);
              SvXMLElementExport aElemST(rExport, XML_NAMESPACE_TABLE, XML_DATA_PILOT_SUBTOTAL, sal_True, sal_True);
          }
      }
-@@ -473,6 +480,9 @@ void ScXMLExportDataPilot::WriteMembers(ScDPSaveDimension* pDim)
+@@ -473,6 +484,15 @@ void ScXMLExportDataPilot::WriteMembers(ScDPSaveDimension* pDim)
          for (ScDPSaveDimension::MemberList::const_iterator i=rMembers.begin(); i != rMembers.end() ; i++)
          {
              rExport.AddAttribute(XML_NAMESPACE_TABLE, XML_NAME, rtl::OUString((*i)->GetName()));
-+            const OUString* pLayoutName = (*i)->GetLayoutName();
-+            if (pLayoutName)
-+                rExport.AddAttribute(XML_NAMESPACE_TABLE, XML_DISPLAY_NAME, *pLayoutName);
++
++            if (rExport.getDefaultVersion() == SvtSaveOptions::ODFVER_LATEST)
++            {
++                // Export display names only for ODF 1.2 extended or later.
++                const OUString* pLayoutName = (*i)->GetLayoutName();
++                if (pLayoutName)
++                    rExport.AddAttribute(XML_NAMESPACE_TABLE_EXT, XML_DISPLAY_NAME, *pLayoutName);
++            }
++
              rtl::OUStringBuffer sBuffer;
              SvXMLUnitConverter::convertBool(sBuffer, (*i)->GetIsVisible());
              rExport.AddAttribute(XML_NAMESPACE_TABLE, XML_DISPLAY, sBuffer.makeStringAndClear());
-@@ -670,6 +680,10 @@ void ScXMLExportDataPilot::WriteGroupDimElements(ScDPSaveDimension* pDim, const
+@@ -670,6 +690,14 @@ void ScXMLExportDataPilot::WriteGroupDimElements(ScDPSaveDimension* pDim, const
  void ScXMLExportDataPilot::WriteDimension(ScDPSaveDimension* pDim, const ScDPDimensionSaveData* pDimData)
  {
      rExport.AddAttribute(XML_NAMESPACE_TABLE, XML_SOURCE_FIELD_NAME, rtl::OUString(pDim->GetName()));
-+    const OUString* pLayoutName = pDim->GetLayoutName();
-+    if (pLayoutName)
-+        rExport.AddAttribute(XML_NAMESPACE_TABLE, XML_DISPLAY_NAME, *pLayoutName);
++    if (rExport.getDefaultVersion() == SvtSaveOptions::ODFVER_LATEST)
++    {
++        // Export display names only for ODF 1.2 extended or later.
++        const OUString* pLayoutName = pDim->GetLayoutName();
++        if (pLayoutName)
++            rExport.AddAttribute(XML_NAMESPACE_TABLE_EXT, XML_DISPLAY_NAME, *pLayoutName);
++    }
 +
      if (pDim->IsDataLayout())
          rExport.AddAttribute(XML_NAMESPACE_TABLE, XML_IS_DATA_LAYOUT_FIELD, XML_TRUE);
      rtl::OUString sValueStr;
-@@ -707,6 +721,15 @@ void ScXMLExportDataPilot::WriteDimensions(ScDPSaveData* pDPSave)
+@@ -707,6 +735,19 @@ void ScXMLExportDataPilot::WriteDimensions(ScDPSaveData* pDPSave)
      }
  }
  
@@ -4738,15 +4752,19 @@ index a382a95..eeecd3b 100644
 +{
 +    rExport.AddAttribute(XML_NAMESPACE_TABLE, XML_DISPLAY, bVisible ? XML_TRUE : XML_FALSE);
 +    rExport.AddAttribute(XML_NAMESPACE_TABLE, XML_ORIENTATION, eOrient);
-+    if (pGrandTotal)
-+        rExport.AddAttribute(XML_NAMESPACE_TABLE, XML_DISPLAY_NAME, *pGrandTotal);
++    if (rExport.getDefaultVersion() == SvtSaveOptions::ODFVER_LATEST)
++    {
++        // Export display names only for ODF 1.2 extended or later.
++        if (pGrandTotal)
++            rExport.AddAttribute(XML_NAMESPACE_TABLE_EXT, XML_DISPLAY_NAME, *pGrandTotal);
++    }
 +    SvXMLElementExport aElemGrandTotal(rExport, XML_NAMESPACE_TABLE, XML_DATA_PILOT_GRAND_TOTAL, sal_True, sal_True);
 +}
 +
  void ScXMLExportDataPilot::WriteDataPilots(const uno::Reference <sheet::XSpreadsheetDocument>& /* xSpreadDoc */)
  {
      pDoc = rExport.GetDocument();
-@@ -775,6 +798,20 @@ void ScXMLExportDataPilot::WriteDataPilots(const uno::Reference <sheet::XSpreads
+@@ -775,6 +816,20 @@ void ScXMLExportDataPilot::WriteDataPilots(const uno::Reference <sheet::XSpreads
                          if (!pDPSave->GetDrillDown())
                              rExport.AddAttribute(XML_NAMESPACE_TABLE, XML_DRILL_DOWN_ON_DOUBLE_CLICK, XML_FALSE);
                          SvXMLElementExport aElemDP(rExport, XML_NAMESPACE_TABLE, XML_DATA_PILOT_TABLE, sal_True, sal_True);
@@ -4789,7 +4807,7 @@ index 87c5894..a3f6cf8 100644
      ScXMLExportDataPilot(ScXMLExport& rExport);
      ~ScXMLExportDataPilot();
 diff --git sc/source/filter/xml/xmldpimp.cxx sc/source/filter/xml/xmldpimp.cxx
-index 470827b..070fbc2 100644
+index 470827b..79a0858 100644
 --- sc/source/filter/xml/xmldpimp.cxx
 +++ sc/source/filter/xml/xmldpimp.cxx
 @@ -48,6 +48,7 @@
@@ -5023,7 +5041,7 @@ index 470827b..070fbc2 100644
  ScXMLDPSourceSQLContext::ScXMLDPSourceSQLContext( ScXMLImport& rImport,
                                        USHORT nPrfx,
                                        const ::rtl::OUString& rLName,
-@@ -643,6 +735,80 @@ void ScXMLSourceServiceContext::EndElement()
+@@ -643,6 +735,81 @@ void ScXMLSourceServiceContext::EndElement()
  {
  }
  
@@ -5063,6 +5081,7 @@ index 470827b..070fbc2 100644
 +                    meOrientation = COLUMN;
 +            break;
 +            case XML_TOK_DATA_PILOT_GRAND_TOTAL_ATTR_DISPLAY_NAME:
++            case XML_TOK_DATA_PILOT_GRAND_TOTAL_ATTR_DISPLAY_NAME_EXT:
 +                maDisplayName = rAttrValue;
 +            break;
 +            default:
@@ -5104,7 +5123,7 @@ index 470827b..070fbc2 100644
  ScXMLSourceCellRangeContext::ScXMLSourceCellRangeContext( ScXMLImport& rImport,
                                        USHORT nPrfx,
                                        const ::rtl::OUString& rLName,
-@@ -723,10 +889,12 @@ ScXMLDataPilotFieldContext::ScXMLDataPilotFieldContext( ScXMLImport& rImport,
+@@ -723,10 +890,12 @@ ScXMLDataPilotFieldContext::ScXMLDataPilotFieldContext( ScXMLImport& rImport,
      bIsGroupField(sal_False),
      bDateValue(sal_False),
      bAutoStart(sal_False),
@@ -5118,11 +5137,12 @@ index 470827b..070fbc2 100644
      sal_Int16 nAttrCount = xAttrList.is() ? xAttrList->getLength() : 0;
      const SvXMLTokenMap& rAttrTokenMap = GetScImport().GetDataPilotFieldAttrTokenMap();
      for( sal_Int16 i=0; i < nAttrCount; ++i )
-@@ -745,6 +913,11 @@ ScXMLDataPilotFieldContext::ScXMLDataPilotFieldContext( ScXMLImport& rImport,
+@@ -745,6 +914,12 @@ ScXMLDataPilotFieldContext::ScXMLDataPilotFieldContext( ScXMLImport& rImport,
                  bHasName = sal_True;
              }
              break;
 +            case XML_TOK_DATA_PILOT_FIELD_ATTR_DISPLAY_NAME:
++            case XML_TOK_DATA_PILOT_FIELD_ATTR_DISPLAY_NAME_EXT:
 +            {
 +                aDisplayName = sValue;
 +            }
@@ -5130,7 +5150,7 @@ index 470827b..070fbc2 100644
              case XML_TOK_DATA_PILOT_FIELD_ATTR_IS_DATA_LAYOUT_FIELD :
              {
                  bDataLayout = IsXMLToken(sValue, XML_TRUE);
-@@ -774,7 +947,11 @@ ScXMLDataPilotFieldContext::ScXMLDataPilotFieldContext( ScXMLImport& rImport,
+@@ -774,7 +949,11 @@ ScXMLDataPilotFieldContext::ScXMLDataPilotFieldContext( ScXMLImport& rImport,
          }
      }
      if (bHasName)
@@ -5142,7 +5162,7 @@ index 470827b..070fbc2 100644
  }
  
  ScXMLDataPilotFieldContext::~ScXMLDataPilotFieldContext()
-@@ -808,6 +985,22 @@ SvXMLImportContext *ScXMLDataPilotFieldContext::CreateChildContext( USHORT nPref
+@@ -808,6 +987,22 @@ SvXMLImportContext *ScXMLDataPilotFieldContext::CreateChildContext( USHORT nPref
      return pContext;
  }
  
@@ -5165,7 +5185,7 @@ index 470827b..070fbc2 100644
  void ScXMLDataPilotFieldContext::AddGroup(const ::std::vector<rtl::OUString>& rMembers, const rtl::OUString& rName)
  {
      ScXMLDataPilotGroup aGroup;
-@@ -828,7 +1021,7 @@ void ScXMLDataPilotFieldContext::EndElement()
+@@ -828,7 +1023,7 @@ void ScXMLDataPilotFieldContext::EndElement()
              String sPage(sSelectedPage);
              pDim->SetCurrentPage(&sPage);
          }
@@ -5174,7 +5194,7 @@ index 470827b..070fbc2 100644
          if (bIsGroupField)
          {            
              ScDPNumGroupInfo aInfo;
-@@ -1199,6 +1392,8 @@ SvXMLImportContext *ScXMLDataPilotSubTotalsContext::CreateChildContext( USHORT n
+@@ -1199,6 +1394,8 @@ SvXMLImportContext *ScXMLDataPilotSubTotalsContext::CreateChildContext( USHORT n
  void ScXMLDataPilotSubTotalsContext::EndElement()
  {
      pDataPilotField->SetSubTotals(pFunctions, nFunctionCount);
@@ -5183,7 +5203,7 @@ index 470827b..070fbc2 100644
  }
  
  void ScXMLDataPilotSubTotalsContext::AddFunction(sal_Int16 nFunction)
-@@ -1221,6 +1416,11 @@ void ScXMLDataPilotSubTotalsContext::AddFunction(sal_Int16 nFunction)
+@@ -1221,6 +1418,11 @@ void ScXMLDataPilotSubTotalsContext::AddFunction(sal_Int16 nFunction)
      }
  }
  
@@ -5195,27 +5215,29 @@ index 470827b..070fbc2 100644
  ScXMLDataPilotSubTotalContext::ScXMLDataPilotSubTotalContext( ScXMLImport& rImport,
                                        USHORT nPrfx,
                                        const ::rtl::OUString& rLName,
-@@ -1247,6 +1447,8 @@ ScXMLDataPilotSubTotalContext::ScXMLDataPilotSubTotalContext( ScXMLImport& rImpo
+@@ -1247,6 +1449,9 @@ ScXMLDataPilotSubTotalContext::ScXMLDataPilotSubTotalContext( ScXMLImport& rImpo
                  pDataPilotSubTotals->AddFunction( sal::static_int_cast<sal_Int16>(
                                  ScXMLConverter::GetFunctionFromString( sValue ) ) );
              }
 +            case XML_TOK_DATA_PILOT_SUBTOTAL_ATTR_DISPLAY_NAME:
++            case XML_TOK_DATA_PILOT_SUBTOTAL_ATTR_DISPLAY_NAME_EXT:
 +                pDataPilotSubTotals->SetDisplayName(sValue);
              break;
          }
      }
-@@ -1344,6 +1546,10 @@ ScXMLDataPilotMemberContext::ScXMLDataPilotMemberContext( ScXMLImport& rImport,
+@@ -1344,6 +1549,11 @@ ScXMLDataPilotMemberContext::ScXMLDataPilotMemberContext( ScXMLImport& rImport,
                  bHasName = sal_True;
              }
              break;
 +            case XML_TOK_DATA_PILOT_MEMBER_ATTR_DISPLAY_NAME:
++            case XML_TOK_DATA_PILOT_MEMBER_ATTR_DISPLAY_NAME_EXT:
 +            {
 +                maDisplayName = sValue;
 +            }
              case XML_TOK_DATA_PILOT_MEMBER_ATTR_DISPLAY :
              {
                  bDisplay = IsXMLToken(sValue, XML_TRUE);
-@@ -1380,6 +1586,8 @@ void ScXMLDataPilotMemberContext::EndElement()
+@@ -1380,6 +1590,8 @@ void ScXMLDataPilotMemberContext::EndElement()
      if (bHasName)   // #i53407# don't check sName, empty name is allowed
      {
          ScDPSaveMember* pMember = new ScDPSaveMember(String(sName));
@@ -5377,7 +5399,7 @@ index dfbba92..b4df6b1 100644
      sal_Bool	bDisplayDetails;
      sal_Bool    bHasName;
 diff --git sc/source/filter/xml/xmlimprt.cxx sc/source/filter/xml/xmlimprt.cxx
-index 3171e72..877fe5b 100644
+index 3171e72..c5dfbb3 100644
 --- sc/source/filter/xml/xmlimprt.cxx
 +++ sc/source/filter/xml/xmlimprt.cxx
 @@ -1347,6 +1347,7 @@ const SvXMLTokenMap& ScXMLImport::GetDataPilotTableElemTokenMap()
@@ -5388,7 +5410,7 @@ index 3171e72..877fe5b 100644
              { XML_NAMESPACE_TABLE, XML_DATABASE_SOURCE_QUERY,	XML_TOK_DATA_PILOT_TABLE_ELEM_SOURCE_QUERY		},
              { XML_NAMESPACE_TABLE, XML_SOURCE_SERVICE,			XML_TOK_DATA_PILOT_TABLE_ELEM_SOURCE_SERVICE	},
              { XML_NAMESPACE_TABLE, XML_SOURCE_CELL_RANGE,		XML_TOK_DATA_PILOT_TABLE_ELEM_SOURCE_CELL_RANGE	},
-@@ -1380,6 +1381,24 @@ const SvXMLTokenMap& ScXMLImport::GetDataPilotTableSourceServiceAttrTokenMap()
+@@ -1380,6 +1381,25 @@ const SvXMLTokenMap& ScXMLImport::GetDataPilotTableSourceServiceAttrTokenMap()
      return *pDataPilotTableSourceServiceAttrTokenMap;
  }
  
@@ -5398,9 +5420,10 @@ index 3171e72..877fe5b 100644
 +    {
 +        static __FAR_DATA SvXMLTokenMapEntry aDataPilotGrandTotalAttrTokenMap[] =
 +        {
-+            { XML_NAMESPACE_TABLE, XML_DISPLAY,      XML_TOK_DATA_PILOT_GRAND_TOTAL_ATTR_DISPLAY      },
-+            { XML_NAMESPACE_TABLE, XML_ORIENTATION,  XML_TOK_DATA_PILOT_GRAND_TOTAL_ATTR_ORIENTATION  },
-+            { XML_NAMESPACE_TABLE, XML_DISPLAY_NAME, XML_TOK_DATA_PILOT_GRAND_TOTAL_ATTR_DISPLAY_NAME },
++            { XML_NAMESPACE_TABLE,     XML_DISPLAY,      XML_TOK_DATA_PILOT_GRAND_TOTAL_ATTR_DISPLAY          },
++            { XML_NAMESPACE_TABLE,     XML_ORIENTATION,  XML_TOK_DATA_PILOT_GRAND_TOTAL_ATTR_ORIENTATION      },
++            { XML_NAMESPACE_TABLE,     XML_DISPLAY_NAME, XML_TOK_DATA_PILOT_GRAND_TOTAL_ATTR_DISPLAY_NAME     },
++            { XML_NAMESPACE_TABLE_EXT, XML_DISPLAY_NAME, XML_TOK_DATA_PILOT_GRAND_TOTAL_ATTR_DISPLAY_NAME_EXT },
 +            XML_TOKEN_MAP_END
 +        };
 +
@@ -5413,31 +5436,54 @@ index 3171e72..877fe5b 100644
  const SvXMLTokenMap& ScXMLImport::GetDataPilotTableSourceCellRangeAttrTokenMap()
  {
      if( !pDataPilotTableSourceCellRangeAttrTokenMap )
-@@ -1419,6 +1438,7 @@ const SvXMLTokenMap& ScXMLImport::GetDataPilotFieldAttrTokenMap()
+@@ -1418,12 +1438,14 @@ const SvXMLTokenMap& ScXMLImport::GetDataPilotFieldAttrTokenMap()
+     {
          static __FAR_DATA SvXMLTokenMapEntry aDataPilotFieldAttrTokenMap[] =
          {
-             { XML_NAMESPACE_TABLE, XML_SOURCE_FIELD_NAME,		XML_TOK_DATA_PILOT_FIELD_ATTR_SOURCE_FIELD_NAME		},
-+            { XML_NAMESPACE_TABLE, XML_DISPLAY_NAME,            XML_TOK_DATA_PILOT_FIELD_ATTR_DISPLAY_NAME          },
-             { XML_NAMESPACE_TABLE, XML_IS_DATA_LAYOUT_FIELD,	XML_TOK_DATA_PILOT_FIELD_ATTR_IS_DATA_LAYOUT_FIELD	},
-             { XML_NAMESPACE_TABLE, XML_FUNCTION,				XML_TOK_DATA_PILOT_FIELD_ATTR_FUNCTION				},
-             { XML_NAMESPACE_TABLE, XML_ORIENTATION,			    XML_TOK_DATA_PILOT_FIELD_ATTR_ORIENTATION			},
-@@ -1510,6 +1530,7 @@ const SvXMLTokenMap& ScXMLImport::GetDataPilotSubTotalAttrTokenMap()
-         static __FAR_DATA SvXMLTokenMapEntry aDataPilotSubTotalAttrTokenMap[] =
-         {
-             { XML_NAMESPACE_TABLE, XML_FUNCTION,				XML_TOK_DATA_PILOT_SUBTOTAL_ATTR_FUNCTION			},
-+            { XML_NAMESPACE_TABLE, XML_DISPLAY_NAME,            XML_TOK_DATA_PILOT_SUBTOTAL_ATTR_DISPLAY_NAME       },
+-            { XML_NAMESPACE_TABLE, XML_SOURCE_FIELD_NAME,		XML_TOK_DATA_PILOT_FIELD_ATTR_SOURCE_FIELD_NAME		},
+-            { XML_NAMESPACE_TABLE, XML_IS_DATA_LAYOUT_FIELD,	XML_TOK_DATA_PILOT_FIELD_ATTR_IS_DATA_LAYOUT_FIELD	},
+-            { XML_NAMESPACE_TABLE, XML_FUNCTION,				XML_TOK_DATA_PILOT_FIELD_ATTR_FUNCTION				},
+-            { XML_NAMESPACE_TABLE, XML_ORIENTATION,			    XML_TOK_DATA_PILOT_FIELD_ATTR_ORIENTATION			},
+-            { XML_NAMESPACE_TABLE, XML_SELECTED_PAGE,           XML_TOK_DATA_PILOT_FIELD_ATTR_SELECTED_PAGE         },
+-            { XML_NAMESPACE_TABLE, XML_USED_HIERARCHY,			XML_TOK_DATA_PILOT_FIELD_ATTR_USED_HIERARCHY		},
++            { XML_NAMESPACE_TABLE,     XML_SOURCE_FIELD_NAME,    XML_TOK_DATA_PILOT_FIELD_ATTR_SOURCE_FIELD_NAME    },
++            { XML_NAMESPACE_TABLE,     XML_DISPLAY_NAME,         XML_TOK_DATA_PILOT_FIELD_ATTR_DISPLAY_NAME         },
++            { XML_NAMESPACE_TABLE_EXT, XML_DISPLAY_NAME,         XML_TOK_DATA_PILOT_FIELD_ATTR_DISPLAY_NAME_EXT     },
++            { XML_NAMESPACE_TABLE,     XML_IS_DATA_LAYOUT_FIELD, XML_TOK_DATA_PILOT_FIELD_ATTR_IS_DATA_LAYOUT_FIELD },
++            { XML_NAMESPACE_TABLE,     XML_FUNCTION,             XML_TOK_DATA_PILOT_FIELD_ATTR_FUNCTION             },
++            { XML_NAMESPACE_TABLE,     XML_ORIENTATION,          XML_TOK_DATA_PILOT_FIELD_ATTR_ORIENTATION          },
++            { XML_NAMESPACE_TABLE,     XML_SELECTED_PAGE,        XML_TOK_DATA_PILOT_FIELD_ATTR_SELECTED_PAGE        },
++            { XML_NAMESPACE_TABLE,     XML_USED_HIERARCHY,       XML_TOK_DATA_PILOT_FIELD_ATTR_USED_HIERARCHY       },
              XML_TOKEN_MAP_END
          };
  
-@@ -1542,6 +1563,7 @@ const SvXMLTokenMap& ScXMLImport::GetDataPilotMemberAttrTokenMap()
+@@ -1509,7 +1531,9 @@ const SvXMLTokenMap& ScXMLImport::GetDataPilotSubTotalAttrTokenMap()
+     {
+         static __FAR_DATA SvXMLTokenMapEntry aDataPilotSubTotalAttrTokenMap[] =
+         {
+-            { XML_NAMESPACE_TABLE, XML_FUNCTION,				XML_TOK_DATA_PILOT_SUBTOTAL_ATTR_FUNCTION			},
++            { XML_NAMESPACE_TABLE,     XML_FUNCTION,     XML_TOK_DATA_PILOT_SUBTOTAL_ATTR_FUNCTION         },
++            { XML_NAMESPACE_TABLE,     XML_DISPLAY_NAME, XML_TOK_DATA_PILOT_SUBTOTAL_ATTR_DISPLAY_NAME     },
++            { XML_NAMESPACE_TABLE_EXT, XML_DISPLAY_NAME, XML_TOK_DATA_PILOT_SUBTOTAL_ATTR_DISPLAY_NAME_EXT },
+             XML_TOKEN_MAP_END
+         };
+ 
+@@ -1541,9 +1565,11 @@ const SvXMLTokenMap& ScXMLImport::GetDataPilotMemberAttrTokenMap()
+     {
          static __FAR_DATA SvXMLTokenMapEntry aDataPilotMemberAttrTokenMap[] =
          {
-             { XML_NAMESPACE_TABLE, XML_NAME,					XML_TOK_DATA_PILOT_MEMBER_ATTR_NAME					},
-+            { XML_NAMESPACE_TABLE, XML_DISPLAY_NAME,        XML_TOK_DATA_PILOT_MEMBER_ATTR_DISPLAY_NAME         },
-             { XML_NAMESPACE_TABLE, XML_DISPLAY,				XML_TOK_DATA_PILOT_MEMBER_ATTR_DISPLAY				},
-             { XML_NAMESPACE_TABLE, XML_SHOW_DETAILS,		XML_TOK_DATA_PILOT_MEMBER_ATTR_SHOW_DETAILS		},
+-            { XML_NAMESPACE_TABLE, XML_NAME,					XML_TOK_DATA_PILOT_MEMBER_ATTR_NAME					},
+-            { XML_NAMESPACE_TABLE, XML_DISPLAY,				XML_TOK_DATA_PILOT_MEMBER_ATTR_DISPLAY				},
+-            { XML_NAMESPACE_TABLE, XML_SHOW_DETAILS,		XML_TOK_DATA_PILOT_MEMBER_ATTR_SHOW_DETAILS		},
++            { XML_NAMESPACE_TABLE,     XML_NAME,         XML_TOK_DATA_PILOT_MEMBER_ATTR_NAME             },
++            { XML_NAMESPACE_TABLE,     XML_DISPLAY_NAME, XML_TOK_DATA_PILOT_MEMBER_ATTR_DISPLAY_NAME     },
++            { XML_NAMESPACE_TABLE_EXT, XML_DISPLAY_NAME, XML_TOK_DATA_PILOT_MEMBER_ATTR_DISPLAY_NAME_EXT },
++            { XML_NAMESPACE_TABLE,     XML_DISPLAY,      XML_TOK_DATA_PILOT_MEMBER_ATTR_DISPLAY          },
++            { XML_NAMESPACE_TABLE,     XML_SHOW_DETAILS, XML_TOK_DATA_PILOT_MEMBER_ATTR_SHOW_DETAILS     },
              XML_TOKEN_MAP_END
-@@ -1677,6 +1699,7 @@ ScXMLImport::ScXMLImport(
+         };
+ 
+@@ -1677,6 +1703,7 @@ ScXMLImport::ScXMLImport(
      pDataPilotTableAttrTokenMap( 0 ),
      pDataPilotTableElemTokenMap( 0 ),
      pDataPilotTableSourceServiceAttrTokenMap( 0 ),
@@ -5446,7 +5492,7 @@ index 3171e72..877fe5b 100644
      pDataPilotTableSourceCellRangeAttrTokenMap( 0 ),
      pDataPilotFieldAttrTokenMap( 0 ),
 diff --git sc/source/filter/xml/xmlimprt.hxx sc/source/filter/xml/xmlimprt.hxx
-index 5d3911c..48d720d 100644
+index 5d3911c..b7bd7b1 100644
 --- sc/source/filter/xml/xmlimprt.hxx
 +++ sc/source/filter/xml/xmlimprt.hxx
 @@ -489,6 +489,7 @@ enum ScXMLDataPilotTableElemTokens
@@ -5457,7 +5503,7 @@ index 5d3911c..48d720d 100644
      XML_TOK_DATA_PILOT_TABLE_ELEM_SOURCE_QUERY,
      XML_TOK_DATA_PILOT_TABLE_ELEM_SOURCE_SERVICE,
      XML_TOK_DATA_PILOT_TABLE_ELEM_SOURCE_CELL_RANGE,
-@@ -504,6 +505,13 @@ enum ScXMLDataPilotTableSourceServiceAttrTokens
+@@ -504,6 +505,14 @@ enum ScXMLDataPilotTableSourceServiceAttrTokens
      XML_TOK_SOURCE_SERVICE_ATTR_PASSWORD
  };
  
@@ -5465,39 +5511,43 @@ index 5d3911c..48d720d 100644
 +{
 +    XML_TOK_DATA_PILOT_GRAND_TOTAL_ATTR_DISPLAY,
 +    XML_TOK_DATA_PILOT_GRAND_TOTAL_ATTR_ORIENTATION,
-+    XML_TOK_DATA_PILOT_GRAND_TOTAL_ATTR_DISPLAY_NAME
++    XML_TOK_DATA_PILOT_GRAND_TOTAL_ATTR_DISPLAY_NAME,
++    XML_TOK_DATA_PILOT_GRAND_TOTAL_ATTR_DISPLAY_NAME_EXT
 +};
 +
  enum ScXMLDataPilotTableSourceCellRangeElemTokens
  {
      XML_TOK_SOURCE_CELL_RANGE_ELEM_FILTER
-@@ -517,6 +525,7 @@ enum ScXMLDataPilotTableSourceCellRangeAttrTokens
+@@ -517,6 +526,8 @@ enum ScXMLDataPilotTableSourceCellRangeAttrTokens
  enum ScXMLDataPilotFieldAttrTokens
  {
      XML_TOK_DATA_PILOT_FIELD_ATTR_SOURCE_FIELD_NAME,
 +    XML_TOK_DATA_PILOT_FIELD_ATTR_DISPLAY_NAME,
++    XML_TOK_DATA_PILOT_FIELD_ATTR_DISPLAY_NAME_EXT,
      XML_TOK_DATA_PILOT_FIELD_ATTR_IS_DATA_LAYOUT_FIELD,
      XML_TOK_DATA_PILOT_FIELD_ATTR_FUNCTION,
      XML_TOK_DATA_PILOT_FIELD_ATTR_ORIENTATION,
-@@ -552,7 +561,8 @@ enum ScXMLDataPilotSubTotalsElemTokens
+@@ -552,7 +563,9 @@ enum ScXMLDataPilotSubTotalsElemTokens
  
  enum ScXMLDataPilotSubTotalAttrTokens
  {
 -    XML_TOK_DATA_PILOT_SUBTOTAL_ATTR_FUNCTION
 +    XML_TOK_DATA_PILOT_SUBTOTAL_ATTR_FUNCTION,
-+    XML_TOK_DATA_PILOT_SUBTOTAL_ATTR_DISPLAY_NAME
++    XML_TOK_DATA_PILOT_SUBTOTAL_ATTR_DISPLAY_NAME,
++    XML_TOK_DATA_PILOT_SUBTOTAL_ATTR_DISPLAY_NAME_EXT
  };
  
  enum ScXMLDataPilotMembersElemTokens
-@@ -563,6 +573,7 @@ enum ScXMLDataPilotMembersElemTokens
+@@ -563,6 +576,8 @@ enum ScXMLDataPilotMembersElemTokens
  enum ScXMLDataPilotMemberAttrTokens
  {
      XML_TOK_DATA_PILOT_MEMBER_ATTR_NAME,
 +    XML_TOK_DATA_PILOT_MEMBER_ATTR_DISPLAY_NAME,
++    XML_TOK_DATA_PILOT_MEMBER_ATTR_DISPLAY_NAME_EXT,
      XML_TOK_DATA_PILOT_MEMBER_ATTR_DISPLAY,
      XML_TOK_DATA_PILOT_MEMBER_ATTR_SHOW_DETAILS
  };
-@@ -723,6 +734,7 @@ class ScXMLImport: public SvXMLImport
+@@ -723,6 +738,7 @@ class ScXMLImport: public SvXMLImport
      SvXMLTokenMap 			*pDataPilotTableAttrTokenMap;
      SvXMLTokenMap 			*pDataPilotTableElemTokenMap;
      SvXMLTokenMap 			*pDataPilotTableSourceServiceAttrTokenMap;
@@ -5505,7 +5555,7 @@ index 5d3911c..48d720d 100644
      SvXMLTokenMap 			*pDataPilotTableSourceCellRangeElemTokenMap;
      SvXMLTokenMap 			*pDataPilotTableSourceCellRangeAttrTokenMap;
      SvXMLTokenMap 			*pDataPilotFieldAttrTokenMap;
-@@ -886,6 +898,7 @@ public:
+@@ -886,6 +902,7 @@ public:
      const SvXMLTokenMap& GetDataPilotTableAttrTokenMap();
      const SvXMLTokenMap& GetDataPilotTableElemTokenMap();
      const SvXMLTokenMap& GetDataPilotTableSourceServiceAttrTokenMap();
