@@ -1,0 +1,2172 @@
+# HG changeset patch
+# User Caolán McNamara <cmc@openoffice.org>
+# Date 1258645276 0
+# Node ID 9e94a83ee85cd717604b6c7ace0ac38bd8a1b4f2
+# Parent  0d8650731e2fe04a3b67ec4e9728924544664187
+linuxhppa1: #i107051#: port to linux hppa (parisc)
+
+diff -r 0d8650731e2f -r 9e94a83ee85c automation/source/testtool/objtest.cxx
+--- automation/source/testtool/objtest.cxx	Mon Nov 16 21:50:44 2009 +0100
++++ automation/source/testtool/objtest.cxx	Thu Nov 19 15:41:16 2009 +0000
+@@ -521,6 +521,8 @@
+     abGP.Append( "20" );  // Linux ia64
+ #elif defined LINUX && defined S390
+     abGP.Append( "21" );  // Linux S390
++#elif defined LINUX && defined HPPA
++    abGP.Append( "22" );  // Linux PA-RISC
+ #else
+ #error ("unknown platform. please request an ID for your platform on qa/dev")
+ #endif
+diff -r 0d8650731e2f -r 9e94a83ee85c bridges/prj/build.lst
+--- bridges/prj/build.lst	Mon Nov 16 21:50:44 2009 +0100
++++ bridges/prj/build.lst	Thu Nov 19 15:41:16 2009 +0000
+@@ -21,6 +21,7 @@
+ br	bridges\source\cpp_uno\gcc3_linux_sparc		nmake	-	u	br_gccl3s br_unotypes br_cppuno_shared br_inc NULL
+ br	bridges\source\cpp_uno\gcc3_linux_arm		nmake	-	u	br_gccl3r br_unotypes NULL
+ br	bridges\source\cpp_uno\gcc3_linux_ia64		nmake	-	u	br_gccl3a br_unotypes NULL
++br	bridges\source\cpp_uno\gcc3_linux_hppa		nmake	-	u	br_gccl3h br_unotypes NULL
+ br	bridges\source\cpp_uno\gcc3_macosx_intel			nmake	-	u	br_gcc3macoxi br_cppuno_shared br_unotypes br_inc NULL
+ br	bridges\source\cpp_uno\gcc3_macosx_powerpc			nmake	-	u	br_gcc3macoxp br_cppuno_shared br_unotypes br_inc NULL
+ br	bridges\source\cpp_uno\cc50_solaris_sparc			nmake	-	u	br_cc50sols br_unotypes br_cppuno_shared br_inc NULL
+diff -r 0d8650731e2f -r 9e94a83ee85c bridges/source/cpp_uno/gcc3_linux_hppa/call.cxx
+--- /dev/null	Thu Jan 01 00:00:00 1970 +0000
++++ bridges/source/cpp_uno/gcc3_linux_hppa/call.cxx	Thu Nov 19 15:41:16 2009 +0000
+@@ -0,0 +1,145 @@
++/*************************************************************************
++ *
++ * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
++ * 
++ * Copyright 2008 by Sun Microsystems, Inc.
++ *
++ * OpenOffice.org - a multi-platform office productivity suite
++ *
++ * $RCSfile: uno2cpp.cxx,v $
++ * $Revision: 1.2 $
++ *
++ * This file is part of OpenOffice.org.
++ *
++ * OpenOffice.org is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU Lesser General Public License version 3
++ * only, as published by the Free Software Foundation.
++ *
++ * OpenOffice.org is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU Lesser General Public License version 3 for more details
++ * (a copy is included in the LICENSE file that accompanied this code).
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * version 3 along with OpenOffice.org.  If not, see
++ * <http://www.openoffice.org/license.html>
++ * for a copy of the LGPLv3 License.
++ *
++ ************************************************************************/
++
++#include <malloc.h>
++#include <rtl/alloc.h>
++
++#include <com/sun/star/uno/genfunc.hxx>
++#include "com/sun/star/uno/RuntimeException.hpp"
++#include <uno/data.h>
++
++#include <bridges/cpp_uno/shared/bridge.hxx>
++#include <bridges/cpp_uno/shared/types.hxx>
++#include <bridges/cpp_uno/shared/unointerfaceproxy.hxx>
++#include <bridges/cpp_uno/shared/vtables.hxx>
++
++#include "share.hxx"
++
++#include <stdio.h>
++#include <string.h>
++
++using namespace ::rtl;
++using namespace ::com::sun::star::uno;
++
++void MapReturn(sal_uInt32 ret0, sal_uInt32 ret1, typelib_TypeDescription *pReturnTypeDescr, bool bRegisterReturn, sal_uInt32 *pRegisterReturn)
++{
++    register float fret asm("fr4");
++    register double dret asm("fr4");
++
++    switch (pReturnTypeDescr->eTypeClass)
++    {
++        case typelib_TypeClass_HYPER:
++        case typelib_TypeClass_UNSIGNED_HYPER:
++            pRegisterReturn[1] = ret1;
++        case typelib_TypeClass_LONG:
++        case typelib_TypeClass_UNSIGNED_LONG:
++        case typelib_TypeClass_ENUM:
++        case typelib_TypeClass_CHAR:
++        case typelib_TypeClass_SHORT:
++        case typelib_TypeClass_UNSIGNED_SHORT:
++        case typelib_TypeClass_BOOLEAN:
++        case typelib_TypeClass_BYTE:
++            pRegisterReturn[0] = ret0;
++            break;
++        case typelib_TypeClass_FLOAT:
++            *(float*)pRegisterReturn = fret;
++	    break;
++        case typelib_TypeClass_DOUBLE:
++            *(double*)pRegisterReturn = dret;
++            break;
++        case typelib_TypeClass_STRUCT:
++        case typelib_TypeClass_EXCEPTION:
++        {
++            if (bRegisterReturn)
++            {
++                pRegisterReturn[0] = ret0;
++                pRegisterReturn[1] = ret1;
++            }
++            break;
++        }
++        default:
++            break;
++    }
++}
++
++//Moved callVirtual into this .cxx so that I can do this and get gcc to not
++//touch r28 without having to learn any more pa-risc assembly than is
++//strictly necessary
++register sal_uInt32 r28 __asm__("%r28");
++
++void callVirtualMethod(void * pThis, sal_uInt32 nVtableIndex, 
++    void * pRegisterReturn, typelib_TypeDescription *pReturnTypeDescr, bool bRegisterReturn,
++    sal_uInt32 *pStack, sal_uInt32 nStack, sal_uInt32 *pGPR, double *pFPR) __attribute__((noinline));
++
++void callVirtualMethod(void * pThis, sal_uInt32 nVtableIndex, 
++    void * pRegisterReturn, typelib_TypeDescription *pReturnTypeDescr, bool bRegisterReturn,
++    sal_uInt32 *pStack, sal_uInt32 nStack, sal_uInt32 *pGPR, double *pFPR)
++{
++    register sal_uInt32* sp __asm__("%r30");
++
++    sal_uInt32 pMethod = *((sal_uInt32*)pThis);
++    pMethod += 4 * nVtableIndex;
++    pMethod = *((sal_uInt32 *)pMethod);
++
++#ifdef CMC_DEBUG
++    fprintf(stderr, "this is %p\n", pGPR[0]);
++    for (int i = 0; i < hppa::MAX_GPR_REGS ; ++i)
++        fprintf(stderr, "normal reg %d is %d %x\n", i, pGPR[i], pGPR[i]);
++
++    for (int i = 0; i < hppa::MAX_SSE_REGS ; ++i)
++        fprintf(stderr, "float reg %d is %x\n", i, pFPR[i]);
++
++    for (int i = 0; i < nStack; ++i)
++        fprintf(stderr, "stack bytes are %x\n", pStack[i]);
++#endif
++
++    //Always reserve 4 slots, and align to 8 bytes
++    sal_uInt32 nStackBytes = ( ( nStack + 4 + 1 ) >> 1 ) * 8;
++    __builtin_alloca(nStackBytes);
++    sal_uInt32 *stack = sp-8;
++    int o = -5;
++    for (sal_uInt32 i = 0; i < nStack; ++i, --o)
++        stack[o] = pStack[i];
++
++    typedef int (* FunctionCall )( sal_uInt32, sal_uInt32, sal_uInt32, sal_uInt32 );
++    FunctionCall pFunc = (FunctionCall)pMethod;
++
++    asm volatile("fldd %0, %%fr4" : : "m"(pFPR[0]) : "fr4");
++    asm volatile("fldd %0, %%fr5" : : "m"(pFPR[1]) : "fr5");
++    asm volatile("fldd %0, %%fr6" : : "m"(pFPR[2]) : "fr6");
++    asm volatile("fldd %0, %%fr7" : : "m"(pFPR[3]) : "fr7");
++    asm volatile("ldw %0, %%r28" : : "m"(pRegisterReturn) : "r28");
++    (*pFunc)(pGPR[0], pGPR[1], pGPR[2], pGPR[3]);
++
++    register sal_uInt32 r29 __asm__("%r29");
++    MapReturn(r28, r29, pReturnTypeDescr, bRegisterReturn, (sal_uInt32*)pRegisterReturn);
++}
++
++/* vi:set tabstop=4 shiftwidth=4 expandtab: */
+diff -r 0d8650731e2f -r 9e94a83ee85c bridges/source/cpp_uno/gcc3_linux_hppa/cpp2uno.cxx
+--- /dev/null	Thu Jan 01 00:00:00 1970 +0000
++++ bridges/source/cpp_uno/gcc3_linux_hppa/cpp2uno.cxx	Thu Nov 19 15:41:16 2009 +0000
+@@ -0,0 +1,728 @@
++/*************************************************************************
++ *
++ * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
++ * 
++ * Copyright 2008 by Sun Microsystems, Inc.
++ *
++ * OpenOffice.org - a multi-platform office productivity suite
++ *
++ * $RCSfile: cpp2uno.cxx,v $
++ * $Revision: 1.2 $
++ *
++ * This file is part of OpenOffice.org.
++ *
++ * OpenOffice.org is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU Lesser General Public License version 3
++ * only, as published by the Free Software Foundation.
++ *
++ * OpenOffice.org is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU Lesser General Public License version 3 for more details
++ * (a copy is included in the LICENSE file that accompanied this code).
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * version 3 along with OpenOffice.org.  If not, see
++ * <http://www.openoffice.org/license.html>
++ * for a copy of the LGPLv3 License.
++ *
++ ************************************************************************/
++
++#include <malloc.h>
++#include <hash_map>
++
++#include <rtl/alloc.h>
++#include <osl/mutex.hxx>
++
++#include <com/sun/star/uno/genfunc.hxx>
++#include "com/sun/star/uno/RuntimeException.hpp"
++#include <uno/data.h>
++#include <typelib/typedescription.hxx>
++
++#include "bridges/cpp_uno/shared/bridge.hxx"
++#include "bridges/cpp_uno/shared/cppinterfaceproxy.hxx"
++#include "bridges/cpp_uno/shared/types.hxx"
++#include "bridges/cpp_uno/shared/vtablefactory.hxx"
++
++#include "share.hxx"
++
++#include <dlfcn.h>
++
++
++using namespace ::osl;
++using namespace ::rtl;
++using namespace ::com::sun::star::uno;
++
++namespace
++{
++
++    static typelib_TypeClass cpp2uno_call(
++        bridges::cpp_uno::shared::CppInterfaceProxy* pThis,
++        const typelib_TypeDescription * pMemberTypeDescr,
++        typelib_TypeDescriptionReference * pReturnTypeRef, 
++        sal_Int32 nParams, typelib_MethodParameter * pParams,
++        long r8, void ** gpreg, double *fpreg, void ** ovrflw,
++        sal_Int64 * pRegisterReturn /* space for register return */ )
++    {
++        void ** startovrflw;
++        int nregs = 0; //number of words passed in registers
++
++#ifdef CMC_DEBUG
++	fprintf(stderr, "cpp2uno_call\n");
++#endif
++        // return
++        typelib_TypeDescription * pReturnTypeDescr = 0;
++        if (pReturnTypeRef)
++            TYPELIB_DANGER_GET( &pReturnTypeDescr, pReturnTypeRef );
++        
++        void * pUnoReturn = 0;
++        // complex return ptr: if != 0 && != pUnoReturn, reconversion need
++        void * pCppReturn = 0;
++
++        if (pReturnTypeDescr)
++        {
++            if (hppa::isRegisterReturn(pReturnTypeRef))
++            {
++#ifdef CMC_DEBUG
++		fprintf(stderr, "simple return\n");
++#endif
++                pUnoReturn = pRegisterReturn; // direct way for simple types
++            }
++            else
++            {
++#ifdef CMC_DEBUG
++		fprintf(stderr, "complex return via r8\n");
++#endif
++                pCppReturn = (void *)r8;
++
++                pUnoReturn = (bridges::cpp_uno::shared::relatesToInterfaceType( pReturnTypeDescr )
++                    ? alloca( pReturnTypeDescr->nSize )
++                    : pCppReturn); // direct way
++            }
++        }
++        // pop this
++        gpreg++;
++        fpreg++;
++        nregs++;
++
++        // stack space
++        OSL_ENSURE( sizeof(void *) == sizeof(sal_Int32), "### unexpected size!" );
++        // parameters
++        void ** pUnoArgs = (void **)alloca( 4 * sizeof(void *) * nParams );
++        void ** pCppArgs = pUnoArgs + nParams;
++        // indizes of values this have to be converted (interface conversion
++        // cpp<=>uno)
++        sal_Int32 * pTempIndizes = (sal_Int32 *)(pUnoArgs + (2 * nParams));
++        // type descriptions for reconversions
++        typelib_TypeDescription ** ppTempParamTypeDescr = 
++            (typelib_TypeDescription **)(pUnoArgs + (3 * nParams));
++        
++        sal_Int32 nTempIndizes   = 0;
++        bool bOverFlowUsed = false;
++        for ( sal_Int32 nPos = 0; nPos < nParams; ++nPos )
++        {
++            const typelib_MethodParameter & rParam = pParams[nPos];
++            typelib_TypeDescription * pParamTypeDescr = 0;
++            TYPELIB_DANGER_GET( &pParamTypeDescr, rParam.pTypeRef );
++
++            if (!rParam.bOut && bridges::cpp_uno::shared::isSimpleType( pParamTypeDescr ))
++            {
++                switch (pParamTypeDescr->eTypeClass)
++                {
++                    case typelib_TypeClass_DOUBLE:
++                        if (nregs < hppa::MAX_WORDS_IN_REGS && (nregs & 1))
++                        {
++                            gpreg++;
++                            fpreg++;
++                            nregs++;
++                        }
++                        if (nregs < hppa::MAX_WORDS_IN_REGS-1)
++                        {
++                            fpreg++;
++                            pCppArgs[nPos] = pUnoArgs[nPos] = fpreg;
++                            gpreg+=2;
++                            fpreg+=2;
++                            nregs+=2;
++                        }
++                        else
++                        {
++                            if ((startovrflw-ovrflw) & 4)
++                                ovrflw--;
++                            pCppArgs[nPos] = pUnoArgs[nPos] = ((char*)ovrflw - 4);
++                            bOverFlowUsed = true;
++                        }
++                        if (bOverFlowUsed) ovrflw-=2;
++                        break;
++                    case typelib_TypeClass_FLOAT:
++                        if (nregs < hppa::MAX_WORDS_IN_REGS)
++                        {
++                            pCppArgs[nPos] = pUnoArgs[nPos] = fpreg;
++                            gpreg++;
++                            fpreg++;
++                            nregs++;
++                        }
++                        else
++                        {
++                            pCppArgs[nPos] = pUnoArgs[nPos] = ovrflw;
++                            bOverFlowUsed = true;
++                        }
++                        if (bOverFlowUsed) ovrflw--;
++                        break;
++                    case typelib_TypeClass_HYPER:
++                    case typelib_TypeClass_UNSIGNED_HYPER:
++                        if (nregs < hppa::MAX_WORDS_IN_REGS && (nregs & 1))
++                        {
++                            gpreg++;
++                            fpreg++;
++                            nregs++;
++                        }
++                        if (nregs < hppa::MAX_WORDS_IN_REGS-1)
++                        {
++                            pCppArgs[nPos] = pUnoArgs[nPos] = gpreg;
++                            gpreg+=2;
++                            fpreg+=2;
++                            nregs+=2;
++                        }
++                        else
++                        {
++                            if ((startovrflw-ovrflw) & 4)
++                                ovrflw--;
++                            pCppArgs[nPos] = pUnoArgs[nPos] = ((char*)ovrflw - 4);
++                            bOverFlowUsed = true;
++                        }
++                        if (bOverFlowUsed) ovrflw-=2;
++                        break;
++                    case typelib_TypeClass_BYTE:
++                    case typelib_TypeClass_BOOLEAN:
++                        if (nregs < hppa::MAX_WORDS_IN_REGS)
++                        {
++                            pCppArgs[nPos] = pUnoArgs[nPos] = ((char*)gpreg + 3);
++                            gpreg++;
++                            fpreg++;
++                            nregs++;
++                        }
++                        else
++                        {
++                            pCppArgs[nPos] = pUnoArgs[nPos] = ((char*)ovrflw+3);
++                            bOverFlowUsed = true;
++                        }
++                        if (bOverFlowUsed) ovrflw--;
++                        break;
++                    case typelib_TypeClass_CHAR:
++                    case typelib_TypeClass_SHORT:
++                    case typelib_TypeClass_UNSIGNED_SHORT:
++                        if (nregs < hppa::MAX_WORDS_IN_REGS)
++                        {
++                            pCppArgs[nPos] = pUnoArgs[nPos] = ((char*)gpreg+2);
++                            gpreg++;
++                            fpreg++;
++                            nregs++;
++                        }
++                        else
++                        {
++                            pCppArgs[nPos] = pUnoArgs[nPos] = ((char*)ovrflw+2);
++                            bOverFlowUsed = true;
++                        }
++                        if (bOverFlowUsed) ovrflw--;
++                        break;
++                    case typelib_TypeClass_ENUM:
++                    case typelib_TypeClass_LONG:
++                    case typelib_TypeClass_UNSIGNED_LONG:
++                    default:
++                        if (nregs < hppa::MAX_WORDS_IN_REGS)
++                        {
++                            pCppArgs[nPos] = pUnoArgs[nPos] = gpreg;
++                            gpreg++;
++                            fpreg++;
++                            nregs++;
++                        }
++                        else
++                        {
++                            pCppArgs[nPos] = pUnoArgs[nPos] = ovrflw;
++                            bOverFlowUsed = true;
++                        }
++                        if (bOverFlowUsed) ovrflw--;
++                        break;
++                }
++                // no longer needed
++                TYPELIB_DANGER_RELEASE( pParamTypeDescr );
++            }
++            else // ptr to complex value | ref
++            {
++                void *pCppStack;
++
++                if (nregs < hppa::MAX_WORDS_IN_REGS)
++                {
++                    pCppArgs[nPos] = pCppStack = *gpreg;
++                    gpreg++;
++                    fpreg++;
++                    nregs++;
++                }
++                else
++                {
++                    pCppArgs[nPos] = pCppStack = *ovrflw;
++                    bOverFlowUsed = true;
++                }
++                if (bOverFlowUsed) ovrflw--;
++
++                if (! rParam.bIn) // is pure out
++                {
++                    // uno out is unconstructed mem!
++                    pUnoArgs[nPos] = alloca( pParamTypeDescr->nSize );
++                    pTempIndizes[nTempIndizes] = nPos;
++                    // will be released at reconversion
++                    ppTempParamTypeDescr[nTempIndizes++] = pParamTypeDescr;
++                }
++                // is in/inout
++                else if (bridges::cpp_uno::shared::relatesToInterfaceType(
++                    pParamTypeDescr ))
++                {
++                   uno_copyAndConvertData( pUnoArgs[nPos] = alloca( pParamTypeDescr->nSize ), 
++                        pCppStack, pParamTypeDescr,
++                        pThis->getBridge()->getCpp2Uno() );
++                    pTempIndizes[nTempIndizes] = nPos; // has to be reconverted
++                    // will be released at reconversion
++                    ppTempParamTypeDescr[nTempIndizes++] = pParamTypeDescr;
++                }
++                else // direct way
++                {
++                    pUnoArgs[nPos] = pCppStack;
++                    // no longer needed
++                    TYPELIB_DANGER_RELEASE( pParamTypeDescr );
++                }
++            }
++        }
++
++        // ExceptionHolder
++        uno_Any aUnoExc; // Any will be constructed by callee
++        uno_Any * pUnoExc = &aUnoExc;
++
++#ifdef CMC_DEBUG
++	fprintf(stderr, "before dispatch\n");
++#endif
++        // invoke uno dispatch call
++        (*pThis->getUnoI()->pDispatcher)(
++          pThis->getUnoI(), pMemberTypeDescr, pUnoReturn, pUnoArgs, &pUnoExc );
++
++#ifdef CMC_DEBUG
++	fprintf(stderr, "after dispatch\n");
++#endif
++
++        // in case an exception occured...
++        if (pUnoExc)
++        {
++            // destruct temporary in/inout params
++            for ( ; nTempIndizes--; )
++            {
++                sal_Int32 nIndex = pTempIndizes[nTempIndizes];
++                
++                if (pParams[nIndex].bIn) // is in/inout => was constructed
++                    uno_destructData( pUnoArgs[nIndex], 
++                        ppTempParamTypeDescr[nTempIndizes], 0 );
++                TYPELIB_DANGER_RELEASE( ppTempParamTypeDescr[nTempIndizes] );
++            }
++            if (pReturnTypeDescr)
++                TYPELIB_DANGER_RELEASE( pReturnTypeDescr );
++            
++            CPPU_CURRENT_NAMESPACE::raiseException( &aUnoExc, 
++                pThis->getBridge()->getUno2Cpp() ); // has to destruct the any
++            // is here for dummy
++            return typelib_TypeClass_VOID;
++        }
++        else // else no exception occured...
++        {
++            // temporary params
++            for ( ; nTempIndizes--; )
++            {
++                sal_Int32 nIndex = pTempIndizes[nTempIndizes];
++                typelib_TypeDescription * pParamTypeDescr =
++                    ppTempParamTypeDescr[nTempIndizes];
++                
++                if (pParams[nIndex].bOut) // inout/out
++                {
++                    // convert and assign
++                    uno_destructData( pCppArgs[nIndex], pParamTypeDescr,
++                        cpp_release );
++                    uno_copyAndConvertData( pCppArgs[nIndex], pUnoArgs[nIndex], 
++                        pParamTypeDescr, pThis->getBridge()->getUno2Cpp() );
++                }
++                // destroy temp uno param
++                uno_destructData( pUnoArgs[nIndex], pParamTypeDescr, 0 );
++                
++                TYPELIB_DANGER_RELEASE( pParamTypeDescr );
++            }
++            // return
++            if (pCppReturn) // has complex return
++            {
++                if (pUnoReturn != pCppReturn) // needs reconversion
++                {
++                    uno_copyAndConvertData( pCppReturn, pUnoReturn,
++                        pReturnTypeDescr, pThis->getBridge()->getUno2Cpp() );
++                    // destroy temp uno return
++                    uno_destructData( pUnoReturn, pReturnTypeDescr, 0 );
++                }
++                // complex return ptr is set to eax
++                *(void **)pRegisterReturn = pCppReturn;
++            }
++            if (pReturnTypeDescr)
++            {
++                typelib_TypeClass eRet =
++                    (typelib_TypeClass)pReturnTypeDescr->eTypeClass;
++                TYPELIB_DANGER_RELEASE( pReturnTypeDescr );
++                return eRet;
++            }
++            else
++                return typelib_TypeClass_VOID;
++        }
++    }
++
++
++    //=====================================================================
++    static typelib_TypeClass cpp_mediate(
++        sal_Int32 nFunctionIndex, sal_Int32 nVtableOffset,
++        void ** gpreg, double* fpreg,
++        long sp, long r8,
++        sal_Int64 * pRegisterReturn /* space for register return */ )
++
++    {
++	void ** ovrflw = (void**)(sp);
++#ifdef CMC_DEBUG
++	fprintf(stderr, "cpp_mediate with\n");
++	fprintf(stderr, "%x %x\n", nFunctionIndex, nVtableOffset);
++	fprintf(stderr, "and %x %x\n", (long)(ovrflw[0]), (long)(ovrflw[-1]));
++	fprintf(stderr, "and %x %x\n", (long)(ovrflw[-2]), (long)(ovrflw[-3]));
++	fprintf(stderr, "and %x %x\n", (long)(ovrflw[-4]), (long)(ovrflw[-5]));
++	fprintf(stderr, "and %x %x\n", (long)(ovrflw[-6]), (long)(ovrflw[-7]));
++	fprintf(stderr, "and %x %x\n", (long)(ovrflw[-8]), (long)(ovrflw[-9]));
++	fprintf(stderr, "and %x %x\n", (long)(ovrflw[-10]), (long)(ovrflw[-11]));
++	fprintf(stderr, "and %x %x\n", (long)(ovrflw[-12]), (long)(ovrflw[-13]));
++	fprintf(stderr, "and %x %x\n", (long)(ovrflw[-14]), (long)(ovrflw[-15]));
++#endif
++        OSL_ENSURE( sizeof(sal_Int32)==sizeof(void *), "### unexpected!" );
++
++        // gpreg:  [ret *], this, [other gpr params]
++        // fpreg:  [fpr params]
++        // ovrflw: [gpr or fpr params (properly aligned)]
++
++        void * pThis;
++        if (nFunctionIndex & 0x80000000 )
++        {
++	    nFunctionIndex &= 0x7fffffff;
++	    pThis = gpreg[1];
++#ifdef CMC_DEBUG
++	    fprintf(stderr, "pThis is gpreg[1]\n");
++#endif
++        }
++        else
++        {
++	    pThis = gpreg[0];
++#ifdef CMC_DEBUG
++            fprintf(stderr, "pThis is gpreg[0]\n");
++#endif
++        }
++
++        pThis = static_cast< char * >(pThis) - nVtableOffset;
++
++        bridges::cpp_uno::shared::CppInterfaceProxy * pCppI = 
++            bridges::cpp_uno::shared::CppInterfaceProxy::castInterfaceToProxy(
++                pThis);
++            
++        typelib_InterfaceTypeDescription * pTypeDescr = pCppI->getTypeDescr();
++
++        OSL_ENSURE( nFunctionIndex < pTypeDescr->nMapFunctionIndexToMemberIndex,
++            "### illegal vtable index!" );
++        if (nFunctionIndex >= pTypeDescr->nMapFunctionIndexToMemberIndex)
++        {
++            throw RuntimeException(
++                OUString::createFromAscii("illegal vtable index!"),
++                (XInterface *)pCppI );
++        }
++
++        // determine called method
++        OSL_ENSURE( nFunctionIndex < pTypeDescr->nMapFunctionIndexToMemberIndex,
++            "### illegal vtable index!" );
++        sal_Int32 nMemberPos =
++            pTypeDescr->pMapFunctionIndexToMemberIndex[nFunctionIndex];
++        OSL_ENSURE( nMemberPos < pTypeDescr->nAllMembers,
++            "### illegal member index!" );
++
++        TypeDescription aMemberDescr( pTypeDescr->ppAllMembers[nMemberPos] );
++
++        typelib_TypeClass eRet;
++        switch (aMemberDescr.get()->eTypeClass)
++        {
++        case typelib_TypeClass_INTERFACE_ATTRIBUTE:
++        {
++            if (pTypeDescr->pMapMemberIndexToFunctionIndex[nMemberPos] ==
++                nFunctionIndex)
++            {
++                // is GET method
++                eRet = cpp2uno_call(
++                    pCppI, aMemberDescr.get(),
++                    ((typelib_InterfaceAttributeTypeDescription *)aMemberDescr.get())->pAttributeTypeRef,
++                    0, 0, // no params
++                    r8, gpreg, fpreg, ovrflw, pRegisterReturn );
++            }
++            else
++            {
++                // is SET method
++                typelib_MethodParameter aParam;
++                aParam.pTypeRef =
++                    ((typelib_InterfaceAttributeTypeDescription *)aMemberDescr.get())->pAttributeTypeRef;
++                aParam.bIn      = sal_True;
++                aParam.bOut     = sal_False;
++                
++                eRet = cpp2uno_call(
++                    pCppI, aMemberDescr.get(),
++                    0, // indicates void return
++                    1, &aParam,
++                    r8, gpreg, fpreg, ovrflw, pRegisterReturn );
++            }
++            break;
++        }
++        case typelib_TypeClass_INTERFACE_METHOD:
++        {
++            // is METHOD
++            switch (nFunctionIndex)
++            {
++            case 1: // acquire()
++                pCppI->acquireProxy(); // non virtual call!
++                eRet = typelib_TypeClass_VOID;
++                break;
++            case 2: // release()
++                pCppI->releaseProxy(); // non virtual call!
++                eRet = typelib_TypeClass_VOID;
++                break;
++            case 0: // queryInterface() opt
++            {
++                typelib_TypeDescription * pTD = 0;
++                TYPELIB_DANGER_GET(&pTD,
++                    reinterpret_cast<Type *>(gpreg[1])->getTypeLibType());
++                if (pTD)
++                {
++                    XInterface * pInterface = 0;
++                    (*pCppI->getBridge()->getCppEnv()->getRegisteredInterface)(
++                        pCppI->getBridge()->getCppEnv(),
++                        (void **)&pInterface, pCppI->getOid().pData,
++                        (typelib_InterfaceTypeDescription *)pTD );
++                
++                    if (pInterface)
++                    {
++                        ::uno_any_construct(
++                            reinterpret_cast< uno_Any * >( r8 ),
++                            &pInterface, pTD, cpp_acquire );
++                        pInterface->release();
++                        TYPELIB_DANGER_RELEASE( pTD );
++                        *(void **)pRegisterReturn = (void*)r8;
++                        eRet = typelib_TypeClass_ANY;
++                        break;
++                    }
++                    TYPELIB_DANGER_RELEASE( pTD );
++                }
++            } // else perform queryInterface()
++            default:
++                eRet = cpp2uno_call(
++                    pCppI, aMemberDescr.get(),
++                    ((typelib_InterfaceMethodTypeDescription *)aMemberDescr.get())->pReturnTypeRef,
++                    ((typelib_InterfaceMethodTypeDescription *)aMemberDescr.get())->nParams,
++                    ((typelib_InterfaceMethodTypeDescription *)aMemberDescr.get())->pParams,
++                    r8, gpreg, fpreg, ovrflw, pRegisterReturn );
++            }
++            break;
++        }
++        default:
++        {
++            throw RuntimeException(
++                OUString::createFromAscii("no member description found!"),
++                (XInterface *)pCppI );
++            // is here for dummy
++            eRet = typelib_TypeClass_VOID;
++        }
++        }
++
++        return eRet;
++    }
++}
++
++//=======================================================================
++/**
++ * is called on incoming vtable calls
++ * (called by asm snippets)
++ */
++
++sal_Int64 cpp_vtable_call( sal_uInt32 in0, sal_uInt32 in1, sal_uInt32 in2, sal_uInt32 in3, sal_uInt32 firstonstack )
++{
++    register sal_Int32 r21 asm("r21");
++    register sal_Int32 r22 asm("r22");
++    register sal_Int32 r28 asm("r28");
++    sal_Int32 functionIndex = r21;
++    sal_Int32 vtableOffset = r22;
++    sal_Int32 r8 = r28;
++
++    long sp = (long)&firstonstack;
++
++    sal_uInt32 gpreg[hppa::MAX_GPR_REGS];
++    gpreg[0] = in0;
++    gpreg[1] = in1;
++    gpreg[2] = in2;
++    gpreg[3] = in3;
++
++    float fpreg[hppa::MAX_SSE_REGS]; //todo
++    register float f0 asm("fr4"); fpreg[0] = f0;
++    register float f1 asm("fr5"); fpreg[1] = f1;
++    register float f2 asm("fr6"); fpreg[2] = f2;
++    register float f3 asm("fr7"); fpreg[3] = f3;
++
++    double dpreg[hppa::MAX_SSE_REGS]; //todo
++    register double d0 asm("fr4"); dpreg[0] = d0;
++    register double d1 asm("fr5"); dpreg[1] = d1;
++    register double d2 asm("fr6"); dpreg[2] = d2;
++    register double d3 asm("fr7"); dpreg[3] = d3;
++
++
++#ifdef CMC_DEBUG
++    fprintf(stderr, "got to cpp_vtable_call with %x %x\n", functionIndex, vtableOffset);
++    for (int i = 0; i < hppa::MAX_GPR_REGS; ++i)
++	fprintf(stderr, "reg %d is %d %x\n", i, gpreg[i], gpreg[i]);
++    for (int i = 0; i < hppa::MAX_SSE_REGS; ++i)
++	fprintf(stderr, "float reg %d is %f %x\n", i, fpreg[i], ((long*)fpreg)[i]);
++    for (int i = 0; i < 4; ++i)
++	fprintf(stderr, "double reg %d is %f %llx\n", i, dpreg[i], ((long long*)dpreg)[i]);
++#endif
++
++    sal_Int64 nRegReturn;
++
++    typelib_TypeClass aType =
++        cpp_mediate( functionIndex, vtableOffset, (void**)gpreg, dpreg, sp, r8, &nRegReturn);
++
++    switch( aType )
++    {
++        case typelib_TypeClass_FLOAT:
++            f0 = (*((float*)&nRegReturn));
++            break;
++        case typelib_TypeClass_DOUBLE:
++            d0 = (*((double*)&nRegReturn));
++            break;
++        default:
++            break;
++    }
++
++    return nRegReturn;
++}
++
++
++namespace
++{
++    const int codeSnippetSize = 44;
++
++#   define unldil(v) (((v & 0x7c) << 14) | ((v & 0x180) << 7) | ((v & 0x3) << 12) | ((v & 0xffe00) >> 8) | ((v & 0x100000) >> 20))
++#   define L21(v)  unldil(((unsigned long)(v) >> 11) & 0x1fffff) //Left 21 bits
++#   define R11(v)  (((unsigned long)(v) & 0x7FF) << 1) //Right 11 bits
++
++    unsigned char *codeSnippet(unsigned char* code, sal_Int32 functionIndex, 
++        sal_Int32 vtableOffset, bool bHasHiddenParam)
++    {
++        if (bHasHiddenParam)
++            functionIndex |= 0x80000000;
++
++        unsigned char * p = code;
++        *(unsigned long*)&p[0]  = 0xeaa00000; // b,l 0x8,r21
++        *(unsigned long*)&p[4]  = 0xd6a01c1e; // depwi 0,31,2,r21
++        *(unsigned long*)&p[8]  = 0x4aa10040; // ldw 32(r21),r1
++
++        *(unsigned long*)&p[12] = 0x22A00000 | L21(functionIndex); // ldil L<functionIndex>,r21
++        *(unsigned long*)&p[16] = 0x36B50000 | R11(functionIndex); // ldo R<functionIndex>,r21
++
++        *(unsigned long*)&p[20] = 0x22C00000 | L21(vtableOffset); // ldil L<vtableOffset>,r22
++        *(unsigned long*)&p[24] = 0x36D60000 | R11(vtableOffset); // ldo R<vtableOffset>,r22
++
++        *(unsigned long*)&p[28] = 0x0c201094; // ldw 0(r1),r20
++        *(unsigned long*)&p[32] = 0xea80c000; // bv r0(r20)
++        *(unsigned long*)&p[36] = 0x0c281093; // ldw 4(r1),r19
++        *(unsigned long*)&p[40] = ((unsigned long)(cpp_vtable_call) & ~2);
++
++        return code + codeSnippetSize;
++    }
++}
++
++struct bridges::cpp_uno::shared::VtableFactory::Slot { void * fn; };
++
++bridges::cpp_uno::shared::VtableFactory::Slot *
++bridges::cpp_uno::shared::VtableFactory::mapBlockToVtable(void * block)
++{
++    return static_cast< Slot * >(block) + 2;
++}
++
++sal_Size bridges::cpp_uno::shared::VtableFactory::getBlockSize(
++    sal_Int32 slotCount)
++{
++    return (slotCount + 2) * sizeof (Slot) + slotCount * codeSnippetSize;
++}
++
++bridges::cpp_uno::shared::VtableFactory::Slot *
++bridges::cpp_uno::shared::VtableFactory::initializeBlock(
++    void * block, sal_Int32 slotCount)
++{
++    Slot * slots = mapBlockToVtable(block);
++    slots[-2].fn = 0;
++    slots[-1].fn = 0;
++    return slots + slotCount;
++}
++
++unsigned char * bridges::cpp_uno::shared::VtableFactory::addLocalFunctions(
++    Slot ** slots, unsigned char * code, sal_PtrDiff writetoexecdiff,
++    typelib_InterfaceTypeDescription const * type, sal_Int32 functionOffset,
++    sal_Int32 functionCount, sal_Int32 vtableOffset)
++{
++    (*slots) -= functionCount;
++    Slot * s = *slots;
++    for (sal_Int32 i = 0; i < type->nMembers; ++i)
++    {
++        typelib_TypeDescription * member = 0;
++        TYPELIB_DANGER_GET(&member, type->ppMembers[i]);
++        OSL_ASSERT(member != 0);
++        switch (member->eTypeClass)
++        {
++            case typelib_TypeClass_INTERFACE_ATTRIBUTE:
++                // Getter:
++                (s++)->fn = code + writetoexecdiff;
++                code = codeSnippet(code, functionOffset++, vtableOffset, false);
++                // Setter:
++                if (!reinterpret_cast<
++                    typelib_InterfaceAttributeTypeDescription * >(
++                        member)->bReadOnly)
++                {
++                    (s++)->fn = code + writetoexecdiff;
++                    code = codeSnippet(code, functionOffset++, vtableOffset, false);
++                }
++                break;
++            case typelib_TypeClass_INTERFACE_METHOD:
++            {
++                (s++)->fn = code + writetoexecdiff;
++                code = codeSnippet(code, functionOffset++, vtableOffset, false);
++                break;
++            }
++        default:
++            OSL_ASSERT(false);
++            break;
++        }
++        TYPELIB_DANGER_RELEASE(member);
++    }
++    return code;
++}
++
++void bridges::cpp_uno::shared::VtableFactory::flushCode(
++    unsigned char const *beg, unsigned char const *end)
++{
++    void *p = (void*)((size_t)beg & ~31);
++    size_t stride = 32;
++    while (p < end)
++    {
++        asm volatile("fdc (%0)\n\t"
++                     "sync\n\t"
++                     "fic,m %1(%%sr4, %0)\n\t"
++                     "sync" : "+r"(p) : "r"(stride) : "memory");
++    }
++}
++
++/* vi:set tabstop=4 shiftwidth=4 expandtab: */
+diff -r 0d8650731e2f -r 9e94a83ee85c bridges/source/cpp_uno/gcc3_linux_hppa/except.cxx
+--- /dev/null	Thu Jan 01 00:00:00 1970 +0000
++++ bridges/source/cpp_uno/gcc3_linux_hppa/except.cxx	Thu Nov 19 15:41:16 2009 +0000
+@@ -0,0 +1,337 @@
++/*************************************************************************
++ *
++ * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
++ * 
++ * Copyright 2008 by Sun Microsystems, Inc.
++ *
++ * OpenOffice.org - a multi-platform office productivity suite
++ *
++ * $RCSfile: except.cxx,v $
++ * $Revision: 1.2 $
++ *
++ * This file is part of OpenOffice.org.
++ *
++ * OpenOffice.org is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU Lesser General Public License version 3
++ * only, as published by the Free Software Foundation.
++ *
++ * OpenOffice.org is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU Lesser General Public License version 3 for more details
++ * (a copy is included in the LICENSE file that accompanied this code).
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * version 3 along with OpenOffice.org.  If not, see
++ * <http://www.openoffice.org/license.html>
++ * for a copy of the LGPLv3 License.
++ *
++ ************************************************************************/
++
++#include <stdio.h>
++#include <string.h>
++#include <dlfcn.h>
++#include <cxxabi.h>
++#include <hash_map>
++
++#include <rtl/strbuf.hxx>
++#include <rtl/ustrbuf.hxx>
++#include <osl/diagnose.h>
++#include <osl/mutex.hxx>
++
++#include <com/sun/star/uno/genfunc.hxx>
++#include "com/sun/star/uno/RuntimeException.hpp"
++#include <typelib/typedescription.hxx>
++#include <uno/any2.h>
++
++#include "share.hxx"
++
++
++using namespace ::std;
++using namespace ::osl;
++using namespace ::rtl;
++using namespace ::com::sun::star::uno;
++using namespace ::__cxxabiv1;
++
++extern sal_Int32 * pHack;
++extern sal_Int32 nHack;
++
++namespace CPPU_CURRENT_NAMESPACE
++{
++    void dummy_can_throw_anything( char const * )
++    {
++    }
++
++    //===================================================================
++    static OUString toUNOname( char const * p ) SAL_THROW( () )
++    {
++#if OSL_DEBUG_LEVEL > 1
++        char const * start = p;
++#endif
++
++        // example: N3com3sun4star4lang24IllegalArgumentExceptionE
++
++        OUStringBuffer buf( 64 );
++        OSL_ASSERT( 'N' == *p );
++        ++p; // skip N
++
++        while ('E' != *p)
++        {
++            // read chars count
++            long n = (*p++ - '0');
++            while ('0' <= *p && '9' >= *p)
++            {
++                n *= 10;
++                n += (*p++ - '0');
++            }
++            buf.appendAscii( p, n );
++            p += n;
++            if ('E' != *p)
++                buf.append( (sal_Unicode)'.' );
++        }
++
++#if OSL_DEBUG_LEVEL > 1
++        OUString ret( buf.makeStringAndClear() );
++        OString c_ret( OUStringToOString( ret, RTL_TEXTENCODING_ASCII_US ) );
++        fprintf( stderr, "> toUNOname(): %s => %s\n", start, c_ret.getStr() );
++        return ret;
++#else
++        return buf.makeStringAndClear();
++#endif
++    }
++
++    //=====================================================================
++    class RTTI
++    {
++        typedef hash_map< OUString, type_info *, OUStringHash > t_rtti_map;
++
++        Mutex m_mutex;
++        t_rtti_map m_rttis;
++        t_rtti_map m_generatedRttis;
++
++        void * m_hApp;
++
++    public:
++        RTTI() SAL_THROW( () );
++        ~RTTI() SAL_THROW( () );
++
++        type_info * getRTTI(typelib_CompoundTypeDescription *) SAL_THROW( () );
++    };
++    //____________________________________________________________________
++    RTTI::RTTI() SAL_THROW( () )
++        : m_hApp( dlopen( 0, RTLD_LAZY ) )
++    {
++    }
++    //____________________________________________________________________
++    RTTI::~RTTI() SAL_THROW( () )
++    {
++        dlclose( m_hApp );
++    }
++
++    //____________________________________________________________________
++    type_info * RTTI::getRTTI( typelib_CompoundTypeDescription *pTypeDescr ) SAL_THROW( () )
++    {
++        type_info * rtti;
++
++        OUString const & unoName = *(OUString const *)&pTypeDescr->aBase.pTypeName;
++
++        MutexGuard guard( m_mutex );
++        t_rtti_map::const_iterator iRttiFind( m_rttis.find( unoName ) );
++        if (iRttiFind == m_rttis.end())
++        {
++            // RTTI symbol
++            OStringBuffer buf( 64 );
++            buf.append( RTL_CONSTASCII_STRINGPARAM("_ZTIN") );
++            sal_Int32 index = 0;
++            do
++            {
++                OUString token( unoName.getToken( 0, '.', index ) );
++                buf.append( token.getLength() );
++                OString c_token( OUStringToOString( token, RTL_TEXTENCODING_ASCII_US ) );
++                buf.append( c_token );
++            }
++            while (index >= 0);
++            buf.append( 'E' );
++
++            OString symName( buf.makeStringAndClear() );
++            rtti = (type_info *)dlsym( m_hApp, symName.getStr() );
++
++            if (rtti)
++            {
++                pair< t_rtti_map::iterator, bool > insertion(
++                    m_rttis.insert( t_rtti_map::value_type( unoName, rtti ) ) );
++                OSL_ENSURE( insertion.second, "### inserting new rtti failed?!" );
++            }
++            else
++            {
++                // try to lookup the symbol in the generated rtti map
++                t_rtti_map::const_iterator iFind( m_generatedRttis.find( unoName ) );
++                if (iFind == m_generatedRttis.end())
++                {
++                    // we must generate it !
++                    // symbol and rtti-name is nearly identical,
++                    // the symbol is prefixed with _ZTI
++                    char const * rttiName = symName.getStr() +4;
++#if OSL_DEBUG_LEVEL > 1
++                    fprintf( stderr,"generated rtti for %s\n", rttiName );
++#endif
++                    if (pTypeDescr->pBaseTypeDescription)
++                    {
++                        // ensure availability of base
++                        type_info * base_rtti = getRTTI(
++                            (typelib_CompoundTypeDescription *)pTypeDescr->pBaseTypeDescription );
++                        rtti = new __si_class_type_info(
++                            strdup( rttiName ), (__class_type_info *)base_rtti );
++                    }
++                    else
++                    {
++                        // this class has no base class
++                        rtti = new __class_type_info( strdup( rttiName ) );
++                    }
++
++                    pair< t_rtti_map::iterator, bool > insertion(
++                        m_generatedRttis.insert( t_rtti_map::value_type( unoName, rtti ) ) );
++                    OSL_ENSURE( insertion.second, "### inserting new generated rtti failed?!" );
++                }
++                else // taking already generated rtti
++                {
++                    rtti = iFind->second;
++                }
++            }
++        }
++        else
++        {
++            rtti = iRttiFind->second;
++        }
++
++        return rtti;
++    }
++
++    //------------------------------------------------------------------
++    static void deleteException( void * pExc )
++    {
++        __cxa_exception const * header = ((__cxa_exception const *)pExc - 1);
++        typelib_TypeDescription * pTD = 0;
++        OUString unoName( toUNOname( header->exceptionType->name() ) );
++        ::typelib_typedescription_getByName( &pTD, unoName.pData );
++        OSL_ENSURE( pTD, "### unknown exception type! leaving out destruction => leaking!!!" );
++        if (pTD)
++        {
++            ::uno_destructData( pExc, pTD, cpp_release );
++            ::typelib_typedescription_release( pTD );
++        }
++    }
++
++    //==================================================================
++    void raiseException( uno_Any * pUnoExc, uno_Mapping * pUno2Cpp )
++    {
++#if OSL_DEBUG_LEVEL > 1
++        OString cstr(
++            OUStringToOString(
++                *reinterpret_cast< OUString const * >( &pUnoExc->pType->pTypeName ),
++                RTL_TEXTENCODING_ASCII_US ) );
++        fprintf( stderr, "> uno exception occured: %s\n", cstr.getStr() );
++#endif
++        void * pCppExc;
++        type_info * rtti;
++
++        {
++        // construct cpp exception object
++        typelib_TypeDescription * pTypeDescr = 0;
++        TYPELIB_DANGER_GET( &pTypeDescr, pUnoExc->pType );
++        OSL_ASSERT( pTypeDescr );
++        if (! pTypeDescr)
++        {
++            throw RuntimeException(
++                OUString( RTL_CONSTASCII_USTRINGPARAM("cannot get typedescription for type ") ) +
++                *reinterpret_cast< OUString const * >( &pUnoExc->pType->pTypeName ),
++                Reference< XInterface >() );
++        }
++
++        pCppExc = __cxa_allocate_exception( pTypeDescr->nSize );
++        ::uno_copyAndConvertData( pCppExc, pUnoExc->pData, pTypeDescr, pUno2Cpp );
++
++        // destruct uno exception
++        ::uno_any_destruct( pUnoExc, 0 );
++        // avoiding locked counts
++        static RTTI * s_rtti = 0;
++        if (! s_rtti)
++        {
++            MutexGuard guard( Mutex::getGlobalMutex() );
++            if (! s_rtti)
++            {
++#ifdef LEAK_STATIC_DATA
++                s_rtti = new RTTI();
++#else
++                static RTTI rtti_data;
++                s_rtti = &rtti_data;
++#endif
++            }
++        }
++        rtti = (type_info *)s_rtti->getRTTI( (typelib_CompoundTypeDescription *) pTypeDescr );
++        TYPELIB_DANGER_RELEASE( pTypeDescr );
++        OSL_ENSURE( rtti, "### no rtti for throwing exception!" );
++        if (! rtti)
++        {
++            throw RuntimeException(
++                OUString( RTL_CONSTASCII_USTRINGPARAM("no rtti for type ") ) +
++                *reinterpret_cast< OUString const * >( &pUnoExc->pType->pTypeName ),
++                Reference< XInterface >() );
++        }
++        }
++
++
++	__cxa_throw( pCppExc, rtti, deleteException );
++    }
++
++    static void* getAdjustedPtr(__cxa_exception* header)
++    {
++        return header->adjustedPtr;
++    }
++
++    //===================================================================
++    void fillUnoException( __cxa_exception * header, uno_Any * pUnoExc, uno_Mapping * pCpp2Uno )
++    {
++        if (! header)
++        {
++            RuntimeException aRE(
++                OUString( RTL_CONSTASCII_USTRINGPARAM("no exception header!") ),
++                Reference< XInterface >() );
++            Type const & rType = ::getCppuType( &aRE );
++            uno_type_any_constructAndConvert( pUnoExc, &aRE, rType.getTypeLibType(), pCpp2Uno );
++#if OSL_DEBUG_LEVEL > 0
++            OString cstr( OUStringToOString( aRE.Message, RTL_TEXTENCODING_ASCII_US ) );
++            OSL_ENSURE( 0, cstr.getStr() );
++#endif
++            return;
++        }
++
++        typelib_TypeDescription * pExcTypeDescr = 0;
++        OUString unoName( toUNOname( header->exceptionType->name() ) );
++#if OSL_DEBUG_LEVEL > 1
++        OString cstr_unoName( OUStringToOString( unoName, RTL_TEXTENCODING_ASCII_US ) );
++        fprintf( stderr, "> c++ exception occured: %s\n", cstr_unoName.getStr() );
++#endif
++        typelib_typedescription_getByName( &pExcTypeDescr, unoName.pData );
++        if (0 == pExcTypeDescr)
++        {
++            RuntimeException aRE(
++                OUString( RTL_CONSTASCII_USTRINGPARAM("exception type not found: ") ) + unoName,
++                Reference< XInterface >() );
++            Type const & rType = ::getCppuType( &aRE );
++            uno_type_any_constructAndConvert( pUnoExc, &aRE, rType.getTypeLibType(), pCpp2Uno );
++#if OSL_DEBUG_LEVEL > 0
++            OString cstr( OUStringToOString( aRE.Message, RTL_TEXTENCODING_ASCII_US ) );
++            OSL_ENSURE( 0, cstr.getStr() );
++#endif
++        }
++        else
++        {
++            // construct uno exception any
++            uno_any_constructAndConvert( pUnoExc, getAdjustedPtr(header), pExcTypeDescr, pCpp2Uno );
++            typelib_typedescription_release( pExcTypeDescr );
++        }
++    }
++}
++
++/* vi:set tabstop=4 shiftwidth=4 expandtab: */
+diff -r 0d8650731e2f -r 9e94a83ee85c bridges/source/cpp_uno/gcc3_linux_hppa/makefile.mk
+--- /dev/null	Thu Jan 01 00:00:00 1970 +0000
++++ bridges/source/cpp_uno/gcc3_linux_hppa/makefile.mk	Thu Nov 19 15:41:16 2009 +0000
+@@ -0,0 +1,86 @@
++#*************************************************************************
++#
++# DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
++# 
++# Copyright 2008 by Sun Microsystems, Inc.
++#
++# OpenOffice.org - a multi-platform office productivity suite
++#
++# $RCSfile: makefile.mk,v $
++#
++# $Revision: 1.2 $
++#
++# This file is part of OpenOffice.org.
++#
++# OpenOffice.org is free software: you can redistribute it and/or modify
++# it under the terms of the GNU Lesser General Public License version 3
++# only, as published by the Free Software Foundation.
++#
++# OpenOffice.org is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU Lesser General Public License version 3 for more details
++# (a copy is included in the LICENSE file that accompanied this code).
++#
++# You should have received a copy of the GNU Lesser General Public License
++# version 3 along with OpenOffice.org.  If not, see
++# <http://www.openoffice.org/license.html>
++# for a copy of the LGPLv3 License.
++#
++#*************************************************************************
++
++PRJ=..$/..$/..
++
++PRJNAME=bridges
++TARGET=gcc3_uno
++LIBTARGET=no
++ENABLE_EXCEPTIONS=TRUE
++NO_BSYMBOLIC=TRUE
++
++# --- Settings -----------------------------------------------------
++
++.INCLUDE :  settings.mk
++
++# --- Files --------------------------------------------------------
++
++.IF "$(COM)$(OS)$(CPU)" == "GCCLINUXH"
++
++.IF "$(cppu_no_leak)" == ""
++CFLAGS += -DLEAK_STATIC_DATA
++.ENDIF
++
++CFLAGSCXX += -fno-omit-frame-pointer 
++
++NOOPTFILES= \
++	$(SLO)$/cpp2uno.obj \
++	$(SLO)$/except.obj \
++	$(SLO)$/uno2cpp.obj \
++	$(SLO)$/call.obj
++
++CFLAGSNOOPT=-O0
++
++SLOFILES= \
++	$(SLO)$/cpp2uno.obj \
++	$(SLO)$/except.obj \
++	$(SLO)$/uno2cpp.obj \
++	$(SLO)$/call.obj
++
++SHL1TARGET= $(TARGET)
++
++SHL1DEF=$(MISC)$/$(SHL1TARGET).def
++SHL1IMPLIB=i$(TARGET)
++SHL1VERSIONMAP=..$/..$/bridge_exports.map
++SHL1RPATH=URELIB
++
++SHL1OBJS = $(SLOFILES)
++SHL1LIBS = $(SLB)$/cpp_uno_shared.lib
++
++SHL1STDLIBS= \
++	$(CPPULIB)			\
++	$(SALLIB)
++
++.ENDIF
++
++# --- Targets ------------------------------------------------------
++
++.INCLUDE :  target.mk
+diff -r 0d8650731e2f -r 9e94a83ee85c bridges/source/cpp_uno/gcc3_linux_hppa/share.hxx
+--- /dev/null	Thu Jan 01 00:00:00 1970 +0000
++++ bridges/source/cpp_uno/gcc3_linux_hppa/share.hxx	Thu Nov 19 15:41:16 2009 +0000
+@@ -0,0 +1,102 @@
++/*************************************************************************
++ *
++ * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
++ * 
++ * Copyright 2008 by Sun Microsystems, Inc.
++ *
++ * OpenOffice.org - a multi-platform office productivity suite
++ *
++ * $RCSfile: share.hxx,v $
++ * $Revision: 1.2 $
++ *
++ * This file is part of OpenOffice.org.
++ *
++ * OpenOffice.org is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU Lesser General Public License version 3
++ * only, as published by the Free Software Foundation.
++ *
++ * OpenOffice.org is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU Lesser General Public License version 3 for more details
++ * (a copy is included in the LICENSE file that accompanied this code).
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * version 3 along with OpenOffice.org.  If not, see
++ * <http://www.openoffice.org/license.html>
++ * for a copy of the LGPLv3 License.
++ *
++ ************************************************************************/
++
++#include "uno/mapping.h"
++
++#include <typeinfo>
++#include <exception>
++#include <cstddef>
++
++namespace CPPU_CURRENT_NAMESPACE
++{
++
++  void dummy_can_throw_anything( char const * );
++
++
++// ----- following decl from libstdc++-v3/libsupc++/unwind-cxx.h and unwind.h
++
++struct _Unwind_Exception
++{
++    unsigned exception_class __attribute__((__mode__(__DI__)));
++    void * exception_cleanup;
++    unsigned private_1 __attribute__((__mode__(__word__)));
++    unsigned private_2 __attribute__((__mode__(__word__)));
++} __attribute__((__aligned__));
++
++struct __cxa_exception
++{ 
++    ::std::type_info *exceptionType;
++    void (*exceptionDestructor)(void *); 
++    
++    ::std::unexpected_handler unexpectedHandler;
++    ::std::terminate_handler terminateHandler;
++    
++    __cxa_exception *nextException;
++    
++    int handlerCount;
++    
++    int handlerSwitchValue;
++    const unsigned char *actionRecord;
++    const unsigned char *languageSpecificData;
++    void *catchTemp;
++    void *adjustedPtr;
++    
++    _Unwind_Exception unwindHeader;
++};    
++
++extern "C" void *__cxa_allocate_exception(
++    std::size_t thrown_size ) throw();
++extern "C" void __cxa_throw (
++    void *thrown_exception, std::type_info *tinfo, void (*dest) (void *) ) __attribute__((noreturn));
++
++struct __cxa_eh_globals
++{
++    __cxa_exception *caughtExceptions;
++    unsigned int uncaughtExceptions;
++};
++extern "C" __cxa_eh_globals *__cxa_get_globals () throw();
++
++// -----
++
++//==================================================================================================
++void raiseException(
++    uno_Any * pUnoExc, uno_Mapping * pUno2Cpp );
++//==================================================================================================
++void fillUnoException(
++    __cxa_exception * header, uno_Any *, uno_Mapping * pCpp2Uno );
++}
++
++
++namespace hppa 
++{
++    enum hppalimits { MAX_WORDS_IN_REGS = 4, MAX_GPR_REGS = 4, MAX_SSE_REGS = 4 };
++
++    bool isRegisterReturn( typelib_TypeDescriptionReference *pTypeRef );
++}
+diff -r 0d8650731e2f -r 9e94a83ee85c bridges/source/cpp_uno/gcc3_linux_hppa/uno2cpp.cxx
+--- /dev/null	Thu Jan 01 00:00:00 1970 +0000
++++ bridges/source/cpp_uno/gcc3_linux_hppa/uno2cpp.cxx	Thu Nov 19 15:41:16 2009 +0000
+@@ -0,0 +1,524 @@
++/*************************************************************************
++ *
++ * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
++ * 
++ * Copyright 2008 by Sun Microsystems, Inc.
++ *
++ * OpenOffice.org - a multi-platform office productivity suite
++ *
++ * $RCSfile: uno2cpp.cxx,v $
++ * $Revision: 1.2 $
++ *
++ * This file is part of OpenOffice.org.
++ *
++ * OpenOffice.org is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU Lesser General Public License version 3
++ * only, as published by the Free Software Foundation.
++ *
++ * OpenOffice.org is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU Lesser General Public License version 3 for more details
++ * (a copy is included in the LICENSE file that accompanied this code).
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * version 3 along with OpenOffice.org.  If not, see
++ * <http://www.openoffice.org/license.html>
++ * for a copy of the LGPLv3 License.
++ *
++ ************************************************************************/
++
++#include <malloc.h>
++#include <rtl/alloc.h>
++
++#include <com/sun/star/uno/genfunc.hxx>
++#include "com/sun/star/uno/RuntimeException.hpp"
++#include <uno/data.h>
++
++#include <bridges/cpp_uno/shared/bridge.hxx>
++#include <bridges/cpp_uno/shared/types.hxx>
++#include <bridges/cpp_uno/shared/unointerfaceproxy.hxx>
++#include <bridges/cpp_uno/shared/vtables.hxx>
++
++#include "share.hxx"
++
++#include <stdio.h>
++#include <string.h>
++
++using namespace ::rtl;
++using namespace ::com::sun::star::uno;
++
++void callVirtualMethod(void * pThis, sal_uInt32 nVtableIndex, 
++    void * pRegisterReturn, typelib_TypeDescription *pReturnTypeDescr, bool bRegisterReturn,
++    sal_uInt32 *pStack, sal_uInt32 nStack, sal_uInt32 *pGPR, double *pFPR);
++
++#define INSERT_INT32( pSV, nr, pGPR, pDS, bOverFlow )\
++        if (nr < hppa::MAX_WORDS_IN_REGS) \
++        { \
++            pGPR[nr++] = *reinterpret_cast<sal_uInt32 *>( pSV ); \
++        } \
++        else \
++            bOverFlow = true; \
++        if (bOverFlow) \
++            *pDS++ = *reinterpret_cast<sal_uInt32 *>( pSV );
++
++#define INSERT_INT64( pSV, nr, pGPR, pDS, pStart, bOverFlow )\
++    if ( (nr < hppa::MAX_WORDS_IN_REGS) && (nr % 2) ) \
++    { \
++        ++nr; \
++    } \
++    if ( nr < hppa::MAX_WORDS_IN_REGS ) \
++    { \
++        pGPR[nr++] = *reinterpret_cast<sal_uInt32 *>( pSV ); \
++        pGPR[nr++] = *(reinterpret_cast<sal_uInt32 *>( pSV ) + 1); \
++    } \
++    else \
++        bOverFlow = true; \
++    if ( bOverFlow ) \
++    { \
++        if ( (pDS - pStart) % 2) \
++            ++pDS; \
++        *pDS++ = reinterpret_cast<sal_uInt32 *>( pSV )[1]; \
++        *pDS++ = reinterpret_cast<sal_uInt32 *>( pSV )[0]; \
++    }
++
++#define INSERT_FLOAT( pSV, nr, pFPR, pDS, bOverFlow ) \
++    if (nr < hppa::MAX_WORDS_IN_REGS) \
++    { \
++        sal_uInt32 *pDouble = (sal_uInt32 *)&(pFPR[nr++]); \
++        pDouble[0] = *reinterpret_cast<sal_uInt32 *>( pSV ); \
++    } \
++    else \
++        bOverFlow = true; \
++    if (bOverFlow) \
++        *pDS++ = *reinterpret_cast<sal_uInt32 *>( pSV );
++
++#define INSERT_DOUBLE( pSV, nr, pFPR, pDS, pStart, bOverFlow ) \
++    if ( (nr < hppa::MAX_WORDS_IN_REGS) && (nr % 2) ) \
++    { \
++        ++nr; \
++    } \
++    if ( nr < hppa::MAX_WORDS_IN_REGS ) \
++    { \
++        sal_uInt32 *pDouble = (sal_uInt32 *)&(pFPR[nr+1]); \
++        pDouble[0] = *reinterpret_cast<sal_uInt32 *>( pSV ); \
++        pDouble[1] = *(reinterpret_cast<sal_uInt32 *>( pSV ) + 1); \
++        nr+=2; \
++    } \
++    else \
++        bOverFlow = true; \
++    if ( bOverFlow ) \
++    { \
++        if ( (pDS - pStart) % 2) \
++            ++pDS; \
++        *pDS++ = reinterpret_cast<sal_uInt32 *>( pSV )[1]; \
++        *pDS++ = reinterpret_cast<sal_uInt32 *>( pSV )[0]; \
++    }
++
++#define INSERT_INT16( pSV, nr, pGPR, pDS, bOverFlow ) \
++    if ( nr < hppa::MAX_WORDS_IN_REGS ) \
++        pGPR[nr++] = *reinterpret_cast<sal_uInt16 *>( pSV ); \
++    else \
++        bOverFlow = true; \
++    if (bOverFlow) \
++        *pDS++ = *reinterpret_cast<sal_uInt16 *>( pSV );
++
++#define INSERT_INT8(  pSV, nr, pGPR, pDS, bOverFlow ) \
++    if ( nr < hppa::MAX_WORDS_IN_REGS ) \
++        pGPR[nr++] = *reinterpret_cast<sal_uInt8 *>( pSV ); \
++    else \
++        bOverFlow = true; \
++    if (bOverFlow) \
++        *pDS++ = *reinterpret_cast<sal_uInt8 *>( pSV );
++
++namespace hppa
++{
++    bool is_complex_struct(const typelib_TypeDescription * type)
++    {
++        const typelib_CompoundTypeDescription * p
++            = reinterpret_cast< const typelib_CompoundTypeDescription * >(type);
++        for (sal_Int32 i = 0; i < p->nMembers; ++i)
++        {
++            if (p->ppTypeRefs[i]->eTypeClass == typelib_TypeClass_STRUCT ||
++                p->ppTypeRefs[i]->eTypeClass == typelib_TypeClass_EXCEPTION)
++            { 
++                typelib_TypeDescription * t = 0;
++                TYPELIB_DANGER_GET(&t, p->ppTypeRefs[i]);
++                bool b = is_complex_struct(t);
++                TYPELIB_DANGER_RELEASE(t);
++                if (b) {
++                    return true;
++                }
++            }
++            else if (!bridges::cpp_uno::shared::isSimpleType(p->ppTypeRefs[i]->eTypeClass))
++                return true;
++        }
++        if (p->pBaseTypeDescription != 0)
++            return is_complex_struct(&p->pBaseTypeDescription->aBase);
++        return false;
++    }
++
++    bool isRegisterReturn( typelib_TypeDescriptionReference *pTypeRef )
++    {
++        if (bridges::cpp_uno::shared::isSimpleType(pTypeRef))
++            return true;
++        else if (pTypeRef->eTypeClass == typelib_TypeClass_STRUCT || pTypeRef->eTypeClass == typelib_TypeClass_EXCEPTION)
++        {
++            typelib_TypeDescription * pTypeDescr = 0;
++            TYPELIB_DANGER_GET( &pTypeDescr, pTypeRef );
++
++            /* If the struct is larger than 8 bytes, then there is a buffer at r8 to stick the return value into  */
++            bool bRet = pTypeDescr->nSize <= 8 && !is_complex_struct(pTypeDescr);
++
++            TYPELIB_DANGER_RELEASE( pTypeDescr );
++            return bRet;
++        }
++        return false;
++    }
++}
++
++
++namespace {
++//======================================================================= 
++static void cpp_call(
++    bridges::cpp_uno::shared::UnoInterfaceProxy * pThis,
++    bridges::cpp_uno::shared::VtableSlot aVtableSlot,
++    typelib_TypeDescriptionReference * pReturnTypeRef,
++    sal_Int32 nParams, typelib_MethodParameter * pParams,
++    void * pUnoReturn, void * pUnoArgs[], uno_Any ** ppUnoExc )
++{
++    // max space for: [complex ret ptr], values|ptr ...
++    sal_uInt32 * pStack = (sal_uInt32 *)__builtin_alloca(
++        sizeof(sal_Int32) + ((nParams+2) * sizeof(sal_Int64)) );
++    sal_uInt32 * pStackStart = pStack;
++
++    sal_uInt32 pGPR[hppa::MAX_GPR_REGS];
++    double pFPR[hppa::MAX_SSE_REGS];
++    sal_uInt32 nRegs=0;
++
++    // return
++    typelib_TypeDescription * pReturnTypeDescr = 0;
++    TYPELIB_DANGER_GET( &pReturnTypeDescr, pReturnTypeRef );
++    OSL_ENSURE( pReturnTypeDescr, "### expected return type description!" );
++    
++    void * pCppReturn = 0; // if != 0 && != pUnoReturn, needs reconversion
++    bool bOverFlow = false;
++    bool bRegisterReturn = true;
++
++    if (pReturnTypeDescr)
++    {
++
++        bRegisterReturn = hppa::isRegisterReturn(pReturnTypeRef);
++        if (bRegisterReturn)
++            pCppReturn = pUnoReturn; // direct way for simple types
++        else
++        {
++            // complex return via ptr
++            pCppReturn = (bridges::cpp_uno::shared::relatesToInterfaceType( pReturnTypeDescr )
++                    ? __builtin_alloca( pReturnTypeDescr->nSize )
++                    : pUnoReturn); // direct way
++        }
++    }
++    // push this
++    void * pAdjustedThisPtr = reinterpret_cast< void ** >(pThis->getCppI())
++        + aVtableSlot.offset;
++    INSERT_INT32( &pAdjustedThisPtr, nRegs, pGPR, pStack, bOverFlow );
++
++    // stack space
++    OSL_ENSURE( sizeof(void *) == sizeof(sal_Int32), "### unexpected size!" );
++    // args
++    void ** pCppArgs  = (void **)alloca( 3 * sizeof(void *) * nParams );
++    // indizes of values this have to be converted (interface conversion cpp<=>uno)
++    sal_Int32 * pTempIndizes = (sal_Int32 *)(pCppArgs + nParams);
++    // type descriptions for reconversions
++    typelib_TypeDescription ** ppTempParamTypeDescr = (typelib_TypeDescription **)(pCppArgs + (2 * nParams));
++
++    sal_Int32 nTempIndizes   = 0;
++
++    for ( sal_Int32 nPos = 0; nPos < nParams; ++nPos )
++    {
++        const typelib_MethodParameter & rParam = pParams[nPos];
++        typelib_TypeDescription * pParamTypeDescr = 0;
++        TYPELIB_DANGER_GET( &pParamTypeDescr, rParam.pTypeRef );
++
++        if (!rParam.bOut && bridges::cpp_uno::shared::isSimpleType( pParamTypeDescr ))
++        {
++            uno_copyAndConvertData( pCppArgs[nPos] = alloca(8), pUnoArgs[nPos],
++                pParamTypeDescr, pThis->getBridge()->getUno2Cpp() );
++            
++            switch (pParamTypeDescr->eTypeClass)
++            {
++                case typelib_TypeClass_HYPER:
++                case typelib_TypeClass_UNSIGNED_HYPER:
++#ifdef CMC_DEBUG
++                    fprintf(stderr, "hyper is %llx\n", *((long long*)pCppArgs[nPos]));
++#endif
++                    INSERT_INT64( pCppArgs[nPos], nRegs, pGPR, pStack, pStackStart, bOverFlow );
++                break;
++                case typelib_TypeClass_LONG:
++                case typelib_TypeClass_UNSIGNED_LONG:
++                case typelib_TypeClass_ENUM:
++#ifdef CMC_DEBUG
++                    fprintf(stderr, "long is %x\n", pCppArgs[nPos]);
++#endif
++                    INSERT_INT32( pCppArgs[nPos], nRegs, pGPR, pStack, bOverFlow );
++                break;
++                case typelib_TypeClass_SHORT:
++                case typelib_TypeClass_CHAR:
++                case typelib_TypeClass_UNSIGNED_SHORT:
++                    INSERT_INT16( pCppArgs[nPos], nRegs, pGPR, pStack, bOverFlow );
++                break;
++                case typelib_TypeClass_BOOLEAN:
++                case typelib_TypeClass_BYTE:
++                    INSERT_INT8( pCppArgs[nPos], nRegs, pGPR, pStack, bOverFlow );
++                break;
++                case typelib_TypeClass_FLOAT:
++                    INSERT_FLOAT( pCppArgs[nPos], nRegs, pFPR, pStack, bOverFlow );
++                break;
++                case typelib_TypeClass_DOUBLE:
++                    INSERT_DOUBLE( pCppArgs[nPos], nRegs, pFPR, pStack, pStackStart, bOverFlow );
++                break;
++                default:
++                break;
++            }
++            // no longer needed
++            TYPELIB_DANGER_RELEASE( pParamTypeDescr );
++        }
++        else // ptr to complex value | ref
++        {
++            if (! rParam.bIn) // is pure out
++            {
++                // cpp out is constructed mem, uno out is not!
++                uno_constructData(
++                    pCppArgs[nPos] = alloca( pParamTypeDescr->nSize ),
++                    pParamTypeDescr );
++                pTempIndizes[nTempIndizes] = nPos; // default constructed for cpp call
++                // will be released at reconversion
++                ppTempParamTypeDescr[nTempIndizes++] = pParamTypeDescr;
++            }
++            // is in/inout
++            else if (bridges::cpp_uno::shared::relatesToInterfaceType( pParamTypeDescr ))
++            {
++                uno_copyAndConvertData(
++                    pCppArgs[nPos] = alloca( pParamTypeDescr->nSize ),
++                    pUnoArgs[nPos], pParamTypeDescr, pThis->getBridge()->getUno2Cpp() );
++                
++                pTempIndizes[nTempIndizes] = nPos; // has to be reconverted
++                // will be released at reconversion
++                ppTempParamTypeDescr[nTempIndizes++] = pParamTypeDescr;
++            }
++            else // direct way
++            {
++                pCppArgs[nPos] = pUnoArgs[nPos];
++                // no longer needed
++                TYPELIB_DANGER_RELEASE( pParamTypeDescr );
++            }
++            INSERT_INT32( &(pCppArgs[nPos]), nRegs, pGPR, pStack, bOverFlow );
++        }
++    }
++
++    try
++    {
++        callVirtualMethod(
++            pAdjustedThisPtr, aVtableSlot.index,
++            pCppReturn, pReturnTypeDescr, bRegisterReturn,
++            pStackStart, 
++            (pStack - pStackStart), pGPR, pFPR);
++
++        // NO exception occured...
++        *ppUnoExc = 0;
++
++        // reconvert temporary params
++        for ( ; nTempIndizes--; )
++        {
++            sal_Int32 nIndex = pTempIndizes[nTempIndizes];
++            typelib_TypeDescription * pParamTypeDescr = ppTempParamTypeDescr[nTempIndizes];
++            
++            if (pParams[nIndex].bIn)
++            {
++                if (pParams[nIndex].bOut) // inout
++                {
++                    uno_destructData( pUnoArgs[nIndex], pParamTypeDescr, 0 ); // destroy uno value
++                    uno_copyAndConvertData( pUnoArgs[nIndex], pCppArgs[nIndex], pParamTypeDescr,
++                                            pThis->getBridge()->getCpp2Uno() );
++                }
++            }
++            else // pure out
++            {
++                uno_copyAndConvertData( pUnoArgs[nIndex], pCppArgs[nIndex], pParamTypeDescr,
++                                        pThis->getBridge()->getCpp2Uno() );
++            }
++            // destroy temp cpp param => cpp: every param was constructed
++            uno_destructData( pCppArgs[nIndex], pParamTypeDescr, cpp_release );
++            
++            TYPELIB_DANGER_RELEASE( pParamTypeDescr );
++        }
++        // return value
++        if (pCppReturn && pUnoReturn != pCppReturn)
++        {
++            uno_copyAndConvertData( pUnoReturn, pCppReturn, pReturnTypeDescr,
++                                    pThis->getBridge()->getCpp2Uno() );
++            uno_destructData( pCppReturn, pReturnTypeDescr, cpp_release );
++        }
++    }
++    catch (...)
++    {
++        // fill uno exception
++        fillUnoException( CPPU_CURRENT_NAMESPACE::__cxa_get_globals()->caughtExceptions, *ppUnoExc, pThis->getBridge()->getCpp2Uno() );
++
++        // temporary params
++        for ( ; nTempIndizes--; )
++        {
++            sal_Int32 nIndex = pTempIndizes[nTempIndizes];
++            // destroy temp cpp param => cpp: every param was constructed
++            uno_destructData( pCppArgs[nIndex], ppTempParamTypeDescr[nTempIndizes], cpp_release );
++            TYPELIB_DANGER_RELEASE( ppTempParamTypeDescr[nTempIndizes] );
++        }
++        
++        // return type
++        if (pReturnTypeDescr)
++            TYPELIB_DANGER_RELEASE( pReturnTypeDescr );
++    }
++}
++}
++
++namespace bridges { namespace cpp_uno { namespace shared {
++
++void unoInterfaceProxyDispatch(
++    uno_Interface * pUnoI, const typelib_TypeDescription * pMemberDescr,
++    void * pReturn, void * pArgs[], uno_Any ** ppException )
++{
++    // is my surrogate
++    bridges::cpp_uno::shared::UnoInterfaceProxy * pThis
++          = static_cast< bridges::cpp_uno::shared::UnoInterfaceProxy * >(pUnoI);
++#if OSL_DEBUG_LEVEL > 0
++    typelib_InterfaceTypeDescription * pTypeDescr = pThis->pTypeDescr;
++#endif
++
++    switch (pMemberDescr->eTypeClass)
++    {
++        case typelib_TypeClass_INTERFACE_ATTRIBUTE:
++        {
++#if OSL_DEBUG_LEVEL > 0
++            // determine vtable call index
++            sal_Int32 nMemberPos = ((typelib_InterfaceMemberTypeDescription *)pMemberDescr)->nPosition;
++            OSL_ENSURE( nMemberPos < pTypeDescr->nAllMembers, "### member pos out of range!" );
++#endif
++        
++            VtableSlot aVtableSlot(
++                getVtableSlot(
++                reinterpret_cast<typelib_InterfaceAttributeTypeDescription const *>
++                   (pMemberDescr)));
++        
++            if (pReturn)
++            {
++                // dependent dispatch
++                cpp_call(
++                    pThis, aVtableSlot,
++                    ((typelib_InterfaceAttributeTypeDescription *)pMemberDescr)->pAttributeTypeRef,
++                    0, 0, // no params
++                    pReturn, pArgs, ppException );
++            }
++            else
++            {
++                // is SET
++                typelib_MethodParameter aParam;
++                aParam.pTypeRef =
++                    ((typelib_InterfaceAttributeTypeDescription *)pMemberDescr)->pAttributeTypeRef;
++                aParam.bIn      = sal_True;
++                aParam.bOut     = sal_False;
++
++                typelib_TypeDescriptionReference * pReturnTypeRef = 0;
++                OUString aVoidName( RTL_CONSTASCII_USTRINGPARAM("void") );
++                typelib_typedescriptionreference_new(
++                    &pReturnTypeRef, typelib_TypeClass_VOID, aVoidName.pData );
++            
++                // dependent dispatch
++                aVtableSlot.index += 1;
++                cpp_call(
++                    pThis, aVtableSlot, // get, then set method
++                    pReturnTypeRef,
++                    1, &aParam,
++                    pReturn, pArgs, ppException );
++            
++                typelib_typedescriptionreference_release( pReturnTypeRef );
++            }
++        
++            break;
++        }
++        case typelib_TypeClass_INTERFACE_METHOD:
++        {
++#if OSL_DEBUG_LEVEL > 0
++            // determine vtable call index
++            sal_Int32 nMemberPos = ((typelib_InterfaceMemberTypeDescription *)pMemberDescr)->nPosition;
++            OSL_ENSURE( nMemberPos < pTypeDescr->nAllMembers, "### member pos out of range!" );
++#endif
++
++            VtableSlot aVtableSlot(
++                getVtableSlot(
++                reinterpret_cast<typelib_InterfaceMethodTypeDescription const *>
++                  (pMemberDescr)));
++
++            switch (aVtableSlot.index)
++            {
++                // standard calls
++                case 1: // acquire uno interface
++                    (*pUnoI->acquire)( pUnoI );
++                    *ppException = 0;
++                break;
++                case 2: // release uno interface
++                    (*pUnoI->release)( pUnoI );
++                    *ppException = 0;
++                    break;
++                case 0: // queryInterface() opt
++                {
++                    typelib_TypeDescription * pTD = 0;
++                    TYPELIB_DANGER_GET( &pTD, reinterpret_cast< Type * >( pArgs[0] )->getTypeLibType() );
++                    if (pTD)
++                    {
++                        uno_Interface * pInterface = 0;
++                        (*pThis->getBridge()->getUnoEnv()->getRegisteredInterface)(
++                            pThis->getBridge()->getUnoEnv(),
++                            (void **)&pInterface, pThis->oid.pData, (typelib_InterfaceTypeDescription *)pTD );
++            
++                        if (pInterface)
++                        {
++                            ::uno_any_construct(
++                                reinterpret_cast< uno_Any * >( pReturn ),
++                                &pInterface, pTD, 0 );
++                                (*pInterface->release)( pInterface );
++                                TYPELIB_DANGER_RELEASE( pTD );
++                                *ppException = 0;
++                           break;
++                        }
++
++                        TYPELIB_DANGER_RELEASE( pTD );
++                    }
++                } // else perform queryInterface()
++                default:
++                    // dependent dispatch
++                    cpp_call(
++                        pThis, aVtableSlot,
++                        ((typelib_InterfaceMethodTypeDescription *)pMemberDescr)->pReturnTypeRef,
++                        ((typelib_InterfaceMethodTypeDescription *)pMemberDescr)->nParams,
++                        ((typelib_InterfaceMethodTypeDescription *)pMemberDescr)->pParams,
++                        pReturn, pArgs, ppException );
++            }
++            break;
++        }
++        default:
++        {
++            ::com::sun::star::uno::RuntimeException aExc(
++                OUString( RTL_CONSTASCII_USTRINGPARAM("illegal member type description!") ),
++                ::com::sun::star::uno::Reference< ::com::sun::star::uno::XInterface >() );
++        
++            Type const & rExcType = ::getCppuType( &aExc );
++            // binary identical null reference
++            ::uno_type_any_construct( *ppException, &aExc, rExcType.getTypeLibType(), 0 );
++        }
++    }
++}
++
++} } }
++
++/* vi:set tabstop=4 shiftwidth=4 expandtab: */
+diff -r 0d8650731e2f -r 9e94a83ee85c bridges/source/cpp_uno/gcc3_linux_m68k/cpp2uno.cxx
+--- bridges/source/cpp_uno/gcc3_linux_m68k/cpp2uno.cxx	Mon Nov 16 21:50:44 2009 +0100
++++ bridges/source/cpp_uno/gcc3_linux_m68k/cpp2uno.cxx	Thu Nov 19 15:41:16 2009 +0000
+@@ -256,7 +256,7 @@
+                     // destroy temp uno return
+                     uno_destructData( pUnoReturn, pReturnTypeDescr, 0 );
+                 }
+-                // complex return ptr is set to eax
++                // complex return ptr is set to return reg 
+                 *(void **)pRegisterReturn = pCppReturn;
+             }
+             if (pReturnTypeDescr)
+diff -r 0d8650731e2f -r 9e94a83ee85c configure.in
+--- configure.in	Mon Nov 16 21:50:44 2009 +0100
++++ configure.in	Thu Nov 19 15:41:16 2009 +0000
+@@ -130,7 +130,7 @@
+ ],,)
+ AC_ARG_WITH(system-stdlibs,
+ [  --with-system-stdlibs   use libstdc++/libgcc_s already on system
+-],,checkforprelink=yes)
++],,checkforstdlibproblems=yes)
+ AC_ARG_WITH(system-mspack,
+ [  --with-system-mspack    use libmspack already installed on system
+ ],,)
+@@ -2709,7 +2709,7 @@
+       if ! $CXX $CXXFLAGS $CPPFLAGS -fpic -S visibility.cxx 2>/dev/null > /dev/null; then
+          gccvisbroken=yes
+       else
+-         if $EGREP -q '@PLT|\$stub' visibility.s; then
++         if $EGREP -q '@PLT|\$stub|\(PLT\)' visibility.s; then
+              gccvisbroken=no;
+          else 
+              gccvisbroken=yes; 
+@@ -2889,8 +2889,8 @@
+         _jdk=`$JAVAINTERPRETER -version 2>&1 | $AWK -F'"' '{ print \$2 }' | $SED s/[[-A-Za-z]]*//`
+         _jdk_ver=`echo "$_jdk" | $AWK -F. '{ print (($1 * 100) + $2) * 100 + $3;}'`
+    
+-        if test "$_jdk_ver" -lt 10600; then
+-             AC_MSG_ERROR([IBM JDK is too old, you need at least 1.6])
++        if test "$_jdk_ver" -lt 10500; then
++             AC_MSG_ERROR([IBM JDK is too old, you need at least 1.5])
+         fi
+ 
+         AC_MSG_RESULT([checked (IBM JDK $_jdk)])
+@@ -3581,10 +3581,16 @@
+ dnl Check for prelinked libgcc_s.so.1
+ dnl ===================================================================
+ if test -z "$with_system_stdlibs" -a -z "$with_system_libs"; then
+-  if test -n "$checkforprelink" -a -f /etc/rpm/macros.prelink; then
+-    with_system_stdlibs=yes
+-    AC_MSG_WARN([prelinked libgcc_s.so.1, enabling --with-system-stdlibs, use --without-system-stdlibs to override])
+-    echo "prelinked libgcc_s.so.1, enabling --with-system-stdlibs, use --without-system-stdlibs to override" >> warn
++  if test -n "$checkforstdlibproblems"; then
++    if test -f /etc/rpm/macros.prelink; then
++      with_system_stdlibs=yes
++      AC_MSG_WARN([prelinked libgcc_s.so.1, enabling --with-system-stdlibs, use --without-system-stdlibs to override])
++      echo "prelinked libgcc_s.so.1, enabling --with-system-stdlibs, use --without-system-stdlibs to override" >> warn
++    elif test "$GCC" = "yes" -a ! -e `$CC -print-file-name=libgcc_s.so.1`; then
++      with_system_stdlibs=yes
++      AC_MSG_WARN([platform doesn't have a libgcc_s.so.1, enabling --with-system-stdlibs, use --without-system-stdlibs to override])
++      echo "platform doesn't have a libgcc_s.so.1, enabling --with-system-stdlibs, use --without-system-stdlibs to override" >> warn
++    fi
+   fi
+ fi
+ 
+diff -r 0d8650731e2f -r 9e94a83ee85c jvmfwk/plugins/sunmajor/pluginlib/vendorbase.hxx
+--- jvmfwk/plugins/sunmajor/pluginlib/vendorbase.hxx	Mon Nov 16 21:50:44 2009 +0100
++++ jvmfwk/plugins/sunmajor/pluginlib/vendorbase.hxx	Thu Nov 19 15:41:16 2009 +0000
+@@ -70,9 +70,11 @@
+ #define JFW_PLUGIN_ARCH "ia64"
+ #elif defined M68K
+ #define JFW_PLUGIN_ARCH "m68k"
+-#else // SPARC, INTEL, POWERPC, MIPS, ARM, IA64, M68K
++#elif defined HPPA
++#define JFW_PLUGIN_ARCH "parisc"
++#else // SPARC, INTEL, POWERPC, MIPS, ARM, IA64, M68K, HPPA
+ #error unknown plattform
+-#endif // SPARC, INTEL, POWERPC, MIPS, ARM
++#endif // SPARC, INTEL, POWERPC, MIPS, ARM, IA64, M68K, HPPA
+ 
+ 
+ class MalformedVersionException
+diff -r 0d8650731e2f -r 9e94a83ee85c sal/rtl/source/macro.hxx
+--- sal/rtl/source/macro.hxx	Mon Nov 16 21:50:44 2009 +0100
++++ sal/rtl/source/macro.hxx	Thu Nov 19 15:41:16 2009 +0000
+@@ -94,6 +94,8 @@
+ #    define THIS_ARCH "IA64"
+ #elif defined M68K
+ #    define THIS_ARCH "M68K"
++#elif defined HPPA
++#    define THIS_ARCH "HPPA"
+ #endif
+ 
+ #if ! defined THIS_ARCH
+diff -r 0d8650731e2f -r 9e94a83ee85c sal/typesconfig/typesconfig.c
+--- sal/typesconfig/typesconfig.c	Mon Nov 16 21:50:44 2009 +0100
++++ sal/typesconfig/typesconfig.c	Thu Nov 19 15:41:16 2009 +0000
+@@ -163,7 +163,7 @@
+ |*	Letzte Aenderung
+ |*
+ *************************************************************************/
+-#if defined(IA64) || defined(ARM32)
++#if defined(IA64) || defined(ARM32) || defined(HPPA)
+ 
+ int forceerror()
+ {
+diff -r 0d8650731e2f -r 9e94a83ee85c set_soenv.in
+--- set_soenv.in	Mon Nov 16 21:50:44 2009 +0100
++++ set_soenv.in	Thu Nov 19 15:41:16 2009 +0000
+@@ -495,6 +495,17 @@
+       $JRETOOLKITDIR  = '$JAVA_HOME'.$ds."jre".$ds."lib".$ds."m68k".$ds."server";
+       $JRETHREADDIR   = '$JAVA_HOME'.$ds."jre".$ds."lib".$ds."m68k".$ds."native_threads";
+    }
++   elsif ($platform =~ m/^hppa/)
++   {  print "Setting Linux hppa specific values... ";
++      $outfile        = "LinuxHPPAEnv.Set";
++      $CPU            = "H";
++      $CPUNAME        = "HPPA";
++      $OUTPATH        = "unxlnghppa";
++      $JRELIBDIR      = '$JAVA_HOME'.$ds."jre".$ds."lib".$ds."hppa";
++      $JRETOOLKITDIR  = '$JAVA_HOME'.$ds."jre".$ds."lib".$ds."hppa".$ds."server";
++      $JRETHREADDIR   = '$JAVA_HOME'.$ds."jre".$ds."lib".$ds."hppa".$ds."native_threads";
++      $EPM_FLAGS      = "-a hppa";
++   }
+    elsif ($platform =~ m/^alpha/) 
+    {  print "Setting Linux Alpha specific values... ";
+       $outfile        = "LinuxAlphaEnv.Set"; 
+diff -r 0d8650731e2f -r 9e94a83ee85c solenv/inc/unx.mk
+--- solenv/inc/unx.mk	Mon Nov 16 21:50:44 2009 +0100
++++ solenv/inc/unx.mk	Thu Nov 19 15:41:16 2009 +0000
+@@ -179,6 +179,10 @@
+ .INCLUDE : unxlngm68k.mk
+ .ENDIF
+ 
++.IF "$(COM)$(OS)$(CPU)" == "GCCLINUXH"
++.INCLUDE : unxlnghppa.mk
++.ENDIF
++
+ # --- general *ix settings ---
+ HC=hc
+ HCFLAGS=
+diff -r 0d8650731e2f -r 9e94a83ee85c solenv/inc/unxlnghppa.mk
+--- /dev/null	Thu Jan 01 00:00:00 1970 +0000
++++ solenv/inc/unxlnghppa.mk	Thu Nov 19 15:41:16 2009 +0000
+@@ -0,0 +1,39 @@
++#*************************************************************************
++#
++# DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
++# 
++# Copyright 2008 by Sun Microsystems, Inc.
++#
++# OpenOffice.org - a multi-platform office productivity suite
++#
++# $RCSfile: unxlnghppa.mk,v $
++#
++# $Revision: 1.2 $
++#
++# This file is part of OpenOffice.org.
++#
++# OpenOffice.org is free software: you can redistribute it and/or modify
++# it under the terms of the GNU Lesser General Public License version 3
++# only, as published by the Free Software Foundation.
++#
++# OpenOffice.org is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU Lesser General Public License version 3 for more details
++# (a copy is included in the LICENSE file that accompanied this code).
++#
++# You should have received a copy of the GNU Lesser General Public License
++# version 3 along with OpenOffice.org.  If not, see
++# <http://www.openoffice.org/license.html>
++# for a copy of the LGPLv3 License.
++#
++#*************************************************************************
++
++# mk file for Unix Linux HPPA using GCC, please make generic modifications to unxlng.mk
++PICSWITCH:=-fPIC
++.INCLUDE : unxlng.mk
++CDEFS+=-DHPPA
++CFLAGS+=
++CFLAGSCC+=
++CFLAGSCXX+=
++DLLPOSTFIX=lh
+diff -r 0d8650731e2f -r 9e94a83ee85c tools/inc/tools/solar.h
+--- tools/inc/tools/solar.h	Mon Nov 16 21:50:44 2009 +0100
++++ tools/inc/tools/solar.h	Thu Nov 19 15:41:16 2009 +0000
+@@ -385,6 +385,8 @@
+   #define __DLLEXTENSION "la.so"
+ #elif defined LINUX && defined M68K
+   #define __DLLEXTENSION "lm.so"
++#elif defined LINUX && defined HPPA
++  #define __DLLEXTENSION "lh.so"
+ #elif defined LINUX
+   #error unknown plattform
+ #elif defined FREEBSD && defined X86
