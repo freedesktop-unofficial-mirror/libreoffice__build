@@ -1,9 +1,9 @@
 diff --git sc/inc/mdds/flatsegmenttree.hxx sc/inc/mdds/flatsegmenttree.hxx
 new file mode 100644
-index 0000000..96a6256
+index 0000000..34fbc44
 --- /dev/null
 +++ sc/inc/mdds/flatsegmenttree.hxx
-@@ -0,0 +1,815 @@
+@@ -0,0 +1,956 @@
 +/*************************************************************************
 + *
 + * Copyright (c) 2008-2009 Kohei Yoshida
@@ -35,6 +35,7 @@ index 0000000..96a6256
 +#define __MDDS_FLATSEGMENTTREE_HXX__
 +
 +#include <iostream>
++#include <utility>
 +#include <cassert>
 +
 +#include "node.hxx"
@@ -130,6 +131,146 @@ index 0000000..96a6256
 +            return new node(leaf);
 +        }
 +    };
++
++private:
++    class const_iterator_base
++    {
++    public:
++        typedef flat_segment_tree<key_type, value_type> fst_type;
++
++        explicit const_iterator_base(const fst_type* _db, bool _end, bool _forward) : 
++            m_db(_db), m_pos(NULL), m_end_pos(_end), m_forward(_forward)
++        {
++            if (!_db)
++                return;
++
++            if (m_forward)
++            {
++                // forward direction
++                m_pos = _end ? get_node(_db->m_right_leaf) : get_node(_db->m_left_leaf);
++            }
++            else
++            {
++                // reverse direction
++                m_pos = _end ? get_node(_db->m_left_leaf) : get_node(_db->m_right_leaf);
++            }
++        }
++
++        const_iterator_base(const const_iterator_base& r) :
++            m_db(r.m_db), m_pos(r.m_pos), m_end_pos(r.m_end_pos), m_forward(r.m_forward) {}
++
++        const_iterator_base& operator=(const const_iterator_base& r)
++        {
++            m_db = r.m_db;
++            m_pos = r.m_pos;
++
++        }
++
++        void operator++()
++        {
++            assert(m_pos);
++            if (m_forward)
++            {
++                if (m_pos == get_node(m_db->m_right_leaf))
++                    m_end_pos = true;
++                else
++                    m_pos = get_node(m_pos->right);
++            }
++            else
++            {
++                if (m_pos == get_node(m_db->m_left_leaf))
++                    m_end_pos = true;
++                else
++                    m_pos = get_node(m_pos->left);
++            }
++        }
++
++        void operator--()
++        {
++            assert(m_pos);
++            if (m_end_pos)
++                m_end_pos = false;
++            else
++                m_pos = m_forward ? get_node(m_pos->left) : get_node(m_pos->right);
++        }
++
++        bool operator==(const const_iterator_base& r) const
++        {
++            return (m_end_pos == r.m_end_pos) && (m_pos == r.m_pos);
++        }
++
++        bool operator!=(const const_iterator_base& r) const
++        {
++            return !operator==(r);
++        }
++
++        const ::std::pair<key_type, value_type>& operator*()
++        {
++            return get_current_node_pair();
++        }
++
++        const ::std::pair<key_type, value_type>* operator->()
++        {
++            return &get_current_node_pair();
++        }
++
++    private:
++        const ::std::pair<key_type, value_type>& get_current_node_pair()
++        {
++            m_current_pair = ::std::pair<key_type, value_type>(m_pos->value_leaf.key, m_pos->value_leaf.value);
++            return m_current_pair;
++        }
++
++        const fst_type*         m_db;
++        const fst_type::node*   m_pos;
++        ::std::pair<key_type, value_type> m_current_pair;
++        bool            m_end_pos:1;
++        bool            m_forward:1;
++    };
++
++public:
++    class const_iterator : public const_iterator_base
++    {
++        friend class flat_segment_tree;
++    public:
++        const_iterator() :
++            const_iterator_base(NULL, false, true) {}
++
++    private:
++        explicit const_iterator(typename const_iterator_base::fst_type* _db, bool _end) : 
++            const_iterator_base(_db, _end, true) {}
++    };
++
++    class const_reverse_iterator : public const_iterator_base
++    {
++        friend class flat_segment_tree;
++    public:
++        const_reverse_iterator() :
++            const_iterator_base(NULL, false, false) {}
++    private:
++        explicit const_reverse_iterator(typename const_iterator_base::fst_type* _db, bool _end) : 
++            const_iterator_base(_db, _end, false) {}
++    };
++
++    const_iterator begin()
++    {
++        return const_iterator(this, false);
++    }
++
++    const_iterator end()
++    {
++        return const_iterator(this, true);
++    }
++
++    const_reverse_iterator rbegin()
++    {
++        return const_reverse_iterator(this, false);
++    }
++
++    const_reverse_iterator rend()
++    {
++        return const_reverse_iterator(this, true);
++    }
 +
 +    /** 
 +     * Get a pointer of concrete node type from the base pointer.
@@ -1228,22 +1369,22 @@ index 0000000..466f9ed
 +
 +#endif
 diff --git sc/source/core/data/makefile.mk sc/source/core/data/makefile.mk
-index c631bb4..5fbec41 100644
+index b177f20..4ac58a9 100644
 --- sc/source/core/data/makefile.mk
 +++ sc/source/core/data/makefile.mk
 @@ -102,6 +102,7 @@ SLOFILES =  \
  	$(SLO)$/phonetic.obj \
- 	$(SLO)$/poolhelp.obj \
- 	$(SLO)$/scimpexpmsg.obj \
+     $(SLO)$/poolhelp.obj \
+     $(SLO)$/scimpexpmsg.obj \
 +	$(SLO)$/segmenttree.obj \
- 	$(SLO)$/sortparam.obj \
- 	$(SLO)$/stlpool.obj \
- 	$(SLO)$/stlsheet.obj \
+     $(SLO)$/sortparam.obj \
+     $(SLO)$/stlpool.obj \
+     $(SLO)$/stlsheet.obj \
 @@ -147,7 +148,8 @@ EXCEPTIONSFILES= \
- 	$(SLO)$/dbdocutl.obj \
- 	$(SLO)$/dptabsrc.obj \
- 	$(SLO)$/drwlayer.obj \
--	$(SLO)$/globalx.obj
+     $(SLO)$/dbdocutl.obj \
+     $(SLO)$/dptabsrc.obj \
+     $(SLO)$/drwlayer.obj \
+-    $(SLO)$/globalx.obj
 +	$(SLO)$/globalx.obj \
 +	$(SLO)$/segmenttree.obj
  
@@ -1480,4 +1621,3 @@ index 0000000..be8e408
 +{
 +    mpImpl->insertSegment(static_cast<SCCOLROW>(nCol), static_cast<SCCOLROW>(nSize), bSkipStartBoundary);
 +}
-
