@@ -1,0 +1,203 @@
+diff --git sc/source/ui/docshell/docsh.cxx sc/source/ui/docshell/docsh.cxx
+index d500001..2cd4321 100644
+--- sc/source/ui/docshell/docsh.cxx
++++ sc/source/ui/docshell/docsh.cxx
+@@ -392,10 +392,12 @@ void ScDocShell::AfterXMLLoading(sal_Bool bRet)
+         BasicManager* pAppMgr = SFX_APP()->GetBasicManager();
+         if ( pAppMgr )
+             pAppMgr->SetGlobalUNOConstant( "ThisExcelDoc", aArgs[ 0 ] );
++#if 0 // this should be controlled by a compatibility mode
+         // suppress VBA events when loading the xml
+         uno::Reference< document::XVbaEventsHelper > xEvt( aDocument.GetVbaEventsHelper() );
+         if ( xEvt.is() )
+             xEvt->setIgnoreEvents( sal_False );
++#endif
+     aDocument.SetImportingXML( FALSE );
+     aDocument.EnableExecuteLink( true );
+     aDocument.EnableUndo( TRUE );
+diff --git sc/source/ui/vba/vbaeventshelper.cxx sc/source/ui/vba/vbaeventshelper.cxx
+index e3a6e85..a22702d 100644
+--- sc/source/ui/vba/vbaeventshelper.cxx
++++ sc/source/ui/vba/vbaeventshelper.cxx
+@@ -253,15 +253,19 @@ VbaEventsListener::startEventsLinstener()
+             xCloseBroadcaster->addCloseListener( this );
+         }
+         // add Border resize listener
+-        uno::Reference< frame::XController > xController( m_xModel->getCurrentController(), uno::UNO_QUERY );
+-        if( xController.is() )
++        try
+         {
+-            uno::Reference< frame::XControllerBorder > xControllerBorder( xController, uno::UNO_QUERY );
+-            if( xControllerBorder.is() )
++            uno::Reference< frame::XController > xController( m_xModel->getCurrentController(), uno::UNO_QUERY );
++            if( xController.is() )
+             {
+-                xControllerBorder->addBorderResizeListener( this );
++                uno::Reference< frame::XControllerBorder > xControllerBorder( xController, uno::UNO_QUERY );
++                if( xControllerBorder.is() )
++                {
++                    xControllerBorder->addBorderResizeListener( this );
++                }
+             }
+         }
++        catch( uno::Exception& e) {} // Disposed already most likely
+     }
+ }
+ void
+@@ -280,17 +284,21 @@ VbaEventsListener::stopEventsLinstener()
+         {
+             xCloseBroadcaster->removeCloseListener( this );
+         }
+-        uno::Reference< frame::XController > xController( m_xModel->getCurrentController(), uno::UNO_QUERY );
+-        if( xController.is() )
++        try
+         {
+-            uno::Reference< frame::XControllerBorder > xControllerBorder( xController, uno::UNO_QUERY );
+-            if( xControllerBorder.is() )
++            uno::Reference< frame::XController > xController( m_xModel->getCurrentController(), uno::UNO_QUERY );
++            if( xController.is() )
+             {
+-                xControllerBorder->removeBorderResizeListener( this );
++                uno::Reference< frame::XControllerBorder > xControllerBorder( xController, uno::UNO_QUERY );
++                if( xControllerBorder.is() )
++                {
++                    xControllerBorder->removeBorderResizeListener( this );
++                }
+             }
+         }
+-        pVbaEventsHelper = NULL;
++        catch ( uno::Exception& e ){}      
+     }
++    pVbaEventsHelper = NULL;
+ }
+ 
+ void
+@@ -375,7 +383,7 @@ VbaEventsListener::borderWidthsChanged( const uno::Reference< uno::XInterface >&
+     }
+ }
+ 
+-ScVbaEventsHelper::ScVbaEventsHelper( uno::Sequence< css::uno::Any > const& aArgs, uno::Reference< uno::XComponentContext > const& xContext ) : VbaEventsHelperBase( xContext ), mbOpened( sal_False )
++ScVbaEventsHelper::ScVbaEventsHelper( uno::Sequence< css::uno::Any > const& aArgs, uno::Reference< uno::XComponentContext > const& xContext ) : VbaEventsHelperBase( xContext ), mbOpened( sal_False ), mbDocDisposed( false )
+ {
+     Initilize();
+     uno::Reference< frame::XModel > xModel ( getXSomethingFromArgs< frame::XModel >( aArgs, 0 ), uno::UNO_QUERY );
+@@ -385,10 +393,46 @@ ScVbaEventsHelper::ScVbaEventsHelper( uno::Sequence< css::uno::Any > const& aArg
+     uno::Reference< util::XChangesNotifier > xChangesNotifier( xModel, uno::UNO_QUERY );
+     if( xChangesNotifier.is() )
+         xChangesNotifier->addChangesListener( uno::Reference< util::XChangesListener >( new WorksheetChangeListener( this ) ) );
++    if ( xModel.is() )
++    {
++        uno::Reference< lang::XComponent > xComponent( xModel, uno::UNO_QUERY );
++        if ( xComponent.is() )
++        {
++            xComponent->addEventListener( this );
++        }
++    }
+ }
+ 
+ ScVbaEventsHelper::~ScVbaEventsHelper()
+ {
++    stopListening();
++}
++
++void ScVbaEventsHelper::stopListening()
++{
++    if ( mbDocDisposed )
++        return;
++    uno::Reference< frame::XModel > xModel( getDocument()->GetDocumentShell()->GetModel(), uno::UNO_QUERY );
++    if ( xModel.is() )
++    {
++        uno::Reference< lang::XComponent > xComponent( xModel, uno::UNO_QUERY );
++        if ( xComponent.is() )
++        {
++            try
++            {
++               xComponent->removeEventListener( this );
++            }
++            catch( uno::Exception& e ) {}
++        }
++    }
++    if ( xModel.is() )
++    {
++        uno::Reference< lang::XComponent > xComponent( xModel, uno::UNO_QUERY );
++        if ( xComponent.is() )
++        {
++            xComponent->addEventListener( this );
++        }
++    }
+ }
+ 
+ #define CREATEOUSTRING(asciistr) rtl::OUString::createFromAscii(asciistr)
+@@ -788,11 +832,19 @@ SCTAB ScVbaEventsHelper::getTabFromArgs( const uno::Sequence< uno::Any > aArgs,
+     return nTab;
+ }
+ 
++void
++ScVbaEventsHelper::disposing(const com::sun::star::lang::EventObject& aSource ) throw (com::sun::star::uno::RuntimeException)
++{
++    OSL_TRACE("ScVbaEventsHelper::disposing");
++    stopListening();
++    mbDocDisposed = true;
++}
++
+ sal_Bool SAL_CALL 
+ ScVbaEventsHelper::ProcessCompatibleVbaEvent( sal_Int32 nEventId, const uno::Sequence< uno::Any >& aArgs ) throw (uno::RuntimeException)
+ {
+ 	SfxObjectShell* pShell = pDoc->GetDocumentShell();
+-	if( !pShell || mbIgnoreEvents)
++	if( !pShell || mbIgnoreEvents || mbDocDisposed )
+ 		return sal_False;
+     
+     // In order to better support "withevents" in the future, 
+diff --git sc/source/ui/vba/vbaeventshelper.hxx sc/source/ui/vba/vbaeventshelper.hxx
+index 20a2cef..28b141e 100644
+--- sc/source/ui/vba/vbaeventshelper.hxx
++++ sc/source/ui/vba/vbaeventshelper.hxx
+@@ -38,25 +38,29 @@
+ 
+ #include "document.hxx"
+ #include <cppuhelper/implbase1.hxx>
++#include <cppuhelper/implbase2.hxx>
+ #include <com/sun/star/document/VbaEventId.hpp>
+ #include <com/sun/star/document/XVbaEventsHelper.hpp>
++#include <com/sun/star/lang/XEventListener.hpp>
+ #include <com/sun/star/awt/XWindowListener.hpp>
+ #include "excelvbahelper.hxx"
+ #include <vbahelper/vbaeventshelperbase.hxx>
+ 
+ #define INVALID_TAB -1
+ 
+-typedef ::cppu::WeakImplHelper1< com::sun::star::document::XVbaEventsHelper > VBAWorkbookEvent_BASE;
++typedef ::cppu::WeakImplHelper2< com::sun::star::document::XVbaEventsHelper, com::sun::star::lang::XEventListener > VBAWorkbookEvent_BASE;
+ 
+ class VbaEventsListener;
+ class ScDocShell;
+ class ScVbaEventsHelper : public VBAWorkbookEvent_BASE, public VbaEventsHelperBase
+ {
++friend class VbaEventsListener;
+ private:
+ 	ScDocument* pDoc;
+ 	ScDocShell* pDocShell;
+     css::uno::Reference< css::awt::XWindowListener > m_xVbaEventsListener;
+     sal_Bool mbOpened;
++    sal_Bool mbDocDisposed;
+ 
+ 	String getSheetModuleName( SCTAB nTab );
+ 	css::uno::Any createWorkSheet( SfxObjectShell* pShell, SCTAB nTab );
+@@ -67,13 +71,15 @@ private:
+     rtl::OUString getMacroPath( const sal_Int32 nEventId, const SCTAB nTab = INVALID_TAB );
+     sal_Bool processVbaEvent( const sal_Int32 nEventId, const css::uno::Sequence< css::uno::Any >& rArgs, const SCTAB nTab = INVALID_TAB );
+     void Initilize();
+-
++    void stopListening();
+ public:
+ 	//ScVbaEventsHelper( ScDocument* pDocument ):pDoc( pDocument ), mbOpened( sal_False ){};
+     ScVbaEventsHelper( css::uno::Sequence< css::uno::Any > const& aArgs, css::uno::Reference< css::uno::XComponentContext > const& xContext );
+     ~ScVbaEventsHelper();
+ 	ScDocument* getDocument() { return pDoc; };
+ 	ScDocShell* getDocumentShell() { return pDocShell; };
++    // XEventListener
++    virtual void SAL_CALL disposing(const css::lang::EventObject& aSource) throw(css::uno::RuntimeException);
+     // XVBAWorkbookEventHelper
+     virtual sal_Bool SAL_CALL ProcessCompatibleVbaEvent( sal_Int32 nEventId, const css::uno::Sequence< css::uno::Any >& aArgs ) throw (css::uno::RuntimeException);
+     virtual void SAL_CALL setIgnoreEvents( ::sal_Bool _ignoreevents ) throw (css::uno::RuntimeException);
