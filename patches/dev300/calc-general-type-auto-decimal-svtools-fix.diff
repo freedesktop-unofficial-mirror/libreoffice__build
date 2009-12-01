@@ -1,0 +1,106 @@
+diff --git svtools/inc/svtools/zforlist.hxx svtools/inc/svtools/zforlist.hxx
+index 2ae53fc..c06f9bd 100644
+--- svtools/inc/svtools/zforlist.hxx
++++ svtools/inc/svtools/zforlist.hxx
+@@ -342,6 +342,12 @@ public:
+      */ 
+     static const sal_uInt16 UNLIMITED_PRECISION;
+ 
++    /** 
++     * Precision suitable for numbers displayed in input bar, for instance 
++     * Calc's formula input bar. 
++     */
++    static const sal_uInt16 INPUTSTRING_PRECISION;
++
+     /// Preferred ctor with service manager and language/country enum
+     SvNumberFormatter(
+         const ::com::sun::star::uno::Reference< ::com::sun::star::lang::XMultiServiceFactory >& xSMgr,
+diff --git svtools/source/numbers/zforlist.cxx svtools/source/numbers/zforlist.cxx
+index 85807ce..2b3f196 100644
+--- svtools/source/numbers/zforlist.cxx
++++ svtools/source/numbers/zforlist.cxx
+@@ -193,7 +193,8 @@ SV_IMPL_PTRARR( NfWSStringsDtor, String* );
+ 
+ /***********************Funktionen SvNumberFormatter**************************/
+ 
+-const sal_uInt16 SvNumberFormatter::UNLIMITED_PRECISION = ::std::numeric_limits<sal_uInt16>::max();
++const sal_uInt16 SvNumberFormatter::UNLIMITED_PRECISION   = ::std::numeric_limits<sal_uInt16>::max();
++const sal_uInt16 SvNumberFormatter::INPUTSTRING_PRECISION = ::std::numeric_limits<sal_uInt16>::max()-1;
+ 
+ SvNumberFormatter::SvNumberFormatter(
+             const Reference< XMultiServiceFactory >& xSMgr,
+@@ -1492,7 +1493,6 @@ void SvNumberFormatter::GetInputLineString(const double& fOutNumber,
+                                            String& sOutString)
+ {
+     SvNumberformat* pFormat;
+-    short nOldPrec;
+     Color* pColor;
+     pFormat = (SvNumberformat*) aFTable.Get(nFIndex);
+     if (!pFormat)
+@@ -1502,7 +1502,8 @@ void SvNumberFormatter::GetInputLineString(const double& fOutNumber,
+     short eType = pFormat->GetType() & ~NUMBERFORMAT_DEFINED;
+     if (eType == 0)
+         eType = NUMBERFORMAT_DEFINED;
+-    nOldPrec = -1;
++    sal_uInt16 nOldPrec = pFormatScanner->GetStandardPrec();
++    bool bPrecChanged = false;
+     if (eType == NUMBERFORMAT_NUMBER || eType == NUMBERFORMAT_PERCENT
+                                      || eType == NUMBERFORMAT_CURRENCY
+                                      || eType == NUMBERFORMAT_SCIENTIFIC
+@@ -1510,8 +1511,8 @@ void SvNumberFormatter::GetInputLineString(const double& fOutNumber,
+     {
+         if (eType != NUMBERFORMAT_PERCENT)	// spaeter Sonderbehandlung %
+             eType = NUMBERFORMAT_NUMBER;
+-        nOldPrec = pFormatScanner->GetStandardPrec();
+-        ChangeStandardPrec(UNLIMITED_PRECISION);						// Merkwert
++        ChangeStandardPrec(INPUTSTRING_PRECISION);
++        bPrecChanged = true;
+     }
+     sal_uInt32 nKey = nFIndex;
+     switch ( eType )
+@@ -1531,12 +1532,12 @@ void SvNumberFormatter::GetInputLineString(const double& fOutNumber,
+     {
+         if ( eType == NUMBERFORMAT_TIME && pFormat->GetFormatPrecision() )
+         {
+-            nOldPrec = pFormatScanner->GetStandardPrec();
+-            ChangeStandardPrec(UNLIMITED_PRECISION);						// Merkwert
++            ChangeStandardPrec(INPUTSTRING_PRECISION);
++            bPrecChanged = true;
+         }
+         pFormat->GetOutputString(fOutNumber, sOutString, &pColor);
+     }
+-    if (nOldPrec != -1)
++    if (bPrecChanged)
+         ChangeStandardPrec(nOldPrec);
+ }
+ 
+diff --git svtools/source/numbers/zformat.cxx svtools/source/numbers/zformat.cxx
+index 494128a..1b240c2 100644
+--- svtools/source/numbers/zformat.cxx
++++ svtools/source/numbers/zformat.cxx
+@@ -2061,16 +2061,23 @@ BOOL SvNumberformat::GetOutputString(double fNumber,
+     BOOL bHadStandard = FALSE;
+     if (bStandard)                              // einzelne Standardformate
+     {
+-        if (rScan.GetStandardPrec() == SvNumberFormatter::UNLIMITED_PRECISION)     // alle Zahlformate InputLine
++        if (rScan.GetStandardPrec() == SvNumberFormatter::INPUTSTRING_PRECISION)     // alle Zahlformate InputLine
+         {
+             ImpGetOutputInputLine(fNumber, OutString);
+-            return FALSE;
++            return false;
+         }
+         switch (eType)
+         {
+             case NUMBERFORMAT_NUMBER:                   // Standardzahlformat
++            {
++                if (rScan.GetStandardPrec() == SvNumberFormatter::UNLIMITED_PRECISION)
++                {
++                    ImpGetOutputInputLine(fNumber, OutString);
++                    return false;
++                }
+                 ImpGetOutputStandard(fNumber, OutString);
+                 bHadStandard = TRUE;
++            }
+             break;
+             case NUMBERFORMAT_DATE:
+                 bRes |= ImpGetDateOutput(fNumber, 0, OutString);
