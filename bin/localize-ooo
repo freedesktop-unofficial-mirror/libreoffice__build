@@ -28,34 +28,27 @@ merge_localization()
 {
     sdf_file="$1"
     langcode="$2"
-    split_build="$3"
-    sdf_file_filter="$4"
 
-    # filter the sdf file in the split build
-    if test "$split_build" = "yes" ; then
-	sdf_file_filtered=`mktemp /tmp/localize-ooo-sdf-filtered-XXXXXX`
-	grep -f "$sdf_file_filter" "$sdf_file" >$sdf_file_filtered
-    else
-	sdf_file_filtered="$sdf_file"
-    fi
+    # we do not want en-US strings
+    sdf_file_filtered=`mktemp /tmp/localize-ooo-sdf-filtered-XXXXXX`
+    awk -F "\t" '{ if ($10 != "en-US") print }' "$sdf_file" >$sdf_file_filtered
 
     # merge the localization
     if test `wc -l $sdf_file_filtered | cut -d " " -f 1` -eq 0 ; then
 	echo "Warning: Ignoring empty extra localization $(basename $sdf_file)..."
     else
 	echo "Merging extra localization $(basename $sdf_file)..."
-	localize -m -x -l $langcode -f $sdf_file_filtered || exit 1;
+	localize -m -x -o -l $langcode -f $sdf_file_filtered || exit 1;
 	echo ""
     fi
 
-    # remove temp file
-    if test "$split_build" = "yes" ; then
-	rm $sdf_file_filtered
-    fi
+    rm $sdf_file_filtered
 }
 
+export WRAPCMD="LD_LIBRARY_PATH=$SOLARVER/$INPATH/lib PATH=$PATH:$SOLARVER/$INPATH/bin"
+
 # build the localize tool if needed (only in the non-split build)
-if test "$split_build" != "yes" && ! which localize >/dev/null 2>&1 ; then
+if test "$split_build" != "yes" && ! localize -h >/dev/null 2>&1 ; then
     echo 'Building localize stuff at first...'
     cd $OOBUILDDIR/transex3
     perl $SOLARENV/bin/build.pl --all $EXTRA_BUILD_FLAGS $EXTRA_DMAKE_FLAGS || exit 1;
@@ -66,12 +59,6 @@ if test "$split_build" != "yes" && ! which localize >/dev/null 2>&1 ; then
     if [ -d $OOBUILDDIR/l10n ]; then
 	find $OOBUILDDIR/l10n -type f -name "localize.sdf" -exec chmod 644 {} \;
     fi
-fi
-
-# will filter the sdf files in the split-build
-if test "$split_build" = "yes" ; then
-    sdf_file_filter=`mktemp /tmp/localize-ooo-sdf-filter-XXXXXX`
-    find $OOBUILDDIR -mindepth 1 -maxdepth 1 -type d -printf "^%P\t\n" >$sdf_file_filter
 fi
 
 # stamp files
@@ -115,7 +102,7 @@ for sdf_file in `find $SRCDIR $DEB_GSIDIR $TOOLSDIR/po $SRCDIR_PIECE -name "*.sd
     done
     test -z "$langcode" && continue;
 
-    merge_localization "$sdf_file" "$langcode" "$split_build" "$sdf_file_filter"
+    merge_localization "$sdf_file" "$langcode"
 
     # workaround for i#56622, n#210797
     test "$langcode" = "hu" && hungarian_updated=yes
@@ -158,7 +145,7 @@ for fn in `find $SRCDIR $DEB_GSIDIR $TOOLSDIR/po $SRCDIR_PIECE -name "*.sdf"` ; 
     # skip exotic localizations that are not in $ALL_LANGS and thus not detected
     echo "$fn" | grep -q "$SRCDIR/GSI" && ! echo $OOO_LANGS | grep -q "$(echo $(basename $fn) | cut -d'_' -f2)" && continue;
     echo "$fn" | grep -q "$TOOLSDIR/po/ooo-build" && ! echo $OOO_LANGS | grep -q "$(echo $(basename $fn) | cut -d'-' -f3)" && continue;
-    merge_localization "$fn" "all" "$split_build" "$sdf_file_filter" || exit 1;
+    merge_localization "$fn" "all" || exit 1;
     echo "$fn" >>$extra_trans_stamp
 done
 
@@ -166,7 +153,7 @@ if test "z$DEB_GSIDIR" != "z"; then
     for fn in $DEB_GSIDIR/*all*.sdf; do
 	[ -f "$fn" ] || continue
 	echo "Merging extra localization $(basename $fn) ..."
-	merge_localization "$fn" "all" "$split_build" "$sdf_file_filter" || exit 1;
+	merge_localization "$fn" "all" || exit 1;
     done
 fi
 
@@ -177,7 +164,7 @@ if ! grep -q "^GSI_en-GB-en-US.sdf$" $extra_trans_stamp 2>/dev/null ; then
 	    gsi_temp=`mktemp /tmp/build-ooo.XXXXXX`
 	    echo "Fixing en-GB localization..."
 	    localize -e -l en-US,en-GB=en-US -f $gsi_temp
-	    localize -m -x -l en-GB -f $gsi_temp
+	    merge_localization "$gsi_temp" "en-GB"
 	    echo "GSI_en-GB-en-US.sdf" >>$extra_trans_stamp
 	    rm -f $gsi_temp
 	    break;
@@ -186,7 +173,6 @@ if ! grep -q "^GSI_en-GB-en-US.sdf$" $extra_trans_stamp 2>/dev/null ; then
 fi
 
 # remove temporary files
-test "$split_build" = "yes" && rm $sdf_file_filter
 rm $all_langs_pattern
 
 echo "Localizations updated ...!"
