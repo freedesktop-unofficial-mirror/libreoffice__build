@@ -1,0 +1,144 @@
+diff --git sc/inc/document.hxx sc/inc/document.hxx
+index 42479b4..61e23c9 100644
+--- sc/inc/document.hxx
++++ sc/inc/document.hxx
+@@ -452,7 +452,8 @@ public:
+     void			SetName( const String& r ) { aDocName = r; }
+ 	const String& 	GetCodeName() const { return aDocCodeName; }
+ 	void			SetCodeName( const String& r ) { aDocCodeName = r; }
+-
++    
++    SC_DLLPUBLIC NameToNameMap*              GetLocalNameMap( SCTAB& rTab );
+     void			GetDocStat( ScDocStat& rDocStat );
+ 
+     SC_DLLPUBLIC void			InitDrawLayer( SfxObjectShell* pDocShell = NULL );
+diff --git sc/inc/rangenam.hxx sc/inc/rangenam.hxx
+index 980f593..3991b8e 100644
+--- sc/inc/rangenam.hxx
++++ sc/inc/rangenam.hxx
+@@ -145,7 +145,7 @@ public:
+ 
+     SC_DLLPUBLIC BOOL			IsReference( ScRange& rRef ) const;
+     BOOL			IsReference( ScRange& rRef, const ScAddress& rPos ) const;
+-    BOOL			IsValidReference( ScRange& rRef ) const;
++    SC_DLLPUBLIC BOOL			IsValidReference( ScRange& rRef ) const;
+ 
+ //UNUSED2009-05 BOOL			IsRangeAtCursor( const ScAddress&, BOOL bStartOnly ) const;
+     BOOL			IsRangeAtBlock( const ScRange& ) const;
+diff --git sc/inc/table.hxx sc/inc/table.hxx
+index c7836c5..a259b48 100644
+--- sc/inc/table.hxx
++++ sc/inc/table.hxx
+@@ -89,6 +89,8 @@ class ScFlatUInt16RowSegments;
+ class ScFlatBoolRowSegments;
+ class ScFlatBoolColSegments;
+ 
++typedef std::hash_map< ::rtl::OUString, rtl::OUString, ::rtl::OUStringHash, ::std::equal_to< ::rtl::OUString > > NameToNameMap;
++
+ class ScTable
+ {
+ private:
+@@ -180,7 +181,7 @@ private:
+     USHORT			nScenarioFlags;
+     BOOL			bActiveScenario;
+     bool            mbPageBreaksValid;
+-
++    NameToNameMap       localNameToGlobalName;
+ friend class ScDocument;					// fuer FillInfo
+ friend class ScDocumentIterator;
+ friend class ScValueIterator;
+diff --git sc/source/core/data/document.cxx sc/source/core/data/document.cxx
+index b4a134e..a783519 100644
+--- sc/source/core/data/document.cxx
++++ sc/source/core/data/document.cxx
+@@ -189,6 +189,13 @@ BOOL ScDocument::GetCodeName( SCTAB nTab, String& rName ) const
+ 	return FALSE;
+ }
+ 
++NameToNameMap*
++ScDocument::GetLocalNameMap( SCTAB& rTab )
++{
++    if ( !HasTable( rTab ) )
++        return NULL;
++    return &pTab[rTab]->localNameToGlobalName;
++}
+ 
+ BOOL ScDocument::GetTable( const String& rName, SCTAB& rTab ) const
+ {
+diff --git sc/source/filter/excel/xiname.cxx sc/source/filter/excel/xiname.cxx
+index 0ad70d5..04d9ca3 100644
+--- sc/source/filter/excel/xiname.cxx
++++ sc/source/filter/excel/xiname.cxx
+@@ -38,7 +38,8 @@
+ #include "excform.hxx"
+ // for filter manager
+ #include "excimp8.hxx"
+-
++#include "scextopt.hxx"
++#include "document.hxx"
+ // ============================================================================
+ // *** Implementation ***
+ // ============================================================================
+@@ -130,6 +131,7 @@ XclImpName::XclImpName( XclImpStream& rStrm, sal_uInt16 nXclNameIdx ) :
+         maScName = maXclName;
+         ScfTools::ConvertToScDefinedName( maScName );
+     }
++    rtl::OUString aRealOrigName = maScName;
+ 
+     // add index for local names
+     if( nXclTab != EXC_NAME_GLOBAL )
+@@ -224,6 +226,25 @@ XclImpName::XclImpName( XclImpStream& rStrm, sal_uInt16 nXclNameIdx ) :
+         pData->GuessPosition();             // calculate base position for relative refs
+         pData->SetIndex( nXclNameIdx );     // used as unique identifier in formulas
+         rRangeNames.Insert( pData );        // takes ownership of pData
++        if( nXclTab != EXC_NAME_GLOBAL )
++        {
++            if (GetBiff() == EXC_BIFF8)
++            {
++                ScRange aRange;
++                // discard deleted ranges ( for the moment at least )
++                if ( pData->IsValidReference( aRange ) )
++                {
++                    ScExtTabSettings& rTabSett = GetExtDocOptions().GetOrCreateTabSettings( nXclTab );
++                    // create a mapping between the unmodified localname to
++                    // the name in the global name container for named ranges
++                    OSL_TRACE(" mapping local name to global name for tab %d which exists? %s", nXclTab, GetDoc().HasTable( mnScTab ) ? "true" : "false" );
++                    SCTAB nTab( static_cast< SCTAB >( mnScTab ) );
++                    NameToNameMap* pMap = GetDoc().GetLocalNameMap( nTab );
++                    if ( pMap )
++                       (*pMap)[ aRealOrigName ] = maScName;
++                }
++            }
++        }
+         mpScData = pData;                   // cache for later use
+     }
+ }
+diff --git sc/source/ui/vba/vbarange.cxx sc/source/ui/vba/vbarange.cxx
+index 735f913..923868e 100644
+--- sc/source/ui/vba/vbarange.cxx
++++ sc/source/ui/vba/vbarange.cxx
+@@ -1105,6 +1105,24 @@ bool getScRangeListForAddress( const rtl::OUString& sName, ScDocShell* pDocSh, S
+         formula::FormulaGrammar::AddressConvention eConv = aConv; 
+         // spaces are illegal ( but the user of course can enter them )
+         rtl::OUString sAddress = (*it).trim();
++        // if a local name ( on the active sheet ) exists this will
++        // take precedence over a global with the same name
++        if ( !xNameAccess->hasByName( sAddress ) && pDocSh )
++        {
++            // try a local name
++            ScDocument* pDoc = pDocSh->GetDocument();     
++            SCTAB nCurTab = pDocSh->GetCurTab();
++            if ( pDoc )
++            {
++                NameToNameMap* pMap = pDoc->GetLocalNameMap( nCurTab );
++                if ( pMap )
++                {
++                    NameToNameMap::iterator it = pMap->find( sAddress );
++                    if ( it != pMap->end() ) // found a mapping
++                        sAddress = it->second;
++                }
++            }
++        }
+         if ( xNameAccess->hasByName( sAddress ) )
+         {
+             uno::Reference< sheet::XNamedRange > xNamed( xNameAccess->getByName( sAddress ), uno::UNO_QUERY_THROW );
