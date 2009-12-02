@@ -12,7 +12,6 @@ script_files = \
 	defuzzpatch \
 	extract-gsi \
 	extract-new-strings \
-	fast_merge.pl \
 	font-munge \
 	fix-deps \
 	generate-bash-completion \
