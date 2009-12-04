@@ -15,16 +15,29 @@ EOF
     exit 1
 fi
 
-HEADERS="
+INC="
 excdoc.hxx
 excrecds.hxx
 exp_op.hxx
 XclExpChangeTrack.hxx
 xcl97esc.hxx
 xcl97rec.hxx
+xechart.hxx
+xecontent.hxx
 xeescher.hxx
+xelink.hxx
+xename.hxx
+xepage.hxx
 xepivot.hxx
+xerecord.hxx
 xestream.hxx
+xestyle.hxx
+xetable.hxx
+xeview.hxx
+"
+
+XLS_INC="
+xltoolbar.hxx
 "
 
 ADD_PREFIX="
@@ -82,12 +95,14 @@ xlpivot.cxx
 xlroot.cxx
 xlstyle.cxx
 xltools.cxx
+xltoolbar.cxx
 xltracer.cxx
 xlview.cxx
 "
 
 ADD_PREFIX_97="
 XclExpChangeTrack.cxx
+XclImpChangeTrack.cxx
 xcl97esc.cxx
 xcl97rec.cxx
 "
@@ -108,8 +123,11 @@ new-diff() {
 }
 
 (
-    for I in $HEADERS ; do
+    for I in $INC ; do
         new-diff $HEADER $I $I
+    done
+    for I in $XLS_INC ; do
+        new-diff $XLS $I $I
     done
     for I in $ADD_PREFIX ; do
         new-diff $XLS $I xlsx-$I
