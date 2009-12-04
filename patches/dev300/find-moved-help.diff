@@ -1,0 +1,160 @@
+Index: source/deployment/registry/help/dp_help.cxx
+===================================================================
+--- desktop/source/deployment/registry/help/dp_help.cxx	(revision 277668)
++++ desktop/source/deployment/registry/help/dp_help.cxx	(working copy)
+@@ -39,6 +39,7 @@
+ #include "ucbhelper/content.hxx"
+ #include "comphelper/servicedecl.hxx"
+ #include "svtools/inettype.hxx"
++#include "svtools/pathoptions.hxx"
+ 
+ #include <transex3/compilehelp.hxx> 
+ #include <com/sun/star/ucb/XSimpleFileAccess.hpp>
+@@ -350,8 +351,12 @@
+ 					pXhpFiles[iXhp] = aXhpRelFile;
+ 				}
+ 
++				rtl::OUString aOfficeHelpPath( SvtPathOptions().GetHelpPath() );
++				rtl::OUString aOfficeHelpPathFileURL;
++				::osl::File::getFileURLFromSystemPath( aOfficeHelpPath, aOfficeHelpPathFileURL ); 
++
+ 				HelpProcessingErrorInfo aErrorInfo;
+-				bool bSuccess = compileExtensionHelp( aHelpStr, aLangURL, 
++				bool bSuccess = compileExtensionHelp( aOfficeHelpPathFileURL, aHelpStr, aLangURL,
+ 					nXhpFileCount, pXhpFiles, aErrorInfo );
+ 
+ 				if( bSuccess && xInvocation.is() )
+Index: source/help/compilehelp.hxx
+===================================================================
+--- transex3/source/help/compilehelp.hxx	(revision 277621)
++++ transex3/source/help/compilehelp.hxx	(working copy)
+@@ -71,6 +71,7 @@
+ // Returns true in case of success, false in case of error
+ HELPLINKER_DLLPUBLIC bool compileExtensionHelp
+ (
++ 	const rtl::OUString& aOfficeHelpPath,
+ 	const rtl::OUString& aExtensionName,
+ 	const rtl::OUString& aExtensionLanguageRoot,
+ 	sal_Int32 nXhpFileCount, const rtl::OUString* pXhpFiles,
+Index: source/help/HelpLinker.cxx
+===================================================================
+--- transex3/source/help/HelpLinker.cxx	(revision 277621)
++++ transex3/source/help/HelpLinker.cxx	(working copy)
+@@ -118,35 +118,41 @@
+ {
+ 	std::string aStdStr_EncodedDocPathURL = getEncodedPath( EncodedDocPath );
+ 
+-    xmlDocPtr resCaption = xsltApplyStylesheet( m_xsltStylesheetPtrCaption, doc, NULL );
+-	xmlNodePtr pResNodeCaption = resCaption->xmlChildrenNode;
+-	if( pResNodeCaption )
++	if( m_xsltStylesheetPtrCaption )
+ 	{
+-		fs::path fsCaptionPureTextFile_docURL = m_fsCaptionFilesDirName / aStdStr_EncodedDocPathURL;
+-		std::string aCaptionPureTextFileStr_docURL = fsCaptionPureTextFile_docURL.native_file_string();
+-		FILE* pFile_docURL = fopen( aCaptionPureTextFileStr_docURL.c_str(), "w" );
+-		if( pFile_docURL )
++		xmlDocPtr resCaption = xsltApplyStylesheet( m_xsltStylesheetPtrCaption, doc, NULL );
++		xmlNodePtr pResNodeCaption = resCaption->xmlChildrenNode;
++		if( pResNodeCaption )
+ 		{
+-			fprintf( pFile_docURL, "%s\n", pResNodeCaption->content );
+-			fclose( pFile_docURL );
++			fs::path fsCaptionPureTextFile_docURL = m_fsCaptionFilesDirName / aStdStr_EncodedDocPathURL;
++			std::string aCaptionPureTextFileStr_docURL = fsCaptionPureTextFile_docURL.native_file_string();
++			FILE* pFile_docURL = fopen( aCaptionPureTextFileStr_docURL.c_str(), "w" );
++			if( pFile_docURL )
++			{
++				fprintf( pFile_docURL, "%s\n", pResNodeCaption->content );
++				fclose( pFile_docURL );
++			}
+ 		}
++		xmlFreeDoc(resCaption);
+ 	}
+-    xmlFreeDoc(resCaption);
+ 
+-    xmlDocPtr resContent = xsltApplyStylesheet( m_xsltStylesheetPtrContent, doc, NULL );
+-	xmlNodePtr pResNodeContent = resContent->xmlChildrenNode;
+-	if( pResNodeContent )
++	if( m_xsltStylesheetPtrContent )
+ 	{
+-		fs::path fsContentPureTextFile_docURL = m_fsContentFilesDirName / aStdStr_EncodedDocPathURL;
+-		std::string aContentPureTextFileStr_docURL = fsContentPureTextFile_docURL.native_file_string();
+-		FILE* pFile_docURL = fopen( aContentPureTextFileStr_docURL.c_str(), "w" );
+-		if( pFile_docURL )
++		xmlDocPtr resContent = xsltApplyStylesheet( m_xsltStylesheetPtrContent, doc, NULL );
++		xmlNodePtr pResNodeContent = resContent->xmlChildrenNode;
++		if( pResNodeContent )
+ 		{
+-			fprintf( pFile_docURL, "%s\n", pResNodeContent->content );
+-			fclose( pFile_docURL );
++			fs::path fsContentPureTextFile_docURL = m_fsContentFilesDirName / aStdStr_EncodedDocPathURL;
++			std::string aContentPureTextFileStr_docURL = fsContentPureTextFile_docURL.native_file_string();
++			FILE* pFile_docURL = fopen( aContentPureTextFileStr_docURL.c_str(), "w" );
++			if( pFile_docURL )
++			{
++				fprintf( pFile_docURL, "%s\n", pResNodeContent->content );
++				fclose( pFile_docURL );
++			}
+ 		}
++	    xmlFreeDoc(resContent);
+ 	}
+-    xmlFreeDoc(resContent);
+ }
+ 
+ struct Data
+@@ -237,8 +243,9 @@
+ class HelpLinker
+ {
+ public:
+-    void main(std::vector<std::string> &args, std::string* pExtensionPath = NULL )
+-		throw( HelpProcessingException );
++    void main(std::vector<std::string> &args,
++		std::string* pExtensionPath = NULL, const rtl::OUString* pOfficeHelpPath = NULL )
++			throw( HelpProcessingException );
+ 
+     HelpLinker()
+ 		: init(true)
+@@ -743,21 +750,21 @@
+ }
+ 
+ 
+-void HelpLinker::main(std::vector<std::string> &args, std::string* pExtensionPath)
+-	throw( HelpProcessingException )
++void HelpLinker::main( std::vector<std::string> &args,
++	std::string* pExtensionPath, const rtl::OUString* pOfficeHelpPath )
++		throw( HelpProcessingException )
+ {
+ 	rtl::OUString aOfficeHelpPath;
+ 
+ 	bExtensionMode = false;
+-	if( pExtensionPath && pExtensionPath->length() > 0 )
++	if( pExtensionPath && pExtensionPath->length() > 0 && pOfficeHelpPath )
+ 	{
+ 		helpFiles.clear();
+ 		bExtensionMode = true;
+ 		extensionPath = *pExtensionPath;
+ 		sourceRoot = fs::path(extensionPath);
+ 
+-		aOfficeHelpPath = rtl::OUString( RTL_CONSTASCII_USTRINGPARAM("$OOO_BASE_DIR/help") );
+-		rtl::Bootstrap::expandMacros( aOfficeHelpPath );
++		aOfficeHelpPath = *pOfficeHelpPath;
+ 	}
+     if (args.size() > 0 && args[0][0] == '@')
+     {
+@@ -1057,6 +1064,7 @@
+ // Returns true in case of success, false in case of error
+ HELPLINKER_DLLPUBLIC bool compileExtensionHelp
+ (
++ 	const rtl::OUString& aOfficeHelpPath,
+ 	const rtl::OUString& aExtensionName,
+ 	const rtl::OUString& aExtensionLanguageRoot,
+ 	sal_Int32 nXhpFileCount, const rtl::OUString* pXhpFiles,
+@@ -1099,7 +1107,7 @@
+ 	try
+ 	{
+ 		HelpLinker* pHelpLinker = new HelpLinker();
+-	    pHelpLinker->main( args,&aStdStrExtensionPath );
++	    pHelpLinker->main( args, &aStdStrExtensionPath, &aOfficeHelpPath );
+ 		delete pHelpLinker;
+ 	}
+ 	catch( const HelpProcessingException& e )
