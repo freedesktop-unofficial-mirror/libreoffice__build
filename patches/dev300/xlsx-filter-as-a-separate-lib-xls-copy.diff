@@ -9601,7 +9601,7 @@
 +
 --- /dev/null
 +++ sc/source/filter/xlsx/xlsx-excform.cxx
-@@ -0,0 +1,2020 @@
+@@ -0,0 +1,2017 @@
 +/*************************************************************************
 + *
 + * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
@@ -9740,7 +9740,7 @@
 +            bConvert = TRUE;
 +
 +        if( bConvert )
-+            eErr = pFormConv->Convert( pErgebnis, maStrm, nFormLen, ExcelToSc::ConvertParam(), FT_CellFormula);
++            eErr = pFormConv->Convert( pErgebnis, maStrm, nFormLen, true, FT_CellFormula);
 +
 +        ScFormulaCell*		pZelle = NULL;
 +
@@ -9805,8 +9805,7 @@
 +// if bAllowArrays is false stream seeks to first byte after <nFormulaLen>
 +// otherwise it will seek to the first byte after the additional content (eg
 +// inline arrays) following <nFormulaLen>
-+ConvErr ExcelToSc::Convert( const ScTokenArray*& pErgebnis, XclImpStream& aIn, sal_Size nFormulaLen, 
-+                            const ConvertParam& rParam, const FORMULA_TYPE eFT )
++ConvErr ExcelToSc::Convert( const ScTokenArray*& pErgebnis, XclImpStream& aIn, sal_Size nFormulaLen, bool bAllowArrays, const FORMULA_TYPE eFT )
 +{
 +    RootData&       rR = GetOldRoot();
 +    BYTE			nOp, nLen, nByte;
@@ -10077,12 +10076,9 @@
 +            case 0x20: // Array Constant						[317 268]
 +                aIn >> nByte >> nUINT16;
 +                aIn.Ignore( (meBiff == EXC_BIFF2) ? 3 : 4 );
-+                if( rParam.mbAllowArrays )
++                if( bAllowArrays )
 +                {
-+                    SCSIZE nC = nByte ? nByte : 256;
-+                    SCSIZE nR = nUINT16;
-+
-+                    aStack << aPool.StoreMatrix( nC, nR );
++                    aStack << aPool.StoreMatrix();
 +                    aExtensions.push_back( EXTENSION_ARRAY );
 +                }
 +                else
@@ -11501,6 +11497,7 @@
 +
 +    if( NULL != pMatrix )
 +    {
++        pMatrix->Resize(nCols, nRows);
 +        pMatrix->GetDimensions( nC, nR);
 +        if( nC != nCols || nR != nRows )
 +        {
@@ -11624,7 +11621,7 @@
 +
 --- /dev/null
 +++ sc/source/filter/xlsx/xlsx-excform8.cxx
-@@ -0,0 +1,1609 @@
+@@ -0,0 +1,1600 @@
 +/*************************************************************************
 + *
 + * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
@@ -11724,8 +11721,7 @@
 +
 +// if bAllowArrays is false stream seeks to first byte after <nFormulaLen>
 +// otherwise it will seek to the first byte past additional content after <nFormulaLen>
-+ConvErr ExcelToSc8::Convert( const ScTokenArray*& rpTokArray, XclImpStream& aIn, sal_Size nFormulaLen, 
-+                             const ConvertParam& rParam, const FORMULA_TYPE eFT )
++ConvErr ExcelToSc8::Convert( const ScTokenArray*& rpTokArray, XclImpStream& aIn, sal_Size nFormulaLen, bool bAllowArrays, const FORMULA_TYPE eFT )
 +{
 +    BYTE					nOp, nLen, nByte;
 +    UINT16                  nUINT16;
@@ -12021,17 +12017,9 @@
 +            case 0x20: // Array Constant						[317 268]
 +                aIn >> nByte >> nUINT16;
 +                aIn.Ignore( 4 );
-+                if (rParam.mbAllowArrays)
++                if( bAllowArrays )
 +                {
-+                    SCSIZE nC = rParam.mnArrayColSize;
-+                    SCSIZE nR = rParam.mnArrayRowSize;
-+                    if (!nC || !nR)
-+                    {
-+                        // Stored array size is invalid.  Get that from the formula.
-+                        nC = nByte + 1;
-+                        nR = nUINT16 + 1;
-+                    }
-+                    aStack << aPool.StoreMatrix(nC, nR);
++                    aStack << aPool.StoreMatrix();
 +                    aExtensions.push_back( EXTENSION_ARRAY );
 +                }
 +                else
@@ -15916,7 +15904,7 @@
 +
 --- /dev/null
 +++ sc/source/filter/xlsx/xlsx-frmbase.cxx
-@@ -0,0 +1,301 @@
+@@ -0,0 +1,295 @@
 +/*************************************************************************
 + *
 + * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
@@ -16177,12 +16165,6 @@
 +    aEingPos.Set( 0, 0, 0 );
 +}
 +
-+ExcelConverterBase::ConvertParam::ConvertParam() :
-+    mbAllowArrays(true),
-+    mnArrayColSize(0),
-+    mnArrayRowSize(0)
-+{
-+}
 +
 +
 +
@@ -16220,7 +16202,7 @@
 +
 --- /dev/null
 +++ sc/source/filter/xlsx/xlsx-impop.cxx
-@@ -0,0 +1,1349 @@
+@@ -0,0 +1,1341 @@
 +/*************************************************************************
 + *
 + * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
@@ -16740,9 +16722,7 @@
 +
 +        pFormConv->Reset( ScAddress( static_cast<SCCOL>(nFirstCol),
 +                    static_cast<SCROW>(nFirstRow), GetCurrScTab() ) );
-+        ExcelConverterBase::ConvertParam aParam;
-+        aParam.mbAllowArrays = true;
-+        pFormConv->Convert( pErgebnis, maStrm, nFormLen, aParam, FT_CellFormula);
++        pFormConv->Convert( pErgebnis, maStrm, nFormLen, true, FT_CellFormula);
 +
 +        DBG_ASSERT( pErgebnis, "*ImportExcel::Array25(): ScTokenArray ist NULL!" );
 +
@@ -17040,9 +17020,7 @@
 +    const ScTokenArray*	pErgebnis;
 +
 +    pFormConv->Reset();
-+    ExcelConverterBase::ConvertParam aParam;
-+    aParam.mbAllowArrays = true;
-+    pFormConv->Convert( pErgebnis, maStrm, nLenExpr, aParam, FT_SharedFormula );
++    pFormConv->Convert( pErgebnis, maStrm, nLenExpr, true, FT_SharedFormula );
 +
 +
 +    DBG_ASSERT( pErgebnis, "+ImportExcel::Shrfmla(): ScTokenArray ist NULL!" );
@@ -17214,14 +17192,10 @@
 +    {
 +        // jetzt steht Lesemarke auf Formel, Laenge in nFormLen
 +        const ScTokenArray*	pErgebnis;
-+        ExcelConverterBase::ConvertParam aParam;
-+        aParam.mbAllowArrays = true;
-+        aParam.mnArrayColSize = nLastCol - nFirstCol + 1;
-+        aParam.mnArrayRowSize = nLastRow - nFirstRow + 1;
 +
 +        pFormConv->Reset( ScAddress( static_cast<SCCOL>(nFirstCol),
 +                    static_cast<SCROW>(nFirstRow), GetCurrScTab() ) );
-+        pFormConv->Convert( pErgebnis, maStrm, nFormLen, aParam, FT_CellFormula);
++        pFormConv->Convert( pErgebnis, maStrm, nFormLen, true, FT_CellFormula);
 +
 +        DBG_ASSERT( pErgebnis, "+ImportExcel::Array34(): ScTokenArray ist NULL!" );
 +
@@ -19237,7 +19211,7 @@
 +
 --- /dev/null
 +++ sc/source/filter/xlsx/xlsx-tokstack.cxx
-@@ -0,0 +1,892 @@
+@@ -0,0 +1,891 @@
 +/*************************************************************************
 + *
 + * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
@@ -19980,7 +19954,7 @@
 +    return ( const TokenId ) nElementAkt;
 +}
 +
-+const TokenId TokenPool::StoreMatrix( SCSIZE nC, SCSIZE nR )
++const TokenId TokenPool::StoreMatrix()
 +{
 +    ScMatrix* pM;
 +
@@ -19993,8 +19967,7 @@
 +    pElement[ nElementAkt ] = nP_MatrixAkt;
 +    pType[ nElementAkt ] = T_Matrix;
 +
-+    pM = new ScMatrix( nC, nR );
-+    pM->FillDouble( 0., 0,0, nC-1, nR-1 );
++    pM = new ScMatrix( 0, 0 );
 +    pM->IncRef( );
 +    ppP_Matrix[ nP_MatrixAkt ] = pM;
 +
@@ -43415,7 +43388,7 @@
 +
 --- /dev/null
 +++ sc/source/filter/xlsx/xlsx-xicontent.cxx
-@@ -0,0 +1,1328 @@
+@@ -0,0 +1,1322 @@
 +/*************************************************************************
 + *
 + * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
@@ -44034,15 +44007,12 @@
 +    const ScAddress& rPos = maRanges.GetObject( 0 )->aStart;    // assured above that maRanges is not empty
 +    ExcelToSc& rFmlaConv = GetOldFmlaConverter();
 +
-+    ExcelConverterBase::ConvertParam aParam;
-+    aParam.mbAllowArrays = false;
-+
 +    ::std::auto_ptr< ScTokenArray > xTokArr1;
 +    if( nFmlaSize1 > 0 )
 +    {
 +        const ScTokenArray* pTokArr = 0;
 +        rFmlaConv.Reset( rPos );
-+        rFmlaConv.Convert( pTokArr, rStrm, nFmlaSize1, aParam, FT_RangeName );
++        rFmlaConv.Convert( pTokArr, rStrm, nFmlaSize1, false, FT_RangeName );
 +        // formula converter owns pTokArr -> create a copy of the token array
 +        if( pTokArr )
 +            xTokArr1.reset( pTokArr->Clone() );
@@ -44053,7 +44023,7 @@
 +    {
 +        const ScTokenArray* pTokArr = 0;
 +        rFmlaConv.Reset( rPos );
-+        rFmlaConv.Convert( pTokArr, rStrm, nFmlaSize2, aParam, FT_RangeName );
++        rFmlaConv.Convert( pTokArr, rStrm, nFmlaSize2, false, FT_RangeName );
 +        // formula converter owns pTokArr -> create a copy of the token array
 +        if( pTokArr )
 +            pTokArr2.reset( pTokArr->Clone() );
@@ -44161,9 +44131,6 @@
 +    String aErrorMessage(  rStrm.ReadUniString() );
 +    rStrm.SetNulSubstChar();    // back to default
 +
-+    ExcelConverterBase::ConvertParam aParam;
-+    aParam.mbAllowArrays = false;
-+
 +    // formula(s)
 +    if( rStrm.GetRecLeft() > 8 )
 +    {
@@ -44179,7 +44146,7 @@
 +        {
 +            const ScTokenArray* pTokArr = 0;
 +            rFmlaConv.Reset();
-+            rFmlaConv.Convert( pTokArr, rStrm, nLen, aParam, FT_RangeName );
++            rFmlaConv.Convert( pTokArr, rStrm, nLen, false, FT_RangeName );
 +            // formula converter owns pTokArr -> create a copy of the token array
 +            if( pTokArr )
 +                xTokArr1.reset( pTokArr->Clone() );
@@ -44194,7 +44161,7 @@
 +        {
 +            const ScTokenArray* pTokArr = 0;
 +            rFmlaConv.Reset();
-+            rFmlaConv.Convert( pTokArr, rStrm, nLen, aParam, FT_RangeName );
++            rFmlaConv.Convert( pTokArr, rStrm, nLen, false, FT_RangeName );
 +            // formula converter owns pTokArr -> create a copy of the token array
 +            if( pTokArr )
 +                xTokArr2.reset( pTokArr->Clone() );
@@ -48795,7 +48762,7 @@
 +
 --- /dev/null
 +++ sc/source/filter/xlsx/xlsx-xiformula.cxx
-@@ -0,0 +1,132 @@
+@@ -0,0 +1,130 @@
 +/*************************************************************************
 + *
 + * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
@@ -48895,9 +48862,7 @@
 +    aFmlaStrm.StartNextRecord();
 +    const ScTokenArray* pArray = NULL;
 +    GetOldFmlaConverter().Reset();
-+    ExcelToSc::ConvertParam aParam;
-+    aParam.mbAllowArrays = true;
-+    GetOldFmlaConverter().Convert(pArray, aFmlaStrm, aFmlaStrm.GetRecSize(), aParam);
++    GetOldFmlaConverter().Convert(pArray, aFmlaStrm, aFmlaStrm.GetRecSize(), true);
 +    return pArray;
 +}
 +
@@ -54505,7 +54470,7 @@
 +
 --- /dev/null
 +++ sc/source/filter/xlsx/xlsx-xiname.cxx
-@@ -0,0 +1,269 @@
+@@ -0,0 +1,286 @@
 +/*************************************************************************
 + *
 + * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
@@ -54546,7 +54511,8 @@
 +#include "excform.hxx"
 +// for filter manager
 +#include "excimp8.hxx"
-+
++#include "scextopt.hxx"
++#include "document.hxx"
 +// ============================================================================
 +// *** Implementation ***
 +// ============================================================================
@@ -54638,6 +54604,7 @@
 +        maScName = maXclName;
 +        ScfTools::ConvertToScDefinedName( maScName );
 +    }
++    rtl::OUString aRealOrigName = maScName;
 +
 +    // add index for local names
 +    if( nXclTab != EXC_NAME_GLOBAL )
@@ -54688,9 +54655,7 @@
 +        // --- name formula ---
 +        // JEG : double check this.  It is clearly false for normal names
 +        //  but some of the builtins (sheettitle?) might be able to handle arrays
-+        ExcelConverterBase::ConvertParam aParam;
-+        aParam.mbAllowArrays = false;
-+        rFmlaConv.Convert( pTokArr, rStrm, nFmlaSize, aParam, FT_RangeName );
++        rFmlaConv.Convert( pTokArr, rStrm, nFmlaSize, false, FT_RangeName );
 +
 +        // --- auto or advanced filter ---
 +        if( (GetBiff() == EXC_BIFF8) && pTokArr && bBuiltIn )
@@ -54718,9 +54683,7 @@
 +    else if( nFmlaSize > 0 )
 +    {
 +        // regular defined name
-+        ExcelConverterBase::ConvertParam aParam;
-+        aParam.mbAllowArrays = true;
-+        rFmlaConv.Convert( pTokArr, rStrm, nFmlaSize, aParam, FT_RangeName );
++        rFmlaConv.Convert( pTokArr, rStrm, nFmlaSize, true, FT_RangeName );
 +    }
 +
 +    // 4) *** create a defined name in the Calc document *** ------------------
@@ -54732,6 +54695,25 @@
 +        pData->GuessPosition();             // calculate base position for relative refs
 +        pData->SetIndex( nXclNameIdx );     // used as unique identifier in formulas
 +        rRangeNames.Insert( pData );        // takes ownership of pData
++        if( nXclTab != EXC_NAME_GLOBAL )
++        {
++            if (GetBiff() == EXC_BIFF8)
++            {
++                ScRange aRange;
++                // discard deleted ranges ( for the moment at least )
++                if ( pData->IsValidReference( aRange ) )
++                {
++                    ScExtTabSettings& rTabSett = GetExtDocOptions().GetOrCreateTabSettings( nXclTab );
++                    // create a mapping between the unmodified localname to
++                    // the name in the global name container for named ranges
++                    OSL_TRACE(" mapping local name to global name for tab %d which exists? %s", nXclTab, GetDoc().HasTable( mnScTab ) ? "true" : "false" );
++                    SCTAB nTab( static_cast< SCTAB >( mnScTab ) );
++                    NameToNameMap* pMap = GetDoc().GetLocalNameMap( nTab );
++                    if ( pMap )
++                       (*pMap)[ aRealOrigName ] = maScName;
++                }
++            }
++        }
 +        mpScData = pData;                   // cache for later use
 +    }
 +}
@@ -69530,7 +69512,7 @@
 +
 --- /dev/null
 +++ sc/source/filter/xlsx/xlsx-XclImpChangeTrack.cxx
-@@ -0,0 +1,507 @@
+@@ -0,0 +1,505 @@
 +/*************************************************************************
 + *
 + * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
@@ -69743,9 +69725,7 @@
 +    // read the formula, 3D tab refs from extended data
 +    const ScTokenArray* pArray = NULL;
 +    aFmlConv.Reset( rPosition );
-+    ExcelConverterBase::ConvertParam aParam;
-+    aParam.mbAllowArrays = false;
-+    BOOL bOK = (aFmlConv.Convert( pArray, aFmlaStrm, nFmlSize, aParam, FT_CellFormula) == ConvOK);	// JEG : Check This
++    BOOL bOK = (aFmlConv.Convert( pArray, aFmlaStrm, nFmlSize, false, FT_CellFormula) == ConvOK);	// JEG : Check This
 +    rpTokenArray = (bOK && pArray) ? new ScTokenArray( *pArray ) : NULL;
 +    pStrm->Ignore( 1 );
 +}
