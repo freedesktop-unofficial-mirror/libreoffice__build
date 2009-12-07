@@ -1,6 +1,78 @@
 #!/bin/bash
 
-export BUILD_HTML_OUTPUT=true
+## default config
+PAUSE_SECONDS=$((15*60))
+HTML_OUTPUT=0
+SEND_MAIL=0
 
-make clean-local
-while git pull -r && ./autogen.sh && ./download && make; do make clean-local; done
+## subroutines
+usage ()
+{
+	echo "Usage: $0 [options]"
+	echo "Options:"
+	echo "-w <N> specify timeout in secs between subsequent pull requests"
+	echo "-l     when given: write html build log"
+	echo "-m     when given: mail errors to last committer"
+	echo "-h     this help"
+}
+
+reportError ()
+{
+	commit=`git-log --pretty=oneline -n1`
+	author=`git-log --pretty=short -n1 | sed -ne '/^Author: / s/^Author: //p'`
+
+	echo "$1" 1>&2
+	echo "Culprit: $author with $commit" 1>&2
+	if test $SEND_MAIL -eq 1; then
+		subject="tinderbox failure caused by: $commit"
+		echo "$1" | mail -s "$subject" "$author"
+	fi
+}
+
+## code
+while getopts w:lmh opt ; do
+	case "$opt" in
+		w) PAUSE_SECONDS="$OPTARG" ;;
+		l) HTML_OUTPUT=1 ;;
+		m) SEND_MAIL=1 ;;
+		h) usage; exit ;;
+		?) usage; exit ;;
+	esac
+done
+
+test $HTML_OUTPUT -eq 1 && export BUILD_HTML_OUTPUT=true
+
+good_head=""
+while true; do
+	err_msg=""
+	old_head=$(git-rev-parse --verify HEAD) && err_msg=$(git-pull -r 2>&1) || 
+	{
+		reportError("git repo f*cked up - error is: \n$err_msg")
+		exit 1
+	}
+	new_head=$(git-rev-parse --verify HEAD)
+
+	if test "$old_head" = "$new_head"; then
+		sleep $PAUSE_SECONDS
+	else
+		# something has changed, do a build
+		if ! err_msg=$(./autogen.sh); then
+			reportError("autogen.sh / configure failed - error is: \n$err_msg")
+		elif ! err_msg=$(./download); then
+			reportError("download failed - error is: \n$err_msg")
+		elif ! err_msg=$(./make patch.apply 2>&1 | tail -n 50); then
+			reportError("patch.apply failed - error is: \n$err_msg")
+		elif ! err_msg=$(./make dev-install 2>&1 | tail -n 50); then
+			reportError("building failed - error is: \n$err_msg")
+		else
+			# successful build, maybe do a smoketest/first.bas?
+			good_head=$new_head
+			if test -d build-*; then
+				rm -rf build-*
+			fi
+			mv build "build-$good_head" || exit 1
+		fi
+		# cleanup
+		make clean-local
+	fi
+done
