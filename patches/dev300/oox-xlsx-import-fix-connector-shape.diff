@@ -1,0 +1,67 @@
+diff --git oox/source/drawingml/shape.cxx oox/source/drawingml/shape.cxx
+index 0478c39..c2d96c1 100644
+--- oox/source/drawingml/shape.cxx
++++ oox/source/drawingml/shape.cxx
+@@ -48,6 +48,7 @@
+ #include <com/sun/star/lang/XMultiServiceFactory.hpp>
+ #include <com/sun/star/xml/AttributeData.hpp>
+ #include <com/sun/star/drawing/HomogenMatrix3.hpp>
++#include <com/sun/star/drawing/ConnectorType.hpp>
+ #include <com/sun/star/text/XText.hpp>
+ #include <basegfx/point/b2dpoint.hxx>
+ #include <basegfx/polygon/b2dpolygon.hxx>
+@@ -394,6 +395,20 @@ Reference< XShape > Shape::createAndInsert(
+         maShapeProperties[ sStartPosition ] <<= aAWTStartPosition;
+         static const OUString sEndPosition(RTL_CONSTASCII_USTRINGPARAM("EndPosition"));
+         maShapeProperties[ sEndPosition ] <<= aAWTEndPosition;
++
++        // set the connector type
++        rtl::OUString sConnectorType = mpCustomShapePropertiesPtr->getShapePresetType();
++        OSL_TRACE("the connector type is %s", rtl::OUStringToOString( sConnectorType, RTL_TEXTENCODING_UTF8 ).getStr() );
++        // default is bentConnector
++        // FIXME: handle other connector type, should be use XEnhancedCustomShapeDefaulter?
++        ConnectorType eConnectorType = ConnectorType_STANDARD;
++        if( sConnectorType.equalsAscii("mso-spt32") )
++            eConnectorType = ConnectorType_LINE;
++        else if( sConnectorType.equalsAscii("mso-spt38") )    
++            eConnectorType = ConnectorType_CURVE;
++
++        static const OUString sEdgeKind(RTL_CONSTASCII_USTRINGPARAM("EdgeKind"));
++        maShapeProperties[ sEdgeKind ] <<= eConnectorType;
+     }
+     else
+     {
+diff --git oox/source/xls/drawingfragment.cxx oox/source/xls/drawingfragment.cxx
+index 6424f02..96fa4cb 100644
+--- oox/source/xls/drawingfragment.cxx
++++ oox/source/xls/drawingfragment.cxx
+@@ -439,10 +439,26 @@ void OoxDrawingFragment::onEndElement( const OUString& rChars )
+         case XDR_TOKEN( absoluteAnchor ):
+         case XDR_TOKEN( oneCellAnchor ):
+         case XDR_TOKEN( twoCellAnchor ):
+-            if( mxDrawPage.is() && mxShape.get() && mxAnchor.get() )
++            if( mxDrawPage.is() && mxShape.get() )
+             {
+-                Rectangle aLoc = mxAnchor->calcEmuLocation( maEmuSheetSize );
+-                if( (aLoc.X >= 0) && (aLoc.Y >= 0) && (aLoc.Width >= 0) && (aLoc.Height >= 0) )
++                // It seems the position and size are incorrect to use cellAnchor to create the shape
++                // so if the size and position are defined, use them to set the shape postion and size.
++                Rectangle aLoc( -1, -1, -1, -1 );;
++                Size aSize = mxShape->getSize();
++                if( aSize.Width > 0 || aSize.Height > 0 )
++                {
++                    Point aPoint = mxShape->getPosition();
++                    aLoc.X = aPoint.X;
++                    aLoc.Y = aPoint.Y;
++                    aLoc.Width = aSize.Width;
++                    aLoc.Height = aSize.Height;
++                }
++                else if( mxAnchor.get() )
++                {
++                    aLoc = mxAnchor->calcEmuLocation( maEmuSheetSize );
++                }    
++
++                if( (aLoc.Width >= 0) && (aLoc.Height >= 0) )
+                     mxShape->addShape( getOoxFilter(), getThemeRef(), mxDrawPage, &aLoc );
+             }
+             mxShape.reset();
