@@ -1,0 +1,158 @@
+diff --git sfx2/source/doc/docfile.cxx sfx2/source/doc/docfile.cxx
+index 4c31c11..da52688 100644
+--- sfx2/source/doc/docfile.cxx
++++ sfx2/source/doc/docfile.cxx
+@@ -356,6 +356,7 @@ public:
+     sal_Bool m_bVersionsAlreadyLoaded: 1;
+     sal_Bool m_bLocked: 1;
+     sal_Bool m_bGotDateTime: 1;
++    sal_Bool m_bTriedToCreateLogRing: 1; // whether we already attempted to create m_xLogRing
+ 
+     uno::Reference < embed::XStorage > xStorage;
+ 
+@@ -404,6 +405,8 @@ public:
+ 
+     SfxMedium_Impl( SfxMedium* pAntiImplP );
+     ~SfxMedium_Impl();
++
++    void CreateLogRing();
+ };
+ 
+ void SfxMedium::DataAvailable_Impl()
+@@ -451,6 +454,7 @@ SfxMedium_Impl::SfxMedium_Impl( SfxMedium* pAntiImplP )
+     m_bVersionsAlreadyLoaded( sal_False ),
+     m_bLocked( sal_False ),
+     m_bGotDateTime( sal_False ),
++    m_bTriedToCreateLogRing( sal_False ),
+     pAntiImpl( pAntiImplP ),
+     nFileVersion( 0 ),
+     pOrigFilter( 0 ),
+@@ -474,6 +478,22 @@ SfxMedium_Impl::~SfxMedium_Impl()
+         delete pTempFile;
+ }
+ 
++void SfxMedium_Impl::CreateLogRing()
++{
++    if ( !m_bTriedToCreateLogRing && !m_xLogRing.is() )
++    {
++        m_bTriedToCreateLogRing = sal_True;
++        try
++        {
++            ::comphelper::ComponentContext aContext( ::comphelper::getProcessServiceFactory() );
++            if ( aContext.is() )
++                m_xLogRing.set( aContext.getSingleton( "com.sun.star.logging.DocumentIOLogRing" ), UNO_QUERY_THROW );
++        }
++        catch( uno::Exception& )
++        {}
++    }
++}
++
+ //================================================================
+ 
+ #define IMPL_CTOR(rootVal,URLVal)			\
+@@ -508,17 +528,7 @@ sal_uInt32 SfxMedium::GetLastStorageCreationState()
+ //------------------------------------------------------------------
+ void SfxMedium::AddLog( const ::rtl::OUString& aMessage )
+ {
+-    if ( !pImp->m_xLogRing.is() )
+-    {
+-        try
+-        {
+-            ::comphelper::ComponentContext aContext( ::comphelper::getProcessServiceFactory() );
+-            if ( aContext.is() )
+-                pImp->m_xLogRing.set( aContext.getSingleton( "com.sun.star.logging.DocumentIOLogRing" ), UNO_QUERY_THROW );
+-        }
+-        catch( uno::Exception& )
+-        {}
+-    }
++    pImp->CreateLogRing();
+ 
+     if ( pImp->m_xLogRing.is() )
+         pImp->m_xLogRing->logString( aMessage );
+diff --git sfx2/source/doc/objmisc.cxx sfx2/source/doc/objmisc.cxx
+index fed3335..f5e9b14 100644
+--- sfx2/source/doc/objmisc.cxx
++++ sfx2/source/doc/objmisc.cxx
+@@ -2488,19 +2488,25 @@ void SfxObjectShell_Impl::showBrokenSignatureWarning( const uno::Reference< task
+     }
+ }
+ 
+-void SfxObjectShell::AddLog( const ::rtl::OUString& aMessage )
++void SfxObjectShell_Impl::CreateLogRing()
+ {
+-    if ( !pImp->m_xLogRing.is() )
++    if ( !m_bTriedToCreateLogRing && !m_xLogRing.is() )
+     {
++        m_bTriedToCreateLogRing = sal_True;
+         try
+         {
+             ::comphelper::ComponentContext aContext( ::comphelper::getProcessServiceFactory() );
+             if ( aContext.is() )
+-                pImp->m_xLogRing.set( aContext.getSingleton( "com.sun.star.logging.DocumentIOLogRing" ), UNO_QUERY_THROW );
++                m_xLogRing.set( aContext.getSingleton( "com.sun.star.logging.DocumentIOLogRing" ), UNO_QUERY_THROW );
+         }
+         catch( uno::Exception& )
+         {}
+     }
++}
++
++void SfxObjectShell::AddLog( const ::rtl::OUString& aMessage )
++{
++    pImp->CreateLogRing();
+ 
+     if ( pImp->m_xLogRing.is() )
+         pImp->m_xLogRing->logString( aMessage );
+@@ -2526,17 +2532,7 @@ void WriteStringInStream( const uno::Reference< io::XOutputStream >& xOutStream,
+ 
+ void SfxObjectShell::StoreLog()
+ {
+-    if ( !pImp->m_xLogRing.is() )
+-    {
+-        try
+-        {
+-            ::comphelper::ComponentContext aContext( ::comphelper::getProcessServiceFactory() );
+-            if ( aContext.is() )
+-                pImp->m_xLogRing.set( aContext.getSingleton( "com.sun.star.logging.DocumentIOLogRing" ), UNO_QUERY_THROW );
+-        }
+-        catch( uno::Exception& )
+-        {}
+-    }
++    pImp->CreateLogRing();
+ 
+     if ( pImp->m_xLogRing.is() )
+     {
+diff --git sfx2/source/doc/objxtor.cxx sfx2/source/doc/objxtor.cxx
+index fb43eaf..5ae9d05 100644
+--- sfx2/source/doc/objxtor.cxx
++++ sfx2/source/doc/objxtor.cxx
+@@ -272,6 +272,7 @@ SfxObjectShell_Impl::SfxObjectShell_Impl( SfxObjectShell& _rDocShell )
+     ,bSaveVersionOnClose( sal_False )
+     ,m_bSharedXMLFlag( sal_False )
+     ,m_bAllowShareControlFileClean( sal_True )
++    ,m_bTriedToCreateLogRing( sal_False )
+     ,lErr(ERRCODE_NONE)
+     ,nEventId ( 0)
+     ,bDoNotTouchDocInfo( sal_False )
+diff --git sfx2/source/inc/objshimp.hxx sfx2/source/inc/objshimp.hxx
+index 8ee3b79..1b052ed 100644
+--- sfx2/source/inc/objshimp.hxx
++++ sfx2/source/inc/objshimp.hxx
+@@ -120,7 +120,8 @@ struct SfxObjectShell_Impl : public ::sfx2::IMacroDocumentAccess
+                         bUseUserData:1,
+                         bSaveVersionOnClose:1,
+                         m_bSharedXMLFlag:1, // whether the flag should be stored in xml file
+-                        m_bAllowShareControlFileClean:1; // whether the flag should be stored in xml file
++                        m_bAllowShareControlFileClean:1, // whether the flag should be stored in xml file
++                        m_bTriedToCreateLogRing:1; // whether we already attempted to create m_xLogRing
+ 
+     String              aNewName;  // Der Name, unter dem das Doc gespeichert
+                                    // werden soll
+@@ -192,6 +193,8 @@ struct SfxObjectShell_Impl : public ::sfx2::IMacroDocumentAccess
+ 
+     virtual sal_Bool hasTrustedScriptingSignature( sal_Bool bAllowUIToAddAuthor );
+     virtual void showBrokenSignatureWarning( const ::com::sun::star::uno::Reference< ::com::sun::star::task::XInteractionHandler >& _rxInteraction ) const;
++
++    void CreateLogRing();
+ };
+ 
+ #endif
