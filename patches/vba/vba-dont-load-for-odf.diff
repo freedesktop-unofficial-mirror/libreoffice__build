@@ -134,42 +134,38 @@ index 179b9bb..cec3387 100644
      $(SFXLIB)		\
      $(SVTOOLLIB)	\
 diff --git svx/source/form/fmundo.cxx svx/source/form/fmundo.cxx
-index c438b74..adc30c7 100644
+index c438b74..dd72639 100644
 --- svx/source/form/fmundo.cxx
 +++ svx/source/form/fmundo.cxx
-@@ -74,6 +74,7 @@
- #include <comphelper/property.hxx>
- #include <comphelper/uno3.hxx>
- #include <comphelper/stl_types.hxx>
-+#include <vbahelper/vbahelper.hxx>
- 
- using namespace ::com::sun::star::uno;
- using namespace ::com::sun::star::awt;
-@@ -98,9 +99,15 @@ class ScriptEventListenerWrapper : public ScriptEventListener_BASE
- public:
- 	ScriptEventListenerWrapper( FmFormModel& _rModel) throw ( RuntimeException ) : pModel(&_rModel) 
- 	{
-+		bool bSupportedAlienDoc( false );
-+              	SfxObjectShellRef xObjSh = pModel->GetObjectShell();
-+		if ( xObjSh.Is() )
-+		{
-+			bSupportedAlienDoc = ov::isAlienExcelDoc( *xObjSh ) ||  ov::isAlienWordDoc( *xObjSh );
-+		} 
- 		Reference < XPropertySet > xProps(
- 			::comphelper::getProcessServiceFactory(), UNO_QUERY );
--		if ( xProps.is() )
-+		if ( xProps.is() && bSupportedAlienDoc )
- 		{
- 			Reference< XComponentContext > xCtx( xProps->getPropertyValue(
- 				rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( "DefaultContext" ))), UNO_QUERY );
-@@ -108,6 +115,7 @@ public:
+@@ -108,12 +108,23 @@ public:
  			{
  				Reference< XMultiComponentFactory > xMFac( 
  					xCtx->getServiceManager(), UNO_QUERY );
-+
- 				if ( xMFac.is() )
+-				if ( xMFac.is() )
++				SfxObjectShellRef xObjSh = pModel->GetObjectShell();
++				Reference< XMultiServiceFactory > xDocFac;
++                                if ( xObjSh.Is() )
++					xDocFac.set( xObjSh->GetModel(), UNO_QUERY );
++  
++				if ( xMFac.is() && xDocFac.is() )
  				{
- 					m_vbaListener.set( xMFac->createInstanceWithContext( 
+-					m_vbaListener.set( xMFac->createInstanceWithContext( 
+-						rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( 
+-							"ooo.vba.EventListener"  ) ), xCtx ), 
+-								UNO_QUERY_THROW );
++					// bit of a hack, code name provider 
++					// will only created if this is a 'supported;
++					// alien document
++                                    
++					Reference< XInterface > xNameQuery(  xDocFac->createInstance( rtl::OUString::createFromAscii( "ooo.vba.VBACodeNameProvider" ) ) );
++					if ( xNameQuery.is() )
++						m_vbaListener.set( xMFac->createInstanceWithContext( 
++							rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( 
++								"ooo.vba.EventListener"  ) ), xCtx ), 
++									UNO_QUERY_THROW );
+ 				}
+ 			}
+ 		}
 diff --git sw/source/core/doc/doc.cxx sw/source/core/doc/doc.cxx
 index 914a843..aba6e2f 100644
 --- sw/source/core/doc/doc.cxx
