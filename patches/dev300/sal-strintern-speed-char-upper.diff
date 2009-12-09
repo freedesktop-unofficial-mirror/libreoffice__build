@@ -1,0 +1,215 @@
+diff --git sal/rtl/source/ustring.c sal/rtl/source/ustring.c
+index b545ff4..c0cf7b5 100644
+--- sal/rtl/source/ustring.c
++++ sal/rtl/source/ustring.c
+@@ -818,23 +818,53 @@ void SAL_CALL rtl_uString_internConvert( rtl_uString   ** newStr,
+     { // try various optimisations
+         if ( len < 0 )
+             len = strlen( str );
+-        if ( eTextEncoding == RTL_TEXTENCODING_ASCII_US )
++        switch ( eTextEncoding )
+         {
+-            int i;
+-            rtl_uString *pScratch;
+-            pScratch = alloca( sizeof( rtl_uString )
+-                               + len * sizeof (IMPL_RTL_STRCODE ) );
+-            for (i = 0; i < len; i++)
++            case RTL_TEXTENCODING_ASCII_US:
+             {
+-                /* Check ASCII range */
+-                OSL_ENSURE( ((unsigned char)str[i]) <= 127,
+-                            "rtl_ustring_internConvert() - Found char > 127 and RTL_TEXTENCODING_ASCII_US is specified" );
+-                pScratch->buffer[i] = str[i];
++                int i;
++                rtl_uString *pScratch;
++                pScratch = alloca( sizeof( rtl_uString )
++                                   + len * sizeof (IMPL_RTL_STRCODE ) );
++                for (i = 0; i < len; i++)
++                {
++                    /* Check ASCII range */
++                    OSL_ENSURE( ((unsigned char)str[i]) <= 127,
++                                "rtl_ustring_internConvert() - Found char > 127 and RTL_TEXTENCODING_ASCII_US is specified" );
++                    pScratch->buffer[i] = str[i];
++                }
++                pScratch->length = len;
++                rtl_ustring_intern_internal( newStr, pScratch, CANNOT_RETURN );
++                return;
++            }
++            case RTL_TEXTENCODING_IBM_437:
++            case RTL_TEXTENCODING_IBM_850:
++            case RTL_TEXTENCODING_IBM_860:
++            case RTL_TEXTENCODING_IBM_861:
++            case RTL_TEXTENCODING_IBM_863:
++            case RTL_TEXTENCODING_IBM_865:
++            {
++                rtl_uString *pScratch;
++                rtl_TextToUnicodeConverter hConverter;
++                sal_Size nDestChars, nSrcBytes;
++                sal_uInt32 nInfo;
++
++                hConverter = rtl_createTextToUnicodeConverter( eTextEncoding );
++                pScratch = alloca( sizeof(rtl_uString) + len * sizeof (IMPL_RTL_STRCODE) );
++
++                nDestChars = rtl_convertTextToUnicode(
++                    hConverter, 0, str, len, pScratch->buffer, len, convertFlags, &nInfo, &nSrcBytes );
++                pScratch->length = len;
++
++                if (pInfo)
++                    *pInfo = nInfo;
++
++                rtl_ustring_intern_internal( newStr, pScratch, CANNOT_RETURN );
++                rtl_destroyTextToUnicodeConverter( hConverter );
++                return;
+             }
+-            pScratch->length = len;
+-            rtl_ustring_intern_internal( newStr, pScratch, CANNOT_RETURN );
+-            return;
+         }
++
+         /* FIXME: we want a nice UTF-8 / alloca shortcut here */
+     }
+ 
+diff --git sal/textenc/tcvtbyte.c sal/textenc/tcvtbyte.c
+index be39b8e..ca5571e 100644
+--- sal/textenc/tcvtbyte.c
++++ sal/textenc/tcvtbyte.c
+@@ -643,6 +643,47 @@ sal_Size ImplCharToUnicode( const ImplTextConverterData* pData,
+ 
+ /* ----------------------------------------------------------------------- */
+ 
++sal_Size ImplUpperCharToUnicode( const ImplTextConverterData* pData,
++                            void* pContext,
++                            const sal_Char* pSrcBuf, sal_Size nSrcBytes,
++                            sal_Unicode* pDestBuf, sal_Size nDestChars,
++                            sal_uInt32 nFlags, sal_uInt32* pInfo,
++                            sal_Size* pSrcCvtBytes )
++{
++    sal_uChar                   c;
++    sal_Unicode                 cConv;
++    const ImplByteConvertData*  pConvertData = (const ImplByteConvertData*)pData;
++    sal_Unicode*                pEndDestBuf;
++    const sal_Char*             pEndSrcBuf;
++
++    (void) pContext; /* unused */
++    (void) nFlags;   /* unused */
++
++    *pInfo = 0;
++    pEndDestBuf = pDestBuf+nDestChars;
++    pEndSrcBuf  = pSrcBuf+nSrcBytes;
++    while ( pSrcBuf < pEndSrcBuf )
++    {
++        c = (sal_uChar)*pSrcBuf;
++        if (c < 0x80)
++            cConv = c;
++        else
++            // c <= 0xFF is implied.
++            cConv = pConvertData->mpToUniTab1[c - 0x80];
++
++        // No need to handle cConv == 0 since that never happens.
++
++        *pDestBuf = cConv;
++        pDestBuf++;
++        pSrcBuf++;
++    }
++
++    *pSrcCvtBytes = nSrcBytes - (pEndSrcBuf-pSrcBuf);
++    return (nDestChars - (pEndDestBuf-pDestBuf));
++}
++
++/* ----------------------------------------------------------------------- */
++
+ // Writes 0--2 characters to dest:
+ static int ImplConvertUnicodeCharToChar(
+     const ImplByteConvertData* pConvertData, sal_Unicode c, sal_Char * dest )
+diff --git sal/textenc/tcvtlat1.tab sal/textenc/tcvtlat1.tab
+index 4bc77f6..86e7b06 100644
+--- sal/textenc/tcvtlat1.tab
++++ sal/textenc/tcvtlat1.tab
+@@ -191,7 +191,7 @@ static ImplByteConvertData const aImplIBM437ByteCvtData =
+ 
+ static ImplTextEncodingData const aImplIBM437TextEncodingData
+     = { { &aImplIBM437ByteCvtData,
+-          ImplCharToUnicode,
++          ImplUpperCharToUnicode,
+           ImplUnicodeToChar,
+           NULL,
+           NULL,
+@@ -325,7 +325,7 @@ static ImplByteConvertData const aImplIBM850ByteCvtData =
+ 
+ static ImplTextEncodingData const aImplIBM850TextEncodingData
+     = { { &aImplIBM850ByteCvtData,
+-          ImplCharToUnicode,
++          ImplUpperCharToUnicode,
+           ImplUnicodeToChar,
+           NULL,
+           NULL,
+@@ -498,7 +498,7 @@ static ImplByteConvertData const aImplIBM860ByteCvtData =
+ 
+ static ImplTextEncodingData const aImplIBM860TextEncodingData
+     = { { &aImplIBM860ByteCvtData,
+-          ImplCharToUnicode,
++          ImplUpperCharToUnicode,
+           ImplUnicodeToChar,
+           NULL,
+           NULL,
+@@ -673,7 +673,7 @@ static ImplByteConvertData const aImplIBM861ByteCvtData =
+ 
+ static ImplTextEncodingData const aImplIBM861TextEncodingData
+     = { { &aImplIBM861ByteCvtData,
+-          ImplCharToUnicode,
++          ImplUpperCharToUnicode,
+           ImplUnicodeToChar,
+           NULL,
+           NULL,
+@@ -848,7 +848,7 @@ static ImplByteConvertData const aImplIBM863ByteCvtData =
+ 
+ static ImplTextEncodingData const aImplIBM863TextEncodingData
+     = { { &aImplIBM863ByteCvtData,
+-          ImplCharToUnicode,
++          ImplUpperCharToUnicode,
+           ImplUnicodeToChar,
+           NULL,
+           NULL,
+@@ -1023,7 +1023,7 @@ static ImplByteConvertData const aImplIBM865ByteCvtData =
+ 
+ static ImplTextEncodingData const aImplIBM865TextEncodingData
+     = { { &aImplIBM865ByteCvtData,
+-          ImplCharToUnicode,
++          ImplUpperCharToUnicode,
+           ImplUnicodeToChar,
+           NULL,
+           NULL,
+@@ -1563,7 +1563,7 @@ static ImplByteConvertData const aImplAPPLEICELANDByteCvtData =
+ 
+ static ImplTextEncodingData const aImplAPPLEICELANDTextEncodingData
+     = { { &aImplAPPLEICELANDByteCvtData,
+-          ImplCharToUnicode,
++          ImplUpperCharToUnicode,
+           ImplUnicodeToChar,
+           NULL,
+           NULL,
+@@ -1710,7 +1710,7 @@ static ImplByteConvertData const aImplAPPLEROMANByteCvtData =
+ 
+ static ImplTextEncodingData const aImplAPPLEROMANTextEncodingData
+     = { { &aImplAPPLEROMANByteCvtData,
+-          ImplCharToUnicode,
++          ImplUpperCharToUnicode,
+           ImplUnicodeToChar,
+           NULL,
+           NULL,
+diff --git sal/textenc/tenchelp.h sal/textenc/tenchelp.h
+index 16affcd..6c0a930 100644
+--- sal/textenc/tenchelp.h
++++ sal/textenc/tenchelp.h
+@@ -233,6 +233,11 @@ sal_Size ImplCharToUnicode( const ImplTextConverterData* pData, void* pContext,
+                             const sal_Char* pSrcBuf, sal_Size nSrcBytes,
+                             sal_Unicode* pDestBuf, sal_Size nDestChars,
+                             sal_uInt32 nFlags, sal_uInt32* pInfo, sal_Size* pSrcCvtBytes );
++/** For those encodings only with unicode range of 0x80 to 0xFF. */
++sal_Size ImplUpperCharToUnicode( const ImplTextConverterData* pData, void* pContext,
++                            const sal_Char* pSrcBuf, sal_Size nSrcBytes,
++                            sal_Unicode* pDestBuf, sal_Size nDestChars,
++                            sal_uInt32 nFlags, sal_uInt32* pInfo, sal_Size* pSrcCvtBytes );
+ sal_Size ImplUnicodeToChar( const ImplTextConverterData* pData, void* pContext,
+                             const sal_Unicode* pSrcBuf, sal_Size nSrcChars,
+                             sal_Char* pDestBuf, sal_Size nDestBytes,
