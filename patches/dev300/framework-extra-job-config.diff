@@ -1,0 +1,358 @@
+Add context property to framework "job" list
+
+From: Thorsten Behrens <thb@openoffice.org>
+
+
+---
+
+ framework/inc/jobs/jobdata.hxx                     |   10 +++++
+ framework/inc/jobs/jobdispatch.hxx                 |    3 ++
+ framework/inc/jobs/jobexecutor.hxx                 |    4 ++
+ framework/source/jobs/jobdata.cxx                  |   33 +++++++++++++++++-
+ framework/source/jobs/jobdispatch.cxx              |   37 +++++++++++++++-----
+ framework/source/jobs/jobexecutor.cxx              |   18 ++++++++++
+ .../registry/schema/org/openoffice/Office/Jobs.xcs |    5 +++
+ .../registry/data/org/openoffice/Office/Jobs.xcu   |    3 ++
+ 8 files changed, 102 insertions(+), 11 deletions(-)
+
+
+diff --git framework/inc/jobs/jobdata.hxx framework/inc/jobs/jobdata.hxx
+index 73dfbbf..3c0358d 100644
+--- framework/inc/jobs/jobdata.hxx
++++ framework/inc/jobs/jobdata.hxx
+@@ -83,6 +83,8 @@ class JobData : private ThreadHelpBase
+         static const sal_Char* JOBCFG_PROP_ARGUMENTS;
+         /// define the cfg key "Service" of a job relativ to JOBCFG_ROOT/<job alias>
+         static const sal_Char* JOBCFG_PROP_SERVICE;
++        /// define the cfg key "Context" of a job relativ to JOBCFG_ROOT/<job alias>
++        static const sal_Char* JOBCFG_PROP_CONTEXT;
+ 
+         /// specifies the root package and key to find event registrations
+         static const sal_Char* EVENTCFG_ROOT;
+@@ -108,6 +110,7 @@ class JobData : private ThreadHelpBase
+         static const sal_Char* PROP_FRAME;
+         static const sal_Char* PROP_MODEL;
+         static const sal_Char* PROP_SERVICE;
++        static const sal_Char* PROP_CONTEXT;
+ 
+     //___________________________________
+     // structs
+@@ -213,6 +216,12 @@ class JobData : private ThreadHelpBase
+         ::rtl::OUString m_sService;
+ 
+         /**
++            the module context list of this job.
++            It's readed from the configuration. Don't set it from outside!
++         */
++        ::rtl::OUString m_sContext;
++
++        /**
+             a job can be registered for an event.
+             It can be an empty value! But it will be set from outside any times.
+             Because it's not clear which job this instance should represent if an event
+@@ -258,6 +267,7 @@ class JobData : private ThreadHelpBase
+         css::uno::Sequence< css::beans::NamedValue > getJobConfig            () const;
+ 
+         sal_Bool                                     hasConfig               () const;
++        sal_Bool                                     hasCorrectContext       ( const ::rtl::OUString& rModuleIdent ) const;
+ 
+         void                                         setEnvironment (       EEnvironment                                  eEnvironment );
+         void                                         setAlias       ( const ::rtl::OUString&                              sAlias       );
+diff --git framework/inc/jobs/jobdispatch.hxx framework/inc/jobs/jobdispatch.hxx
+index 8c426ef..e5ff7ec 100644
+--- framework/inc/jobs/jobdispatch.hxx
++++ framework/inc/jobs/jobdispatch.hxx
+@@ -104,6 +104,9 @@ class JobDispatch : public  css::lang::XTypeProvider
+         /** reference to the frame, inside which this dispatch is used */
+         css::uno::Reference< css::frame::XFrame > m_xFrame;
+ 
++        /** name of module (writer, impress etc.) the frame is for */
++        ::rtl::OUString m_sModuleIdentifier;
++
+     //___________________________________
+     // native interface methods
+ 
+diff --git framework/inc/jobs/jobexecutor.hxx framework/inc/jobs/jobexecutor.hxx
+index 98d5e29..7c03bb0 100644
+--- framework/inc/jobs/jobexecutor.hxx
++++ framework/inc/jobs/jobexecutor.hxx
+@@ -51,6 +51,7 @@
+ #include <com/sun/star/container/XContainerListener.hpp>
+ #include <com/sun/star/lang/XEventListener.hpp>
+ #include <com/sun/star/document/XEventListener.hpp>
++#include <com/sun/star/frame/XModuleManager.hpp>
+ 
+ //_______________________________________
+ // other includes
+@@ -88,6 +89,9 @@ class JobExecutor : public  css::lang::XTypeProvider
+         /** reference to the uno service manager */
+         css::uno::Reference< css::lang::XMultiServiceFactory > m_xSMGR;
+ 
++        /** reference to the module info service */
++        css::uno::Reference< css::frame::XModuleManager > m_xModuleManager;
++
+         /** cached list of all registered event names of cfg for call optimization. */
+         OUStringList m_lEvents;
+ 
+diff --git framework/source/jobs/jobdata.cxx framework/source/jobs/jobdata.cxx
+index bb04f4f..60d1b55 100644
+--- framework/source/jobs/jobdata.cxx
++++ framework/source/jobs/jobdata.cxx
+@@ -1,4 +1,4 @@
+-    /*************************************************************************
++/*************************************************************************
+  *
+  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+  * 
+@@ -64,6 +64,7 @@ namespace framework{
+ 
+ const sal_Char* JobData::JOBCFG_ROOT              = "/org.openoffice.Office.Jobs/Jobs/"   ;
+ const sal_Char* JobData::JOBCFG_PROP_SERVICE      = "Service"                             ;
++const sal_Char* JobData::JOBCFG_PROP_CONTEXT      = "Context"                             ;
+ const sal_Char* JobData::JOBCFG_PROP_ARGUMENTS    = "Arguments"                           ;
+ 
+ const sal_Char* JobData::EVENTCFG_ROOT            = "/org.openoffice.Office.Jobs/Events/" ;
+@@ -82,6 +83,7 @@ const sal_Char* JobData::PROP_ENVTYPE             = "EnvType"
+ const sal_Char* JobData::PROP_FRAME               = "Frame"                               ;
+ const sal_Char* JobData::PROP_MODEL               = "Model"                               ;
+ const sal_Char* JobData::PROP_SERVICE             = "Service"                             ;
++const sal_Char* JobData::PROP_CONTEXT             = "Context"                             ;
+ 
+ //________________________________
+ //	non exported definitions
+@@ -142,6 +144,7 @@ void JobData::operator=( const JobData& rCopy )
+     m_eEnvironment         = rCopy.m_eEnvironment        ;
+     m_sAlias               = rCopy.m_sAlias              ;
+     m_sService             = rCopy.m_sService            ;
++    m_sContext             = rCopy.m_sContext            ;
+     m_sEvent               = rCopy.m_sEvent              ;
+     m_lArguments           = rCopy.m_lArguments          ;
+     m_aLastExecutionResult = rCopy.m_aLastExecutionResult;
+@@ -204,6 +207,10 @@ void JobData::setAlias( const ::rtl::OUString& sAlias )
+         aValue   = xJobProperties->getPropertyValue(::rtl::OUString::createFromAscii(JOBCFG_PROP_SERVICE));
+         aValue >>= m_sService;
+ 
++        // read module context list
++        aValue   = xJobProperties->getPropertyValue(::rtl::OUString::createFromAscii(JOBCFG_PROP_CONTEXT));
++        aValue >>= m_sContext;
++
+         // read whole argument list
+         aValue = xJobProperties->getPropertyValue(::rtl::OUString::createFromAscii(JOBCFG_PROP_ARGUMENTS));
+         css::uno::Reference< css::container::XNameAccess > xArgumentList;
+@@ -480,7 +487,7 @@ css::uno::Sequence< css::beans::NamedValue > JobData::getConfig() const
+     css::uno::Sequence< css::beans::NamedValue > lConfig;
+     if (m_eMode==E_ALIAS)
+     {
+-        lConfig.realloc(2);
++        lConfig.realloc(3);
+         sal_Int32 i = 0;
+ 
+         lConfig[i].Name = ::rtl::OUString::createFromAscii(PROP_ALIAS);
+@@ -490,6 +497,10 @@ css::uno::Sequence< css::beans::NamedValue > JobData::getConfig() const
+         lConfig[i].Name = ::rtl::OUString::createFromAscii(PROP_SERVICE);
+         lConfig[i].Value <<= m_sService;
+         ++i;
++
++        lConfig[i].Name = ::rtl::OUString::createFromAscii(PROP_CONTEXT);
++        lConfig[i].Value <<= m_sContext;
++        ++i;
+     }
+     aReadLock.unlock();
+     /* } SAFE */
+@@ -613,6 +624,23 @@ void JobData::appendEnabledJobsForEvent( const css::uno::Reference< css::lang::X
+ //________________________________
+ /**
+  */
++sal_Bool JobData::hasCorrectContext(const ::rtl::OUString& rModuleIdent) const
++{
++    if ( m_sContext.getLength() == 0 )
++        return sal_True;
++
++    if ( rModuleIdent.getLength() > 0 )
++    {
++        sal_Int32 nIndex = m_sContext.indexOf( rModuleIdent );
++        return ( nIndex >= 0 );
++    }
++
++    return sal_False;
++}
++
++//________________________________
++/**
++ */
+ css::uno::Sequence< ::rtl::OUString > JobData::getEnabledJobsForEvent( const css::uno::Reference< css::lang::XMultiServiceFactory >& xSMGR  ,
+                                                                        const ::rtl::OUString&                                        sEvent )
+ {
+@@ -708,6 +736,7 @@ void JobData::impl_reset()
+     m_eEnvironment = E_UNKNOWN_ENVIRONMENT;
+     m_sAlias       = ::rtl::OUString();
+     m_sService     = ::rtl::OUString();
++    m_sContext     = ::rtl::OUString();
+     m_sEvent       = ::rtl::OUString();
+     m_lArguments   = css::uno::Sequence< css::beans::NamedValue >();
+     aWriteLock.unlock();
+diff --git framework/source/jobs/jobdispatch.cxx framework/source/jobs/jobdispatch.cxx
+index 010123a..936e873 100644
+--- framework/source/jobs/jobdispatch.cxx
++++ framework/source/jobs/jobdispatch.cxx
+@@ -47,6 +47,7 @@
+ //	interface includes
+ #include <com/sun/star/beans/XPropertySet.hpp>
+ #include <com/sun/star/frame/DispatchResultState.hpp>
++#include <com/sun/star/frame/XModuleManager.hpp>
+ 
+ //________________________________
+ //	includes of other projects
+@@ -148,7 +149,20 @@ void SAL_CALL JobDispatch::initialize( const css::uno::Sequence< css::uno::Any >
+     for (int a=0; a<lArguments.getLength(); ++a)
+     {
+         if (a==0)
++        {
+             lArguments[a] >>= m_xFrame;
++
++            css::uno::Reference< css::frame::XModuleManager > xModuleManager(
++                m_xSMGR->createInstance(
++                    SERVICENAME_MODULEMANAGER ), 
++                css::uno::UNO_QUERY_THROW );
++            try
++            {
++                m_sModuleIdentifier = xModuleManager->identify( m_xFrame );
++            }
++            catch( css::uno::Exception& )
++            {}
++        }
+     }
+ 
+     aWriteLock.unlock();
+@@ -292,16 +306,8 @@ void JobDispatch::impl_dispatchEvent( /*IN*/ const ::rtl::OUString&
+     // But a may given listener will know something ...
+     // I think this operaton was finished successfully.
+     // It's not realy an error, if no registered jobs could be located.
+-    if (lJobs.getLength()<1 && xListener.is())
+-    {
+-        css::frame::DispatchResultEvent aEvent;
+-        aEvent.Source = xThis;
+-        aEvent.State  = css::frame::DispatchResultState::SUCCESS;
+-        xListener->dispatchFinished(aEvent);
+-        return;
+-    }
+-
+     // Step over all found jobs and execute it
++    int nExecutedJobs=0;
+     for (int j=0; j<lJobs.getLength(); ++j)
+     {
+         /* SAFE { */
+@@ -310,6 +316,7 @@ void JobDispatch::impl_dispatchEvent( /*IN*/ const ::rtl::OUString&
+         JobData aCfg(m_xSMGR);
+         aCfg.setEvent(sEvent, lJobs[j]);
+         aCfg.setEnvironment(JobData::E_DISPATCH);
++        const bool bIsEnabled=aCfg.hasCorrectContext(m_sModuleIdentifier);
+ 
+         /*Attention!
+             Jobs implements interfaces and dies by ref count!
+@@ -323,6 +330,9 @@ void JobDispatch::impl_dispatchEvent( /*IN*/ const ::rtl::OUString&
+         aReadLock.unlock();
+         /* } SAFE */
+ 
++        if (!bIsEnabled)
++            continue;
++
+         // Special mode for listener.
+         // We dont notify it directly here. We delegate that
+         // to the job implementation. But we must set ourself there too.
+@@ -331,6 +341,15 @@ void JobDispatch::impl_dispatchEvent( /*IN*/ const ::rtl::OUString&
+         if (xListener.is())
+             pJob->setDispatchResultFake(xListener, xThis);
+         pJob->execute(Converter::convert_seqPropVal2seqNamedVal(lArgs));
++        ++nExecutedJobs;
++    }
++
++    if (nExecutedJobs<1 && xListener.is())
++    {
++        css::frame::DispatchResultEvent aEvent;
++        aEvent.Source = xThis;
++        aEvent.State  = css::frame::DispatchResultState::SUCCESS;
++        xListener->dispatchFinished(aEvent);
+     }
+ }
+ 
+diff --git framework/source/jobs/jobexecutor.cxx framework/source/jobs/jobexecutor.cxx
+index 470e1fa..d796cd0 100644
+--- framework/source/jobs/jobexecutor.cxx
++++ framework/source/jobs/jobexecutor.cxx
+@@ -101,6 +101,11 @@ DEFINE_XSERVICEINFO_ONEINSTANCESERVICE( JobExecutor                   ,
+ 
+ DEFINE_INIT_SERVICE( JobExecutor,
+                      {
++                         m_xModuleManager = css::uno::Reference< css::frame::XModuleManager >(
++                             m_xSMGR->createInstance(
++                                 SERVICENAME_MODULEMANAGER ), 
++                             css::uno::UNO_QUERY_THROW );
++
+                          /*Attention
+                              I think we don't need any mutex or lock here ... because we are called by our own static method impl_createInstance()
+                              to create a new instance of this class by our own supported service factory.
+@@ -145,6 +150,7 @@ JobExecutor::JobExecutor( /*IN*/ const css::uno::Reference< css::lang::XMultiSer
+     : ThreadHelpBase      (&Application::GetSolarMutex()                                   )
+     , ::cppu::OWeakObject (                                                                )
+     , m_xSMGR             (xSMGR                                                           )
++    , m_xModuleManager    (                                                                )
+     , m_aConfig           (xSMGR, ::rtl::OUString::createFromAscii(JobData::EVENTCFG_ROOT) )
+ {
+     // Don't do any reference related code here! Do it inside special
+@@ -236,6 +242,15 @@ void SAL_CALL JobExecutor::notifyEvent( const css::document::EventObject& aEvent
+     // This optimization supress using of the cfg api for getting event and job descriptions.
+     // see using of m_lEvents.find() below ...
+ 
++    // retrieve event context from event source
++    rtl::OUString aModuleIdentifier;
++    try
++    {
++        aModuleIdentifier = m_xModuleManager->identify( aEvent.Source );
++    }
++    catch( css::uno::Exception& )
++    {}
++
+     // Special feature: If the events "OnNew" or "OnLoad" occures - we generate our own event "onDocumentOpened".
+     if (
+         (aEvent.EventName.equals(EVENT_ON_NEW )) ||
+@@ -278,6 +293,9 @@ void SAL_CALL JobExecutor::notifyEvent( const css::document::EventObject& aEvent
+         aCfg.setEvent(rBinding.m_sDocEvent, rBinding.m_sJobName);
+         aCfg.setEnvironment(JobData::E_DOCUMENTEVENT);
+ 
++        if (!aCfg.hasCorrectContext(aModuleIdentifier))
++            continue;
++
+         /*Attention!
+             Jobs implements interfaces and dies by ref count!
+             And freeing of such uno object is done by uno itself.
+diff --git officecfg/registry/schema/org/openoffice/Office/Jobs.xcs officecfg/registry/schema/org/openoffice/Office/Jobs.xcs
+index 104914d..e220e15 100644
+--- officecfg/registry/schema/org/openoffice/Office/Jobs.xcs
++++ officecfg/registry/schema/org/openoffice/Office/Jobs.xcs
+@@ -43,6 +43,11 @@
+ 					<desc>Must contain an UNO implementation(!) name of the implemented job component.</desc>
+ 				</info>
+             		</prop>
++            		<prop oor:name="Context" oor:type="xs:string">
++                		<info>
++					<desc>An property to define the context this event should be active in. It can be empty or a colon separated list of the supported application modules.</desc>
++				</info>
++            		</prop>
+             		<group oor:name="Arguments" oor:extensible="true">
+                 		<info>
+ 					<desc>Can be filled with any argument, which is under control of the job component.</desc>
+diff --git sdext/source/presenter/registry/data/org/openoffice/Office/Jobs.xcu sdext/source/presenter/registry/data/org/openoffice/Office/Jobs.xcu
+index ba74332..1241a72 100644
+--- sdext/source/presenter/registry/data/org/openoffice/Office/Jobs.xcu
++++ sdext/source/presenter/registry/data/org/openoffice/Office/Jobs.xcu
+@@ -5,6 +5,9 @@
+             <prop oor:name="Service">
+                 <value>com.sun.star.comp.Draw.framework.PresenterScreenJob</value>
+             </prop>
++            <prop oor:name="Context">
++                <value>com.sun.star.presentation.PresentationDocument</value>
++            </prop>
+         </node>
+     </node>
+     <node oor:name="Events">
