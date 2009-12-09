@@ -4674,7 +4674,7 @@ index 626b11b..0a078a4 100644
  // ----------------------------------------------------------------------------
  
 diff --git sc/source/filter/xml/XMLExportDataPilot.cxx sc/source/filter/xml/XMLExportDataPilot.cxx
-index a382a95..f01685d 100644
+index a382a95..44e4635 100644
 --- sc/source/filter/xml/XMLExportDataPilot.cxx
 +++ sc/source/filter/xml/XMLExportDataPilot.cxx
 @@ -68,6 +68,7 @@
@@ -4744,7 +4744,7 @@ index a382a95..f01685d 100644
      if (pDim->IsDataLayout())
          rExport.AddAttribute(XML_NAMESPACE_TABLE, XML_IS_DATA_LAYOUT_FIELD, XML_TRUE);
      rtl::OUString sValueStr;
-@@ -707,6 +735,19 @@ void ScXMLExportDataPilot::WriteDimensions(ScDPSaveData* pDPSave)
+@@ -707,6 +735,16 @@ void ScXMLExportDataPilot::WriteDimensions(ScDPSaveData* pDPSave)
      }
  }
  
@@ -4752,19 +4752,16 @@ index a382a95..f01685d 100644
 +{
 +    rExport.AddAttribute(XML_NAMESPACE_TABLE, XML_DISPLAY, bVisible ? XML_TRUE : XML_FALSE);
 +    rExport.AddAttribute(XML_NAMESPACE_TABLE, XML_ORIENTATION, eOrient);
-+    if (rExport.getDefaultVersion() == SvtSaveOptions::ODFVER_LATEST)
-+    {
-+        // Export display names only for ODF 1.2 extended or later.
-+        if (pGrandTotal)
-+            rExport.AddAttribute(XML_NAMESPACE_TABLE_EXT, XML_DISPLAY_NAME, *pGrandTotal);
-+    }
++    if (pGrandTotal)
++        rExport.AddAttribute(XML_NAMESPACE_TABLE_EXT, XML_DISPLAY_NAME, *pGrandTotal);
++
 +    SvXMLElementExport aElemGrandTotal(rExport, XML_NAMESPACE_TABLE, XML_DATA_PILOT_GRAND_TOTAL, sal_True, sal_True);
 +}
 +
  void ScXMLExportDataPilot::WriteDataPilots(const uno::Reference <sheet::XSpreadsheetDocument>& /* xSpreadDoc */)
  {
      pDoc = rExport.GetDocument();
-@@ -775,6 +816,20 @@ void ScXMLExportDataPilot::WriteDataPilots(const uno::Reference <sheet::XSpreads
+@@ -775,6 +813,24 @@ void ScXMLExportDataPilot::WriteDataPilots(const uno::Reference <sheet::XSpreads
                          if (!pDPSave->GetDrillDown())
                              rExport.AddAttribute(XML_NAMESPACE_TABLE, XML_DRILL_DOWN_ON_DOUBLE_CLICK, XML_FALSE);
                          SvXMLElementExport aElemDP(rExport, XML_NAMESPACE_TABLE, XML_DATA_PILOT_TABLE, sal_True, sal_True);
@@ -4772,14 +4769,18 @@ index a382a95..f01685d 100644
 +                        // grand total elements.
 +
 +                        const OUString* pGrandTotalName = pDPSave->GetGrandTotalName();
-+                        if (bRowGrand && bColumnGrand)
++                        if (pGrandTotalName && rExport.getDefaultVersion() == SvtSaveOptions::ODFVER_LATEST)
 +                        {
-+                            WriteGrandTotal(XML_BOTH, true, pGrandTotalName);
-+                        }
-+                        else
-+                        {
-+                            WriteGrandTotal(XML_ROW, bRowGrand, pGrandTotalName);
-+                            WriteGrandTotal(XML_COLUMN, bColumnGrand, pGrandTotalName);
++                            // Use the new data-pilot-grand-total element.
++                            if (bRowGrand && bColumnGrand)
++                            {
++                                WriteGrandTotal(XML_BOTH, true, pGrandTotalName);
++                            }
++                            else
++                            {
++                                WriteGrandTotal(XML_ROW, bRowGrand, pGrandTotalName);
++                                WriteGrandTotal(XML_COLUMN, bColumnGrand, pGrandTotalName);
++                            }
 +                        }
 +
                          rExport.CheckAttrList();
@@ -4807,7 +4808,7 @@ index 87c5894..a3f6cf8 100644
      ScXMLExportDataPilot(ScXMLExport& rExport);
      ~ScXMLExportDataPilot();
 diff --git sc/source/filter/xml/xmldpimp.cxx sc/source/filter/xml/xmldpimp.cxx
-index 470827b..79a0858 100644
+index 470827b..44dab95 100644
 --- sc/source/filter/xml/xmldpimp.cxx
 +++ sc/source/filter/xml/xmldpimp.cxx
 @@ -48,6 +48,7 @@
@@ -4832,7 +4833,7 @@ index 470827b..79a0858 100644
  }
  
 +ScXMLDataPilotTableContext::GrandTotalItem::GrandTotalItem() :
-+    mbVisible(false) {}
++    mbVisible(true) {}
 +
  ScXMLDataPilotTableContext::ScXMLDataPilotTableContext( ScXMLImport& rImport,
                                        USHORT nPrfx,
@@ -4848,7 +4849,7 @@ index 470827b..79a0858 100644
      bIsNative(sal_True),
      bIgnoreEmptyRows(sal_False),
      bIdentifyCategories(sal_False),
-@@ -159,6 +169,19 @@ ScXMLDataPilotTableContext::ScXMLDataPilotTableContext( ScXMLImport& rImport,
+@@ -159,6 +169,26 @@ ScXMLDataPilotTableContext::ScXMLDataPilotTableContext( ScXMLImport& rImport,
              case XML_TOK_DATA_PILOT_TABLE_ATTR_GRAND_TOTAL :
              {
                  sGrandTotal = sValue;
@@ -4860,15 +4861,22 @@ index 470827b..79a0858 100644
 +                else if (IsXMLToken(sValue, XML_ROW))
 +                {    
 +                    maRowGrandTotal.mbVisible = true;
++                    maColGrandTotal.mbVisible = false;
 +                }
 +                else if (IsXMLToken(sValue, XML_COLUMN))
 +                {    
++                    maRowGrandTotal.mbVisible = false;
 +                    maColGrandTotal.mbVisible = true;
++                }
++                else
++                {
++                    maRowGrandTotal.mbVisible = false;
++                    maColGrandTotal.mbVisible = false;
 +                }
              }
              break;
              case XML_TOK_DATA_PILOT_TABLE_ATTR_IGNORE_EMPTY_ROWS :
-@@ -238,6 +261,11 @@ SvXMLImportContext *ScXMLDataPilotTableContext::CreateChildContext( USHORT nPref
+@@ -238,6 +268,11 @@ SvXMLImportContext *ScXMLDataPilotTableContext::CreateChildContext( USHORT nPref
              nSourceType = SERVICE;
          }
          break;
@@ -4880,7 +4888,7 @@ index 470827b..79a0858 100644
          case XML_TOK_DATA_PILOT_TABLE_ELEM_SOURCE_CELL_RANGE :
          {
              pContext = new ScXMLSourceCellRangeContext(GetScImport(), nPrefix, rLName, xAttrList, this);
-@@ -256,7 +284,13 @@ SvXMLImportContext *ScXMLDataPilotTableContext::CreateChildContext( USHORT nPref
+@@ -256,7 +291,13 @@ SvXMLImportContext *ScXMLDataPilotTableContext::CreateChildContext( USHORT nPref
  }
  
  void ScXMLDataPilotTableContext::SetButtons()
@@ -4895,7 +4903,7 @@ index 470827b..79a0858 100644
      OUString sAddress;
      sal_Int32 nOffset = 0;
      while( nOffset >= 0 )
-@@ -268,8 +302,21 @@ void ScXMLDataPilotTableContext::SetButtons()
+@@ -268,8 +309,21 @@ void ScXMLDataPilotTableContext::SetButtons()
              sal_Int32 nAddrOffset(0);
              if (pDoc && ScRangeStringConverter::GetAddressFromString( aScAddress, sAddress, pDoc, ::formula::FormulaGrammar::CONV_OOO, nAddrOffset ))
              {
@@ -4919,7 +4927,7 @@ index 470827b..79a0858 100644
              }
          }
      }
-@@ -278,7 +325,7 @@ void ScXMLDataPilotTableContext::SetButtons()
+@@ -278,7 +332,7 @@ void ScXMLDataPilotTableContext::SetButtons()
          pDPObject->RefreshAfterLoad();
  }
  
@@ -4928,7 +4936,7 @@ index 470827b..79a0858 100644
  {
      if (pDPSave)
      {
-@@ -288,6 +335,38 @@ void ScXMLDataPilotTableContext::AddDimension(ScDPSaveDimension* pDim)
+@@ -288,6 +342,38 @@ void ScXMLDataPilotTableContext::AddDimension(ScDPSaveDimension* pDim)
                  pDPSave->GetExistingDimensionByName(pDim->GetName()) )
              pDim->SetDupFlag( TRUE );
  
@@ -4967,7 +4975,7 @@ index 470827b..79a0858 100644
          pDPSave->AddDimension(pDim);
      }
  }
-@@ -362,26 +441,15 @@ void ScXMLDataPilotTableContext::EndElement()
+@@ -362,26 +448,15 @@ void ScXMLDataPilotTableContext::EndElement()
              }
              break;
          }
@@ -5003,7 +5011,7 @@ index 470827b..79a0858 100644
          pDPSave->SetIgnoreEmptyRows(bIgnoreEmptyRows);
          pDPSave->SetRepeatIfEmpty(bIdentifyCategories);
          pDPSave->SetFilterButton(bShowFilter);
-@@ -393,12 +461,36 @@ void ScXMLDataPilotTableContext::EndElement()
+@@ -393,12 +468,36 @@ void ScXMLDataPilotTableContext::EndElement()
          {
              ScDPCollection* pDPCollection = pDoc->GetDPCollection();
              pDPObject->SetAlive(sal_True);
@@ -5041,7 +5049,7 @@ index 470827b..79a0858 100644
  ScXMLDPSourceSQLContext::ScXMLDPSourceSQLContext( ScXMLImport& rImport,
                                        USHORT nPrfx,
                                        const ::rtl::OUString& rLName,
-@@ -643,6 +735,81 @@ void ScXMLSourceServiceContext::EndElement()
+@@ -643,6 +742,81 @@ void ScXMLSourceServiceContext::EndElement()
  {
  }
  
@@ -5123,7 +5131,7 @@ index 470827b..79a0858 100644
  ScXMLSourceCellRangeContext::ScXMLSourceCellRangeContext( ScXMLImport& rImport,
                                        USHORT nPrfx,
                                        const ::rtl::OUString& rLName,
-@@ -723,10 +890,12 @@ ScXMLDataPilotFieldContext::ScXMLDataPilotFieldContext( ScXMLImport& rImport,
+@@ -723,10 +897,12 @@ ScXMLDataPilotFieldContext::ScXMLDataPilotFieldContext( ScXMLImport& rImport,
      bIsGroupField(sal_False),
      bDateValue(sal_False),
      bAutoStart(sal_False),
@@ -5137,7 +5145,7 @@ index 470827b..79a0858 100644
      sal_Int16 nAttrCount = xAttrList.is() ? xAttrList->getLength() : 0;
      const SvXMLTokenMap& rAttrTokenMap = GetScImport().GetDataPilotFieldAttrTokenMap();
      for( sal_Int16 i=0; i < nAttrCount; ++i )
-@@ -745,6 +914,12 @@ ScXMLDataPilotFieldContext::ScXMLDataPilotFieldContext( ScXMLImport& rImport,
+@@ -745,6 +921,12 @@ ScXMLDataPilotFieldContext::ScXMLDataPilotFieldContext( ScXMLImport& rImport,
                  bHasName = sal_True;
              }
              break;
@@ -5150,7 +5158,7 @@ index 470827b..79a0858 100644
              case XML_TOK_DATA_PILOT_FIELD_ATTR_IS_DATA_LAYOUT_FIELD :
              {
                  bDataLayout = IsXMLToken(sValue, XML_TRUE);
-@@ -774,7 +949,11 @@ ScXMLDataPilotFieldContext::ScXMLDataPilotFieldContext( ScXMLImport& rImport,
+@@ -774,7 +956,11 @@ ScXMLDataPilotFieldContext::ScXMLDataPilotFieldContext( ScXMLImport& rImport,
          }
      }
      if (bHasName)
@@ -5162,7 +5170,7 @@ index 470827b..79a0858 100644
  }
  
  ScXMLDataPilotFieldContext::~ScXMLDataPilotFieldContext()
-@@ -808,6 +987,22 @@ SvXMLImportContext *ScXMLDataPilotFieldContext::CreateChildContext( USHORT nPref
+@@ -808,6 +994,22 @@ SvXMLImportContext *ScXMLDataPilotFieldContext::CreateChildContext( USHORT nPref
      return pContext;
  }
  
@@ -5185,7 +5193,7 @@ index 470827b..79a0858 100644
  void ScXMLDataPilotFieldContext::AddGroup(const ::std::vector<rtl::OUString>& rMembers, const rtl::OUString& rName)
  {
      ScXMLDataPilotGroup aGroup;
-@@ -828,7 +1023,7 @@ void ScXMLDataPilotFieldContext::EndElement()
+@@ -828,7 +1030,7 @@ void ScXMLDataPilotFieldContext::EndElement()
              String sPage(sSelectedPage);
              pDim->SetCurrentPage(&sPage);
          }
@@ -5194,7 +5202,7 @@ index 470827b..79a0858 100644
          if (bIsGroupField)
          {            
              ScDPNumGroupInfo aInfo;
-@@ -1199,6 +1394,8 @@ SvXMLImportContext *ScXMLDataPilotSubTotalsContext::CreateChildContext( USHORT n
+@@ -1199,6 +1401,8 @@ SvXMLImportContext *ScXMLDataPilotSubTotalsContext::CreateChildContext( USHORT n
  void ScXMLDataPilotSubTotalsContext::EndElement()
  {
      pDataPilotField->SetSubTotals(pFunctions, nFunctionCount);
@@ -5203,7 +5211,7 @@ index 470827b..79a0858 100644
  }
  
  void ScXMLDataPilotSubTotalsContext::AddFunction(sal_Int16 nFunction)
-@@ -1221,6 +1418,11 @@ void ScXMLDataPilotSubTotalsContext::AddFunction(sal_Int16 nFunction)
+@@ -1221,6 +1425,11 @@ void ScXMLDataPilotSubTotalsContext::AddFunction(sal_Int16 nFunction)
      }
  }
  
@@ -5215,7 +5223,7 @@ index 470827b..79a0858 100644
  ScXMLDataPilotSubTotalContext::ScXMLDataPilotSubTotalContext( ScXMLImport& rImport,
                                        USHORT nPrfx,
                                        const ::rtl::OUString& rLName,
-@@ -1247,6 +1449,9 @@ ScXMLDataPilotSubTotalContext::ScXMLDataPilotSubTotalContext( ScXMLImport& rImpo
+@@ -1247,6 +1456,9 @@ ScXMLDataPilotSubTotalContext::ScXMLDataPilotSubTotalContext( ScXMLImport& rImpo
                  pDataPilotSubTotals->AddFunction( sal::static_int_cast<sal_Int16>(
                                  ScXMLConverter::GetFunctionFromString( sValue ) ) );
              }
@@ -5225,7 +5233,7 @@ index 470827b..79a0858 100644
              break;
          }
      }
-@@ -1344,6 +1549,11 @@ ScXMLDataPilotMemberContext::ScXMLDataPilotMemberContext( ScXMLImport& rImport,
+@@ -1344,6 +1556,11 @@ ScXMLDataPilotMemberContext::ScXMLDataPilotMemberContext( ScXMLImport& rImport,
                  bHasName = sal_True;
              }
              break;
@@ -5237,7 +5245,7 @@ index 470827b..79a0858 100644
              case XML_TOK_DATA_PILOT_MEMBER_ATTR_DISPLAY :
              {
                  bDisplay = IsXMLToken(sValue, XML_TRUE);
-@@ -1380,6 +1590,8 @@ void ScXMLDataPilotMemberContext::EndElement()
+@@ -1380,6 +1597,8 @@ void ScXMLDataPilotMemberContext::EndElement()
      if (bHasName)   // #i53407# don't check sName, empty name is allowed
      {
          ScDPSaveMember* pMember = new ScDPSaveMember(String(sName));
