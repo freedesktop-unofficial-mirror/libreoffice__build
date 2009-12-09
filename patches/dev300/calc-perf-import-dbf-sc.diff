@@ -1,0 +1,966 @@
+diff --git sc/inc/column.hxx sc/inc/column.hxx
+index 1d3cad9..a664cfd 100644
+--- sc/inc/column.hxx
++++ sc/inc/column.hxx
+@@ -71,6 +71,7 @@ struct ScLineFlags;
+ struct ScMergePatternState;
+ struct ScSetStringParam;
+ class ScFlatBoolRowSegments;
++struct ScColWidthParam;
+ 
+ #define COLUMN_DELTA	4
+ 
+@@ -125,8 +126,16 @@ friend class ScHorizontalCellIterator;
+ friend class ScHorizontalAttrIterator;
+ 
+ public:
+-static BOOL bDoubleAlloc;			// fuer Import: Groesse beim Allozieren verdoppeln
++    static bool bDoubleAlloc;			// fuer Import: Groesse beim Allozieren verdoppeln
+ 
++    class DoubleAllocSwitch
++    {
++    public:
++        DoubleAllocSwitch(bool bNewVal = true);
++        ~DoubleAllocSwitch();
++    private:
++        bool mbOldVal;
++    };
+ public:
+                 ScColumn();
+                 ~ScColumn();
+@@ -365,7 +374,7 @@ public:
+                                     const Fraction& rZoomX, const Fraction& rZoomY,
+                                     BOOL bFormula, USHORT nOldWidth,
+                                     const ScMarkData* pMarkData,
+-                                    BOOL bSimpleTextImport );
++                                    const ScColWidthParam* pParam );
+     void		GetOptimalHeight( SCROW nStartRow, SCROW nEndRow, USHORT* pHeight,
+                                     OutputDevice* pDev,
+                                     double nPPTX, double nPPTY,
+diff --git sc/inc/dbdocutl.hxx sc/inc/dbdocutl.hxx
+index 52d2680..d3cddf7 100644
+--- sc/inc/dbdocutl.hxx
++++ sc/inc/dbdocutl.hxx
+@@ -45,10 +45,20 @@ namespace com { namespace sun { namespace star { namespace sdbc {
+ class ScDatabaseDocUtil
+ {
+ public:
++    /** 
++     * Detailed information on single string value.
++     */
++    struct StrData
++    {
++        bool        mbSimpleText;
++        sal_uInt32  mnStrLength;
++
++        StrData();
++    };
+     static void PutData( ScDocument* pDoc, SCCOL nCol, SCROW nRow, SCTAB nTab,
+                         const ::com::sun::star::uno::Reference<
+                             ::com::sun::star::sdbc::XRow>& xRow, long nRowPos,
+-                        long nType, BOOL bCurrency, BOOL* pSimpleFlag = NULL );
++                        long nType, BOOL bCurrency, StrData* pStrData = NULL );
+ };
+ 
+ #endif
+diff --git sc/inc/dociter.hxx sc/inc/dociter.hxx
+index 350c611..22cc806 100644
+--- sc/inc/dociter.hxx
++++ sc/inc/dociter.hxx
+@@ -38,6 +38,8 @@
+ #include "queryparam.hxx"
+ 
+ #include <memory>
++#include <vector>
++#include <boost/shared_ptr.hpp>
+ 
+ class ScDocument;
+ class ScBaseCell;
+@@ -45,6 +47,7 @@ class ScPatternAttr;
+ class ScAttrArray;
+ class ScAttrIterator;
+ class ScRange;
++class ScFlatBoolRowSegments;
+ 
+ class ScDocumentIterator				// alle nichtleeren Zellen durchgehen
+ {
+@@ -511,6 +514,42 @@ public:
+     const ScBaseCell*		GetCell() const			{ return pFoundCell; }
+ };
+ 
++// ============================================================================
++
++class ScDocRowHeightUpdater
++{
++public:
++    struct TabRanges
++    {
++        SCTAB mnTab;
++        ::boost::shared_ptr<ScFlatBoolRowSegments> mpRanges;
++
++        TabRanges();
++        TabRanges(SCTAB nTab);
++    };
++
++    /** 
++     * Passing a NULL pointer to pTabRangesArray forces the heights of all 
++     * rows in all tables to be updated. 
++     */
++    explicit ScDocRowHeightUpdater(
++        ScDocument& rDoc, OutputDevice* pOutDev, double fPPTX, double fPPTY, 
++        const ::std::vector<TabRanges>* pTabRangesArray = NULL);
++
++    void update();
++
++private:
++    void updateAll();
++
++private:
++    ScDocument& mrDoc;
++    OutputDevice* mpOutDev;
++    double mfPPTX;
++    double mfPPTY;
++    const ::std::vector<TabRanges>* mpTabRangesArray;
++};
++
++
+ #endif
+ 
+ 
+diff --git sc/inc/docparam.hxx sc/inc/docparam.hxx
+new file mode 100644
+index 0000000..e273c01
+--- /dev/null
++++ sc/inc/docparam.hxx
+@@ -0,0 +1,47 @@
++/*************************************************************************
++ *
++ * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
++ *
++ * Copyright 2008 by Sun Microsystems, Inc.
++ *
++ * OpenOffice.org - a multi-platform office productivity suite
++ *
++ * $RCSfile: document.hxx,v $
++ * $Revision: 1.115.36.9 $
++ *
++ * This file is part of OpenOffice.org.
++ *
++ * OpenOffice.org is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU Lesser General Public License version 3
++ * only, as published by the Free Software Foundation.
++ *
++ * OpenOffice.org is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU Lesser General Public License version 3 for more details
++ * (a copy is included in the LICENSE file that accompanied this code).
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * version 3 along with OpenOffice.org.  If not, see
++ * <http://www.openoffice.org/license.html>
++ * for a copy of the LGPLv3 License.
++ *
++ ************************************************************************/
++
++#ifndef SC_DOCPARAM_HXX
++#define SC_DOCPARAM_HXX
++
++#include "address.hxx"
++
++// Let's put here misc structures that get passed to ScDocument's methods.
++
++struct ScColWidthParam
++{
++    SCROW       mnMaxTextRow;
++    sal_uInt32  mnMaxTextLen;
++    bool        mbSimpleText;
++
++    ScColWidthParam();
++};
++
++#endif
+diff --git sc/inc/document.hxx sc/inc/document.hxx
+index 61e23c9..4d94701 100644
+--- sc/inc/document.hxx
++++ sc/inc/document.hxx
+@@ -141,6 +141,8 @@ class ScFormulaParserPool;
+ struct ScClipParam;        
+ struct ScClipRangeNameData;
+ struct ScSetStringParam;
++class ScDocRowHeightUpdater;
++struct ScColWidthParam;
+ 
+ namespace com { namespace sun { namespace star {
+     namespace lang {
+@@ -244,6 +246,7 @@ friend class ScHorizontalAttrIterator;
+ friend class ScDocAttrIterator;
+ friend class ScAttrRectIterator;
+ friend class ScDocShell;
++friend class ScDocRowHeightUpdater;
+ 
+ private:
+     ::com::sun::star::uno::Reference< ::com::sun::star::lang::XMultiServiceFactory > xServiceManager;
+@@ -1276,7 +1279,7 @@ public:
+                                         const Fraction& rZoomX, const Fraction& rZoomY,
+                                         BOOL bFormula,
+                                         const ScMarkData* pMarkData = NULL,
+-                                        BOOL bSimpleTextImport = FALSE );
++                                        const ScColWidthParam* pParam = NULL );
+     SC_DLLPUBLIC BOOL			SetOptimalHeight( SCROW nStartRow, SCROW nEndRow, SCTAB nTab, USHORT nExtra,
+                                         OutputDevice* pDev,
+                                         double nPPTX, double nPPTY,
+diff --git sc/inc/segmenttree.hxx sc/inc/segmenttree.hxx
+index 9b9d753..3199f7d 100644
+--- sc/inc/segmenttree.hxx
++++ sc/inc/segmenttree.hxx
+@@ -63,6 +63,16 @@ public:
+         bool    mbCurValue;
+     };
+ 
++    class RangeIterator
++    {
++    public:
++        explicit RangeIterator(ScFlatBoolRowSegments& rSegs);
++        bool getFirst(RangeData& rRange);
++        bool getNext(RangeData& rRange);
++    private:
++        ScFlatBoolRowSegments& mrSegs;
++    };
++
+     ScFlatBoolRowSegments();
+     ~ScFlatBoolRowSegments();
+ 
+diff --git sc/inc/table.hxx sc/inc/table.hxx
+index f0b39b3..9606b98 100644
+--- sc/inc/table.hxx
++++ sc/inc/table.hxx
+@@ -88,6 +88,7 @@ struct ScSetStringParam;
+ class ScFlatUInt16RowSegments;
+ class ScFlatBoolRowSegments;
+ class ScFlatBoolColSegments;
++struct ScColWidthParam;
+ 
+ typedef std::hash_map< ::rtl::OUString, rtl::OUString, ::rtl::OUStringHash, ::std::equal_to< ::rtl::OUString > > NameToNameMap;
+ 
+@@ -592,7 +593,7 @@ public:
+                                     double nPPTX, double nPPTY,
+                                     const Fraction& rZoomX, const Fraction& rZoomY,
+                                     BOOL bFormula, const ScMarkData* pMarkData,
+-                                    BOOL bSimpleTextImport );
++                                    const ScColWidthParam* pParam );
+     BOOL		SetOptimalHeight( SCROW nStartRow, SCROW nEndRow, USHORT nExtra,
+                                     OutputDevice* pDev,
+                                     double nPPTX, double nPPTY,
+diff --git sc/source/core/data/column.cxx sc/source/core/data/column.cxx
+index 98e470a..6da47f4 100644
+--- sc/source/core/data/column.cxx
++++ sc/source/core/data/column.cxx
+@@ -70,8 +70,20 @@ inline BOOL IsAmbiguousScriptNonZero( BYTE nScript )
+              nScript != 0 );
+ }
+ 
+-// -----------------------------------------------------------------------------------------
++// ----------------------------------------------------------------------------
+ 
++ScColumn::DoubleAllocSwitch::DoubleAllocSwitch(bool bNewVal) :
++    mbOldVal(ScColumn::bDoubleAlloc)
++{
++    ScColumn::bDoubleAlloc = bNewVal;
++}
++
++ScColumn::DoubleAllocSwitch::~DoubleAllocSwitch()
++{
++    ScColumn::bDoubleAlloc = mbOldVal;
++}
++
++// ----------------------------------------------------------------------------
+ 
+ ScColumn::ScColumn() :
+     nCol( 0 ),
+diff --git sc/source/core/data/column2.cxx sc/source/core/data/column2.cxx
+index c97fbda..10a3dd5 100644
+--- sc/source/core/data/column2.cxx
++++ sc/source/core/data/column2.cxx
+@@ -70,6 +70,7 @@
+ #include "dbcolect.hxx"
+ #include "fillinfo.hxx"
+ #include "segmenttree.hxx"
++#include "docparam.hxx"
+ 
+ #include <math.h>
+ 
+@@ -637,10 +638,10 @@ long ScColumn::GetSimpleTextNeededSize( SCSIZE nIndex, OutputDevice* pDev,
+ }
+ 
+ USHORT ScColumn::GetOptimalColWidth( OutputDevice* pDev, double nPPTX, double nPPTY,
+-                                        const Fraction& rZoomX, const Fraction& rZoomY,
+-                                        BOOL bFormula, USHORT nOldWidth,
+-                                        const ScMarkData* pMarkData,
+-                                        BOOL bSimpleTextImport )
++                                     const Fraction& rZoomX, const Fraction& rZoomY,
++                                     BOOL bFormula, USHORT nOldWidth,
++                                     const ScMarkData* pMarkData,
++                                     const ScColWidthParam* pParam )
+ {
+     if (nCount == 0)
+         return nOldWidth;
+@@ -650,7 +651,7 @@ USHORT ScColumn::GetOptimalColWidth( OutputDevice* pDev, double nPPTX, double nP
+ 
+     SCSIZE nIndex;
+     ScMarkedDataIter aDataIter(this, pMarkData, TRUE);
+-    if ( bSimpleTextImport )
++    if ( pParam && pParam->mbSimpleText )
+     {	// alles eins bis auf NumberFormate
+         const ScPatternAttr* pPattern = GetPattern( 0 );
+         Font aFont;
+@@ -661,19 +662,44 @@ USHORT ScColumn::GetOptimalColWidth( OutputDevice* pDev, double nPPTX, double nP
+         long nMargin = (long) ( pMargin->GetLeftMargin() * nPPTX ) +
+                         (long) ( pMargin->GetRightMargin() * nPPTX );
+ 
+-        while (aDataIter.Next( nIndex ))
++        // Try to find the row that has the longest string, and measure the width of that string.
++        SvNumberFormatter* pFormatter = pDocument->GetFormatTable();
++        ULONG nFormat = pPattern->GetNumberFormat( pFormatter );
++        String aLongStr;
++        Color* pColor;
++        if (pParam->mnMaxTextRow >= 0)
+         {
+-            USHORT nThis = (USHORT) (GetSimpleTextNeededSize( nIndex, pDev,
+-                TRUE ) + nMargin);
+-            if (nThis)
++            ScBaseCell* pCell = GetCell(pParam->mnMaxTextRow);
++            ScCellFormat::GetString(
++                pCell, nFormat, aLongStr, &pColor, *pFormatter, TRUE, FALSE, ftCheck );
++        }
++        else
++        {
++            xub_StrLen nLongLen = 0;
++            while (aDataIter.Next(nIndex))
+             {
+-                if (nThis>nWidth || !bFound)
++                if (nIndex >= nCount)
++                    // Out-of-bound reached.  No need to keep going.
++                    break;
++    
++                ScBaseCell* pCell = pItems[nIndex].pCell;
++                String aValStr;
++                ScCellFormat::GetString(
++                    pCell, nFormat, aValStr, &pColor, *pFormatter, TRUE, FALSE, ftCheck );
++                
++                if (aValStr.Len() > nLongLen)
+                 {
+-                    nWidth = nThis;
+-                    bFound = TRUE;
++                    nLongLen = aValStr.Len();
++                    aLongStr = aValStr;
+                 }
+             }
+         }
++
++        if (aLongStr.Len())
++        {    
++            nWidth = pDev->GetTextWidth(aLongStr) + static_cast<USHORT>(nMargin);
++            bFound = true;
++        }
+     }
+     else
+     {
+diff --git sc/source/core/data/column3.cxx sc/source/core/data/column3.cxx
+index b4e62a0..3982b9a 100644
+--- sc/source/core/data/column3.cxx
++++ sc/source/core/data/column3.cxx
+@@ -68,7 +68,7 @@ extern const ScFormulaCell* pLastFormulaTreeTop;	// in cellform.cxx
+ using namespace formula;
+ // STATIC DATA -----------------------------------------------------------
+ 
+-BOOL ScColumn::bDoubleAlloc = FALSE;	// fuer Import: Groesse beim Allozieren verdoppeln
++bool ScColumn::bDoubleAlloc = FALSE;    // fuer Import: Groesse beim Allozieren verdoppeln
+ 
+ 
+ void ScColumn::Insert( SCROW nRow, ScBaseCell* pNewCell )
+diff --git sc/source/core/data/dbdocutl.cxx sc/source/core/data/dbdocutl.cxx
+index 707f0da..a1146ad 100644
+--- sc/source/core/data/dbdocutl.cxx
++++ sc/source/core/data/dbdocutl.cxx
+@@ -49,12 +49,19 @@ using namespace ::com::sun::star;
+ 
+ #define D_TIMEFACTOR              86400.0
+ 
+-// -----------------------------------------------------------------------
++// ----------------------------------------------------------------------------
++
++ScDatabaseDocUtil::StrData::StrData() :
++    mbSimpleText(true), mnStrLength(0)
++{
++}
++
++// ----------------------------------------------------------------------------
+ 
+ // static
+ void ScDatabaseDocUtil::PutData( ScDocument* pDoc, SCCOL nCol, SCROW nRow, SCTAB nTab,
+                                 const uno::Reference<sdbc::XRow>& xRow, long nRowPos,
+-                                long nType, BOOL bCurrency, BOOL* pSimpleFlag )
++                                long nType, BOOL bCurrency, StrData* pStrData )
+ {
+     String aString;
+     double nVal = 0.0;
+@@ -188,8 +195,11 @@ void ScDatabaseDocUtil::PutData( ScDocument* pDoc, SCCOL nCol, SCROW nRow, SCTAB
+         if (aString.Len())
+         {
+             pCell = ScBaseCell::CreateTextCell( aString, pDoc );
+-            if ( pSimpleFlag && pCell->GetCellType() == CELLTYPE_EDIT )
+-                *pSimpleFlag = FALSE;
++            if (pStrData)
++            {    
++                pStrData->mbSimpleText = pCell->GetCellType() != CELLTYPE_EDIT;
++                pStrData->mnStrLength = aString.Len();
++            }
+         }
+         else
+             pCell = NULL;
+diff --git sc/source/core/data/dociter.cxx sc/source/core/data/dociter.cxx
+index 9f9dedb..d92187e 100644
+--- sc/source/core/data/dociter.cxx
++++ sc/source/core/data/dociter.cxx
+@@ -46,6 +46,10 @@
+ #include "patattr.hxx"
+ #include "docoptio.hxx"
+ #include "cellform.hxx"
++#include "segmenttree.hxx"
++#include "progress.hxx"
++#include "globstr.hrc"
++#include "tools/fract.hxx"
+ 
+ #include <vector>
+ 
+@@ -2110,3 +2114,96 @@ const ScPatternAttr* ScAttrRectIterator::GetNext( SCCOL& rCol1, SCCOL& rCol2,
+     return NULL;		// is nix mehr
+ }
+ 
++// ============================================================================
++
++ScDocRowHeightUpdater::TabRanges::TabRanges() :
++    mnTab(0), mpRanges(new ScFlatBoolRowSegments)
++{
++}
++
++ScDocRowHeightUpdater::TabRanges::TabRanges(SCTAB nTab) :
++    mnTab(nTab), mpRanges(new ScFlatBoolRowSegments)
++{
++}
++
++ScDocRowHeightUpdater::ScDocRowHeightUpdater(ScDocument& rDoc, OutputDevice* pOutDev, double fPPTX, double fPPTY, const vector<TabRanges>* pTabRangesArray) :
++    mrDoc(rDoc), mpOutDev(pOutDev), mfPPTX(fPPTX), mfPPTY(fPPTY), mpTabRangesArray(pTabRangesArray)
++{
++}
++
++void ScDocRowHeightUpdater::update()
++{
++    if (!mpTabRangesArray || mpTabRangesArray->empty())
++    {
++        // No ranges defined.  Update all rows in all tables.
++        updateAll();
++        return;
++    }
++
++    sal_uInt32 nCellCount = 0;
++    vector<TabRanges>::const_iterator itr = mpTabRangesArray->begin(), itrEnd = mpTabRangesArray->end();
++    for (; itr != itrEnd; ++itr)
++    {
++        ScFlatBoolRowSegments::RangeData aData;
++        ScFlatBoolRowSegments::RangeIterator aRangeItr(*itr->mpRanges);
++        for (bool bFound = aRangeItr.getFirst(aData); bFound; bFound = aRangeItr.getNext(aData))
++        {
++            if (!aData.mbValue)
++                continue;
++
++            nCellCount += aData.mnRow2 - aData.mnRow1 + 1;
++        }
++    }
++
++    ScProgress aProgress(mrDoc.GetDocumentShell(), ScGlobal::GetRscString(STR_PROGRESS_HEIGHTING), nCellCount);
++
++    Fraction aZoom(1, 1);
++    itr = mpTabRangesArray->begin();
++    sal_uInt32 nProgressStart = 0;
++    for (; itr != itrEnd; ++itr)
++    {
++        SCTAB nTab = itr->mnTab;
++        if (!ValidTab(nTab) || !mrDoc.pTab[nTab])
++            continue;
++
++        ScFlatBoolRowSegments::RangeData aData;
++        ScFlatBoolRowSegments::RangeIterator aRangeItr(*itr->mpRanges);
++        for (bool bFound = aRangeItr.getFirst(aData); bFound; bFound = aRangeItr.getNext(aData))
++        {
++            if (!aData.mbValue)
++                continue;
++
++            mrDoc.pTab[nTab]->SetOptimalHeight(
++                aData.mnRow1, aData.mnRow2, 0, mpOutDev, mfPPTX, mfPPTY, aZoom, aZoom, false, &aProgress, nProgressStart);
++
++            nProgressStart += aData.mnRow2 - aData.mnRow1 + 1;
++        }
++    }
++}
++
++void ScDocRowHeightUpdater::updateAll()
++{
++    sal_uInt32 nCellCount = 0;
++    for (SCTAB nTab = 0; nTab <= MAXTAB; ++nTab)
++    {
++        if (!ValidTab(nTab) || !mrDoc.pTab[nTab])
++            continue;
++
++        nCellCount += mrDoc.pTab[nTab]->GetWeightedCount();
++    }
++
++    ScProgress aProgress(mrDoc.GetDocumentShell(), ScGlobal::GetRscString(STR_PROGRESS_HEIGHTING), nCellCount);
++
++    Fraction aZoom(1, 1);
++    ULONG nProgressStart = 0;
++    for (SCTAB nTab = 0; nTab <= MAXTAB; ++nTab)
++    {
++        if (!ValidTab(nTab) || !mrDoc.pTab[nTab])
++            continue;
++
++        mrDoc.pTab[nTab]->SetOptimalHeight(
++            0, MAXROW, 0, mpOutDev, mfPPTX, mfPPTY, aZoom, aZoom, false, &aProgress, nProgressStart);
++
++        nProgressStart += mrDoc.pTab[nTab]->GetWeightedCount();
++    }
++}
+diff --git sc/source/core/data/docparam.cxx sc/source/core/data/docparam.cxx
+new file mode 100644
+index 0000000..0644dd6
+--- /dev/null
++++ sc/source/core/data/docparam.cxx
+@@ -0,0 +1,40 @@
++/*************************************************************************
++ *
++ * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
++ *
++ * Copyright 2008 by Sun Microsystems, Inc.
++ *
++ * OpenOffice.org - a multi-platform office productivity suite
++ *
++ * $RCSfile: document.hxx,v $
++ * $Revision: 1.115.36.9 $
++ *
++ * This file is part of OpenOffice.org.
++ *
++ * OpenOffice.org is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU Lesser General Public License version 3
++ * only, as published by the Free Software Foundation.
++ *
++ * OpenOffice.org is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU Lesser General Public License version 3 for more details
++ * (a copy is included in the LICENSE file that accompanied this code).
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * version 3 along with OpenOffice.org.  If not, see
++ * <http://www.openoffice.org/license.html>
++ * for a copy of the LGPLv3 License.
++ *
++ ************************************************************************/
++
++// MARKER(update_precomp.py): autogen include statement, do not remove
++#include "precompiled_sc.hxx"
++
++// INCLUDE ---------------------------------------------------------------
++
++#include "docparam.hxx"
++
++ScColWidthParam::ScColWidthParam() :
++    mnMaxTextRow(-1), mnMaxTextLen(0), mbSimpleText(true) {}
++
+diff --git sc/source/core/data/document.cxx sc/source/core/data/document.cxx
+index a783519..65a3cc7 100644
+--- sc/source/core/data/document.cxx
++++ sc/source/core/data/document.cxx
+@@ -3269,14 +3269,14 @@ ULONG ScDocument::GetRowOffset( SCROW nRow, SCTAB nTab ) const
+ 
+ 
+ USHORT ScDocument::GetOptimalColWidth( SCCOL nCol, SCTAB nTab, OutputDevice* pDev,
+-                                        double nPPTX, double nPPTY,
+-                                        const Fraction& rZoomX, const Fraction& rZoomY,
+-                                        BOOL bFormula, const ScMarkData* pMarkData,
+-                                        BOOL bSimpleTextImport )
++                                       double nPPTX, double nPPTY,
++                                       const Fraction& rZoomX, const Fraction& rZoomY,
++                                       BOOL bFormula, const ScMarkData* pMarkData,
++                                       const ScColWidthParam* pParam )
+ {
+     if ( ValidTab(nTab) && pTab[nTab] )
+         return pTab[nTab]->GetOptimalColWidth( nCol, pDev, nPPTX, nPPTY,
+-            rZoomX, rZoomY, bFormula, pMarkData, bSimpleTextImport );
++            rZoomX, rZoomY, bFormula, pMarkData, pParam );
+     DBG_ERROR("Falsche Tabellennummer");
+     return 0;
+ }
+diff --git sc/source/core/data/makefile.mk sc/source/core/data/makefile.mk
+index 5893136..5a08a9b 100644
+--- sc/source/core/data/makefile.mk
++++ sc/source/core/data/makefile.mk
+@@ -74,6 +74,7 @@ SLOFILES =  \
+     $(SLO)$/documen8.obj \
+     $(SLO)$/documen9.obj \
+     $(SLO)$/document.obj \
++    $(SLO)$/docparam.obj \
+         $(SLO)$/dpcachetable.obj \
+         $(SLO)$/dpdimsave.obj \
+         $(SLO)$/dpgroup.obj \
+diff --git sc/source/core/data/segmenttree.cxx sc/source/core/data/segmenttree.cxx
+index 98c5032..b86aca8 100644
+--- sc/source/core/data/segmenttree.cxx
++++ sc/source/core/data/segmenttree.cxx
+@@ -66,9 +66,14 @@ public:
+ 
+     SCROW findLastNotOf(ValueType nValue) const;
+ 
++    // range iteration
++    bool getFirst(RangeData& rData);
++    bool getNext(RangeData& rData);
++
+ private:
+     typedef ::mdds::flat_segment_tree<SCCOLROW, ValueType> fst_type;
+     fst_type maSegments;
++    typename fst_type::const_iterator maItr;
+ };
+ 
+ template<typename _ValueType, typename _ExtValueType>
+@@ -175,6 +180,31 @@ SCCOLROW ScFlatSegmentsImpl<_ValueType, _ExtValueType>::findLastNotOf(ValueType
+     return nPos;
+ }
+ 
++template<typename _ValueType, typename _ExtValueType>
++bool ScFlatSegmentsImpl<_ValueType, _ExtValueType>::getFirst(RangeData& rData)
++{
++    maItr = maSegments.begin();
++    return getNext(rData);
++}
++
++template<typename _ValueType, typename _ExtValueType>
++bool ScFlatSegmentsImpl<_ValueType, _ExtValueType>::getNext(RangeData& rData)
++{
++    typename fst_type::const_iterator itrEnd = maSegments.end();
++    if (maItr == itrEnd)
++        return false;
++
++    rData.mnPos1 = maItr->first;
++    rData.mnValue = maItr->second;
++
++    ++maItr;
++    if (maItr == itrEnd)
++        return false;
++
++    rData.mnPos2 = maItr->first - 1;
++    return true;
++}
++
+ // ============================================================================
+ 
+ class ScFlatUInt16SegmentsImpl : public ScFlatSegmentsImpl<sal_uInt16, sal_uInt32>
+@@ -245,6 +275,37 @@ SCROW ScFlatBoolRowSegments::ForwardIterator::getLastPos() const
+ 
+ // ----------------------------------------------------------------------------
+ 
++ScFlatBoolRowSegments::RangeIterator::RangeIterator(ScFlatBoolRowSegments& rSegs) :
++    mrSegs(rSegs)
++{
++}
++
++bool ScFlatBoolRowSegments::RangeIterator::getFirst(RangeData& rRange)
++{
++    ScFlatBoolSegmentsImpl::RangeData aData;
++    if (!mrSegs.mpImpl->getFirst(aData))
++        return false;
++
++    rRange.mnRow1  = static_cast<SCROW>(aData.mnPos1);
++    rRange.mnRow2  = static_cast<SCROW>(aData.mnPos2);
++    rRange.mbValue = static_cast<bool>(aData.mnValue);
++    return true;
++}
++
++bool ScFlatBoolRowSegments::RangeIterator::getNext(RangeData& rRange)
++{
++    ScFlatBoolSegmentsImpl::RangeData aData;
++    if (!mrSegs.mpImpl->getNext(aData))
++        return false;
++
++    rRange.mnRow1  = static_cast<SCROW>(aData.mnPos1);
++    rRange.mnRow2  = static_cast<SCROW>(aData.mnPos2);
++    rRange.mbValue = static_cast<bool>(aData.mnValue);
++    return true;
++}
++
++// ----------------------------------------------------------------------------
++
+ ScFlatBoolRowSegments::ScFlatBoolRowSegments() :
+     mpImpl(new ScFlatBoolSegmentsImpl(static_cast<SCCOLROW>(MAXROW)))
+ {
+diff --git sc/source/core/data/table1.cxx sc/source/core/data/table1.cxx
+index 47fc6ff..e55582b 100644
+--- sc/source/core/data/table1.cxx
++++ sc/source/core/data/table1.cxx
+@@ -308,10 +308,10 @@ USHORT ScTable::GetOptimalColWidth( SCCOL nCol, OutputDevice* pDev,
+                                     double nPPTX, double nPPTY,
+                                     const Fraction& rZoomX, const Fraction& rZoomY,
+                                     BOOL bFormula, const ScMarkData* pMarkData,
+-                                    BOOL bSimpleTextImport )
++                                    const ScColWidthParam* pParam )
+ {
+     return aCol[nCol].GetOptimalColWidth( pDev, nPPTX, nPPTY, rZoomX, rZoomY,
+-        bFormula, STD_COL_WIDTH - STD_EXTRA_WIDTH, pMarkData, bSimpleTextImport );
++        bFormula, STD_COL_WIDTH - STD_EXTRA_WIDTH, pMarkData, pParam );
+ }
+ 
+ long ScTable::GetNeededSize( SCCOL nCol, SCROW nRow,
+diff --git sc/source/ui/docshell/dbdocimp.cxx sc/source/ui/docshell/dbdocimp.cxx
+index 112e35b..4e16c9c 100644
+--- sc/source/ui/docshell/dbdocimp.cxx
++++ sc/source/ui/docshell/dbdocimp.cxx
+@@ -271,7 +271,7 @@ BOOL ScDBDocFunc::DoImport( SCTAB nTab, const ScImportParam& rParam,
+     // ImportDoc - also used for Redo
+     ScDocument* pImportDoc = new ScDocument( SCDOCMODE_UNDO );
+     pImportDoc->InitUndo( pDoc, nTab, nTab );
+-    ScColumn::bDoubleAlloc = TRUE;
++    ScColumn::DoubleAllocSwitch aAllocSwitch(true);
+ 
+     //
+     //	get data from database into import document
+@@ -463,7 +463,6 @@ BOOL ScDBDocFunc::DoImport( SCTAB nTab, const ScImportParam& rParam,
+         DBG_ERROR("Unexpected exception in database");
+     }
+ 
+-    ScColumn::bDoubleAlloc = FALSE;
+     pImportDoc->DoColResize( nTab, rParam.nCol1,nEndCol, 0 );
+ 
+     //
+diff --git sc/source/ui/docshell/docsh.cxx sc/source/ui/docshell/docsh.cxx
+index 2cd4321..cc4c5bf 100644
+--- sc/source/ui/docshell/docsh.cxx
++++ sc/source/ui/docshell/docsh.cxx
+@@ -122,9 +122,11 @@
+ #include "optsolver.hxx"
+ #include "sheetdata.hxx"
+ #include "tabprotection.hxx"
++#include "docparam.hxx"
+ 
+ #include "docsh.hxx"
+ #include "docshimp.hxx"
++#include "sizedev.hxx"
+ #include <rtl/logfile.hxx>
+ 
+ #include <comphelper/processfactory.hxx>
+@@ -134,12 +136,18 @@
+ #include <com/sun/star/document/VbaEventId.hpp>
+ #include <basic/sbstar.hxx>
+ #include <basic/basmgr.hxx>
++
++#include <vector>
++#include <boost/shared_ptr.hpp>
++
+ using namespace com::sun::star;
+ using namespace com::sun::star::document::VbaEventId;
+ 
+ using namespace com::sun::star;
+ using ::rtl::OUString;
+ using ::rtl::OUStringBuffer;
++using ::boost::shared_ptr;
++using ::std::vector;
+ 
+ // STATIC DATA -----------------------------------------------------------
+ 
+@@ -966,12 +974,13 @@ BOOL __EXPORT ScDocShell::ConvertFrom( SfxMedium& rMedium )
+     // ob nach dem Import optimale Spaltenbreiten gesetzt werden sollen
+     BOOL bSetColWidths = FALSE;
+     BOOL bSetSimpleTextColWidths = FALSE;
+-    BOOL bSimpleColWidth[MAXCOLCOUNT];
+-    memset( bSimpleColWidth, 1, (MAXCOLCOUNT) * sizeof(BOOL) );
++    ScColWidthParam aColWidthParam[MAXCOLCOUNT];
+     ScRange aColWidthRange;
+     // ob nach dem Import optimale Zeilenhoehen gesetzt werden sollen
+     BOOL bSetRowHeights = FALSE;
+ 
++    vector<ScDocRowHeightUpdater::TabRanges> aRecalcRowRangesArray;
++
+     aConvFilterName.Erase(); //@ #BugId 54198
+ 
+     //	Alle Filter brauchen die komplette Datei am Stueck (nicht asynchron),
+@@ -1170,8 +1179,10 @@ BOOL __EXPORT ScDocShell::ConvertFrom( SfxMedium& rMedium )
+                 sItStr = ScGlobal::GetCharsetString( RTL_TEXTENCODING_IBM_850 );
+             }
+ 
++            ScDocRowHeightUpdater::TabRanges aRecalcRanges(0);
+             ULONG eError = DBaseImport( rMedium.GetPhysicalName(),
+-                    ScGlobal::GetCharsetValue(sItStr), bSimpleColWidth );
++                    ScGlobal::GetCharsetValue(sItStr), aColWidthParam, *aRecalcRanges.mpRanges );
++            aRecalcRowRangesArray.push_back(aRecalcRanges);
+ 
+             if (eError != eERR_OK)
+             {
+@@ -1185,12 +1196,6 @@ BOOL __EXPORT ScDocShell::ConvertFrom( SfxMedium& rMedium )
+             aColWidthRange.aStart.SetRow( 1 );	// Spaltenheader nicht
+             bSetColWidths = TRUE;
+             bSetSimpleTextColWidths = TRUE;
+-            // Memo-Felder fuehren zu einem bSimpleColWidth[nCol]==FALSE
+-            for ( SCCOL nCol=0; nCol <= MAXCOL && !bSetRowHeights; nCol++ )
+-            {
+-                if ( !bSimpleColWidth[nCol] )
+-                    bSetRowHeights = TRUE;
+-            }
+         }
+         else if (aFltName.EqualsAscii(pFilterDif))
+         {
+@@ -1404,9 +1409,12 @@ BOOL __EXPORT ScDocShell::ConvertFrom( SfxMedium& rMedium )
+             {
+                 for ( SCCOL nCol=0; nCol <= nEndCol; nCol++ )
+                 {
++                    if (!bSetSimpleTextColWidths)
++                        aColWidthParam[nCol].mbSimpleText = false;
++
+                     USHORT nWidth = aDocument.GetOptimalColWidth(
+                         nCol, nTab, &aVirtDev, nPPTX, nPPTY, aZoom, aZoom, FALSE, &aMark,
+-                        (bSetSimpleTextColWidths && bSimpleColWidth[nCol]) );
++                        &aColWidthParam[nCol] );
+                     aDocument.SetColWidth( nCol, nTab,
+                         nWidth + (USHORT)ScGlobal::nLastColWidthExtra );
+                 }
+@@ -1418,11 +1426,25 @@ BOOL __EXPORT ScDocShell::ConvertFrom( SfxMedium& rMedium )
+ //					nPPTX, nPPTY, aZoom, aZoom, FALSE );
+ //			}
+         }
+-        if ( bSetRowHeights )
+-            UpdateAllRowHeights();		// with vdev or printer, depending on configuration
++
++        if (bSetRowHeights)
++        {
++            // Update all rows in all tables.
++            ScSizeDeviceProvider aProv(this);
++            ScDocRowHeightUpdater aUpdater(aDocument, aProv.GetDevice(), aProv.GetPPTX(), aProv.GetPPTY(), NULL);
++            aUpdater.update();
++        }
++        else if (!aRecalcRowRangesArray.empty())
++        {
++            // Update only specified row ranges for better performance.
++            ScSizeDeviceProvider aProv(this);
++            ScDocRowHeightUpdater aUpdater(aDocument, aProv.GetDevice(), aProv.GetPPTX(), aProv.GetPPTY(), &aRecalcRowRangesArray);
++            aUpdater.update();
++        }
+     }
+     FinishedLoading( SFX_LOADED_MAINDOCUMENT | SFX_LOADED_IMAGES );
+ 
++
+     // #73762# invalidate eventually temporary table areas
+     if ( bRet )
+         aDocument.InvalidateTableArea();
+diff --git sc/source/ui/docshell/docsh8.cxx sc/source/ui/docshell/docsh8.cxx
+index 0db7d6b..1156518 100644
+--- sc/source/ui/docshell/docsh8.cxx
++++ sc/source/ui/docshell/docsh8.cxx
+@@ -86,6 +86,8 @@
+ #include "patattr.hxx"
+ #include "scitems.hxx"
+ #include "docpool.hxx"
++#include "segmenttree.hxx"
++#include "docparam.hxx"
+ 
+ #include <vector>
+ 
+@@ -304,9 +306,11 @@ static void lcl_setScalesToColumns(ScDocument& rDoc, const vector<long>& rScales
+     }
+ }
+ 
+-ULONG ScDocShell::DBaseImport( const String& rFullFileName, CharSet eCharSet,
+-                                BOOL bSimpleColWidth[MAXCOLCOUNT] )
++ULONG ScDocShell::DBaseImport( const String& rFullFileName, CharSet eCharSet, 
++                               ScColWidthParam aColWidthParam[MAXCOLCOUNT], ScFlatBoolRowSegments& rRowHeightsRecalc )
+ {
++    ScColumn::DoubleAllocSwitch aAllocSwitch(true);
++
+     ULONG nErr = eERR_OK;
+     long i;
+ 
+@@ -429,16 +433,33 @@ ULONG ScDocShell::DBaseImport( const String& rFullFileName, CharSet eCharSet,
+         BOOL bEnd = FALSE;
+         while ( !bEnd && xRowSet->next() )
+         {
++            bool bSimpleRow = true;
+             if ( nRow <= MAXROW )
+             {
+                 SCCOL nCol = 0;
+                 for (i=0; i<nColCount; i++)
+                 {
++                    ScDatabaseDocUtil::StrData aStrData;
+                     ScDatabaseDocUtil::PutData( &aDocument, nCol, nRow, 0,
+                                                 xRow, i+1, pTypeArr[i], FALSE,
+-                                                &bSimpleColWidth[nCol] );
++                                                &aStrData );
++
++                    if (aStrData.mnStrLength > aColWidthParam[nCol].mnMaxTextLen)
++                    {
++                        aColWidthParam[nCol].mnMaxTextLen = aStrData.mnStrLength;
++                        aColWidthParam[nCol].mnMaxTextRow = nRow;
++                    }
++
++                    if (!aStrData.mbSimpleText)
++                    {    
++                        bSimpleRow = false;
++                        aColWidthParam[nCol].mbSimpleText = false;
++                    }
++
+                     ++nCol;
+                 }
++                if (!bSimpleRow)
++                    rRowHeightsRecalc.setTrue(nRow, nRow);
+                 ++nRow;
+             }
+             else		// past the end of the spreadsheet
+diff --git sc/source/ui/docshell/impex.cxx sc/source/ui/docshell/impex.cxx
+index 8dc8646..83fdc04 100644
+--- sc/source/ui/docshell/impex.cxx
++++ sc/source/ui/docshell/impex.cxx
+@@ -1194,8 +1194,7 @@ BOOL ScImportExport::ExtText2Doc( SvStream& rStrm )
+     if ( rStrm.GetStreamCharSet() == RTL_TEXTENCODING_UNICODE )
+         rStrm.StartReadingUnicodeText();
+ 
+-    BOOL bOld = ScColumn::bDoubleAlloc;
+-    ScColumn::bDoubleAlloc = TRUE;
++    ScColumn::DoubleAllocSwitch aAllocSwitch(true);
+ 
+     SCCOL nStartCol = aRange.aStart.Col();
+     SCCOL nEndCol = aRange.aEnd.Col();
+@@ -1396,7 +1395,6 @@ BOOL ScImportExport::ExtText2Doc( SvStream& rStrm )
+         bDetermineRange = !bDetermineRange;     // toggle
+     } while (!bDetermineRange);
+ 
+-    ScColumn::bDoubleAlloc = bOld;
+     pDoc->DoColResize( nTab, nStartCol, nEndCol, 0 );
+ 
+     delete pEnglishTransliteration;
+diff --git sc/source/ui/inc/docsh.hxx sc/source/ui/inc/docsh.hxx
+index 32539da..a317cfa 100644
+--- sc/source/ui/inc/docsh.hxx
++++ sc/source/ui/inc/docsh.hxx
+@@ -74,6 +74,8 @@ class ScImportOptions;
+ class ScDocShellModificator;
+ class ScOptSolverSave;
+ class ScSheetSaveData;
++class ScFlatBoolRowSegments;
++struct ScColWidthParam;
+ 
+ namespace sfx2 { class FileDialogHelper; }
+ struct DocShell_Impl;
+@@ -154,7 +156,7 @@ class SC_DLLPUBLIC ScDocShell: public SfxObjectShell, public SfxListener
+     SC_DLLPRIVATE SCTAB			GetSaveTab();
+ 
+     SC_DLLPRIVATE ULONG			DBaseImport( const String& rFullFileName, CharSet eCharSet,
+-                                 BOOL bSimpleColWidth[MAXCOLCOUNT] );
++                                             ScColWidthParam aColWidthParam[MAXCOLCOUNT], ScFlatBoolRowSegments& rRowHeightsRecalc );
+     SC_DLLPRIVATE ULONG			DBaseExport( const String& rFullFileName, CharSet eCharSet,
+                                  BOOL& bHasMemo );
+ 
