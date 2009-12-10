@@ -1,79 +1,41 @@
 diff --git sal/rtl/source/ustring.c sal/rtl/source/ustring.c
-index b545ff4..c0cf7b5 100644
+index b545ff4..95277fe 100644
 --- sal/rtl/source/ustring.c
 +++ sal/rtl/source/ustring.c
-@@ -818,23 +818,53 @@ void SAL_CALL rtl_uString_internConvert( rtl_uString   ** newStr,
-     { // try various optimisations
-         if ( len < 0 )
-             len = strlen( str );
--        if ( eTextEncoding == RTL_TEXTENCODING_ASCII_US )
-+        switch ( eTextEncoding )
-         {
--            int i;
--            rtl_uString *pScratch;
--            pScratch = alloca( sizeof( rtl_uString )
--                               + len * sizeof (IMPL_RTL_STRCODE ) );
--            for (i = 0; i < len; i++)
-+            case RTL_TEXTENCODING_ASCII_US:
-             {
--                /* Check ASCII range */
--                OSL_ENSURE( ((unsigned char)str[i]) <= 127,
--                            "rtl_ustring_internConvert() - Found char > 127 and RTL_TEXTENCODING_ASCII_US is specified" );
--                pScratch->buffer[i] = str[i];
-+                int i;
-+                rtl_uString *pScratch;
-+                pScratch = alloca( sizeof( rtl_uString )
-+                                   + len * sizeof (IMPL_RTL_STRCODE ) );
-+                for (i = 0; i < len; i++)
-+                {
-+                    /* Check ASCII range */
-+                    OSL_ENSURE( ((unsigned char)str[i]) <= 127,
-+                                "rtl_ustring_internConvert() - Found char > 127 and RTL_TEXTENCODING_ASCII_US is specified" );
-+                    pScratch->buffer[i] = str[i];
-+                }
-+                pScratch->length = len;
-+                rtl_ustring_intern_internal( newStr, pScratch, CANNOT_RETURN );
-+                return;
-+            }
-+            case RTL_TEXTENCODING_IBM_437:
-+            case RTL_TEXTENCODING_IBM_850:
-+            case RTL_TEXTENCODING_IBM_860:
-+            case RTL_TEXTENCODING_IBM_861:
-+            case RTL_TEXTENCODING_IBM_863:
-+            case RTL_TEXTENCODING_IBM_865:
-+            {
-+                rtl_uString *pScratch;
-+                rtl_TextToUnicodeConverter hConverter;
-+                sal_Size nDestChars, nSrcBytes;
-+                sal_uInt32 nInfo;
-+
-+                hConverter = rtl_createTextToUnicodeConverter( eTextEncoding );
-+                pScratch = alloca( sizeof(rtl_uString) + len * sizeof (IMPL_RTL_STRCODE) );
-+
-+                nDestChars = rtl_convertTextToUnicode(
-+                    hConverter, 0, str, len, pScratch->buffer, len, convertFlags, &nInfo, &nSrcBytes );
-+                pScratch->length = len;
-+
-+                if (pInfo)
-+                    *pInfo = nInfo;
-+
-+                rtl_ustring_intern_internal( newStr, pScratch, CANNOT_RETURN );
-+                rtl_destroyTextToUnicodeConverter( hConverter );
-+                return;
-             }
--            pScratch->length = len;
--            rtl_ustring_intern_internal( newStr, pScratch, CANNOT_RETURN );
--            return;
+@@ -835,6 +835,28 @@ void SAL_CALL rtl_uString_internConvert( rtl_uString   ** newStr,
+             rtl_ustring_intern_internal( newStr, pScratch, CANNOT_RETURN );
+             return;
          }
++        else if ( eTextEncoding == RTL_TEXTENCODING_IBM_850 )
++        {
++            rtl_uString *pScratch;
++            rtl_TextToUnicodeConverter hConverter;
++            sal_Size nDestChars, nSrcBytes;
++            sal_uInt32 nInfo;
++
++            hConverter = rtl_createTextToUnicodeConverter( eTextEncoding );
++            pScratch = alloca( sizeof(rtl_uString) + len * sizeof (IMPL_RTL_STRCODE) );
++
++            nDestChars = rtl_convertTextToUnicode(
++                hConverter, 0, str, len, pScratch->buffer, len, convertFlags, &nInfo, &nSrcBytes );
++            pScratch->length = len;
++
++            if (pInfo)
++                *pInfo = nInfo;
++
++            rtl_ustring_intern_internal( newStr, pScratch, CANNOT_RETURN );
++            rtl_destroyTextToUnicodeConverter( hConverter );
++            return;
++        }
 +
          /* FIXME: we want a nice UTF-8 / alloca shortcut here */
      }
  
 diff --git sal/textenc/tcvtbyte.c sal/textenc/tcvtbyte.c
-index be39b8e..ca5571e 100644
+index be39b8e..c21f69a 100644
 --- sal/textenc/tcvtbyte.c
 +++ sal/textenc/tcvtbyte.c
-@@ -643,6 +643,47 @@ sal_Size ImplCharToUnicode( const ImplTextConverterData* pData,
+@@ -643,6 +643,53 @@ sal_Size ImplCharToUnicode( const ImplTextConverterData* pData,
  
  /* ----------------------------------------------------------------------- */
  
@@ -96,6 +58,12 @@ index be39b8e..ca5571e 100644
 +    *pInfo = 0;
 +    pEndDestBuf = pDestBuf+nDestChars;
 +    pEndSrcBuf  = pSrcBuf+nSrcBytes;
++    if ( pDestBuf == pEndDestBuf )
++    {
++        *pInfo |= RTL_TEXTTOUNICODE_INFO_ERROR | RTL_TEXTTOUNICODE_INFO_DESTBUFFERTOSMALL;
++        *pSrcCvtBytes = 0;
++        return 0;
++    }
 +    while ( pSrcBuf < pEndSrcBuf )
 +    {
 +        c = (sal_uChar)*pSrcBuf;
