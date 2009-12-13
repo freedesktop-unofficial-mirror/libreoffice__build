@@ -16,24 +16,30 @@ EOF
 fi
 
 INC="
+XclExpChangeTrack.hxx
 excdoc.hxx
 excrecds.hxx
 exp_op.hxx
-XclExpChangeTrack.hxx
 xcl97esc.hxx
 xcl97rec.hxx
 xechart.hxx
 xecontent.hxx
 xeescher.hxx
+xehelper.hxx
 xelink.hxx
 xename.hxx
 xepage.hxx
 xepivot.hxx
 xerecord.hxx
+xeroot.hxx
 xestream.hxx
 xestyle.hxx
 xetable.hxx
 xeview.hxx
+xladdress.hxx
+xlescher.hxx
+xlpivot.hxx
+xlview.hxx
 "
 
 XLS_INC="
@@ -41,20 +47,13 @@ xltoolbar.hxx
 "
 
 ADD_PREFIX="
-colrowst.cxx
 excdoc.cxx
-excel.cxx
-excform.cxx
-excform8.cxx
-excimp8.cxx
 excrecds.cxx
 exctools.cxx
 expop2.cxx
 fontbuff.cxx
 frmbase.cxx
-impop.cxx
 namebuff.cxx
-read.cxx
 tokstack.cxx
 xecontent.cxx
 xeescher.cxx
@@ -72,20 +71,6 @@ xestring.cxx
 xestyle.cxx
 xetable.cxx
 xeview.cxx
-xicontent.cxx
-xiescher.cxx
-xiformula.cxx
-xihelper.cxx
-xichart.cxx
-xilink.cxx
-xiname.cxx
-xipage.cxx
-xipivot.cxx
-xiroot.cxx
-xistream.cxx
-xistring.cxx
-xistyle.cxx
-xiview.cxx
 xladdress.cxx
 xlescher.cxx
 xlformula.cxx
@@ -102,7 +87,6 @@ xlview.cxx
 
 ADD_PREFIX_97="
 XclExpChangeTrack.cxx
-XclImpChangeTrack.cxx
 xcl97esc.cxx
 xcl97rec.cxx
 "
