@@ -20,6 +20,7 @@ XclExpChangeTrack.hxx
 excdoc.hxx
 excrecds.hxx
 exp_op.hxx
+imp_op.hxx
 xcl97esc.hxx
 xcl97rec.hxx
 xechart.hxx
@@ -36,6 +37,7 @@ xestream.hxx
 xestyle.hxx
 xetable.hxx
 xeview.hxx
+xistyle.hxx
 xladdress.hxx
 xlescher.hxx
 xlpivot.hxx
