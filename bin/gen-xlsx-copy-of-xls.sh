@@ -26,6 +26,7 @@ xcl97rec.hxx
 xechart.hxx
 xecontent.hxx
 xeescher.hxx
+xeformula.hxx
 xehelper.hxx
 xelink.hxx
 xename.hxx
