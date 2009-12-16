@@ -1,5 +1,5 @@
 diff --git basic/source/classes/sbxmod.cxx basic/source/classes/sbxmod.cxx
-index 684c009..3d5b120 100644
+index 684c009..129b238 100644
 --- basic/source/classes/sbxmod.cxx
 +++ basic/source/classes/sbxmod.cxx
 @@ -2001,10 +2001,11 @@ void SbUserFormModule::InitObject()
@@ -11,12 +11,12 @@ index 684c009..3d5b120 100644
              aArgs[ 0 ] = uno::Any();
              aArgs[ 1 ] <<= m_xDialog;
              aArgs[ 2 ] <<= m_xModel;
-+            aArgs[ 3 ] <<= rtl::OUString( GetName() );
++            aArgs[ 3 ] <<= rtl::OUString( GetParent()->GetName() );
              pDocObject = new SbUnoObject( GetName(), uno::makeAny( xVBAFactory->createInstanceWithArguments( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM("ooo.vba.msforms.UserForm")), aArgs  ) ) );
              uno::Reference< lang::XComponent > xComponent( aArgs[ 1 ], uno::UNO_QUERY_THROW );
              // remove old listener if it exists
 diff --git scripting/source/vbaevents/eventhelper.cxx scripting/source/vbaevents/eventhelper.cxx
-index 0f6b91c..317bc49 100644
+index 0f6b91c..1f6b0e7 100644
 --- scripting/source/vbaevents/eventhelper.cxx
 +++ scripting/source/vbaevents/eventhelper.cxx
 @@ -23,6 +23,8 @@
@@ -28,7 +28,45 @@ index 0f6b91c..317bc49 100644
  #include <com/sun/star/drawing/XControlShape.hpp>
  
  #include <com/sun/star/awt/XControl.hpp>
-@@ -908,17 +910,31 @@ EventListener::firing_Impl(const ScriptEvent& evt, Any* pRet ) throw(RuntimeExce
+@@ -33,6 +35,7 @@
+ #include <com/sun/star/awt/XTextComponent.hpp> //liuchen 2009-6-5
+ #include <com/sun/star/awt/XComboBox.hpp> //liuchen 2009-6-18
+ #include <com/sun/star/awt/XRadioButton.hpp> //liuchen 2009-7-30
++#include <com/sun/star/awt/XListBox.hpp> 
+ 
+ #include <msforms/ReturnInteger.hpp>
+ 
+@@ -274,24 +277,27 @@ Type typeXFixedText = GET_TYPE(awt::XFixedText);
+ Type typeXTextComponent = GET_TYPE(awt::XTextComponent);
+ Type typeXComboBox = GET_TYPE(awt::XComboBox);
+ Type typeXRadioButton = GET_TYPE(awt::XRadioButton);
++Type typeXListBox = GET_TYPE(awt::XListBox);
+ 
+ 
+ TypeList fixedTextList = {&typeXFixedText, 1};
+ TypeList textCompList = {&typeXTextComponent, 1};
+ TypeList radioButtonList = {&typeXRadioButton, 1};
+ TypeList comboBoxList = {&typeXComboBox, 1};
++TypeList listBoxList = {&typeXListBox, 1};
+ 
+ //this array stores the OO event to VBA event translation info
+ static TranslatePropMap aTranslatePropMap_Impl[] = 
+ {
++	{ MAP_CHAR_LEN("actionPerformed"), { MAP_CHAR_LEN("_Change"), NULL, DenyType, (void*)(&radioButtonList) } },  //liuchen 2009-7-30, OptionalButton_Change event is not the same as OptionalButton_Click event
+ 	// actionPerformed ooo event
+ 	{ MAP_CHAR_LEN("actionPerformed"), { MAP_CHAR_LEN("_Click"), NULL, ApproveAll, NULL } },	
+-	{ MAP_CHAR_LEN("actionPerformed"), { MAP_CHAR_LEN("_Change"), NULL, DenyType, (void*)(&radioButtonList) } },  //liuchen 2009-7-30, OptionalButton_Change event is not the same as OptionalButton_Click event
+ 
++	{ MAP_CHAR_LEN("itemStateChanged"), { MAP_CHAR_LEN("_Change"), NULL, ApproveType, (void*)(&radioButtonList) } }, //liuchen 2009-7-30, OptionalButton_Change event should be triggered when the button state is changed
+ 	// itemStateChanged ooo event
+ 	{ MAP_CHAR_LEN("itemStateChanged"), { MAP_CHAR_LEN("_Click"), NULL, ApproveType, (void*)(&comboBoxList) } },  //liuchen, add to support VBA ComboBox_Click event
+-	{ MAP_CHAR_LEN("itemStateChanged"), { MAP_CHAR_LEN("_Change"), NULL, ApproveType, (void*)(&radioButtonList) } }, //liuchen 2009-7-30, OptionalButton_Change event should be triggered when the button state is changed
+ 	
++	{ MAP_CHAR_LEN("itemStateChanged"), { MAP_CHAR_LEN("_Click"), NULL, ApproveType, (void*)(&listBoxList) } },
+ 	// changed ooo event
+ 	{ MAP_CHAR_LEN("changed"), { MAP_CHAR_LEN("_Change"), NULL, ApproveAll, NULL } },	
+ 
+@@ -908,17 +914,43 @@ EventListener::firing_Impl(const ScriptEvent& evt, Any* pRet ) throw(RuntimeExce
      evt.Arguments[ 0 ] >>= aEvent;
  	OSL_TRACE("evt.MethodName is  %s", rtl::OUStringToOString( evt.MethodName, RTL_TEXTENCODING_UTF8 ).getStr() );
  	OSL_TRACE("Argument[0] is  %s", rtl::OUStringToOString( comphelper::anyToString( evt.Arguments[0] ), RTL_TEXTENCODING_UTF8 ).getStr() );
@@ -45,21 +83,33 @@ index 0f6b91c..317bc49 100644
 -        xProps->getPropertyValue( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM("Name") ) ) >>= sName;
 +    {
 +	OSL_TRACE("Getting Control");
++        // evt.Source is 
++        // a) Dialog
++        // b) xShapeControl ( from api (sheet control) )
++        // c) eventmanager ( I guess )
++        // d) vba control ( from api also ) 
++	uno::Reference< drawing::XControlShape > xCntrlShape( evt.Source, uno::UNO_QUERY );
 +	uno::Reference< awt::XControl > xControl( aEvent.Source, uno::UNO_QUERY );
-+	if ( xControl.is() )	      
-+        {
-+		uno::Reference< beans::XPropertySet > xProps;
-+		OSL_TRACE("Getting properties");
-+        	xProps.set( xControl->getModel(), uno::UNO_QUERY_THROW );
-+        	xProps->getPropertyValue( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM("Name") ) ) >>= sName;
-+	}
-+	else
++	if ( xCntrlShape.is() )	      
 +	{
-+		uno::Reference< drawing::XControlShape >  xCntrlShape( aEvent.Source, UNO_QUERY_THROW );
++                // for sheet controls ( that fire from the api ) we don't
++                // have the real control ( thats only available from the view )
++                // api code creates just a control instance that is transferred
++                // via aEvent.Arguments[ 0 ] that control though has no
++                // info like name etc.
++		uno::Reference< drawing::XControlShape >  xCntrlShape( evt.Source, UNO_QUERY_THROW );
 +		OSL_TRACE("Got control shape");
 +		uno::Reference< container::XNamed > xName( xCntrlShape->getControl(), uno::UNO_QUERY_THROW );
 +		OSL_TRACE("Got xnamed ");
 +		sName = xName->getName();
++	}
++	else
++        {
++                // Userform control ( fired from the api or from event manager )
++		uno::Reference< beans::XPropertySet > xProps;
++		OSL_TRACE("Getting properties");
++        	xProps.set( xControl->getModel(), uno::UNO_QUERY_THROW );
++        	xProps->getPropertyValue( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM("Name") ) ) >>= sName;
 +	}
 +
 +    }
@@ -67,7 +117,7 @@ index 0f6b91c..317bc49 100644
      EventInfoHash& infos = getEventTransInfo();
      EventInfoHash::const_iterator eventInfo_it = infos.find( evt.MethodName );
 diff --git vbahelper/source/msforms/vbacheckbox.cxx vbahelper/source/msforms/vbacheckbox.cxx
-index 3a6c5d9..3794a75 100644
+index 3a6c5d9..39b93bb 100644
 --- vbahelper/source/msforms/vbacheckbox.cxx
 +++ vbahelper/source/msforms/vbacheckbox.cxx
 @@ -78,6 +78,8 @@ void SAL_CALL
@@ -84,12 +134,12 @@ index 3a6c5d9..3794a75 100644
      }
      m_xProps->setPropertyValue( STATE, uno::makeAny( nValue ) );
 +    if ( nValue != nOldValue )
-+        fireChangeEvent();
++        fireClickEvent();
  }
  rtl::OUString& 
  ScVbaCheckbox::getServiceImplName()
 diff --git vbahelper/source/msforms/vbacombobox.cxx vbahelper/source/msforms/vbacombobox.cxx
-index 7c27734..20f8f25 100644
+index 7c27734..3d0fb9d 100644
 --- vbahelper/source/msforms/vbacombobox.cxx
 +++ vbahelper/source/msforms/vbacombobox.cxx
 @@ -66,12 +66,16 @@ ScVbaComboBox::setListIndex( const uno::Any& _value ) throw (uno::RuntimeExcepti
@@ -105,7 +155,7 @@ index 7c27734..20f8f25 100644
              rtl::OUString sText = sItems[ nIndex ];
              m_xProps->setPropertyValue( TEXT, uno::makeAny( sText ) );
 +            if( nOldIndex != nIndex )
-+                fireChangeEvent();
++                fireClickEvent();
          }
      }
  }
@@ -118,15 +168,23 @@ index 7c27734..20f8f25 100644
 +	_value >>= sNewValue;
  	m_xProps->setPropertyValue( sSourceName, _value );
 +	if ( sNewValue != sOldValue )
-+            fireChangeEvent();       
++            fireClickEvent();       
  }
  
  // see Value
 diff --git vbahelper/source/msforms/vbacontrol.cxx vbahelper/source/msforms/vbacontrol.cxx
-index 284bf99..caf018d 100644
+index 284bf99..8e89bea 100644
 --- vbahelper/source/msforms/vbacontrol.cxx
 +++ vbahelper/source/msforms/vbacontrol.cxx
-@@ -42,6 +42,9 @@
+@@ -31,6 +31,7 @@
+ #include <com/sun/star/awt/XControlModel.hpp>
+ #include <com/sun/star/awt/XControl.hpp>
+ #include <com/sun/star/awt/XWindow2.hpp>
++#include <com/sun/star/awt/XActionListener.hpp>
+ #include <com/sun/star/lang/XEventListener.hpp>
+ #include <com/sun/star/drawing/XShape.hpp>
+ #include <com/sun/star/drawing/XControlShape.hpp>
+@@ -42,6 +43,9 @@
  #include <com/sun/star/form/binding/XListEntrySink.hpp>
  #include <com/sun/star/table/CellAddress.hpp>
  #include <com/sun/star/table/CellRangeAddress.hpp>
@@ -136,7 +194,35 @@ index 284bf99..caf018d 100644
  #include <ooo/vba/XControlProvider.hpp>
  #ifdef VBA_OOBUILD_HACK
  #include <svtools/bindablecontrolhelper.hxx>
-@@ -383,6 +386,62 @@ void SAL_CALL ScVbaControl::setForeColor( ::sal_Int32 _forecolor ) throw (::com:
+@@ -129,7 +133,7 @@ ScVbaControlListener::disposing( const lang::EventObject& ) throw( uno::RuntimeE
+ 
+ //ScVbaControl
+ 
+-ScVbaControl::ScVbaControl( const uno::Reference< XHelperInterface >& xParent, const uno::Reference< uno::XComponentContext >& xContext, const uno::Reference< ::uno::XInterface >& xControl,  const css::uno::Reference< css::frame::XModel >& xModel, AbstractGeometryAttributes* pGeomHelper ) : ControlImpl_BASE( xParent, xContext ),  m_xControl( xControl ), m_xModel( xModel )
++ScVbaControl::ScVbaControl( const uno::Reference< XHelperInterface >& xParent, const uno::Reference< uno::XComponentContext >& xContext, const uno::Reference< ::uno::XInterface >& xControl,  const css::uno::Reference< css::frame::XModel >& xModel, AbstractGeometryAttributes* pGeomHelper ) : ControlImpl_BASE( xParent, xContext ),  bIsDialog(false), m_xControl( xControl ), m_xModel( xModel )
+ {
+     //add listener
+     m_xEventListener.set( new ScVbaControlListener( this ) );
+@@ -141,9 +145,18 @@ ScVbaControl::ScVbaControl( const uno::Reference< XHelperInterface >& xParent, c
+     uno::Reference< drawing::XControlShape > xControlShape( m_xControl, uno::UNO_QUERY ) ;
+     uno::Reference< awt::XControl> xUserFormControl( m_xControl, uno::UNO_QUERY ) ;
+     if ( xControlShape.is() ) // form control
++    {
+         m_xProps.set( xControlShape->getControl(), uno::UNO_QUERY_THROW );
++        rtl::OUString sDefaultControl;
++        m_xProps->getPropertyValue( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM("DefaultControl") ) ) >>= sDefaultControl;
++        uno::Reference< lang::XMultiComponentFactory > xMFac( mxContext->getServiceManager(), uno::UNO_QUERY_THROW );
++        m_xEmptyFormControl.set( xMFac->createInstanceWithContext( sDefaultControl, mxContext ), uno::UNO_QUERY_THROW );
++    }
+     else if ( xUserFormControl.is() ) // userform control
++    {
+         m_xProps.set( xUserFormControl->getModel(), uno::UNO_QUERY_THROW );
++        bIsDialog = true;
++    }
+ }
+ 
+ ScVbaControl::~ScVbaControl()
+@@ -383,6 +396,75 @@ void SAL_CALL ScVbaControl::setForeColor( ::sal_Int32 _forecolor ) throw (::com:
  {	
  	 m_xProps->setPropertyValue( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( "TextColor" ) ), uno::makeAny( XLRGBToOORGB( _forecolor ) ) );
  }
@@ -150,29 +236,39 @@ index 284bf99..caf018d 100644
 +    xProps->setPropertyValue( ::rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( "Model" ) ), uno::makeAny( m_xModel ) );
 +
 +    // handling for sheet control
-+    uno::Reference< drawing::XControlShape > xControlShape( m_xControl, uno::UNO_QUERY ) ;
-+    uno::Reference< msforms::XControl > xControl( this );
-+    evt.Source = xControl;
++    uno::Reference< msforms::XControl > xThisControl( this );
 +    try
 +    {
++        evt.Arguments.realloc( 1 );
++        lang::EventObject aEvt;
++    
++        uno::Reference< drawing::XControlShape > xControlShape( m_xControl, uno::UNO_QUERY ) ;
++       uno::Reference< awt::XControl > xControl( m_xControl, uno::UNO_QUERY ) ;
++
 +        if ( xControlShape.is() )
 +        {
++            evt.Source = xControlShape;
++            aEvt.Source = m_xEmptyFormControl;
 +            // Set up proper scriptcode
 +            uno::Reference< lang::XMultiServiceFactory > xDocFac(  m_xModel, uno::UNO_QUERY_THROW );
 +            uno::Reference< document::XCodeNameQuery > xNameQuery(  xDocFac->createInstance( rtl::OUString::createFromAscii( "ooo.vba.VBACodeNameProvider" ) ), uno::UNO_QUERY_THROW );
 +            uno::Reference< uno::XInterface > xIf( xControlShape->getControl(), uno::UNO_QUERY_THROW );
 +            evt.ScriptCode = xNameQuery->getCodeNameForObject( xIf );
++            evt.Arguments[ 0 ] = uno::makeAny( aEvt );
 +            xScriptListener->firing( evt );
 +        }
 +        else 
 +        {
-+            uno::Reference< awt::XControl > xControl( m_xControl, uno::UNO_QUERY_THROW );
 +            if ( xControl.is() ) // normal control ( from dialog/userform )
 +            {
-+                uno::Reference< beans::XPropertySet > xProps( xControl, uno::UNO_QUERY_THROW );
-+                rtl::OUString sCodeName;
-+                xProps->getPropertyValue( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM("Name") ) ) >>= sCodeName;
-+                evt.ScriptCode = m_sLibraryName.concat( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( "." ) ) ).concat( sCodeName ); 
++                // #FIXME We should probably store a reference to the 
++                // parent dialog/userform here ( other wise the name of
++                // dialog could be changed and we won't be aware of it.
++                // ( OTOH this is probably an unlikely scenario )
++                evt.Source = xThisControl;
++                aEvt.Source = xControl;
++                evt.ScriptCode = m_sLibraryAndCodeName;
++                evt.Arguments[ 0 ] = uno::makeAny( aEvt );
 +                xScriptListener->firing( evt );
 +            }
 +        }
@@ -187,20 +283,23 @@ index 284bf99..caf018d 100644
 +    evt.ScriptType = rtl::OUString( RTL_CONSTASCII_USTRINGPARAM("VBAInterop") );
 +    evt.ListenerType = form::XChangeListener::static_type(0);
 +    evt.MethodName = rtl::OUString( RTL_CONSTASCII_USTRINGPARAM("changed") );
-+    evt.Arguments.realloc( 1 );
-+    lang::EventObject aEvt;
-+    
-+    uno::Reference< drawing::XControlShape > xControlShape( m_xControl, uno::UNO_QUERY ) ;
-+    if ( xControlShape.is() )
-+        aEvt.Source = xControlShape;
-+    evt.Arguments[ 0 ] = uno::makeAny( aEvt );
 +    fireEvent( evt ); 
 +}
++
++void ScVbaControl::fireClickEvent()
++{
++    script::ScriptEvent evt;
++    evt.ScriptType = rtl::OUString( RTL_CONSTASCII_USTRINGPARAM("VBAInterop") );
++    evt.ListenerType = awt::XActionListener::static_type(0);
++    evt.MethodName = rtl::OUString( RTL_CONSTASCII_USTRINGPARAM("actionPerformed") );
++    fireEvent( evt ); 
++}
++
  //ScVbaControlFactory
  
  ScVbaControlFactory::ScVbaControlFactory( const uno::Reference< uno::XComponentContext >& xContext, const uno::Reference< uno::XInterface >& xControl, const uno::Reference< frame::XModel >& xModel ): m_xContext( xContext ), m_xControl( xControl ), m_xModel( xModel )
 diff --git vbahelper/source/msforms/vbacontrol.hxx vbahelper/source/msforms/vbacontrol.hxx
-index 3d7f67f..f734725 100644
+index 3d7f67f..22e0389 100644
 --- vbahelper/source/msforms/vbacontrol.hxx
 +++ vbahelper/source/msforms/vbacontrol.hxx
 @@ -37,6 +37,7 @@
@@ -211,11 +310,14 @@ index 3d7f67f..f734725 100644
  #include <ooo/vba/msforms/XControl.hpp>
  
  #include <vbahelper/vbahelper.hxx>
-@@ -51,12 +52,15 @@ class ScVbaControl : public ControlImpl_BASE
+@@ -50,13 +51,19 @@ class ScVbaControl : public ControlImpl_BASE
+ {
  private:
      com::sun::star::uno::Reference< com::sun::star::lang::XEventListener > m_xEventListener;
++    com::sun::star::uno::Reference< com::sun::star::awt::XControl > m_xEmptyFormControl;
  protected:
-+    rtl::OUString m_sLibraryName;
++    bool bIsDialog;
++    rtl::OUString m_sLibraryAndCodeName;
      std::auto_ptr< ov::AbstractGeometryAttributes > mpGeometryHelper;
      css::uno::Reference< css::beans::XPropertySet > m_xProps;
      css::uno::Reference< css::uno::XInterface > m_xControl;
@@ -223,39 +325,27 @@ index 3d7f67f..f734725 100644
  
      virtual css::uno::Reference< css::awt::XWindowPeer > getWindowPeer() throw (css::uno::RuntimeException);
 +    void fireChangeEvent();
++    void fireClickEvent();
 +    void fireEvent( css::script::ScriptEvent& evt );
  public:
      ScVbaControl( const css::uno::Reference< ov::XHelperInterface >& xParent, const css::uno::Reference< css::uno::XComponentContext >& xContext, 
                      const css::uno::Reference< css::uno::XInterface >& xControl, const css::uno::Reference< css::frame::XModel >& xModel, ov::AbstractGeometryAttributes* pHelper );
-@@ -64,6 +68,10 @@ public:
+@@ -64,6 +71,10 @@ public:
      // This class will own the helper, so make sure it is allocated from 
      // the heap
      void setGeometryHelper( ov::AbstractGeometryAttributes* pHelper );
 +    // sets the name of the associated library ( used for UserForm controls )
-+    void setLibraryName( const rtl::OUString& sLibName ) { m_sLibraryName = sLibName; }
-+    rtl::OUString getLibraryName() { return m_sLibraryName; }
++    void setLibraryAndCodeName( const rtl::OUString& sLibCodeName ) { m_sLibraryAndCodeName = sLibCodeName; }
++    rtl::OUString getLibraryAndCodeName() { return m_sLibraryAndCodeName; }
 +
      // XControl
      virtual sal_Bool SAL_CALL getEnabled() throw (css::uno::RuntimeException);
      virtual void SAL_CALL setEnabled( sal_Bool _enabled ) throw (css::uno::RuntimeException);
 diff --git vbahelper/source/msforms/vbalistbox.cxx vbahelper/source/msforms/vbalistbox.cxx
-index 175328f..06d4b26 100644
+index 175328f..1f92537 100644
 --- vbahelper/source/msforms/vbalistbox.cxx
 +++ vbahelper/source/msforms/vbalistbox.cxx
-@@ -53,8 +53,12 @@ ScVbaListBox::setListIndex( const uno::Any& _value ) throw (uno::RuntimeExceptio
- {
-     sal_Int32 nIndex = 0;
-     _value >>= nIndex;
-+    sal_Int32 nOldIndex = 0;
-+    getListIndex() >>= nOldIndex;
-     uno::Reference< XPropValue > xPropVal( Selected( nIndex ), uno::UNO_QUERY_THROW );
-     xPropVal->setValue( uno::makeAny( sal_True ) ); 
-+    if ( nIndex != nOldIndex )
-+        fireChangeEvent();
- }
- 
- uno::Any SAL_CALL 
-@@ -111,8 +115,12 @@ ScVbaListBox::setValue( const uno::Any& _value ) throw (uno::RuntimeException)
+@@ -111,8 +111,12 @@ ScVbaListBox::setValue( const uno::Any& _value ) throw (uno::RuntimeException)
                      "Attribute use invalid." ), uno::Reference< uno::XInterface >() );
  
      uno::Sequence< sal_Int16 > nSelectedIndices(1);
@@ -264,28 +354,28 @@ index 175328f..06d4b26 100644
      nSelectedIndices[ 0 ] = nValue;
      m_xProps->setPropertyValue( SELECTEDITEMS, uno::makeAny( nSelectedIndices ) ); 
 +    if ( nSelectedIndices != nOldSelectedIndices )
-+       fireChangeEvent(); 
++        fireClickEvent();
  	//m_xProps->setPropertyValue( TEXT, uno::makeAny( sValue ) );   //liuchen 2009-8-12 solve the problem that ListBox.Text and ListBox.Value cannot be set
  }
  
-@@ -210,6 +218,7 @@ ScVbaListBox::setValueEvent( const uno::Any& value )
+@@ -210,6 +214,7 @@ ScVbaListBox::setValueEvent( const uno::Any& value )
                  }
                  nList.realloc( nLength - 1 );
                  //m_xProps->setPropertyValue( sSourceName, uno::makeAny( nList ) );
-+                fireChangeEvent();
++                fireClickEvent();
  		m_xProps->setPropertyValue( SELECTEDITEMS, uno::makeAny( nList ) );
                  return;
              }
-@@ -228,6 +237,7 @@ ScVbaListBox::setValueEvent( const uno::Any& value )
+@@ -228,6 +233,7 @@ ScVbaListBox::setValueEvent( const uno::Any& value )
              nList[0] = nIndex;
          }
          //m_xProps->setPropertyValue( sSourceName, uno::makeAny( nList ) );
-+        fireChangeEvent();
++        fireClickEvent();
          m_xProps->setPropertyValue( SELECTEDITEMS, uno::makeAny( nList ) );
      }
  }
 diff --git vbahelper/source/msforms/vbaradiobutton.cxx vbahelper/source/msforms/vbaradiobutton.cxx
-index 5aa9d20..735081f 100644
+index 5aa9d20..ed0df4d 100644
 --- vbahelper/source/msforms/vbaradiobutton.cxx
 +++ vbahelper/source/msforms/vbaradiobutton.cxx
 @@ -73,7 +73,9 @@ void SAL_CALL
@@ -298,17 +388,20 @@ index 5aa9d20..735081f 100644
      if( _value >>= nValue )
      {
          if( nValue == -1)
-@@ -85,6 +87,8 @@ ScVbaRadioButton::setValue( const uno::Any& _value ) throw (uno::RuntimeExceptio
+@@ -85,6 +87,11 @@ ScVbaRadioButton::setValue( const uno::Any& _value ) throw (uno::RuntimeExceptio
              nValue = 1;
      }
      m_xProps->setPropertyValue( STATE, uno::makeAny( nValue ) );
 +    if ( nValue != nOldValue )
++    {
 +        fireChangeEvent();
++        fireClickEvent();
++    }
  }
  
  rtl::OUString& 
 diff --git vbahelper/source/msforms/vbauserform.cxx vbahelper/source/msforms/vbauserform.cxx
-index fef36db..d2e5ab6 100644
+index fef36db..2b53e5a 100644
 --- vbahelper/source/msforms/vbauserform.cxx
 +++ vbahelper/source/msforms/vbauserform.cxx
 @@ -61,6 +61,8 @@ ScVbaUserForm::ScVbaUserForm( uno::Sequence< uno::Any > const& aArgs, uno::Refer
@@ -325,7 +418,7 @@ index fef36db..d2e5ab6 100644
          ScVbaControl* pControl  = dynamic_cast< ScVbaControl* >( xVBAControl.get() );
          pControl->setGeometryHelper( new UserFormGeometryHelper( mxContext, xControl ) );
 +        if ( m_sLibName.getLength() )
-+            pControl->setLibraryName( m_sLibName );
++            pControl->setLibraryAndCodeName( m_sLibName.concat( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( "." ) ) ).concat( getName() ) );
  	return uno::makeAny( xVBAControl );
  }
  
