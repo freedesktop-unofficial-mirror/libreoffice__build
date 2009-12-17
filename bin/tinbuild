@@ -5,52 +5,89 @@ PAUSE_SECONDS=$((15*60))
 HTML_OUTPUT=0
 SEND_MAIL=0
 NICE=
+OWNER=
 
 ## subroutines
 usage ()
 {
 	echo "Usage: $0 [options]"
 	echo "Options:"
-	echo "-w <N> specify timeout in secs between subsequent pull requests"
-	echo "-i     when given: run with ionice -c3, can be combined with -n"
-	echo "-l     when given: write html build log"
-	echo "-m     when given: mail errors to last committer"
-	echo "-n     when given: run with nice, can be combined with -i"
-	echo "-h     this help"
+	echo "-w <N>     specify timeout in secs between subsequent pull requests"
+	echo "-i         when given: run with ionice -c3, can be combined with -n"
+	echo "-l         when given: write html build log"
+	echo "-m <owner> when given: mail errors to the committer, general errors to the <owner>"
+	echo "-n         when given: run with nice, can be combined with -i"
+	echo "-h         this help"
 }
 
 reportError ()
 {
+	error_kind="$1"
+	shift
+
 	commit=`git log '--pretty=format:%h %cn - %s' -n1`
-	committer_mail=`git log '--pretty=format:%ce' -n1`
+
+	to_mail=
+	if test "$SEND_MAIL" -eq 1; then
+		case "$error_kind" in
+			owner) to_mail="$OWNER"
+			       message="box broken" ;;
+			*)     to_mail=`git log '--pretty=format:%ce' -n1`
+			       message="last commit: $commit" ;;
+		esac
+	fi
 
 	echo "$*" 1>&2
 	echo "Last commit: $commit" 1>&2
-	if test $SEND_MAIL -eq 1; then
-		subject="tinderbox failure, last commit: $commit"
-		echo "$*" | mail -s "$subject" "$committer_mail"
+	if test -n "$to_mail" ; then
+		subject="Tinderbox failure, $message"
+		(
+			echo "On a tinderbox"
+			echo "  `uname -a`"
+			echo "configured with:"
+			grep '\$ \.\/configure' config.log
+			echo
+			echo "$*"
+		) | mail -s "$subject" "$to_mail"
+	else
+		echo "$*" 1>&2
+		if test "$error_kind" = "owner" ; then
+			exit 1
+		fi
 	fi
 }
 
 ## code
-while getopts w:ilmnh opt ; do
+while getopts hilm:nw: opt ; do
 	case "$opt" in
 		w) PAUSE_SECONDS="$OPTARG" ;;
 		i) NICE="$NICE ionice -c3" ;;
 		l) HTML_OUTPUT=1 ;;
-		m) SEND_MAIL=1 ;;
+		m) SEND_MAIL=1 ; OWNER="$OPTARG" ;;
 		n) NICE="$NICE nice" ;;
 		h) usage; exit ;;
 		?) usage; exit ;;
 	esac
 done
 
+# sanity checks
 which git > /dev/null 2>&1 || {
     echo "You need git for this!"
 	exit 1
 }
+
+if test "$SEND_MAIL" -eq 1 -a -z "$OWNER" ; then
+	echo "Configured to sending mails, but owner not set - deliberate?"
+fi
+if test -n "$OWNER" -a "$OWNER" = "${OWNER/@/_}" ; then
+	echo "The owner address '$OWNER' does not look like an email address."
+	exit 1
+fi
+
+# for build.pl
 test $HTML_OUTPUT -eq 1 && export BUILD_HTML_OUTPUT=true
 
+# main
 good_head=""
 while true; do
 	err_msg=""
@@ -60,11 +97,11 @@ while true; do
 
 	# try to build
 	if ! err_msg=$(./autogen.sh 2>&1); then
-		reportError "autogen.sh / configure failed - error is:" $'\n' "$err_msg"
+		reportError committer "autogen.sh / configure failed - error is:" $'\n' "$err_msg"
 	elif ! err_msg=$(./download 2>&1); then
-		reportError "download failed - error is:" $'\n' "$err_msg"
+		reportError committer "download failed - error is:" $'\n' "$err_msg"
 	elif ! $NICE make dev-install >build.log 2>&1 ; then
-		reportError "building failed - error is:" $'\n' $(tail -n50 build.log)
+		reportError committer "building failed - error is:" $'\n' $(tail -n50 build.log)
 	else
 		echo build done
 
@@ -74,8 +111,9 @@ while true; do
 		good_head=$(git rev-parse --verify HEAD)
 		mv build "build-$good_head" || 
 		{
-			test -z "$prev_head" || echo "Leaving build-$prev_head around, exiting now"
-			exit 1
+			msg=
+			test -z "$prev_head" || msg=$'\n' "Leaving build-$prev_head around, exiting now"
+			reportError owner "Cannot move 'build' to 'build-$good_head'" "$msg"
 		}
 
 		if test -n "$prev_head"; then
@@ -89,10 +127,10 @@ while true; do
 	while true; do
 		old_head=$(git rev-parse --verify HEAD) && err_msg=$(git pull -r 2>&1) || 
 		{
-			echo "git repo f*cked up - error is:"
-			echo $err_msg
-			test -z "$prev_head" || echo "Leaving build-$prev_head around, exiting now"
-			exit 1
+			msg=
+			test -z "$prev_head" || msg=$'\n' "Leaving build-$prev_head around, exiting now"
+
+			reportError owner "git repo f*cked up - error is:" $'\n' $err_msg "$msg"
 		}
 		new_head=$(git rev-parse --verify HEAD)
 		
