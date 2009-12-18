@@ -1,0 +1,104 @@
+diff --git sfx2/inc/sfx2/objsh.hxx sfx2/inc/sfx2/objsh.hxx
+index 9c7e99f..c3403e8 100644
+--- sfx2/inc/sfx2/objsh.hxx
++++ sfx2/inc/sfx2/objsh.hxx
+@@ -417,7 +417,7 @@ public:
+         ::com::sun::star::uno::Sequence< sal_Int16 >& aOutParamIndex,
+         ::com::sun::star::uno::Sequence< ::com::sun::star::uno::Any >& aOutParam,
+         bool bRaiseError = true,
+-        ::com::sun::star::uno::Any* aCaller = 0
++        const ::com::sun::star::uno::Any* aCaller = 0
+     );
+ 
+     static ErrCode  CallXScript(
+@@ -428,7 +428,7 @@ public:
+         ::com::sun::star::uno::Sequence< sal_Int16 >& aOutParamIndex,
+         ::com::sun::star::uno::Sequence< ::com::sun::star::uno::Any >& aOutParam,
+         bool bRaiseError = true,
+-        ::com::sun::star::uno::Any* aCaller = 0
++        const ::com::sun::star::uno::Any* aCaller = 0
+     );
+ 
+     /** adjusts the internal macro mode, according to the current security settings
+diff --git sfx2/source/doc/objmisc.cxx sfx2/source/doc/objmisc.cxx
+index 1909e6b..30e2ca7 100644
+--- sfx2/source/doc/objmisc.cxx
++++ sfx2/source/doc/objmisc.cxx
+@@ -1686,7 +1686,7 @@ namespace
+ }
+ 
+ ErrCode SfxObjectShell::CallXScript( const Reference< XInterface >& _rxScriptContext, const ::rtl::OUString& _rScriptURL,
+-    const Sequence< Any >& aParams, Any& aRet, Sequence< sal_Int16 >& aOutParamIndex, Sequence< Any >& aOutParam, bool bRaiseError, ::com::sun::star::uno::Any* pCaller )
++    const Sequence< Any >& aParams, Any& aRet, Sequence< sal_Int16 >& aOutParamIndex, Sequence< Any >& aOutParam, bool bRaiseError, const ::com::sun::star::uno::Any* pCaller )
+ {
+     OSL_TRACE( "in CallXScript" );
+     ErrCode nErr = ERRCODE_NONE;
+@@ -1760,7 +1760,7 @@ ErrCode SfxObjectShell::CallXScript( const String& rScriptURL,
+         ::com::sun::star::uno::Any& aRet,
+         ::com::sun::star::uno::Sequence< sal_Int16 >& aOutParamIndex,
+         ::com::sun::star::uno::Sequence< ::com::sun::star::uno::Any >&
+-            aOutParam, bool bRaiseError, ::com::sun::star::uno::Any* pCaller )
++            aOutParam, bool bRaiseError, const ::com::sun::star::uno::Any* pCaller )
+ {
+     return CallXScript( GetModel(), rScriptURL, aParams, aRet, aOutParamIndex, aOutParam, bRaiseError, pCaller );
+ }
+diff --git svx/source/msfilter/msvbahelper.cxx svx/source/msfilter/msvbahelper.cxx
+index 7919fb6..3761b62 100644
+--- svx/source/msfilter/msvbahelper.cxx
++++ svx/source/msfilter/msvbahelper.cxx
+@@ -361,40 +361,24 @@ sal_Bool executeMacro( SfxObjectShell* pShell, const String& sMacroName, uno::Se
+     uno::Sequence< uno::Any > aOutArgs;
+ 
+     try
+-    {    
+-        uno::Reference< script::provider::XScriptProvider > xScriptProvider;
+-        uno::Reference< script::provider::XScriptProviderSupplier > xSPS( pShell->GetModel(), uno::UNO_QUERY_THROW );
+-
+-        xScriptProvider.set( xSPS->getScriptProvider(), uno::UNO_QUERY_THROW );
+-
+-        uno::Reference< script::provider::XScript > xScript( xScriptProvider->getScript( sUrl ), uno::UNO_QUERY_THROW );
+-
+-        if ( aCaller.hasValue() )
++    {   ErrCode nErr( ERRCODE_BASIC_INTERNAL_ERROR );
++        if ( pShell )
+         {
+-            uno::Reference< beans::XPropertySet > xProps( xScript, uno::UNO_QUERY );
+-            if ( xProps.is() )
++            uno::Any aRet;
++            nErr = pShell->CallXScript( sUrl,
++                               aArgs, aRet, aOutArgsIndex, aOutArgs, false, &aCaller ); 
++            sal_Int32 nLen = aOutArgs.getLength();
++            // convert any out params to seem like they were inouts
++            if ( nLen )
+             {
+-                uno::Sequence< uno::Any > aCallerHack(1);
+-                aCallerHack[ 0 ] = aCaller;
+-                xProps->setPropertyValue( rtl::OUString::createFromAscii( "Caller" ), uno::makeAny( aCallerHack ) );
+-            }
+-        }
+-
+-
+-        xScript->invoke( aArgs, aOutArgsIndex, aOutArgs  );
+-        
+-        sal_Int32 nLen = aOutArgs.getLength();
+-        // convert any out params to seem like they were inouts
+-        if ( nLen )
+-        {
+-            for ( sal_Int32 index=0; index < nLen; ++index )
+-            {
+-                sal_Int32 nOutIndex = aOutArgsIndex[ index ];
+-                aArgs[ nOutIndex ] = aOutArgs[ index ];
+-           }
++                for ( sal_Int32 index=0; index < nLen; ++index )
++                {
++                    sal_Int32 nOutIndex = aOutArgsIndex[ index ];
++                    aArgs[ nOutIndex ] = aOutArgs[ index ];
++                }
++            } 
+         }
+-
+-        bRes = sal_True;
++        bRes = ( nErr == ERRCODE_NONE );
+     }
+     catch ( uno::Exception& e )
+     {
