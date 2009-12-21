@@ -19,6 +19,7 @@ EXTRA_DIST=\
 	ooobitmap_nld.bmp \
 	openintro_nld.bmp \
 	openabout_nld.bmp \
+	openintro_nld_eval.bmp \
 	openintro_ark.bmp \
 	openabout_ark.png \
 	openintro_fw.bmp \
