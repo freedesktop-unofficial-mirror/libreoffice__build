@@ -1,0 +1,81 @@
+diff --git sc/inc/segmenttree.hxx sc/inc/segmenttree.hxx
+index 3199f7d..3522d9b 100644
+--- sc/inc/segmenttree.hxx
++++ sc/inc/segmenttree.hxx
+@@ -83,6 +83,8 @@ public:
+     void removeSegment(SCROW nRow1, SCROW nRow2);
+     void insertSegment(SCROW nRow, SCROW nSize, bool bSkipStartBoundary);
+ 
++    SCROW findLastNotOf(bool bValue) const;
++
+ private:
+     ::std::auto_ptr<ScFlatBoolSegmentsImpl> mpImpl;
+ };
+diff --git sc/source/core/data/segmenttree.cxx sc/source/core/data/segmenttree.cxx
+index e852efd..7097157 100644
+--- sc/source/core/data/segmenttree.cxx
++++ sc/source/core/data/segmenttree.cxx
+@@ -352,6 +352,11 @@ void ScFlatBoolRowSegments::insertSegment(SCROW nRow, SCROW nSize, bool bSkipSta
+     mpImpl->insertSegment(static_cast<SCCOLROW>(nRow), static_cast<SCCOLROW>(nSize), bSkipStartBoundary);
+ }
+ 
++SCROW ScFlatBoolRowSegments::findLastNotOf(bool bValue) const
++{
++    return static_cast<SCROW>(mpImpl->findLastNotOf(bValue));
++}
++
+ // ============================================================================
+ 
+ ScFlatBoolColSegments::ScFlatBoolColSegments() :
+diff --git sc/source/core/data/table2.cxx sc/source/core/data/table2.cxx
+index f0a0815..35c126d 100644
+--- sc/source/core/data/table2.cxx
++++ sc/source/core/data/table2.cxx
+@@ -2689,11 +2689,32 @@ BYTE ScTable::GetRowFlags( SCROW nRow ) const
+ 
+ SCROW ScTable::GetLastFlaggedRow() const
+ {
+-    if ( !pRowFlags )
+-        return 0;
++    SCROW nLastFound = 0;
++    if (pRowFlags)
++    {    
++        SCROW nRow = pRowFlags->GetLastAnyBitAccess( 0, sal::static_int_cast<BYTE>(CR_ALL) );
++        if (ValidRow(nRow))
++            nLastFound = nRow;
++    }
+ 
+-    SCROW nLastFound = pRowFlags->GetLastAnyBitAccess( 0, sal::static_int_cast<BYTE>(CR_ALL) );
+-    return ValidRow(nLastFound) ? nLastFound : 0;
++    if (!maRowManualBreaks.empty())
++        nLastFound = ::std::max(nLastFound, *maRowManualBreaks.rbegin());
++
++    if (mpHiddenRows)
++    {
++        SCROW nRow = mpHiddenRows->findLastNotOf(false);
++        if (ValidRow(nRow))
++            nLastFound = ::std::max(nLastFound, nRow);
++    }
++
++    if (mpFilteredRows)
++    {
++        SCROW nRow = mpFilteredRows->findLastNotOf(false);
++        if (ValidRow(nRow))
++            nLastFound = ::std::max(nLastFound, nRow);
++    }
++
++    return nLastFound;
+ }
+ 
+ 
+@@ -2716,9 +2737,7 @@ SCROW ScTable::GetLastChangedRow() const
+     if ( !pRowFlags )
+         return 0;
+ 
+-    SCROW nLastFlags = pRowFlags->GetLastAnyBitAccess( 0, sal::static_int_cast<BYTE>(CR_ALL) );
+-    if (!ValidRow(nLastFlags))
+-        nLastFlags = 0;
++    SCROW nLastFlags = GetLastFlaggedRow();
+ 
+     // Find the last row position where the height is NOT the standard row
+     // height.
