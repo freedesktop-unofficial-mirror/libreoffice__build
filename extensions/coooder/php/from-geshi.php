@@ -230,7 +230,14 @@ if (is_file($geshiFile)) {
     foreach ($language_data['KEYWORDS'] as $key => $keywordsSet) {
         $setId = "keywords_$key";
 
-        $keywords .= "<l:set id=\"$setId\">" . getLF($optimize);
+        // True is the default value for case sensitivity: don't set it
+        $caseSensitive = $language_data['CASE_SENSITIVE'][$setId];
+        if ( $caseSensitive == null || !$commentSensitive ) {
+            $caseSensitive = " caseSensitive=\"false\"";
+        }
+
+
+        $keywords .= "<l:set id=\"$setId\"$caseSensitive>" . getLF($optimize);
         foreach ($keywordsSet as $keyword) {
             $keywords .= "<l:value>" . htmlentities($keyword) . "</l:value>" . getLF($optimize);
         }
