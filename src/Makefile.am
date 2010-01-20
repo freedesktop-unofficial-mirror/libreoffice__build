@@ -12,6 +12,9 @@ EXTRA_DIST=\
 	mono-ooo.pc.in \
 	nologoinstall_go-oo.bmp \
 	nologoinstall_nld.bmp \
+	ooosetup_go-oo.ico \
+	ooobanner_go-oo.bmp \
+	ooobitmap_go-oo.bmp \
 	openintro_go-oo.bmp \
 	openabout_go-oo.bmp \
 	ooosetup_nld.ico \
