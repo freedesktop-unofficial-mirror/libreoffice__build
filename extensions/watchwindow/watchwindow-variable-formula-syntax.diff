@@ -1,0 +1,385 @@
+diff --git src/org/openoffice/extensions/watchwindow/Controller.java src/org/openoffice/extensions/watchwindow/Controller.java
+index c3da795..8f0513f 100644
+--- src/org/openoffice/extensions/watchwindow/Controller.java
++++ src/org/openoffice/extensions/watchwindow/Controller.java
+@@ -1,16 +1,24 @@
+ package org.openoffice.extensions.watchwindow;
+ 
+ import com.sun.star.awt.Point;
++import com.sun.star.container.XIndexAccess;
+ import com.sun.star.container.XNamed;
+ import com.sun.star.frame.XController;
++import com.sun.star.frame.XDesktop;
+ import com.sun.star.frame.XFrame;
+ import com.sun.star.frame.XModel;
+ import com.sun.star.lang.IndexOutOfBoundsException;
+ import com.sun.star.lang.Locale;
+ import com.sun.star.lang.WrappedTargetException;
++import com.sun.star.lang.XComponent;
+ import com.sun.star.lang.XLocalizable;
+ import com.sun.star.lang.XMultiComponentFactory;
++import com.sun.star.lang.XMultiServiceFactory;
++import com.sun.star.sheet.FormulaToken;
++import com.sun.star.sheet.ReferenceFlags;
++import com.sun.star.sheet.SingleReference;
+ import com.sun.star.sheet.XCellAddressable;
++import com.sun.star.sheet.XFormulaParser;
+ import com.sun.star.sheet.XSpreadsheet;
+ import com.sun.star.sheet.XSpreadsheetDocument;
+ import com.sun.star.sheet.XSpreadsheetView;
+@@ -20,6 +28,7 @@ import com.sun.star.table.XCell;
+ import com.sun.star.table.XCellRange;
+ import com.sun.star.table.XColumnRowRange;
+ import com.sun.star.table.XTableColumns;
++import com.sun.star.uno.AnyConverter;
+ import com.sun.star.uno.Exception;
+ import com.sun.star.uno.UnoRuntime;
+ import com.sun.star.uno.XComponentContext;
+@@ -34,9 +43,10 @@ public class Controller {
+     private   DataModel              m_DataModel         = null;
+     private   XModel                 m_xModel            = null;
+     private   XMultiComponentFactory m_xServiceManager   = null;
++    private   XFormulaParser         m_xFormulaParser    = null;
+     private   XSpreadsheetDocument   m_xDocument         = null;
+-    private   String                 m_selectedCellName  = null;
+     private   String                 m_selectedSheetName = null;
++    private   FormulaToken           m_selectedCell      = null;
+     private   XSpreadsheet           m_xValidSheet       = null;
+     private static short             _numer              = 0;
+    
+@@ -57,6 +67,24 @@ public class Controller {
+         return m_xModel;
+     }
+     
++    public XFormulaParser getFormulaParser() {
++        if (m_xFormulaParser == null) {
++            try {
++                // We need to get a service factory from the desktop instance 
++                // in order to instantiate the formula parser.
++                Object oDesktop = m_xServiceManager.createInstanceWithContext("com.sun.star.frame.Desktop", m_xContext);
++                XDesktop xDesktop = (XDesktop)UnoRuntime.queryInterface(XDesktop.class, oDesktop);
++                XMultiServiceFactory xSrvMgr = (XMultiServiceFactory)UnoRuntime.queryInterface(
++                    XMultiServiceFactory.class, xDesktop.getCurrentComponent());
++                Object oParser = xSrvMgr.createInstance("com.sun.star.sheet.FormulaParser");
++                m_xFormulaParser = (XFormulaParser)UnoRuntime.queryInterface(XFormulaParser.class, oParser);
++            } catch (Exception ex) {
++                ex.printStackTrace();
++            }
++        }
++        return m_xFormulaParser;
++    }
++
+     public Locale getLocation() { 
+         Locale locale = null;
+         try {
+@@ -114,8 +142,44 @@ public class Controller {
+     public String getSheetName(XSpreadsheet xSheet){
+         XNamed xNamed = (XNamed)UnoRuntime.queryInterface(XNamed.class, xSheet);
+         return xNamed.getName();
+-    } 
+-    
++    }
++
++    private FormulaToken getRefToken(XCell xCell) {
++        
++        XCellAddressable xCellAddr =  (XCellAddressable)UnoRuntime.queryInterface(
++            XCellAddressable.class, xCell);
++        CellAddress addr = xCellAddr.getCellAddress();
++        SingleReference ref = new SingleReference();
++        ref.Column = addr.Column;
++        ref.Row    = addr.Row;
++        ref.Sheet  = addr.Sheet;
++        ref.Flags = ReferenceFlags.SHEET_3D;
++        FormulaToken token = new FormulaToken();
++        token.OpCode = 0;
++        token.Data = ref;
++        return token;
++    }
++
++    private XSpreadsheet getSheetByIndex(int index) {
++        if (m_xDocument == null)
++            return null;
++
++        XIndexAccess xIA = (XIndexAccess)UnoRuntime.queryInterface(
++            XIndexAccess.class, m_xDocument.getSheets());
++
++        if (index >= xIA.getCount()) {
++            return null;
++        }
++
++        try {
++            XSpreadsheet xSheet = (XSpreadsheet)UnoRuntime.queryInterface(
++                XSpreadsheet.class, xIA.getByIndex(index));
++            return xSheet;
++        } catch (Exception ex) {
++        }
++        return null;
++    }  
++
+     public String getCellNameWithDollars(XCell xCell) throws Exception{
+         String cellName ="";
+         Point address = getCellAdress(xCell);
+@@ -170,68 +234,38 @@ public class Controller {
+     }
+     
+     public boolean isValidSelectedName(String selectAreaName){
+-        int length = selectAreaName.length();
+-        if(length>5){
+-            m_selectedCellName  = "";
+-            m_selectedSheetName = "";
+-            short index = 0;
+-            short m = 0;
+-            char[] selectedCellCharName = selectAreaName.toCharArray();
+-            if(index>=length || selectedCellCharName[index++]!='$')
+-                return false;
+-            while(index<length && selectedCellCharName[index]!='.' ){
+-                m_selectedSheetName += selectedCellCharName[index];
+-                m++;
+-                index++;
+-            }  
+-            if(m==0 || index>=length || selectedCellCharName[index++]!='.')
+-                return false;
+-            if(index>=length || selectedCellCharName[index++]!='$')
+-                return false;
+-            m = 0;
+-            while(index<length && selectedCellCharName[index]!='$' && (int)selectedCellCharName[index]>64 && (int)selectedCellCharName[index]<91) {
+-                m_selectedCellName += selectedCellCharName[index];
+-                m++;
+-                index++;
+-            }
+-            if(m==0 || index>=length || selectedCellCharName[index++]!='$')
+-                return false;
+-            m = 0;
+-            while(index<length && (int)selectedCellCharName[index]>47 && (int)selectedCellCharName[index]<58 ) {
+-                m_selectedCellName += selectedCellCharName[index];
+-                m++;
+-                index++;
+-            }
+-            if(m==0)
+-                return false;
+-            Object oSheet = null;
+-            try{
+-                XSpreadsheets xSpreadsheets = m_xDocument.getSheets();
+-                oSheet = xSpreadsheets.getByName(m_selectedSheetName);
+-                if(oSheet == null )
+-                    return false; 
+-            }catch(Exception ex){
+-                ex.printStackTrace();
+-                return false;
+-            }  
+-            m_xValidSheet = (XSpreadsheet)UnoRuntime.queryInterface(XSpreadsheet.class, oSheet);
+-             if(m_xValidSheet != null )
+-                 return true;
++        XFormulaParser xParser = getFormulaParser();
++        CellAddress origin = new CellAddress();
++        FormulaToken[] tokens = xParser.parseFormula(selectAreaName, origin);
++        if (tokens.length == 0)
++            return false;
++
++        FormulaToken token = tokens[0];
++        if (token.OpCode != 0)
++            // This is undocumented, but a reference token has an opcode of 0.
++            // This may change in the future, to probably a named constant 
++            // value.
++            return false;
++
++        if (SingleReference.class != token.Data.getClass())
++            // this must be a single cell reference.
++            return false;
++
++        SingleReference ref = (SingleReference)token.Data;
++        m_xValidSheet = getSheetByIndex(ref.Sheet);
++        if (m_xValidSheet == null) {
++            return false;
+         }
+-        return false;
++        m_selectedSheetName = getSheetName(m_xValidSheet);
++        m_selectedCell = token;
++        return true;
+     }
+     
+     public void addCell() {
+-        try {
+-            String cellName = "";
+-            XSpreadsheet activeSheet = getActiveSheet();
+-            XCell activeCell = getActiveCell();
+-            cellName = "$" + getSheetName(activeSheet) + "." + getCellNameWithDollars(activeCell);
+-            m_Gui.cellSelection(cellName);
+-        } catch (Exception ex) {
+-            ex.printStackTrace();
+-        }
+-          
++        FormulaToken token = getRefToken(getActiveCell());
++        FormulaToken[] tokens = { token };
++        String cellName = getFormulaParser().printFormula(tokens, new CellAddress());
++        m_Gui.cellSelection(cellName);
+     }
+     
+     public void removeCell()  {
+@@ -248,15 +282,16 @@ public class Controller {
+     }
+ 
+     public void done(String selectAreaName) throws Exception {
+-            if(isValidSelectedName(selectAreaName)){
+-                if(m_DataModel == null)
+-                    m_DataModel = new DataModel(this);
+-                m_DataModel.addToDataList( m_xValidSheet, m_selectedSheetName, m_selectedCellName);
+-                m_Gui.setVisible(true);
+-            }else{
+-                m_Gui.setVisible(true);
+-                m_Gui.showMessageBox(0);
+-            }         
++        if (isValidSelectedName(selectAreaName)) {
++            if(m_DataModel == null)
++                m_DataModel = new DataModel(this);
++            m_DataModel.addToDataList( m_xValidSheet, m_selectedSheetName, m_selectedCell);
++            m_Gui.setVisible(true);
++        } else {
++            m_Gui.setVisible(true);
++            m_Gui.showMessageBox(0);
++        }         
+     }
+     
+-}
+\ No newline at end of file
++}
++
+diff --git src/org/openoffice/extensions/watchwindow/DataModel.java src/org/openoffice/extensions/watchwindow/DataModel.java
+index 230919b..d4a6ca6 100644
+--- src/org/openoffice/extensions/watchwindow/DataModel.java
++++ src/org/openoffice/extensions/watchwindow/DataModel.java
+@@ -1,5 +1,6 @@
+ package org.openoffice.extensions.watchwindow;
+ 
++import com.sun.star.sheet.FormulaToken;
+ import com.sun.star.sheet.XSpreadsheet;
+ import java.util.ArrayList;
+ import java.util.List;
+@@ -19,11 +20,11 @@ public class DataModel {
+         return m_Controller;
+     }
+     
+-    public void addToDataList(XSpreadsheet xValidSheet, String selectedSheetName, String selectedCellName) {   
++    public void addToDataList(XSpreadsheet xValidSheet, String selectedSheetName, FormulaToken selectedCell) {   
+         boolean bool = true;
+         short num = 0;
+         for(WatchedCell item: m_list){
+-            if(item.getSheetName().equals(selectedSheetName) && item.getCellName().equals(selectedCellName)){
++            if(item.getSheetName().equals(selectedSheetName) && item.getCellPos().equals(selectedCell)){
+                 bool = false;
+                 num = item.getNum();
+                 if(num == (short)-1){
+@@ -34,7 +35,7 @@ public class DataModel {
+             }
+          }
+          if(bool){
+-            m_list.add(new WatchedCell(getController(), xValidSheet, selectedSheetName, selectedCellName, getController().getNumer()));
++            m_list.add(new WatchedCell(getController(), xValidSheet, selectedSheetName, selectedCell, getController().getNumer()));
+             getController().increaseNumer(); 
+         }
+     }
+diff --git src/org/openoffice/extensions/watchwindow/WatchedCell.java src/org/openoffice/extensions/watchwindow/WatchedCell.java
+index 1a98417..7ef7ae1 100644
+--- src/org/openoffice/extensions/watchwindow/WatchedCell.java
++++ src/org/openoffice/extensions/watchwindow/WatchedCell.java
+@@ -6,10 +6,15 @@ import com.sun.star.document.XEventListener;
+ import com.sun.star.frame.XModel;
+ import com.sun.star.lang.EventObject;
+ import com.sun.star.lang.IndexOutOfBoundsException;
++import com.sun.star.sheet.FormulaToken;
++import com.sun.star.sheet.ReferenceFlags;
++import com.sun.star.sheet.SingleReference;
+ import com.sun.star.sheet.XCellRangeAddressable;
++import com.sun.star.sheet.XFormulaParser;
+ import com.sun.star.sheet.XSpreadsheet;
+ import com.sun.star.sheet.XSpreadsheetDocument;
+ import com.sun.star.sheet.XSpreadsheetView;
++import com.sun.star.table.CellAddress;
+ import com.sun.star.table.CellRangeAddress;
+ import com.sun.star.table.XCell;
+ import com.sun.star.table.XCellRange;
+@@ -22,6 +27,7 @@ import com.sun.star.util.XModifyListener;
+ public class WatchedCell implements XModifyListener, XEventListener{
+ 
+     private Controller           m_Controller              = null;
++    private FormulaToken         m_cellPos                 = null;
+     private String               m_sheetName               = "";
+     private String               m_cellName                = "";
+     private String               m_value                   = "";
+@@ -36,12 +42,12 @@ public class WatchedCell implements XModifyListener, XEventListener{
+     private XEventBroadcaster    m_xEventBroadcaster       = null;
+     private String               m_modifySheetName         = "";
+    
+-    public WatchedCell(Controller controller, XSpreadsheet xSpreadsheet, String sheetName, String cellName, short numer) {
++    public WatchedCell(Controller controller, XSpreadsheet xSpreadsheet, String sheetName, FormulaToken cellPos, short numer) {
+         try {
+             m_Controller = controller;
+             m_xSpreadsheet = xSpreadsheet;
+             m_sheetName = m_modifySheetName = sheetName;
+-            m_cellName = cellName;
++            m_cellPos = cellPos;
+             m_num = numer;
+             init();
+             adjustCounter();
+@@ -52,10 +58,8 @@ public class WatchedCell implements XModifyListener, XEventListener{
+     }
+     
+     public void init() throws IndexOutOfBoundsException {
+-        XCellRange xCellRange = m_xSpreadsheet.getCellRangeByName(getCellName());
+-        XCellRangeAddressable xRangeAddr = (XCellRangeAddressable)UnoRuntime.queryInterface(XCellRangeAddressable.class, xCellRange);
+-        CellRangeAddress cellAddress = xRangeAddr.getRangeAddress();
+-        m_xCell = m_xSpreadsheet.getCellByPosition(cellAddress.StartColumn, cellAddress.StartRow);
++        SingleReference ref = (SingleReference)m_cellPos.Data;
++        m_xCell = m_xSpreadsheet.getCellByPosition(ref.Column, ref.Row);
+         setValue();
+         setFormula(); 
+         m_xDocument = getController().getDocument(); 
+@@ -106,25 +110,27 @@ public class WatchedCell implements XModifyListener, XEventListener{
+        m_sheetName = xNamed.getName();
+     }
+     
+-    public void setSheetName(String sheetName){
+-        m_sheetName = sheetName;
+-    }
+-    
+     public String getSheetNameWithSpaces(){
+         return getController().createStringWithSpace(getSheetName(), 27);
+     }
+-    public String getCellName(){
+-        return m_cellName;
++
++    public String getCellName() {
++        SingleReference ref = (SingleReference)m_cellPos.Data;
++        // We don't want to display the sheet name, and the cell position should be absolute, not relative.
++        ref.Flags = 0; 
++        FormulaToken[] tokens = { m_cellPos };
++        XFormulaParser xParser = m_Controller.getFormulaParser();
++        return xParser.printFormula(tokens, new CellAddress());
++    }
++
++    public FormulaToken getCellPos() {
++        return m_cellPos;
+     }
+     
+     public String getCellNameWithSpaces(){
+         return getController().createStringWithSpace(getCellName(), 15);
+     }
+-    
+-    public void setCellName(String cellName){
+-        m_cellName = cellName;
+-    }
+-    
++        
+     public void setValue() { 
+         XText xText = (XText)UnoRuntime.queryInterface(XText.class, m_xCell);
+         m_value = xText.getString();
+@@ -150,9 +156,6 @@ public class WatchedCell implements XModifyListener, XEventListener{
+         }
+     }
+     
+-    public void setFormula(String formula){
+-        m_formula = formula;
+-    }
+     public String getFormula(){
+         return m_formula;
+     }
