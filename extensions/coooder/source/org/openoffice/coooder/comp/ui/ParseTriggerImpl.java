@@ -20,13 +20,12 @@ package org.openoffice.coooder.comp.ui;
 
 import java.util.Calendar;
 
-import org.openoffice.coooder.comp.HighlighterImpl;
-
 import org.openoffice.coooder.XHighlighter;
 import org.openoffice.coooder.XLanguage;
 import org.openoffice.coooder.theLanguagesManager;
 
 import com.sun.star.frame.XDesktop;
+import com.sun.star.frame.XFrame;
 import com.sun.star.frame.XModel;
 import com.sun.star.lang.XComponent;
 import com.sun.star.lang.XMultiComponentFactory;
@@ -36,6 +35,8 @@ import com.sun.star.lib.uno.helper.Factory;
 import com.sun.star.lib.uno.helper.WeakBase;
 import com.sun.star.registry.XRegistryKey;
 import com.sun.star.task.XJobExecutor;
+import com.sun.star.task.XStatusIndicator;
+import com.sun.star.task.XStatusIndicatorFactory;
 import com.sun.star.uno.UnoRuntime;
 import com.sun.star.uno.XComponentContext;
 
@@ -94,7 +95,7 @@ public final class ParseTriggerImpl extends WeakBase implements XServiceInfo, XJ
     
     public void trigger(String pEvent)
     {
-        ProgressDialog monitor = null;
+        XStatusIndicator monitor = null;
         try {
             // Check if the selection is a text selection
             XMultiComponentFactory xMngr = mContext.getServiceManager();
@@ -108,7 +109,7 @@ public final class ParseTriggerImpl extends WeakBase implements XServiceInfo, XJ
             if (!xInfos.supportsService("com.sun.star.text.TextRanges")) {
                 throw new Exception("Can only highlight code snippets");
             }
-
+            
             // Ask for the language
             String langId = askLanguage();
             
@@ -124,21 +125,27 @@ public final class ParseTriggerImpl extends WeakBase implements XServiceInfo, XJ
 
                 xHighlighter.setLanguage(xLanguage);
                 
-                // Run the progress monitor
-                monitor = new ProgressDialog(mContext);
-                monitor.execute();
-
+                // Create and set the status indicator
+                XFrame xFrm = xDocModel.getCurrentController().getFrame();
+                XStatusIndicatorFactory xStatusFactory = (XStatusIndicatorFactory)UnoRuntime.queryInterface(
+                		XStatusIndicatorFactory.class, xFrm );
+                monitor = xStatusFactory.createStatusIndicator();
+                xHighlighter.setStatusIndicator( monitor );
+                monitor.start( "Hightlighting...", 100 );
+                
+                
                 // Parse the code snippet
                 long debut = Calendar.getInstance().getTimeInMillis();
-                ((HighlighterImpl)xHighlighter).setProgressDialog( monitor );
                 xHighlighter.parse();
                 long fin = Calendar.getInstance().getTimeInMillis();
                 long duree = fin - debut;
                 
                 System.out.println("Highlighting duration: (in ms)" + duree);
+                
+                monitor.end();
             }
         } catch (Exception e) {
-            monitor.updateProgress(100);
+            monitor.end();
             
             String title = "Error during syntax highlighting";
             AbstractDialog.showErrorDialog(mContext, title, e.getMessage());

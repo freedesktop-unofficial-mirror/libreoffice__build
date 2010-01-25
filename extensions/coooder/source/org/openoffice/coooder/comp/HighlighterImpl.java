@@ -21,8 +21,6 @@ package org.openoffice.coooder.comp;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-import org.openoffice.coooder.comp.ui.ProgressDialog;
-
 import org.openoffice.coooder.HighlightingException;
 import org.openoffice.coooder.XHighlighter;
 import org.openoffice.coooder.XLanguage;
@@ -37,6 +35,7 @@ import com.sun.star.lang.XSingleComponentFactory;
 import com.sun.star.lib.uno.helper.Factory;
 import com.sun.star.lib.uno.helper.WeakBase;
 import com.sun.star.registry.XRegistryKey;
+import com.sun.star.task.XStatusIndicator;
 import com.sun.star.text.XParagraphCursor;
 import com.sun.star.text.XTextCursor;
 import com.sun.star.text.XTextDocument;
@@ -72,7 +71,7 @@ public final class HighlighterImpl extends WeakBase implements XServiceInfo, XHi
     private XTextDocument mTextDocument;
     private int mLength;
     
-    private ProgressDialog mProgressDlg;
+    private XStatusIndicator mStatus;
 
     public HighlighterImpl(XComponentContext pContext) {
         mContext = pContext;
@@ -125,6 +124,10 @@ public final class HighlighterImpl extends WeakBase implements XServiceInfo, XHi
     public void setLanguage(XLanguage pLanguage) {
         mLanguage = pLanguage;
     }
+    
+	public void setStatusIndicator(XStatusIndicator pStatus) {
+		mStatus = pStatus;
+	}
     
     public void parse() throws HighlightingException {
         XMultiComponentFactory mngr = mContext.getServiceManager();
@@ -330,13 +333,9 @@ public final class HighlighterImpl extends WeakBase implements XServiceInfo, XHi
 
     //-------------------------------------------------------- Internal methods
    
-    public void setProgressDialog(ProgressDialog pDlg) {
-        mProgressDlg = pDlg;
-    }
-
     private void updateProgress(int pValue) {
-        if (mProgressDlg != null) {
-            mProgressDlg.updateProgress(pValue);
+        if (mStatus != null) {
+            mStatus.setValue(pValue);
         }
     }
     
