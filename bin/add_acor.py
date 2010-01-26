@@ -44,7 +44,7 @@ def update_zip( file, items ):
     # Actually add the elements in the XML file
     for pair in items:
         node = xmlDoc.createElement( "block-list:block" )
-        node.setAttribute( "block-list:addreviated-name", pair[0] )
+        node.setAttribute( "block-list:abbreviated-name", pair[0] )
         node.setAttribute( "block-list:name", pair[1] )
         xmlDoc.documentElement.appendChild( node )
     
