@@ -1,0 +1,114 @@
+diff --git oox/inc/oox/xls/stylesbuffer.hxx oox/inc/oox/xls/stylesbuffer.hxx
+index 6d2f1c8..ead9f05 100644
+--- oox/inc/oox/xls/stylesbuffer.hxx
++++ oox/inc/oox/xls/stylesbuffer.hxx
+@@ -346,11 +346,12 @@ struct AlignmentModel
+ struct ApiAlignmentData
+ {
+     typedef ::com::sun::star::table::CellHoriJustify ApiCellHoriJustify;
+-    typedef ::com::sun::star::table::CellVertJustify ApiCellVertJustify;
+     typedef ::com::sun::star::table::CellOrientation ApiCellOrientation;
+ 
+     ApiCellHoriJustify  meHorJustify;       /// Horizontal alignment.
+-    ApiCellVertJustify  meVerJustify;       /// Vertical alignment.
++    sal_Int32           mnHorJustifyMethod;
++    sal_Int32           mnVerJustify;       /// Vertical alignment.
++    sal_Int32           mnVerJustifyMethod;
+     ApiCellOrientation  meOrientation;      /// Normal or stacked text.
+     sal_Int32           mnRotation;         /// Text rotation angle.
+     sal_Int16           mnWritingMode;      /// CTL text direction.
+diff --git oox/source/token/properties.txt oox/source/token/properties.txt
+index 63f53a7..70e1228 100644
+--- oox/source/token/properties.txt
++++ oox/source/token/properties.txt
+@@ -179,6 +179,7 @@ HeaderIsShared
+ Height
+ HideInactiveSelection
+ HoriJustify
++HoriJustifyMethod
+ HorizontalSplitMode
+ HorizontalSplitPositionTwips
+ IgnoreBlankCells
+@@ -398,6 +399,7 @@ VScroll
+ Validation
+ VaryColorsByPoint
+ VertJustify
++VertJustifyMethod
+ VerticalAlign
+ VerticalSplitMode
+ VerticalSplitPositionTwips
+diff --git oox/source/xls/stylesbuffer.cxx oox/source/xls/stylesbuffer.cxx
+index d910767..ac309b5 100644
+--- oox/source/xls/stylesbuffer.cxx
++++ oox/source/xls/stylesbuffer.cxx
+@@ -45,7 +45,8 @@
+ #include <com/sun/star/style/XStyle.hpp>
+ #include <com/sun/star/text/WritingMode2.hpp>
+ #include <com/sun/star/text/XText.hpp>
+-#include <com/sun/star/table/CellVertJustify.hpp>
++#include <com/sun/star/table/CellVertJustify2.hpp>
++#include <com/sun/star/table/CellJustifyMethod.hpp>
+ #include <rtl/tencinfo.h>
+ #include <rtl/ustrbuf.hxx>
+ #include "properties.hxx"
+@@ -1240,7 +1241,9 @@ void AlignmentModel::setBinTextOrient( sal_uInt8 nTextOrient )
+ 
+ ApiAlignmentData::ApiAlignmentData() :
+     meHorJustify( ::com::sun::star::table::CellHoriJustify_STANDARD ),
+-    meVerJustify( ::com::sun::star::table::CellVertJustify_STANDARD ),
++    mnHorJustifyMethod( ::com::sun::star::table::CellJustifyMethod::AUTO ),
++    mnVerJustify( ::com::sun::star::table::CellVertJustify2::STANDARD ),
++    mnVerJustifyMethod( ::com::sun::star::table::CellJustifyMethod::AUTO ),
+     meOrientation( ::com::sun::star::table::CellOrientation_STANDARD ),
+     mnRotation( 0 ),
+     mnWritingMode( ::com::sun::star::text::WritingMode2::PAGE ),
+@@ -1254,7 +1257,9 @@ bool operator==( const ApiAlignmentData& rLeft, const ApiAlignmentData& rRight )
+ {
+     return
+         (rLeft.meHorJustify  == rRight.meHorJustify) &&
+-        (rLeft.meVerJustify  == rRight.meVerJustify) &&
++        (rLeft.mnHorJustifyMethod == rRight.mnHorJustifyMethod) &&
++        (rLeft.mnVerJustify  == rRight.mnVerJustify) &&
++        (rLeft.mnVerJustifyMethod == rRight.mnVerJustifyMethod) &&
+         (rLeft.meOrientation == rRight.meOrientation) &&
+         (rLeft.mnRotation    == rRight.mnRotation) &&
+         (rLeft.mnWritingMode == rRight.mnWritingMode) &&
+@@ -1351,16 +1356,22 @@ void Alignment::finalizeImport()
+         case XML_right:             maApiData.meHorJustify = csstab::CellHoriJustify_RIGHT;     break;
+     }
+ 
++    if (maModel.mnHorAlign == XML_distributed)
++        maApiData.mnHorJustifyMethod = csstab::CellJustifyMethod::DISTRIBUTE;
++
+     // vertical alignment
+     switch( maModel.mnVerAlign )
+     {
+-        case XML_bottom:        maApiData.meVerJustify = csstab::CellVertJustify_BOTTOM;    break;
+-        case XML_center:        maApiData.meVerJustify = csstab::CellVertJustify_CENTER;    break;
+-        case XML_distributed:   maApiData.meVerJustify = csstab::CellVertJustify_TOP;       break;
+-        case XML_justify:       maApiData.meVerJustify = csstab::CellVertJustify_TOP;       break;
+-        case XML_top:           maApiData.meVerJustify = csstab::CellVertJustify_TOP;       break;
++        case XML_bottom:        maApiData.mnVerJustify = csstab::CellVertJustify2::BOTTOM;    break;
++        case XML_center:        maApiData.mnVerJustify = csstab::CellVertJustify2::CENTER;    break;
++        case XML_distributed:   maApiData.mnVerJustify = csstab::CellVertJustify2::BLOCK;     break;
++        case XML_justify:       maApiData.mnVerJustify = csstab::CellVertJustify2::BLOCK;     break;
++        case XML_top:           maApiData.mnVerJustify = csstab::CellVertJustify2::TOP;       break;
+     }
+ 
++    if (maModel.mnVerAlign == XML_distributed)
++        maApiData.mnVerJustifyMethod = csstab::CellJustifyMethod::DISTRIBUTE;
++
+     /*  indentation: expressed as number of blocks of 3 space characters in
+         OOX, and as multiple of 10 points in BIFF. */
+     sal_Int32 nIndent = 0;
+@@ -1400,7 +1411,9 @@ void Alignment::finalizeImport()
+ void Alignment::writeToPropertyMap( PropertyMap& rPropMap ) const
+ {
+     rPropMap[ PROP_HoriJustify ]     <<= maApiData.meHorJustify;
+-    rPropMap[ PROP_VertJustify ]     <<= maApiData.meVerJustify;
++    rPropMap[ PROP_HoriJustifyMethod ] <<= maApiData.mnHorJustifyMethod;
++    rPropMap[ PROP_VertJustify ]     <<= maApiData.mnVerJustify;
++    rPropMap[ PROP_VertJustifyMethod ] <<= maApiData.mnVerJustifyMethod;
+     rPropMap[ PROP_WritingMode ]     <<= maApiData.mnWritingMode;
+     rPropMap[ PROP_RotateAngle ]     <<= maApiData.mnRotation;
+     rPropMap[ PROP_RotateReference ] <<= ::com::sun::star::table::CellVertJustify_STANDARD;    // rotation reference
