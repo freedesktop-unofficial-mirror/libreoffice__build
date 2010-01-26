@@ -1,0 +1,96 @@
+Make fixed store files work with old regcomp tools
+
+From: Thorsten Behrens <thb@openoffice.org>
+
+
+---
+
+ store/source/storpage.cxx |    8 ++++----
+ store/source/stortree.cxx |   21 +++++++++++++++------
+ store/source/stortree.hxx |    4 ++--
+ 3 files changed, 21 insertions(+), 12 deletions(-)
+
+
+diff --git store/source/storpage.cxx store/source/storpage.cxx
+index 15d5e5d..f58507c 100644
+--- store/source/storpage.cxx
++++ store/source/storpage.cxx
+@@ -163,11 +163,11 @@ storeError OStorePageManager::initializeManager (
+     __STORE_DELETEZ (m_pLink[2]);
+ 
+     // Initialize page buffers.
+-    m_pNode[0] = new(m_nPageSize) page(m_nPageSize);
++    m_pNode[0] = new(m_nPageSize) page(m_nPageSize, version ());
+     if (eAccessMode != store_AccessReadOnly)
+     {
+-        m_pNode[1] = new(m_nPageSize) page(m_nPageSize);
+-        m_pNode[2] = new(m_nPageSize) page(m_nPageSize);
++        m_pNode[1] = new(m_nPageSize) page(m_nPageSize, version ());
++        m_pNode[2] = new(m_nPageSize) page(m_nPageSize, version ());
+     }
+ 
+     // Initialize page cache.
+@@ -1440,7 +1440,7 @@ storeError OStorePageManager::rebuild (
+     flush();
+ 
+     // Scan 'Source' BTree nodes.
+-    page *pNode = new(m_nPageSize) page(m_nPageSize);
++    page *pNode = new(m_nPageSize) page(m_nPageSize, version());
+     node aNode (*pNode);
+     entry e;
+ 
+diff --git store/source/stortree.cxx store/source/stortree.cxx
+index 0d5c1ca..3c24f94 100644
+--- store/source/stortree.cxx
++++ store/source/stortree.cxx
+@@ -54,20 +54,29 @@ using namespace store;
+ /*
+  * OStoreBTreeNodeData.
+  */
+-OStoreBTreeNodeData::OStoreBTreeNodeData (sal_uInt16 nPageSize)
++OStoreBTreeNodeData::OStoreBTreeNodeData (sal_uInt16 nPageSize, sal_uInt16 nFormatVersion)
+ 	: OStorePageData (nPageSize, sizeof (self))
+ {
+-    initialize();
++    initialize(nFormatVersion);
+ }
+ 
+ /*
+  * initialize.
+  */
+-void OStoreBTreeNodeData::initialize (void)
++void OStoreBTreeNodeData::initialize (sal_uInt16 nFormatVersion)
+ {
+-	base::PageHeader  ().m_aGuard.m_nMagic = STORE_MAGIC_BTREENODE;
+-	base::PageHeader  ().m_aDescr.m_nUsed  = base::size() + self::size();
+-	DataRepresentation().m_aGuard.m_nMagic = 0;
++    if ( nFormatVersion == STORE_FORMAT_V2 )
++    {
++        base::PageHeader ().m_aGuard.m_nMagic = STORE_MAGIC_BTREENODE;
++        base::PageHeader ().m_aDescr.m_nUsed  = base::size() + self::size();
++        self::PageHeader ().m_aGuard.m_nMagic = 0;
++    }
++    else
++    {
++        base::PageHeader  ().m_aGuard.m_nMagic = STORE_MAGIC_BTREENODE;
++        base::PageHeader  ().m_aDescr.m_nUsed  = base::size() + self::size();
++        DataRepresentation().m_aGuard.m_nMagic = 0;
++    }
+ 
+     sal_uInt16 i, n = capacityCount();
+     T          t;
+diff --git store/source/stortree.hxx store/source/stortree.hxx
+index 3ca4d4e..033c7e0 100644
+--- store/source/stortree.hxx
++++ store/source/stortree.hxx
+@@ -188,8 +188,8 @@ struct OStoreBTreeNodeData : public store::OStorePageData
+ 
+     /** Construction.
+     */
+-    OStoreBTreeNodeData (sal_uInt16 nPageSize);
+-    void initialize (void);
++    OStoreBTreeNodeData (sal_uInt16 nPageSize, sal_uInt16 nFormatVersion);
++    void initialize (sal_uInt16 nFormatVersion);
+ 
+     self& operator= (const self& rOther)
+     {
