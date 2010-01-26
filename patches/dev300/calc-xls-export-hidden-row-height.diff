@@ -1,0 +1,89 @@
+diff --git sc/inc/document.hxx sc/inc/document.hxx
+index 4d94701..82b1582 100644
+--- sc/inc/document.hxx
++++ sc/inc/document.hxx
+@@ -1249,7 +1249,7 @@ public:
+     void			SetManualHeight( SCROW nStartRow, SCROW nEndRow, SCTAB nTab, BOOL bManual );
+ 
+     SC_DLLPUBLIC USHORT			GetColWidth( SCCOL nCol, SCTAB nTab ) const;
+-    SC_DLLPUBLIC USHORT			GetRowHeight( SCROW nRow, SCTAB nTab ) const;
++    SC_DLLPUBLIC USHORT         GetRowHeight( SCROW nRow, SCTAB nTab, bool bHiddenAsZero = true ) const;
+     SC_DLLPUBLIC ULONG			GetRowHeight( SCROW nStartRow, SCROW nEndRow, SCTAB nTab ) const;
+     ULONG			GetScaledRowHeight( SCROW nStartRow, SCROW nEndRow, SCTAB nTab, double fScale ) const;
+     SC_DLLPUBLIC ULONG			GetColOffset( SCCOL nCol, SCTAB nTab ) const;
+diff --git sc/inc/table.hxx sc/inc/table.hxx
+index 9606b98..7d6f363 100644
+--- sc/inc/table.hxx
++++ sc/inc/table.hxx
+@@ -613,7 +613,7 @@ public:
+     void		SetManualHeight( SCROW nStartRow, SCROW nEndRow, BOOL bManual );
+ 
+ 	USHORT		GetColWidth( SCCOL nCol );
+-    SC_DLLPUBLIC USHORT GetRowHeight( SCROW nRow, SCROW* pStartRow = NULL, SCROW* pEndRow = NULL );
++    SC_DLLPUBLIC USHORT GetRowHeight( SCROW nRow, SCROW* pStartRow = NULL, SCROW* pEndRow = NULL, bool bHiddenAsZero = true );
+ 	ULONG		GetRowHeight( SCROW nStartRow, SCROW nEndRow );
+ 	ULONG		GetScaledRowHeight( SCROW nStartRow, SCROW nEndRow, double fScale );
+ 	ULONG		GetColOffset( SCCOL nCol );
+diff --git sc/source/core/data/document.cxx sc/source/core/data/document.cxx
+index 65a3cc7..40df826 100644
+--- sc/source/core/data/document.cxx
++++ sc/source/core/data/document.cxx
+@@ -3191,10 +3191,10 @@ USHORT ScDocument::GetOriginalHeight( SCROW nRow, SCTAB nTab ) const
+ }
+ 
+ 
+-USHORT ScDocument::GetRowHeight( SCROW nRow, SCTAB nTab ) const
++USHORT ScDocument::GetRowHeight( SCROW nRow, SCTAB nTab, bool bHiddenAsZero ) const
+ {
+     if ( ValidTab(nTab) && pTab[nTab] )
+-        return pTab[nTab]->GetRowHeight( nRow );
++        return pTab[nTab]->GetRowHeight( nRow, NULL, NULL, bHiddenAsZero );
+     DBG_ERROR("Falsche Tabellennummer");
+     return 0;
+ }
+diff --git sc/source/core/data/table2.cxx sc/source/core/data/table2.cxx
+index 35c126d..7511774 100644
+--- sc/source/core/data/table2.cxx
++++ sc/source/core/data/table2.cxx
+@@ -2307,13 +2307,13 @@ USHORT ScTable::GetCommonWidth( SCCOL nEndCol )
+ }
+ 
+ 
+-USHORT ScTable::GetRowHeight( SCROW nRow, SCROW* pStartRow, SCROW* pEndRow )
++USHORT ScTable::GetRowHeight( SCROW nRow, SCROW* pStartRow, SCROW* pEndRow, bool bHiddenAsZero )
+ {
+     DBG_ASSERT(VALIDROW(nRow),"Falsche Zeilennummer");
+ 
+ 	if (VALIDROW(nRow) && mpRowHeights)
+     {
+-        if (RowHidden(nRow))
++        if (bHiddenAsZero && RowHidden(nRow))
+             return 0;
+         else
+         {
+diff --git sc/source/filter/excel/xetable.cxx sc/source/filter/excel/xetable.cxx
+index 2816daf..ceb708e 100644
+--- sc/source/filter/excel/xetable.cxx
++++ sc/source/filter/excel/xetable.cxx
+@@ -1835,17 +1835,11 @@ XclExpRow::XclExpRow( const XclExpRoot& rRoot, sal_uInt16 nXclRow,
+ 
+     // *** Row height *** -----------------------------------------------------
+ 
+-    USHORT nScHeight = GetDoc().GetRowHeight( nScRow, nScTab );
+-    if( nScHeight == 0 )
+-    {
+-        ::set_flag( mnFlags, EXC_ROW_HIDDEN );
+-        mnHeight = EXC_ROW_DEFAULTHEIGHT;
+-    }
++    if (bUserHeight)
++        mnHeight = GetDoc().GetRowHeight(nScRow, nScTab, false);
+     else
+-    {
+-        // Calc and Excel use twips
+-        mnHeight = static_cast< sal_uInt16 >( nScHeight );
+-    }
++        mnHeight = EXC_ROW_DEFAULTHEIGHT;
++
+     // #76250# not usable in Applix
+ //    ::set_flag( mnHeight, EXC_ROW_FLAGDEFHEIGHT, !bUserHeight );
+ 
