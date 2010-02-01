@@ -1,0 +1,192 @@
+diff -wrup ../../build-orig/ooo320-m8/vcl/unx/gtk/window/gtkframe.cxx vcl/unx/gtk/window/gtkframe.cxx
+--- ../../build-orig/ooo320-m8/vcl/unx/gtk/window/gtkframe.cxx	2010-02-01 15:53:48.000000000 +0100
++++ vcl/unx/gtk/window/gtkframe.cxx	2010-01-29 14:02:18.000000000 +0100
+@@ -842,6 +842,9 @@ void GtkSalFrame::Init( SalFrame* pParen
+             eType = GDK_WINDOW_TYPE_HINT_UTILITY;
+         }
+         
++	if( getDisplay()->getWMAdaptor()->getSmallScreen() && eWinType == GTK_WINDOW_TOPLEVEL && !(nStyle & SAL_FRAME_STYLE_DIALOG ) )
++	    bNoDecor = true;
++
+         gtk_window_set_type_hint( GTK_WINDOW(m_pWindow), eType );
+         if( bNoDecor )
+             gtk_window_set_decorated( GTK_WINDOW(m_pWindow), FALSE );
+@@ -876,7 +879,6 @@ void GtkSalFrame::Init( SalFrame* pParen
+         if( ( (nStyle & (SAL_FRAME_STYLE_OWNERDRAWDECORATION)) ) || bMetaCityToolWindowHack )
+             lcl_set_accept_focus( GTK_WINDOW(m_pWindow), FALSE, false );
+     }
+-    
+ }
+ 
+ GdkNativeWindow GtkSalFrame::findTopLevelSystemWindow( GdkNativeWindow aWindow )
+@@ -1615,6 +1617,9 @@ void GtkSalFrame::SetWindowState( const
+         SAL_FRAMESTATE_MASK_MAXIMIZED_X | SAL_FRAMESTATE_MASK_MAXIMIZED_Y |
+         SAL_FRAMESTATE_MASK_MAXIMIZED_WIDTH | SAL_FRAMESTATE_MASK_MAXIMIZED_HEIGHT;
+     
++    if( getDisplay()->getWMAdaptor()->getSmallScreen() && !(m_nStyle & SAL_FRAME_STYLE_DIALOG) )
++      gtk_window_maximize( GTK_WINDOW(m_pWindow) );
++    else {
+     if( (pState->mnMask & SAL_FRAMESTATE_MASK_STATE) &&
+         ! ( m_nState & GDK_WINDOW_STATE_MAXIMIZED ) &&
+         (pState->mnState & SAL_FRAMESTATE_MAXIMIZED) &&
+@@ -1681,6 +1686,7 @@ void GtkSalFrame::SetWindowState( const
+             gtk_window_deiconify( GTK_WINDOW(m_pWindow) );
+     }
+ }
++}
+ 
+ BOOL GtkSalFrame::GetWindowState( SalFrameState* pState )
+ {
+diff -wrup ../../build-orig/ooo320-m8/vcl/unx/inc/wmadaptor.hxx vcl/unx/inc/wmadaptor.hxx
+--- ../../build-orig/ooo320-m8/vcl/unx/inc/wmadaptor.hxx	2009-12-18 13:41:20.000000000 +0100
++++ vcl/unx/inc/wmadaptor.hxx	2010-01-29 14:16:14.000000000 +0100
+@@ -53,6 +53,7 @@ class VCL_DLLPUBLIC WMAdaptor
+ public:
+     enum WMAtom {
+         // atoms for types
++        STRING,
+         UTF8_STRING,
+ 
+         // atoms for extended WM hints
+@@ -124,6 +125,7 @@ public:
+         XSETTINGS,
+         XEMBED,
+         XEMBED_INFO,
++	MOBLIN,
+         NetAtomMax
+     };
+ 
+@@ -156,6 +158,7 @@ protected:
+     SalDisplay*				m_pSalDisplay;		// Display to use
+     Display*				m_pDisplay;			// X Display of SalDisplay
+     String					m_aWMName;
++    bool                                        m_bSmallScreen;
+     Atom					m_aWMAtoms[ NetAtomMax];
+     int						m_nDesktops;
+     bool					m_bEqualWorkAreas;
+@@ -169,7 +172,7 @@ protected:
+     WMAdaptor( SalDisplay * )
+ ;
+     void initAtoms();
+-    bool getNetWmName();
++    bool getNetWmNameAndHints();
+ 
+     /*
+      *  returns whether this instance is useful
+@@ -322,6 +325,8 @@ public:
+      *  if reference frame is NULL the root window is used instead
+      */
+     void changeReferenceFrame( X11SalFrame* pFrame, X11SalFrame* pReferenceFrame ) const;    
++
++    bool getSmallScreen() const { return m_bSmallScreen; }
+ };
+ 
+ } // namespace
+diff -wrup ../../build-orig/ooo320-m8/vcl/unx/source/app/randrwrapper.cxx vcl/unx/source/app/randrwrapper.cxx
+--- ../../build-orig/ooo320-m8/vcl/unx/source/app/randrwrapper.cxx	2009-12-18 13:41:20.000000000 +0100
++++ vcl/unx/source/app/randrwrapper.cxx	2010-01-03 16:12:55.000000000 +0100
+@@ -38,6 +38,10 @@
+ #include "osl/module.h"
+ #include "rtl/ustring.hxx"
+ 
++#if OSL_DEBUG_LEVEL > 1
++#include <stdio.h>
++#endif
++
+ namespace
+ {
+ 
+diff -wrup ../../build-orig/ooo320-m8/vcl/unx/source/app/wmadaptor.cxx vcl/unx/source/app/wmadaptor.cxx
+--- ../../build-orig/ooo320-m8/vcl/unx/source/app/wmadaptor.cxx	2009-12-18 13:41:20.000000000 +0100
++++ vcl/unx/source/app/wmadaptor.cxx	2010-01-29 14:16:30.000000000 +0100
+@@ -234,6 +234,7 @@ WMAdaptor* WMAdaptor::createWMAdaptor( S
+ 
+ WMAdaptor::WMAdaptor( SalDisplay* pDisplay ) :
+         m_pSalDisplay( pDisplay ),
++	m_bSmallScreen( false ),
+         m_bTransientBehaviour( true ),
+         m_bEnableAlwaysOnTopWorks( false ),
+         m_nWinGravity( StaticGravity ),
+@@ -255,7 +256,7 @@ WMAdaptor::WMAdaptor( SalDisplay* pDispl
+     m_pDisplay = m_pSalDisplay->GetDisplay();
+ 
+     initAtoms();
+-    getNetWmName(); // try to discover e.g. Sawfish
++    getNetWmNameAndHints(); // try to discover e.g. Sawfish
+ 
+     // check for dtwm running
+     if( m_aWMAtoms[ DTWM_IS_RUNNING ] )
+@@ -435,7 +436,7 @@ NetWMAdaptor::NetWMAdaptor( SalDisplay*
+     initAtoms();
+ 
+     // check for NetWM
+-    bNetWM = getNetWmName();
++    bNetWM = getNetWmNameAndHints();
+     if( bNetWM
+         && XGetWindowProperty( m_pDisplay,
+                                m_pSalDisplay->GetRootWindow( m_pSalDisplay->GetDefaultScreenNumber() ),
+@@ -681,7 +682,7 @@ GnomeWMAdaptor::GnomeWMAdaptor( SalDispl
+                      *  already supports this part of the extended WM hints
+                      */
+                     m_aWMAtoms[ UTF8_STRING ] = XInternAtom( m_pDisplay, "UTF8_STRING", False );
+-                    getNetWmName();
++                    getNetWmNameAndHints();
+                 }
+             }
+             m_pSalDisplay->GetXLib()->PopXErrorLevel();
+@@ -820,9 +821,9 @@ GnomeWMAdaptor::~GnomeWMAdaptor()
+ }
+ 
+ /*
+- *  getNetWmName()
++ *  getNetWmNameAndHints()
+  */
+-bool WMAdaptor::getNetWmName()
++bool WMAdaptor::getNetWmNameAndHints()
+ {
+     Atom				aRealType	= None;
+     int					nFormat		= 8;
+@@ -903,11 +904,34 @@ bool WMAdaptor::getNetWmName()
+                         {
+                             m_aWMName = String( (sal_Char*)pProperty, nItems, RTL_TEXTENCODING_ISO_8859_1 );
+                         }
++		    }
+ 
++                    if( pProperty )
++                    {
+                         XFree( pProperty );
+                         pProperty = NULL;
+                     }
+-                    else if( pProperty )
++
++                    m_aWMAtoms[ STRING ] = XInternAtom( m_pDisplay, "STRING", False );
++                    if( XGetWindowProperty( m_pDisplay,
++                                            aWMChild,
++                                            m_aWMAtoms[ MOBLIN ],
++                                            0, 256,
++                                            False,
++                                            m_aWMAtoms[ STRING ],
++                                            &aRealType,
++                                            &nFormat,
++                                            &nItems,
++                                            &nBytesLeft,
++                                            &pProperty ) == 0 )
++                    {
++		        if ( (sal_Char*) pProperty && strstr( (sal_Char*) pProperty, "session-type=small-screen") )
++                        {
++			    m_bSmallScreen = true;
++                        }
++		    }
++
++                    if( pProperty )
+                     {
+                         XFree( pProperty );
+                         pProperty = NULL;
+@@ -974,6 +998,7 @@ void WMAdaptor::initAtoms()
+         m_aWMAtoms[ aAtomTab[i].nProtocol ] = XInternAtom( m_pDisplay, aAtomTab[i].pProtocol, False );
+     m_aWMAtoms[ NET_SUPPORTING_WM_CHECK ]	= XInternAtom( m_pDisplay, "_NET_SUPPORTING_WM_CHECK", True );
+     m_aWMAtoms[ NET_WM_NAME ]				= XInternAtom( m_pDisplay, "_NET_WM_NAME", True );
++    m_aWMAtoms[ MOBLIN ]				= XInternAtom( m_pDisplay, "_MOBLIN", True );
+ }
+ 
+ /*
