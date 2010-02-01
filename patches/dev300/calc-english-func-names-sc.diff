@@ -1,0 +1,300 @@
+diff --git sc/inc/docoptio.hxx sc/inc/docoptio.hxx
+index e95a9d0..43fd868 100644
+--- sc/inc/docoptio.hxx
++++ sc/inc/docoptio.hxx
+@@ -56,6 +56,7 @@ class SC_DLLPUBLIC ScDocOptions
+     BOOL   bDoAutoSpell;			// Auto-Spelling
+     BOOL   bLookUpColRowNames;		// Spalten-/Zeilenbeschriftungen automagisch suchen
+     BOOL   bFormulaRegexEnabled;    // regular expressions in formulas enabled
++    bool   bUseEnglishFuncName;     // use English function name even if the locale is not English.
+     ::formula::FormulaGrammar::Grammar eFormulaGrammar;  // formula grammar used to switch different formula syntax
+ 
+     ::rtl::OUString aFormulaSepArg;
+@@ -111,6 +112,9 @@ public:
+     void SetFormulaSyntax( ::formula::FormulaGrammar::Grammar eGram ) { eFormulaGrammar = eGram; }
+     ::formula::FormulaGrammar::Grammar GetFormulaSyntax() const { return eFormulaGrammar; }
+ 
++    void SetUseEnglishFuncName( bool bVal ) { bUseEnglishFuncName = bVal; }
++    bool GetUseEnglishFuncName() const { return bUseEnglishFuncName; }
++
+     void SetFormulaSepArg(const ::rtl::OUString& rSep) { aFormulaSepArg = rSep; }
+     ::rtl::OUString GetFormulaSepArg() const { return aFormulaSepArg; }
+ 
+@@ -142,6 +146,7 @@ inline void ScDocOptions::CopyTo(ScDocOptions& rOpt)
+     rOpt.bDoAutoSpell			= bDoAutoSpell;
+     rOpt.bLookUpColRowNames		= bLookUpColRowNames;
+     rOpt.bFormulaRegexEnabled   = bFormulaRegexEnabled;
++    rOpt.bUseEnglishFuncName    = bUseEnglishFuncName;
+     rOpt.eFormulaGrammar        = eFormulaGrammar;
+     rOpt.aFormulaSepArg         = aFormulaSepArg;
+     rOpt.aFormulaSepArrayRow    = aFormulaSepArrayRow;
+@@ -165,6 +170,7 @@ inline const ScDocOptions& ScDocOptions::operator=( const ScDocOptions& rCpy )
+     bDoAutoSpell		= rCpy.bDoAutoSpell;
+     bLookUpColRowNames	= rCpy.bLookUpColRowNames;
+     bFormulaRegexEnabled= rCpy.bFormulaRegexEnabled;
++    bUseEnglishFuncName = rCpy.bUseEnglishFuncName;
+     eFormulaGrammar     = rCpy.eFormulaGrammar;
+     aFormulaSepArg      = rCpy.aFormulaSepArg;
+     aFormulaSepArrayRow = rCpy.aFormulaSepArrayRow;
+@@ -191,6 +197,7 @@ inline int ScDocOptions::operator==( const ScDocOptions& rOpt ) const
+             &&	rOpt.bDoAutoSpell			== bDoAutoSpell
+             &&	rOpt.bLookUpColRowNames		== bLookUpColRowNames
+             &&  rOpt.bFormulaRegexEnabled   == bFormulaRegexEnabled
++            &&  rOpt.bUseEnglishFuncName    == bUseEnglishFuncName
+             &&  rOpt.eFormulaGrammar        == eFormulaGrammar
+             &&  rOpt.aFormulaSepArg         == aFormulaSepArg
+             &&  rOpt.aFormulaSepArrayRow    == aFormulaSepArrayRow
+diff --git sc/source/core/data/documen3.cxx sc/source/core/data/documen3.cxx
+index d8e4101..8e40f9c 100644
+--- sc/source/core/data/documen3.cxx
++++ sc/source/core/data/documen3.cxx
+@@ -1748,12 +1748,33 @@ const ScDocOptions& ScDocument::GetDocOptions() const
+ void ScDocument::SetDocOptions( const ScDocOptions& rOpt )
+ {
+     DBG_ASSERT( pDocOptions, "No DocOptions! :-(" );
++    bool bUpdateFuncNames = pDocOptions->GetUseEnglishFuncName() != rOpt.GetUseEnglishFuncName();
++
+     *pDocOptions = rOpt;
+ 
+     xPoolHelper->SetFormTableOpt(rOpt);
+ 
+     SetGrammar( rOpt.GetFormulaSyntax() );
+ 
++    if (bUpdateFuncNames)
++    {    
++        // This needs to be called first since it may re-initialize the entire
++        // opcode map.
++        if (rOpt.GetUseEnglishFuncName())
++        {
++            // switch native symbols to English.
++            ScCompiler aComp(NULL, ScAddress());
++            ScCompiler::OpCodeMapPtr xMap = aComp.GetOpCodeMap(::com::sun::star::sheet::FormulaLanguage::ENGLISH);
++            ScCompiler::SetNativeSymbols(xMap);
++        }
++        else
++            // re-initialize native symbols with localized function names.
++            ScCompiler::ResetNativeSymbols();
++
++        // Force re-population of function names for the function wizard, function tip etc.
++        ScGlobal::ResetFunctionList();
++    }
++
+     // Update the separators.
+     ScCompiler::UpdateSeparatorsNative(
+         rOpt.GetFormulaSepArg(), rOpt.GetFormulaSepArrayCol(), rOpt.GetFormulaSepArrayRow());
+diff --git sc/source/core/tool/docoptio.cxx sc/source/core/tool/docoptio.cxx
+index f4c744e..ab7909f 100644
+--- sc/source/core/tool/docoptio.cxx
++++ sc/source/core/tool/docoptio.cxx
+@@ -106,6 +106,7 @@ ScDocOptions::ScDocOptions( const ScDocOptions& rCpy )
+             bDoAutoSpell( rCpy.bDoAutoSpell ),
+             bLookUpColRowNames( rCpy.bLookUpColRowNames ),
+             bFormulaRegexEnabled( rCpy.bFormulaRegexEnabled ),
++            bUseEnglishFuncName( rCpy.bUseEnglishFuncName ),
+             eFormulaGrammar( rCpy.eFormulaGrammar ),
+             aFormulaSepArg( rCpy.aFormulaSepArg ),
+             aFormulaSepArrayRow( rCpy.aFormulaSepArrayRow ),
+@@ -138,6 +139,7 @@ void ScDocOptions::ResetDocOptions()
+     bDoAutoSpell		= FALSE;
+     bLookUpColRowNames	= TRUE;
+     bFormulaRegexEnabled= TRUE;
++    bUseEnglishFuncName = false;
+     eFormulaGrammar     = ::formula::FormulaGrammar::GRAM_NATIVE;
+ 
+     ResetFormulaSeparators(aFormulaSepArg, aFormulaSepArrayCol, aFormulaSepArrayRow);
+@@ -277,10 +279,11 @@ SfxPoolItem* __EXPORT ScTpCalcItem::Clone( SfxItemPool * ) const
+ 
+ #define CFGPATH_FORMULA     "Office.Calc/Formula"
+ #define SCFORMULAOPT_GRAMMAR           0
+-#define SCFORMULAOPT_SEP_ARG           1
+-#define SCFORMULAOPT_SEP_ARRAY_ROW     2
+-#define SCFORMULAOPT_SEP_ARRAY_COL     3
+-#define SCFORMULAOPT_COUNT             4
++#define SCFORMULAOPT_ENGLISH_FUNCNAME  1
++#define SCFORMULAOPT_SEP_ARG           2
++#define SCFORMULAOPT_SEP_ARRAY_ROW     3
++#define SCFORMULAOPT_SEP_ARRAY_COL     4
++#define SCFORMULAOPT_COUNT             5
+ 
+ #define CFGPATH_DOCLAYOUT	"Office.Calc/Layout/Other"
+ 
+@@ -318,6 +321,7 @@ Sequence<OUString> ScDocCfg::GetFormulaPropertyNames()
+ 	static const char* aPropNames[] =
+ 	{
+         "Syntax/Grammar",             // SCFORMULAOPT_GRAMMAR       
++        "Syntax/EnglishFunctionName", // SCFORMULAOPT_ENGLISH_FUNCNAME
+         "Syntax/SeparatorArg",        // SCFORMULAOPT_SEP_ARG      
+         "Syntax/SeparatorArrayRow",   // SCFORMULAOPT_SEP_ARRAY_ROW
+         "Syntax/SeparatorArrayCol",   // SCFORMULAOPT_SEP_ARRAY_COL
+@@ -459,6 +463,13 @@ ScDocCfg::ScDocCfg() :
+                     SetFormulaSyntax(eGram);
+                 }
+                 break;
++                case SCFORMULAOPT_ENGLISH_FUNCNAME:
++                {
++                    sal_Bool bEnglish;
++                    if (pValues[nProp] >>= bEnglish)
++                        SetUseEnglishFuncName(bEnglish);
++                }
++                break;
+                 case SCFORMULAOPT_SEP_ARG:
+                 {
+                     OUString aSep;
+@@ -588,6 +599,12 @@ IMPL_LINK( ScDocCfg, FormulaCommitHdl, void *, EMPTYARG )
+                 pValues[nProp] <<= nVal;
+             }
+             break;
++            case SCFORMULAOPT_ENGLISH_FUNCNAME:
++            {
++                sal_Bool b = GetUseEnglishFuncName();
++                pValues[nProp] <<= b;
++            }
++            break;
+             case SCFORMULAOPT_SEP_ARG:
+                 pValues[nProp] <<= GetFormulaSepArg();
+             break;
+diff --git sc/source/ui/inc/optdlg.hrc sc/source/ui/inc/optdlg.hrc
+index 5767bfb..2481244 100644
+--- sc/source/ui/inc/optdlg.hrc
++++ sc/source/ui/inc/optdlg.hrc
+@@ -199,11 +199,12 @@
+ #define FL_FORMULA_OPTIONS        80
+ #define FT_FORMULA_SYNTAX         81
+ #define LB_FORMULA_SYNTAX         82
+-#define FL_FORMULA_SEPS           83
+-#define FT_FORMULA_SEP_ARG        84
+-#define ED_FORMULA_SEP_ARG        85
+-#define FT_FORMULA_SEP_ARRAY_R    86
+-#define ED_FORMULA_SEP_ARRAY_R    87
+-#define FT_FORMULA_SEP_ARRAY_C    88
+-#define ED_FORMULA_SEP_ARRAY_C    89
+-#define BTN_FORMULA_SEP_RESET     90
++#define CB_ENGLISH_FUNC_NAME      83
++#define FL_FORMULA_SEPS           84
++#define FT_FORMULA_SEP_ARG        85
++#define ED_FORMULA_SEP_ARG        86
++#define FT_FORMULA_SEP_ARRAY_R    87
++#define ED_FORMULA_SEP_ARRAY_R    88
++#define FT_FORMULA_SEP_ARRAY_C    89
++#define ED_FORMULA_SEP_ARRAY_C    90
++#define BTN_FORMULA_SEP_RESET     91
+diff --git sc/source/ui/inc/tpformula.hxx sc/source/ui/inc/tpformula.hxx
+index 054655e..856dcae 100644
+--- sc/source/ui/inc/tpformula.hxx
++++ sc/source/ui/inc/tpformula.hxx
+@@ -72,6 +72,7 @@ private:
+     FixedLine maFlFormulaOpt;
+     FixedText maFtFormulaSyntax;
+     ListBox   maLbFormulaSyntax;
++    CheckBox  maCbEnglishFuncName;
+ 
+     FixedLine  maFlFormulaSeps;
+     FixedText  maFtSepFuncArg;  
+diff --git sc/source/ui/optdlg/tpformula.cxx sc/source/ui/optdlg/tpformula.cxx
+index 0c1d143..b462efc 100644
+--- sc/source/ui/optdlg/tpformula.cxx
++++ sc/source/ui/optdlg/tpformula.cxx
+@@ -59,6 +59,7 @@ ScTpFormulaOptions::ScTpFormulaOptions(Window* pParent, const SfxItemSet& rCoreA
+     maFlFormulaOpt(this, ScResId(FL_FORMULA_OPTIONS)),
+     maFtFormulaSyntax(this, ScResId(FT_FORMULA_SYNTAX)),
+     maLbFormulaSyntax(this, ScResId(LB_FORMULA_SYNTAX)),
++    maCbEnglishFuncName(this, ScResId(CB_ENGLISH_FUNC_NAME)),
+     maFlFormulaSeps(this, ScResId(FL_FORMULA_SEPS)),
+     maFtSepFuncArg(this, ScResId(FT_FORMULA_SEP_ARG)),
+     maEdSepFuncArg(this, ScResId(ED_FORMULA_SEP_ARG)),
+@@ -234,7 +235,7 @@ BOOL ScTpFormulaOptions::FillItemSet(SfxItemSet& rCoreSet)
+     }
+ 
+     mpNewOptions->SetFormulaSyntax(eGram);
+-
++    mpNewOptions->SetUseEnglishFuncName(maCbEnglishFuncName.IsChecked());
+     mpNewOptions->SetFormulaSepArg(maEdSepFuncArg.GetText());
+     mpNewOptions->SetFormulaSepArrayCol(maEdSepArrayCol.GetText());
+     mpNewOptions->SetFormulaSepArrayRow(maEdSepArrayRow.GetText());
+@@ -266,6 +267,8 @@ void ScTpFormulaOptions::Reset(const SfxItemSet& /*rCoreSet*/)
+             maLbFormulaSyntax.SelectEntryPos(0);
+     }
+     
++    maCbEnglishFuncName.Check(mpNewOptions->GetUseEnglishFuncName());
++
+     OUString aSep = mpNewOptions->GetFormulaSepArg();
+     OUString aSepArrayRow = mpNewOptions->GetFormulaSepArrayRow();
+     OUString aSepArrayCol = mpNewOptions->GetFormulaSepArrayCol();
+diff --git sc/source/ui/src/optdlg.src sc/source/ui/src/optdlg.src
+index 78f7864..616345b 100644
+--- sc/source/ui/src/optdlg.src
++++ sc/source/ui/src/optdlg.src
+@@ -218,16 +218,23 @@ TabPage RID_SCPAGE_FORMULA
+         };
+     };
+ 
++    CheckBox CB_ENGLISH_FUNC_NAME
++    {
++        Pos = MAP_APPFONT ( 12, 31 ) ;
++        Size = MAP_APPFONT ( 120, 8 ) ;
++        Text [ en-US ] = "Use English function names" ;
++    };
++
+     FixedLine FL_FORMULA_SEPS
+     {
+-        Pos = MAP_APPFONT ( 6 , 32 ) ;
++        Pos = MAP_APPFONT ( 6 , 46 ) ;
+         Size = MAP_APPFONT ( 248 , 8 ) ;
+         Text [ en-US ] = "Separators";
+     };
+ 
+     FixedText FT_FORMULA_SEP_ARG
+     {
+-        Pos = MAP_APPFONT ( 21, 45 );
++        Pos = MAP_APPFONT ( 21, 59 );
+         Size = MAP_APPFONT ( 40, 8 );
+         Text [ en-US ] = "~Function";
+     };
+@@ -235,13 +242,13 @@ TabPage RID_SCPAGE_FORMULA
+     Edit ED_FORMULA_SEP_ARG
+     {
+         Border = TRUE;
+-        Pos = MAP_APPFONT ( 65, 43 );
++        Pos = MAP_APPFONT ( 65, 57 );
+         Size = MAP_APPFONT ( 10, 12 );
+     };
+ 
+     FixedText FT_FORMULA_SEP_ARRAY_C
+     {
+-        Pos = MAP_APPFONT ( 21, 63 );
++        Pos = MAP_APPFONT ( 21, 77 );
+         Size = MAP_APPFONT ( 40, 8 );
+         Text [ en-US ] = "Array co~lumn";
+     };
+@@ -249,13 +256,13 @@ TabPage RID_SCPAGE_FORMULA
+     Edit ED_FORMULA_SEP_ARRAY_C
+     {
+         Border = TRUE;
+-        Pos = MAP_APPFONT ( 65, 61 );
++        Pos = MAP_APPFONT ( 65, 75 );
+         Size = MAP_APPFONT ( 10, 12 );
+     };
+ 
+     FixedText FT_FORMULA_SEP_ARRAY_R
+     {
+-        Pos = MAP_APPFONT ( 21, 81 );
++        Pos = MAP_APPFONT ( 21, 95 );
+         Size = MAP_APPFONT ( 40, 8 );
+         Text [ en-US ] = "Array ~row";
+     };
+@@ -263,13 +270,13 @@ TabPage RID_SCPAGE_FORMULA
+     Edit ED_FORMULA_SEP_ARRAY_R
+     {
+         Border = TRUE;
+-        Pos = MAP_APPFONT ( 65, 79 );
++        Pos = MAP_APPFONT ( 65, 93 );
+         Size = MAP_APPFONT ( 10, 12 );
+     };
+ 
+     PushButton BTN_FORMULA_SEP_RESET
+     {
+-        Pos = MAP_APPFONT ( 21, 99 );
++        Pos = MAP_APPFONT ( 21, 113 );
+         Size = MAP_APPFONT ( 40, 14 );
+         Text [ en-US ] = "Rese~t";
+     };
