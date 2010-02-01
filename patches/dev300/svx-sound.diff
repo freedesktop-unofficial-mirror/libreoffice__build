@@ -1,0 +1,140 @@
+diff -rup svx-orig/inc/svx/svdomedia.hxx svx/inc/svx/svdomedia.hxx
+--- svx-orig/inc/svx/svdomedia.hxx	2009-10-04 23:14:33.000000000 +0200
++++ svx/inc/svx/svdomedia.hxx	2009-10-05 11:24:04.000000000 +0200
+@@ -71,6 +71,9 @@ public:
+         void						setURL( const ::rtl::OUString& rURL );
+         const ::rtl::OUString&		getURL() const;
+ 
++        void						setSlidesNumber( sal_uInt16 nSlidesNumber );
++        sal_uInt16		        getSlidesNumber() const;
++
+         void						setMediaProperties( const ::avmedia::MediaItem& rState );
+         const ::avmedia::MediaItem& getMediaProperties() const;
+ 
+@@ -90,6 +93,8 @@ private:
+ 
+         ::avmedia::MediaItem		maMediaProperties;
+         ::std::auto_ptr< Graphic >  mapGraphic;
++
++	sal_uInt16 mnSlidesNumber;
+ };
+ 
+ #endif //_SVDOMEDIA_HXX
+Only in svx/inc/svx: svdomedia.hxx~
+diff -rup svx-orig/inc/svx/unoshprp.hxx svx/inc/svx/unoshprp.hxx
+--- svx-orig/inc/svx/unoshprp.hxx	2009-10-04 23:14:33.000000000 +0200
++++ svx/inc/svx/unoshprp.hxx	2009-10-05 11:35:59.000000000 +0200
+@@ -194,6 +194,8 @@
+ 
+ #define OWN_ATTR_EDGE_POLYPOLYGONBEZIER			(OWN_ATTR_VALUE_START+88)
+ 
++#define OWN_ATTR_MEDIA_SLIDES_NUMBER					(OWN_ATTR_VALUE_START+89)
++
+ #define OWN_ATTR_VALUE_END                      OWN_ATTR_EDGE_POLYPOLYGONBEZIER // WARNING: ee items start at 3991!
+ 
+ // #FontWork#
+Only in svx/inc/svx: unoshprp.hxx~
+diff -rup svx-orig/source/svdraw/svdomedia.cxx svx/source/svdraw/svdomedia.cxx
+--- svx-orig/source/svdraw/svdomedia.cxx	2009-10-04 23:14:34.000000000 +0200
++++ svx/source/svdraw/svdomedia.cxx	2009-10-05 12:24:27.000000000 +0200
+@@ -45,14 +45,15 @@ TYPEINIT1( SdrMediaObj, SdrRectObj );
+ 
+ // ------------------------------------------------------------------------------
+ 
+-SdrMediaObj::SdrMediaObj()
++SdrMediaObj::SdrMediaObj() : mnSlidesNumber( 1 )
+ {
+ }
+ 
+ // ------------------------------------------------------------------------------
+ 
+ SdrMediaObj::SdrMediaObj( const Rectangle& rRect ) :
+-    SdrRectObj( rRect )
++    SdrRectObj( rRect ),
++    mnSlidesNumber( 1 )
+ {
+ }
+ 
+@@ -166,6 +167,20 @@ const ::rtl::OUString& SdrMediaObj::getU
+ }
+ 
+ // ------------------------------------------------------------------------------
++
++void SdrMediaObj::setSlidesNumber( sal_uInt16 nSlidesNumber )
++{
++    mnSlidesNumber = nSlidesNumber;
++}
++
++// ------------------------------------------------------------------------------
++    
++sal_uInt16 SdrMediaObj::getSlidesNumber() const
++{
++    return mnSlidesNumber;
++}
++
++// ------------------------------------------------------------------------------
+ 
+ void SdrMediaObj::setMediaProperties( const ::avmedia::MediaItem& rState )
+ {
+Only in svx/source/svdraw: svdomedia.cxx~
+diff -rup svx-orig/source/unodraw/unoprov.cxx svx/source/unodraw/unoprov.cxx
+--- svx-orig/source/unodraw/unoprov.cxx	2009-10-04 23:14:34.000000000 +0200
++++ svx/source/unodraw/unoprov.cxx	2009-10-04 23:23:14.000000000 +0200
+@@ -750,6 +750,7 @@ SfxItemPropertyMap* ImplGetSvxMediaShape
+         { MAP_CHAR_LEN(UNO_NAME_LINKDISPLAYNAME), OWN_ATTR_LDNAME, &::getCppuType(( const ::rtl::OUString*)0),	::com::sun::star::beans::PropertyAttribute::READONLY, 0},
+         { MAP_CHAR_LEN("Transformation"), OWN_ATTR_TRANSFORMATION, &::getCppuType((const struct com::sun::star::drawing::HomogenMatrix3*)0), 0, 0 },
+         { MAP_CHAR_LEN("MediaURL"),	OWN_ATTR_MEDIA_URL, &::getCppuType((const ::rtl::OUString*)0), 0, 0},
++        { MAP_CHAR_LEN("MediaSlidesNumber"),	OWN_ATTR_MEDIA_SLIDES_NUMBER, &::getCppuType((const sal_uInt16*)0), 0, 0},
+         { MAP_CHAR_LEN("PreferredSize"), OWN_ATTR_MEDIA_PREFERREDSIZE, &::getCppuType((const ::com::sun::star::awt::Size*)0), ::com::sun::star::beans::PropertyAttribute::READONLY, 0},
+         { MAP_CHAR_LEN("Loop"),	OWN_ATTR_MEDIA_LOOP, &::getCppuType((const sal_Bool*)0), 0, 0},
+         { MAP_CHAR_LEN("Mute"),	OWN_ATTR_MEDIA_MUTE, &::getCppuType((const sal_Bool*)0), 0, 0},
+diff -rup svx-orig/source/unodraw/unoshap4.cxx svx/source/unodraw/unoshap4.cxx
+--- svx-orig/source/unodraw/unoshap4.cxx	2009-10-04 23:14:34.000000000 +0200
++++ svx/source/unodraw/unoshap4.cxx	2009-10-05 11:37:12.000000000 +0200
+@@ -865,7 +865,7 @@ SvxMediaShape::~SvxMediaShape() throw()
+ 
+ bool SvxMediaShape::setPropertyValueImpl( const SfxItemPropertyMap* pProperty, const ::com::sun::star::uno::Any& rValue ) throw(::com::sun::star::beans::UnknownPropertyException, ::com::sun::star::beans::PropertyVetoException, ::com::sun::star::lang::IllegalArgumentException, ::com::sun::star::lang::WrappedTargetException, ::com::sun::star::uno::RuntimeException)
+ {
+-    if( (pProperty->nWID >= OWN_ATTR_MEDIA_URL) && (pProperty->nWID <= OWN_ATTR_MEDIA_ZOOM) )
++    if( (pProperty->nWID >= OWN_ATTR_MEDIA_URL) && (pProperty->nWID <= OWN_ATTR_MEDIA_ZOOM) || pProperty->nWID == OWN_ATTR_MEDIA_SLIDES_NUMBER )
+     {
+         SdrMediaObj* pMedia = static_cast< SdrMediaObj* >( mpObj.get() );
+         ::avmedia::MediaItem aItem;
+@@ -884,6 +884,17 @@ bool SvxMediaShape::setPropertyValueImpl
+         }
+         break;
+ 
++        case OWN_ATTR_MEDIA_SLIDES_NUMBER:
++        {
++            sal_uInt16 nSlidesNumber;
++            if( rValue >>= nSlidesNumber )
++            {
++                bOk = true;
++                pMedia->setSlidesNumber( nSlidesNumber );
++            }
++        }
++        break;
++
+         case( OWN_ATTR_MEDIA_LOOP ):
+         {
+             sal_Bool bLoop = sal_Bool();
+@@ -954,7 +965,7 @@ bool SvxMediaShape::setPropertyValueImpl
+ 
+ bool SvxMediaShape::getPropertyValueImpl( const SfxItemPropertyMap* pProperty, ::com::sun::star::uno::Any& rValue ) throw(::com::sun::star::beans::UnknownPropertyException, ::com::sun::star::lang::WrappedTargetException, ::com::sun::star::uno::RuntimeException)
+ {
+-    if( ( pProperty->nWID >= OWN_ATTR_MEDIA_URL ) && ( pProperty->nWID <= OWN_ATTR_MEDIA_ZOOM ) )
++    if( ( pProperty->nWID >= OWN_ATTR_MEDIA_URL ) && ( pProperty->nWID <= OWN_ATTR_MEDIA_ZOOM ) || pProperty->nWID == OWN_ATTR_MEDIA_SLIDES_NUMBER )
+     {
+         SdrMediaObj* pMedia = static_cast< SdrMediaObj* >( mpObj.get() );
+         const ::avmedia::MediaItem aItem( pMedia->getMediaProperties() );
+@@ -965,6 +976,10 @@ bool SvxMediaShape::getPropertyValueImpl
+                 rValue <<= aItem.getURL();
+                 break;
+ 
++            case OWN_ATTR_MEDIA_SLIDES_NUMBER:
++                rValue <<= pMedia->getSlidesNumber();
++                break;
++
+             case( OWN_ATTR_MEDIA_LOOP ):
+                 rValue <<= (sal_Bool) aItem.isLoop();
+                 break;

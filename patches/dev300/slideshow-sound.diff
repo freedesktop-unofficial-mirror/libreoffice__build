@@ -1,0 +1,353 @@
+diff -rup slideshow-orig/source/engine/shapes/mediashape.cxx slideshow/source/engine/shapes/mediashape.cxx
+--- slideshow-orig/source/engine/shapes/mediashape.cxx	2009-09-30 16:38:08.000000000 +0200
++++ slideshow/source/engine/shapes/mediashape.cxx	2009-10-05 12:24:37.000000000 +0200
+@@ -101,6 +101,8 @@ namespace slideshow
+             virtual bool implIsIntrinsicAnimationPlaying() const;
+             virtual void implSetIntrinsicAnimationTime(double);
+ 
++	    sal_uInt16 getSlidesNumber();
++
+             /// the list of active view shapes (one for each registered view layer)
+             typedef ::std::vector< ViewMediaShapeSharedPtr > ViewMediaShapeVector;
+             ViewMediaShapeVector                             maViewMediaShapes;
+@@ -117,6 +119,17 @@ namespace slideshow
+         {
+         }
+ 
++	sal_uInt16 MediaShape::getSlidesNumber()
++	{
++	    uno::Reference< beans::XPropertySet > xPropSet( getXShape(), uno::UNO_QUERY );
++	    sal_uInt16 nSlidesNumber = 1;
++
++	    if( xPropSet.is() )
++		xPropSet->getPropertyValue( ::rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( "MediaSlidesNumber" ) ) ) >>= nSlidesNumber;
++
++	    return nSlidesNumber;
++	}
++
+         // ---------------------------------------------------------------------		
+ 
+         void MediaShape::implViewChanged( const UnoViewSharedPtr& rView )
+@@ -202,7 +215,8 @@ namespace slideshow
+         
+         bool MediaShape::clearAllViewLayers()
+         {
+-            maViewMediaShapes.clear();
++	    if( getSlidesNumber() <= 1 )
++		maViewMediaShapes.clear();
+             return true;
+         }
+ 
+@@ -244,11 +258,13 @@ namespace slideshow
+         
+         bool MediaShape::implEndIntrinsicAnimation()
+         {
+-            ::std::for_each( maViewMediaShapes.begin(),
+-                             maViewMediaShapes.end(),
+-                             ::boost::mem_fn( &ViewMediaShape::endMedia ) );
++	    if( getSlidesNumber() <= 1 ) {
++		::std::for_each( maViewMediaShapes.begin(),
++				 maViewMediaShapes.end(),
++				 ::boost::mem_fn( &ViewMediaShape::endMedia ) );
+ 
+-            mbIsPlaying = false;
++		mbIsPlaying = false;
++	    }
+ 
+             return true;
+         }
+Only in slideshow/source/engine/shapes: mediashape.cxx~
+diff -rup slideshow-orig/source/engine/slide/layermanager.cxx slideshow/source/engine/slide/layermanager.cxx
+--- slideshow-orig/source/engine/slide/layermanager.cxx	2009-09-30 16:38:08.000000000 +0200
++++ slideshow/source/engine/slide/layermanager.cxx	2009-10-09 14:38:59.000000000 +0200
+@@ -295,6 +295,28 @@ namespace slideshow
+             implAddShape( rShape );
+         }
+ 
++	void LayerManager::findPersistentMediaShapes( ShapeList& rList )
++	{
++	    for( XShapeHash::iterator it = maXShapeHash.begin(); it != maXShapeHash.end(); it ++) {
++		uno::Reference< beans::XPropertySet > xPropSet( (*it).first, uno::UNO_QUERY );
++		if( xPropSet.is() ) {
++		    sal_uInt16 nSlidesNumber = 1;
++
++		    try {
++			xPropSet->getPropertyValue( ::rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( "MediaSlidesNumber" ) ) ) >>= nSlidesNumber;
++
++			if( nSlidesNumber > 1 ) {
++			    ShapeRefSharedPtr pShapeRef( new ShapeRef() );
++
++			    pShapeRef->pShape = (*it).second;
++			    pShapeRef->nSlidesNumber = nSlidesNumber;
++			    rList.push_back( pShapeRef );
++			}
++		    } catch( uno::Exception& ) {}
++		}
++	    }
++	}
++
+         void LayerManager::putShape2BackgroundLayer( LayerShapeMap::value_type& rShapeEntry )
+         {
+             LayerSharedPtr& rBgLayer( maLayers.front() );
+Only in slideshow/source/engine/slide: layermanager.cxx~
+diff -rup slideshow-orig/source/engine/slide/layermanager.hxx slideshow/source/engine/slide/layermanager.hxx
+--- slideshow-orig/source/engine/slide/layermanager.hxx	2009-09-30 16:38:08.000000000 +0200
++++ slideshow/source/engine/slide/layermanager.hxx	2009-10-08 16:05:27.000000000 +0200
+@@ -147,6 +147,10 @@ namespace slideshow
+             ShapeSharedPtr lookupShape( const ::com::sun::star::uno::Reference< 
+                                            ::com::sun::star::drawing::XShape >& xShape ) const;
+ 
++	    /** lookup persistent media shapes
++	     */
++	    void findPersistentMediaShapes( ShapeList& rList );
++
+             /** Query a subset of the given original shape
+ 
+                 This method queries a new (but not necessarily unique)
+Only in slideshow/source/engine/slide: layermanager.hxx~
+diff -rup slideshow-orig/source/engine/slide/slideimpl.cxx slideshow/source/engine/slide/slideimpl.cxx
+--- slideshow-orig/source/engine/slide/slideimpl.cxx	2009-09-30 16:38:08.000000000 +0200
++++ slideshow/source/engine/slide/slideimpl.cxx	2009-10-08 18:28:23.000000000 +0200
+@@ -142,6 +142,7 @@ public:
+     // but on canvas-independent basegfx bitmaps
+     virtual SlideBitmapSharedPtr getCurrentSlideBitmap( const UnoViewSharedPtr& rView ) const;
+ 
++    virtual void findPersistentMediaShapes( ShapeList& rList );
+ 
+ private:
+     // ViewEventHandler
+@@ -1212,5 +1213,27 @@ SlideSharedPtr createSlide( const uno::R
+     return pRet;
+ }
+ 
++void SlideImpl::findPersistentMediaShapes( ShapeList& rList )
++{
++    if( mpLayerManager ) {
++	ShapeList aList;
++	mpLayerManager->findPersistentMediaShapes( aList );
++
++	uno::Reference< beans::XPropertySet > xPropSet( mxDrawPage, uno::UNO_QUERY_THROW );
++	sal_Int16 nPageNumber = 0;
++	if( xPropSet.is() ) {
++	    xPropSet->getPropertyValue( ::rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( "Number" ) ) ) >>= nPageNumber;
++	}
++
++	for( ShapeList::iterator it = aList.begin(); it != aList.end(); it++ ) {
++	    ShapeRefSharedPtr pShapeRef = *it;
++
++	    pShapeRef->nPageNumber = nPageNumber;
++	}
++
++	rList.merge( aList );
++    }
++}
++
+ } // namespace internal
+ } // namespace slideshow
+Only in slideshow/source/engine/slide: slideimpl.cxx~
+diff -rup slideshow-orig/source/engine/slideshowimpl.cxx slideshow/source/engine/slideshowimpl.cxx
+--- slideshow-orig/source/engine/slideshowimpl.cxx	2009-09-30 16:38:08.000000000 +0200
++++ slideshow/source/engine/slideshowimpl.cxx	2009-10-09 14:39:41.000000000 +0200
+@@ -340,6 +340,8 @@ private:
+     private: SlideShowImpl& mrSlideShowImpl;
+     };
+         
++    // update persistent media shapes after current slide changes
++    void updateMediaShapes();
+ 
+     /// Filter requested cursor shape against hard slideshow cursors (wait, etc.)
+     sal_Int16 calcActiveCursor( sal_Int16 nCursorShape ) const;
+@@ -365,6 +367,7 @@ private:
+     boost::optional<double>               maUserPaintStrokeWidth;
+ 
+     boost::shared_ptr<canvas::tools::ElapsedTime> mpPresTimer;
++    boost::shared_ptr<canvas::tools::ElapsedTime> mpAdvanceTimer;
+     ScreenUpdater                           maScreenUpdater;
+     EventQueue                              maEventQueue;
+     EventMultiplexer                        maEventMultiplexer;
+@@ -408,6 +411,9 @@ private:
+     bool                                    mbDisableAnimationZOrder;
+ 
+     EffectRewinder                          maEffectRewinder;
++
++    // list of persisten media shapes
++    ShapeList maMediaShapes;
+ };
+ 
+ 
+@@ -480,6 +486,7 @@ SlideShowImpl::SlideShowImpl(
+       maUserPaintColor(),
+       maUserPaintStrokeWidth(4.0),
+       mpPresTimer( new canvas::tools::ElapsedTime ),
++      mpAdvanceTimer( new canvas::tools::ElapsedTime ),
+       maScreenUpdater(maViewContainer),
+       maEventQueue( mpPresTimer ),
+       maEventMultiplexer( maEventQueue,
+@@ -550,6 +557,9 @@ void SlideShowImpl::disposing()
+     osl::MutexGuard const guard( m_aMutex );
+ 
+     maEffectRewinder.dispose();
++
++    // drop all references to persistent media shapes
++    maMediaShapes.clear();
+     
+     // stop slide transition sound, if any:
+     stopSlideTransitionSound();
+@@ -949,6 +959,33 @@ private:
+     bool& mrbSkipSlideTransition;
+ };
+ 
++class media_shape_ptr_is_empty
++{
++public:
++    bool operator() (const ShapeRefSharedPtr& value) { return !value->pShape.get(); }
++};
++
++void SlideShowImpl::updateMediaShapes()
++{
++    mpCurrentSlide->findPersistentMediaShapes( maMediaShapes );
++
++    uno::Reference<beans::XPropertySet> xPropSet( mpCurrentSlide->getXDrawPage(), uno::UNO_QUERY );
++    if( xPropSet.is() ) {
++	sal_Int16 nPageNumber;
++	xPropSet->getPropertyValue( ::rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( "Number" ) ) ) >>= nPageNumber;
++
++	for( ShapeList::iterator it = maMediaShapes.begin(); it != maMediaShapes.end(); it++ ) {
++	    ShapeRefSharedPtr pShapeRef = *it;
++
++	    if( nPageNumber >= pShapeRef->nPageNumber + pShapeRef->nSlidesNumber )
++		pShapeRef->pShape.reset();
++	}
++
++
++	maMediaShapes.remove_if( media_shape_ptr_is_empty() );
++    }
++}
++
+ void SlideShowImpl::displaySlide(
+     uno::Reference<drawing::XDrawPage> const& xSlide,
+     uno::Reference<animations::XAnimationNode> const& xRootNode,
+@@ -991,6 +1028,8 @@ void SlideShowImpl::displaySlide(
+         mpPreviousSlide = mpCurrentSlide;
+         mpCurrentSlide.reset();
+ 
++	mpAdvanceTimer->reset();
++
+         if (matches( mpPrefetchSlide, xSlide, xRootNode )) 
+         {
+             // prefetched slide matches:
+@@ -1004,6 +1043,8 @@ void SlideShowImpl::displaySlide(
+         OSL_ASSERT( mpCurrentSlide );
+         if (mpCurrentSlide) 
+         {
++	    updateMediaShapes();
++
+             basegfx::B2DSize oldSlideSize;
+             if( mpPreviousSlide )
+                 oldSlideSize = mpPreviousSlide->getSlideSize();
+@@ -1834,6 +1875,8 @@ void SlideShowImpl::notifySlideTransitio
+                 "notifySlideTransitionEnded(): Invalid current slide" );
+     if (mpCurrentSlide) 
+     {
++	mpAdvanceTimer->adjustTimer( -mpAdvanceTimer->getElapsedTime() / 2 );
++
+         // first init show, to give the animations
+         // the chance to register SlideStartEvents
+         const bool bBackgroundLayerRendered( !bPaintSlide );
+@@ -1844,7 +1887,8 @@ void SlideShowImpl::notifySlideTransitio
+ 
+ void queryAutomaticSlideTransition( uno::Reference<drawing::XDrawPage> const& xDrawPage,
+                                     double&                                   nAutomaticNextSlideTimeout,
+-                                    bool&                                     bHasAutomaticNextSlide )
++                                    bool&                                     bHasAutomaticNextSlide,
++                                    bool&                                     bFromStart )
+ {
+     // retrieve slide change parameters from XDrawPage
+     // ===============================================
+@@ -1864,7 +1908,8 @@ void queryAutomaticSlideTransition( uno:
+             "Could not extract slide change mode from XDrawPage - assuming <none>\n" );
+     }
+             
+-    bHasAutomaticNextSlide = nChange == 1;
++    bHasAutomaticNextSlide = nChange == 1 || nChange == 3;
++    bFromStart = nChange == 3;
+ 
+     if( !xPropSet.is() ||
+         !getPropertyValue( nAutomaticNextSlideTimeout,
+@@ -1906,10 +1951,12 @@ void SlideShowImpl::notifySlideAnimation
+                     "notifySlideAnimationsEnded(): Invalid current slide!" );
+         
+         bool   bHasAutomaticNextSlide=false;
++	bool   bFromStart=false;
+         double nAutomaticNextSlideTimeout=0.0;
+         queryAutomaticSlideTransition(mpCurrentSlide->getXDrawPage(),
+                                       nAutomaticNextSlideTimeout,
+-                                      bHasAutomaticNextSlide);
++                                      bHasAutomaticNextSlide,
++				      bFromStart);
+ 
+         // check whether slide transition should happen
+         // 'automatically'. If yes, simply schedule the
+@@ -1921,6 +1968,14 @@ void SlideShowImpl::notifySlideAnimation
+             !mpRehearseTimingsActivity &&
+             bHasAutomaticNextSlide )
+         {
++	    if( bFromStart ) {
++		double nCurrentTime = mpAdvanceTimer->getElapsedTime();
++		if( nAutomaticNextSlideTimeout > nCurrentTime )
++		    nAutomaticNextSlideTimeout -= nCurrentTime;
++		else
++		    nAutomaticNextSlideTimeout = 0;
++	    }
++
+             aNotificationEvents = makeInterruptableDelay(
+                 boost::bind( &SlideShowImpl::notifySlideEnded, this, false ),
+                 nAutomaticNextSlideTimeout);
+diff -rup slideshow-orig/source/inc/shape.hxx slideshow/source/inc/shape.hxx
+--- slideshow-orig/source/inc/shape.hxx	2009-09-30 16:38:08.000000000 +0200
++++ slideshow/source/inc/shape.hxx	2009-10-09 10:00:39.000000000 +0200
+@@ -41,6 +41,7 @@
+ 
+ #include <boost/shared_ptr.hpp>
+ #include <boost/noncopyable.hpp>
++#include <list>
+ #include <set>
+ #include <vector>
+ 
+@@ -57,6 +58,15 @@ namespace slideshow
+ 
+         typedef ::boost::shared_ptr< Shape > ShapeSharedPtr;
+ 
++	struct ShapeRef
++	{
++	    ShapeSharedPtr pShape;
++	    sal_Int16 nPageNumber;
++	    sal_uInt16 nSlidesNumber;
++	};
++        typedef ::boost::shared_ptr< ShapeRef > ShapeRefSharedPtr;
++	typedef ::std::list< ShapeRefSharedPtr > ShapeList;
++
+         /** Represents a slide's shape object.
+ 
+             This interface represents the view-independent aspects of a
+Only in slideshow/source/inc: shape.hxx~
+diff -rup slideshow-orig/source/inc/slide.hxx slideshow/source/inc/slide.hxx
+--- slideshow-orig/source/inc/slide.hxx	2009-09-30 16:38:08.000000000 +0200
++++ slideshow/source/inc/slide.hxx	2009-10-08 16:16:17.000000000 +0200
+@@ -35,6 +35,7 @@
+ #include "subsettableshapemanager.hxx"
+ #include "unoviewcontainer.hxx"
+ #include "slidebitmap.hxx"
++#include "shape.hxx"
+ #include "shapemaps.hxx"
+ 
+ #include <boost/shared_ptr.hpp>
+@@ -117,6 +118,8 @@ namespace slideshow
+             virtual ::com::sun::star::uno::Reference< 
+                 ::com::sun::star::animations::XAnimationNode > getXAnimationNode() const = 0;
+ 
++	    // get persistent media shapes
++	    virtual void findPersistentMediaShapes( ShapeList& rList ) = 0;
+ 
+             // Slide bitmaps
+             // -------------------------------------------------------------------
