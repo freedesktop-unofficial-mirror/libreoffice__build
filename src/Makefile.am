@@ -1,4 +1,4 @@
-SUBDIRS=eval helpcontent2 icons layout sdf
+SUBDIRS=helpcontent2 icons layout sdf
 
 EXTRA_DIST=\
 	default_images \
@@ -21,6 +21,7 @@ EXTRA_DIST=\
 	ooobanner_nld.bmp \
 	ooobitmap_nld.bmp \
 	openintro_nld.bmp \
+	openintro_nld_eval.bmp \
 	openabout_nld.bmp \
 	openintro_ark.bmp \
 	openabout_ark.png \
