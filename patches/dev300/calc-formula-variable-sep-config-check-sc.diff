@@ -1,5 +1,5 @@
 diff --git sc/inc/docoptio.hxx sc/inc/docoptio.hxx
-index 1184554..e95a9d0 100644
+index 1184554..ba45526 100644
 --- sc/inc/docoptio.hxx
 +++ sc/inc/docoptio.hxx
 @@ -120,7 +120,8 @@ public:
@@ -7,7 +7,7 @@ index 1184554..e95a9d0 100644
      ::rtl::OUString GetFormulaSepArrayCol() const { return aFormulaSepArrayCol; }
  
 -    const LocaleDataWrapper& GetLocaleDataWrapper() const;
-+    static void ResetFormulaSeparators(::rtl::OUString& rArgSep, ::rtl::OUString& rColSep, ::rtl::OUString& rRowSep);
++    void ResetFormulaSeparators();
 +    static const LocaleDataWrapper& GetLocaleDataWrapper();
  };
  
@@ -29,7 +29,7 @@ index 8a72b7e..94e2b98 100644
  #endif
  
 diff --git sc/source/core/tool/docoptio.cxx sc/source/core/tool/docoptio.cxx
-index b0188ee..f4c744e 100644
+index b0188ee..8f035d8 100644
 --- sc/source/core/tool/docoptio.cxx
 +++ sc/source/core/tool/docoptio.cxx
 @@ -140,63 +140,62 @@ void ScDocOptions::ResetDocOptions()
@@ -44,23 +44,22 @@ index b0188ee..f4c744e 100644
 -            // Don't do automatic guess for these languages, and fall back to 
 -            // the old separator set.
 -            break;
--
++    ResetFormulaSeparators();
++}
+ 
 -        const LocaleDataWrapper& rLocaleData = GetLocaleDataWrapper();
 -        const OUString& rDecSep  = rLocaleData.getNumDecimalSep();
 -        const OUString& rListSep = rLocaleData.getListSep();
-+    ResetFormulaSeparators(aFormulaSepArg, aFormulaSepArrayCol, aFormulaSepArrayRow);
-+}
++void ScDocOptions::ResetFormulaSeparators()
++{
++    // Defaults to the old separator values.
++    aFormulaSepArg = OUString::createFromAscii(";");
++    aFormulaSepArrayCol = OUString::createFromAscii(";");
++    aFormulaSepArrayRow = OUString::createFromAscii("|");
  
 -        if (!rDecSep.getLength() || !rListSep.getLength())
 -            // Something is wrong.  Stick with the default separators.
 -            break;
-+void ScDocOptions::ResetFormulaSeparators(OUString& rArgSep, OUString& rColSep, OUString& rRowSep)
-+{
-+    // Defaults to the old separator values.
-+    rArgSep = OUString::createFromAscii(";");
-+    rColSep = OUString::createFromAscii(";");
-+    rRowSep = OUString::createFromAscii("|");
-+
 +    const Locale& rLocale = *ScGlobal::GetLocale();
 +    const OUString& rLang = rLocale.Language;
 +    if (rLang.equalsAscii("ru"))
@@ -126,18 +125,18 @@ index b0188ee..f4c744e 100644
 +
 +    // by default, the parameter separator equals the locale-specific
 +    // list separator.
-+    rArgSep = OUString(cListSep);
++    aFormulaSepArg = OUString(cListSep);
 +
 +    if (cDecSep == cListSep && cDecSep != sal_Unicode(';'))
 +        // if the decimal and list separators are equal, set the
 +        // parameter separator to be ';', unless they are both
 +        // semicolon in which case don't change the decimal separator.
-+        rArgSep = OUString::createFromAscii(";");
++        aFormulaSepArg = OUString::createFromAscii(";");
 +
-+    rColSep = OUString::createFromAscii(",");
++    aFormulaSepArrayCol = OUString::createFromAscii(",");
 +    if (cDecSep == sal_Unicode(','))
-+        rColSep = OUString::createFromAscii(".");
-+    rRowSep = OUString::createFromAscii(";");
++        aFormulaSepArrayCol = OUString::createFromAscii(".");
++    aFormulaSepArrayRow = OUString::createFromAscii(";");
  }
  
 -const LocaleDataWrapper& ScDocOptions::GetLocaleDataWrapper() const
@@ -146,15 +145,16 @@ index b0188ee..f4c744e 100644
      return *ScGlobal::pLocaleData;
  }
 diff --git sc/source/ui/docshell/docsh6.cxx sc/source/ui/docshell/docsh6.cxx
-index e356bed..e2ddad1 100644
+index e356bed..b88e537 100644
 --- sc/source/ui/docshell/docsh6.cxx
 +++ sc/source/ui/docshell/docsh6.cxx
-@@ -56,6 +56,30 @@
+@@ -56,6 +56,31 @@
  #include "tabvwsh.hxx"
  #include "tablink.hxx"
  #include "collect.hxx"
 +#include "docoptio.hxx"
 +#include "globstr.hrc"
++#include "scmod.hxx"
 +
 +#include "formula/FormulaCompiler.hxx"
 +#include "comphelper/processfactory.hxx"
@@ -180,7 +180,7 @@ index e356bed..e2ddad1 100644
  
  struct ScStylePair
  {
-@@ -63,6 +87,12 @@ struct ScStylePair
+@@ -63,6 +88,12 @@ struct ScStylePair
      SfxStyleSheetBase *pDest;
  };
  
@@ -193,7 +193,7 @@ index e356bed..e2ddad1 100644
  
  // STATIC DATA -----------------------------------------------------------
  
-@@ -469,4 +499,68 @@ BOOL ScDocShell::ReloadTabLinks()
+@@ -469,4 +500,45 @@ BOOL ScDocShell::ReloadTabLinks()
      return TRUE;		//! Fehler erkennen
  }
  
@@ -203,59 +203,36 @@ index e356bed..e2ddad1 100644
 +        // no need to check repeatedly.
 +        return;
 +
-+    try
++    OUString aDecSep = ScGlobal::GetpLocaleData()->getNumDecimalSep();
++
++    ScModule* pScMod = SC_MOD();
++    const ScDocOptions& rOpt = pScMod->GetDocOptions();
++    OUString aSepArg = rOpt.GetFormulaSepArg();
++    OUString aSepArrRow = rOpt.GetFormulaSepArrayRow();
++    OUString aSepArrCol = rOpt.GetFormulaSepArrayCol();
++
++    if (aDecSep == aSepArg || aDecSep == aSepArrRow || aDecSep == aSepArrCol)
 +    {
-+        Reference<XMultiServiceFactory> xMSF = ::comphelper::getProcessServiceFactory();
-+        Reference<XMultiServiceFactory> theConfigProvider = 
-+            Reference<XMultiServiceFactory>(
-+                xMSF->createInstance(C2U("com.sun.star.configuration.ConfigurationProvider")), UNO_QUERY_THROW);
++        // One of arg separators conflicts with the current decimal
++        // separator.  Reset them to default.
++        ScDocOptions aNew = rOpt;
++        aNew.ResetFormulaSeparators();
++        aDocument.SetDocOptions(aNew);
++        pScMod->SetDocOptions(aNew);
 +
-+        Sequence<Any> theArgs(1);
-+        theArgs[0] <<= C2U("org.openoffice.Office.Calc/Formula/Syntax");
-+        Reference<XNameAccess> xNA = Reference<XNameAccess>(
-+            theConfigProvider->createInstanceWithArguments(
-+                C2U("com.sun.star.configuration.ConfigurationUpdateAccess"), theArgs), UNO_QUERY_THROW);
-+
-+        Reference<XPropertySet> xPropSet(xNA, UNO_QUERY_THROW);
-+        OUString aSepArg, aSepArrRow, aSepArrCol;
-+        xPropSet->getPropertyValue(C2U("SeparatorArg")) >>= aSepArg;
-+        xPropSet->getPropertyValue(C2U("SeparatorArrayCol")) >>= aSepArrCol;
-+        xPropSet->getPropertyValue(C2U("SeparatorArrayRow")) >>= aSepArrRow;
-+
-+        OUString aDecSep = ScGlobal::GetpLocaleData()->getNumDecimalSep();
-+        if (aDecSep == aSepArg || aDecSep == aSepArrRow || aDecSep == aSepArrCol)
++        // Launch a nice warning dialog to let the users know of this change.
++        ScTabViewShell* pViewShell = GetBestViewShell();
++        if (pViewShell)
 +        {
-+            // One of arg separators conflicts with the current decimal
-+            // separator.  Reset them to default.
-+            ScDocOptions::ResetFormulaSeparators(aSepArg, aSepArrCol, aSepArrRow);
-+            Any any;
-+            any <<= aSepArg;
-+            xPropSet->setPropertyValue(C2U("SeparatorArg"), any);
-+            any <<= aSepArrCol;
-+            xPropSet->setPropertyValue(C2U("SeparatorArrayCol"), any);
-+            any <<= aSepArrRow;
-+            xPropSet->setPropertyValue(C2U("SeparatorArrayRow"), any);
-+            Reference<XChangesBatch>(xPropSet, UNO_QUERY_THROW)->commitChanges();
-+
-+            ::formula::FormulaCompiler::UpdateSeparatorsNative(aSepArg, aSepArrCol, aSepArrRow);
-+
-+            // Launch a nice warning dialog to let the users know of this change.
-+            ScTabViewShell* pViewShell = GetBestViewShell();
-+            if (pViewShell)
-+            {
-+                Window* pParent = pViewShell->GetFrameWin();
-+                InfoBox aBox(pParent, ScGlobal::GetRscString(STR_OPTIONS_WARN_SEPARATORS));
-+                aBox.Execute();
-+            }
-+
-+            // For now, this is the only option setting that could launch info 
-+            // dialog.  But in the future we may want to implement a nicer
-+            // dialog to display a list of warnings in case we have several
-+            // pieces of information to display.
++            Window* pParent = pViewShell->GetFrameWin();
++            InfoBox aBox(pParent, ScGlobal::GetRscString(STR_OPTIONS_WARN_SEPARATORS));
++            aBox.Execute();
 +        }
-+    }
-+    catch (const Exception&)
-+    {
++
++        // For now, this is the only option setting that could launch info 
++        // dialog.  But in the future we may want to implement a nicer
++        // dialog to display a list of warnings in case we have several
++        // pieces of information to display.
 +    }
 +
 +    SetConfigOptionsChecked(true);
@@ -302,10 +279,10 @@ index 0f48b1d..2d0fd78 100644
  };
  
 diff --git sc/source/ui/view/gridwin.cxx sc/source/ui/view/gridwin.cxx
-index 014dbde..a8a01e6 100644
+index 9b9337e..2500129 100644
 --- sc/source/ui/view/gridwin.cxx
 +++ sc/source/ui/view/gridwin.cxx
-@@ -4577,6 +4577,7 @@ void __EXPORT ScGridWindow::GetFocus()
+@@ -4581,6 +4581,7 @@ void __EXPORT ScGridWindow::GetFocus()
                              //		  auf dem Mac
      }
  
