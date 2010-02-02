@@ -1,0 +1,172 @@
+Index: source/cpp_uno/gcc3_linux_x86-64/abi.hxx
+===================================================================
+--- bridges/source/cpp_uno/gcc3_linux_x86-64/abi.hxx	(revision 265903)
++++ bridges/source/cpp_uno/gcc3_linux_x86-64/abi.hxx	(working copy)
+@@ -63,7 +63,7 @@
+ */
+ bool return_in_hidden_param( typelib_TypeDescriptionReference *pTypeRef );
+ 
+-void fill_struct( typelib_TypeDescriptionReference *pTypeRef, void * const *pGPR, void * const *pSSE, void *pStruct );
++void fill_struct( typelib_TypeDescriptionReference *pTypeRef, const sal_uInt64* pGPR, const double* pSSE, void *pStruct );
+ 
+ } // namespace x86_64
+ 
+Index: source/cpp_uno/gcc3_linux_x86-64/cpp2uno.cxx
+===================================================================
+--- bridges/source/cpp_uno/gcc3_linux_x86-64/cpp2uno.cxx	(revision 265957)
++++ bridges/source/cpp_uno/gcc3_linux_x86-64/cpp2uno.cxx	(working copy)
+@@ -159,6 +163,7 @@
+ 		else // struct <= 16 bytes || ptr to complex value || ref
+ 		{
+ 			void *pCppStack;
++#if 0
+ 			char pTmpStruct[16];
+ 
+ 			if ( bFitsRegisters && !rParam.bOut &&
+@@ -180,7 +185,9 @@
+ 				else
+ 					pCppArgs[nPos] = pCppStack = *ovrflw++;
+ 			}
+-			else if ( nr_gpr < x86_64::MAX_GPR_REGS )
++			else
++#endif
++				if ( nr_gpr < x86_64::MAX_GPR_REGS )
+ 			{ 
+ 				pCppArgs[nPos] = pCppStack = *gpreg++;
+ 				nr_gpr++;
+Index: source/cpp_uno/gcc3_linux_x86-64/uno2cpp.cxx
+===================================================================
+--- bridges/source/cpp_uno/gcc3_linux_x86-64/uno2cpp.cxx	(revision 265903)
++++ bridges/source/cpp_uno/gcc3_linux_x86-64/uno2cpp.cxx	(working copy)
+@@ -53,13 +53,13 @@
+ 
+ //==================================================================================================
+ static void callVirtualMethod(void * pThis, sal_uInt32 nVtableIndex,
+-                              void * pRegisterReturn, typelib_TypeDescription * pReturnTypeDescr, bool bSimpleReturn,
++                              void * pRegisterReturn, typelib_TypeDescriptionReference * pReturnTypeRef, bool bSimpleReturn,
+                               sal_uInt64 *pStack, sal_uInt32 nStack,
+                               sal_uInt64 *pGPR, sal_uInt32 nGPR,
+                               double *pFPR, sal_uInt32 nFPR) __attribute__((noinline));
+ 
+ static void callVirtualMethod(void * pThis, sal_uInt32 nVtableIndex,
+-                              void * pRegisterReturn, typelib_TypeDescription * pReturnTypeDescr, bool bSimpleReturn,
++                              void * pRegisterReturn, typelib_TypeDescriptionReference * pReturnTypeRef, bool bSimpleReturn,
+                               sal_uInt64 *pStack, sal_uInt32 nStack,
+                               sal_uInt64 *pGPR, sal_uInt32 nGPR,
+                               double *pFPR, sal_uInt32 nFPR)
+@@ -113,6 +113,7 @@
+     sal_uInt64 rax;
+     sal_uInt64 rdx;
+     double xmm0;
++    double xmm1;
+ 
+     asm volatile (
+         
+@@ -147,13 +148,14 @@
+         "movq   %%rax, %4\n\t"
+         "movq   %%rdx, %5\n\t"
+         "movsd %%xmm0, %6\n\t"
++        "movsd %%xmm1, %7\n\t"
+         :
+         : "m" ( pMethod ), "m" ( pGPR ), "m" ( pFPR ), "m" ( nFPR ),
+-          "m" ( rax ), "m" ( rdx ), "m" ( xmm0 )
++          "m" ( rax ), "m" ( rdx ), "m" ( xmm0 ), "m" ( xmm1 )
+         : "rax", "rdi", "rsi", "rdx", "rcx", "r8", "r9", "r11"
+     );
+ 
+-    switch (pReturnTypeDescr->eTypeClass)
++    switch (pReturnTypeRef->eTypeClass)
+     {
+     case typelib_TypeClass_HYPER:
+     case typelib_TypeClass_UNSIGNED_HYPER:
+@@ -179,12 +181,17 @@
+         break;
+     default:
+         {
+-            sal_Int32 const nRetSize = pReturnTypeDescr->nSize;
++            sal_Int32 const nRetSize = pReturnTypeRef->pType->nSize;
+             if (bSimpleReturn && nRetSize <= 16 && nRetSize > 0)
+             {
+-                if (nRetSize > 8)
+-                    static_cast<sal_uInt64 *>(pRegisterReturn)[1] = rdx;
+-                static_cast<sal_uInt64 *>(pRegisterReturn)[0] = rax;
++                sal_uInt64 longs[2];
++                longs[0] = rax;
++                longs[1] = rdx;
++
++                double doubles[2];
++                doubles[0] = xmm0;
++                doubles[1] = xmm1;
++                x86_64::fill_struct( pReturnTypeRef, &longs[0], &doubles[0], pRegisterReturn);
+             }
+             break;
+         }
+@@ -367,7 +374,7 @@
+ 	{
+ 		callVirtualMethod(
+ 			pAdjustedThisPtr, aVtableSlot.index,
+-			pCppReturn, pReturnTypeDescr, bSimpleReturn,
++			pCppReturn, pReturnTypeRef, bSimpleReturn,
+ 			pStackStart, ( pStack - pStackStart ),
+ 			pGPR, nGPR,
+ 			pFPR, nFPR );
+Index: source/cpp_uno/gcc3_linux_x86-64/abi.cxx
+===================================================================
+--- bridges/source/cpp_uno/gcc3_linux_x86-64/abi.cxx	(revision 265903)
++++ bridges/source/cpp_uno/gcc3_linux_x86-64/abi.cxx	(working copy)
+@@ -229,6 +230,7 @@
+                 for ( sal_Int32 nMember = 0; nMember < pStruct->nMembers; ++nMember )
+                 {
+                     typelib_TypeDescriptionReference *pTypeInStruct = pStruct->ppTypeRefs[ nMember ];
++                    rByteOffset = pStruct->pMemberOffsets[ nMember ];
+ 
+                     int num = classify_argument( pTypeInStruct, subclasses, rByteOffset );
+ 
+@@ -243,9 +245,6 @@
+                         int pos = rByteOffset / 8;
+                         classes[i + pos] = merge_classes( subclasses[i], classes[i + pos] );
+                     }
+-
+-                    if ( pTypeInStruct->eTypeClass != typelib_TypeClass_STRUCT )
+-                        rByteOffset = pStruct->pMemberOffsets[ nMember ];
+                 }
+ 
+                 TYPELIB_DANGER_RELEASE( pTypeDescr );
+@@ -332,7 +331,7 @@
+     return examine_argument( pTypeRef, true, g, s ) == 0;
+ }
+ 
+-void x86_64::fill_struct( typelib_TypeDescriptionReference *pTypeRef, void * const *pGPR, void * const *pSSE, void *pStruct )
++void x86_64::fill_struct( typelib_TypeDescriptionReference *pTypeRef, const sal_uInt64 *pGPR, const double *pSSE, void *pStruct )
+ {
+     enum x86_64_reg_class classes[MAX_CLASSES];
+     int offset = 0;
+@@ -346,12 +345,12 @@
+         {
+             case X86_64_INTEGER_CLASS:
+             case X86_64_INTEGERSI_CLASS:
+-                *pStructAlign++ = *reinterpret_cast<sal_uInt64 *>( *pGPR++ );
++                *pStructAlign++ = *pGPR++;
+                 break;
+             case X86_64_SSE_CLASS:
+             case X86_64_SSESF_CLASS:
+             case X86_64_SSEDF_CLASS:
+-                *pStructAlign++ = *reinterpret_cast<sal_uInt64 *>( *pSSE++ );
++                *pStructAlign++ = *reinterpret_cast<const sal_uInt64 *>( pSSE++ );
+                 break;
+             default:
+                 break;
+Index: source/cpp_uno/gcc3_linux_x86-64/call.s
+===================================================================
+--- bridges/source/cpp_uno/gcc3_linux_x86-64/call.s	(revision 265903)
++++ bridges/source/cpp_uno/gcc3_linux_x86-64/call.s	(working copy)
+@@ -43,6 +43,9 @@
+ 	je	.Lfloat
+ 
+ 	movq	-144(%rbp), %rax		# Return value (int case)
++	movq	-136(%rbp), %rdx		# Return value (int case)
++	movq	-144(%rbp), %xmm0		# Return value (int case)
++	movq	-136(%rbp), %xmm1		# Return value (int case)
+ 	jmp	.Lfinish
+ .Lfloat:
+ 	movlpd	-144(%rbp), %xmm0		# Return value (float/double case)
