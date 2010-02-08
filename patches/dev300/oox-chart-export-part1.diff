@@ -219,10 +219,18 @@ index 0000000..5e2c6e7
 +
 +#endif /* ndef _OOX_EXPORT_CHART_HXX_ */
 diff --git oox/inc/oox/export/drawingml.hxx oox/inc/oox/export/drawingml.hxx
-index 211c90e..56b6080 100644
+index 211c90e..6569c8b 100644
 --- oox/inc/oox/export/drawingml.hxx
 +++ oox/inc/oox/export/drawingml.hxx
-@@ -27,6 +27,9 @@ namespace text {
+@@ -8,6 +8,7 @@
+ #include <com/sun/star/uno/XReference.hpp>
+ #include <tools/poly.hxx>
+ #include <svx/escherex.hxx>
++#include <oox/core/tokens.hxx>
+ 
+ class Graphic;
+ class String;
+@@ -27,6 +28,9 @@ namespace text {
      class XTextContent;
      class XTextRange;
  }
@@ -232,7 +240,27 @@ index 211c90e..56b6080 100644
  }}}
  
  namespace oox {
-@@ -95,11 +98,12 @@ public:
+@@ -64,6 +68,7 @@ public:
+     void SetFS( ::sax_fastparser::FSHelperPtr pFS ) { mpFS = pFS; }
+     ::sax_fastparser::FSHelperPtr GetFS() { return mpFS; }
+     ::oox::core::XmlFilterBase* GetFB() { return mpFB; }
++    DocumentType GetDocumentType() { return meDocumentType; }
+ 
+     rtl::OUString WriteImage( const Graphic &rGraphic );
+ 
+@@ -85,9 +90,9 @@ public:
+     void WriteBlipMode( ::com::sun::star::uno::Reference< ::com::sun::star::beans::XPropertySet > rXPropSet );
+ 
+     void WriteShapeTransformation( ::com::sun::star::uno::Reference< ::com::sun::star::drawing::XShape > rXShape,
+-                   sal_Bool bFlipH = false, sal_Bool bFlipV = false, sal_Int32 nRotation = 0 );
++                   sal_Bool bFlipH = false, sal_Bool bFlipV = false, sal_Int32 nRotation = 0, sal_Int32 nXmlNamespace = XML_a );
+     void WriteTransformation( const Rectangle& rRectangle,
+-                  sal_Bool bFlipH = false, sal_Bool bFlipV = false, sal_Int32 nRotation = 0 );
++                  sal_Bool bFlipH = false, sal_Bool bFlipV = false, sal_Int32 nRotation = 0 , sal_Int32 nXmlNamespace = XML_a );
+ 
+     void WriteText( ::com::sun::star::uno::Reference< ::com::sun::star::drawing::XShape > rXShape );
+     void WriteParagraph( ::com::sun::star::uno::Reference< ::com::sun::star::text::XTextContent > rParagraph );
+@@ -95,11 +100,12 @@ public:
      void WriteParagraphNumbering( ::com::sun::star::uno::Reference< ::com::sun::star::beans::XPropertySet > rXPropSet,
                                    sal_Int16 nLevel );
      void WriteRun( ::com::sun::star::uno::Reference< ::com::sun::star::text::XTextRange > rRun );
@@ -246,7 +274,7 @@ index 211c90e..56b6080 100644
  
      static void ResetCounters();
  
-@@ -110,6 +114,15 @@ public:
+@@ -110,6 +116,15 @@ public:
      sal_uInt32 ColorWithIntensity( sal_uInt32 nColor, sal_uInt32 nIntensity );
  
      static const char* GetAlignment( sal_Int32 nAlignment );
@@ -263,7 +291,7 @@ index 211c90e..56b6080 100644
  
  }
 diff --git oox/inc/oox/export/shapes.hxx oox/inc/oox/export/shapes.hxx
-index be9676e..0190fc6 100644
+index be9676e..9abc1c2 100644
 --- oox/inc/oox/export/shapes.hxx
 +++ oox/inc/oox/export/shapes.hxx
 @@ -105,8 +105,6 @@ public:
@@ -275,6 +303,15 @@ index be9676e..0190fc6 100644
                          WriteGraphicObjectShape( ::com::sun::star::uno::Reference< ::com::sun::star::drawing::XShape > xShape );
      virtual ShapeExport&
                          WriteLineShape( ::com::sun::star::uno::Reference< ::com::sun::star::drawing::XShape > xShape );
+@@ -162,6 +160,8 @@ public:
+     virtual ShapeExport&
+                         WriteTextShape( ::com::sun::star::uno::Reference< ::com::sun::star::drawing::XShape > xShape );
+     virtual ShapeExport&
++                        WriteOLE2Shape( ::com::sun::star::uno::Reference< ::com::sun::star::drawing::XShape > xShape );
++    virtual ShapeExport&
+                         WriteUnknownShape( ::com::sun::star::uno::Reference< ::com::sun::star::drawing::XShape > xShape );
+ 
+     sal_Int32 GetNewShapeID( const ::com::sun::star::uno::Reference< ::com::sun::star::drawing::XShape > rShape );
 diff --git oox/source/export/ColorPropertySet.cxx oox/source/export/ColorPropertySet.cxx
 new file mode 100644
 index 0000000..91b1527
@@ -1048,10 +1085,10 @@ index 0000000..6c8a458
 +#endif
 diff --git oox/source/export/chartexport.cxx oox/source/export/chartexport.cxx
 new file mode 100644
-index 0000000..1123958
+index 0000000..e410a64
 --- /dev/null
 +++ oox/source/export/chartexport.cxx
-@@ -0,0 +1,2653 @@
+@@ -0,0 +1,2696 @@
 +/*************************************************************************
 + *
 + * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
@@ -1137,6 +1174,7 @@ index 0000000..1123958
 +#include <com/sun/star/sheet/AddressConvention.hpp>
 +
 +#include <com/sun/star/text/WritingMode.hpp>
++#include <com/sun/star/container/XNamed.hpp>
 +
 +#include <comphelper/processfactory.hxx>
 +#include "SchXMLSeriesHelper.hxx"
@@ -1158,6 +1196,7 @@ index 0000000..1123958
 +using ::com::sun::star::container::XEnumeration;
 +using ::com::sun::star::container::XEnumerationAccess;
 +using ::com::sun::star::container::XIndexAccess;
++using ::com::sun::star::container::XNamed;
 +using ::com::sun::star::io::XOutputStream;
 +using ::com::sun::star::table::CellAddress;
 +using ::com::sun::star::sheet::XFormulaParser;
@@ -1688,7 +1727,15 @@ index 0000000..1123958
 +    Reference< XFormulaParser > xParser;
 +    uno::Reference< lang::XMultiServiceFactory > xSF( GetFB()->getModelFactory(), uno::UNO_QUERY );
 +    if( xSF.is() )
-+        xParser.set( xSF->createInstance( OUString::createFromAscii( "com.sun.star.sheet.FormulaParser" ) ), UNO_QUERY );
++    {
++        try
++        {
++            xParser.set( xSF->createInstance( OUString::createFromAscii( "com.sun.star.sheet.FormulaParser" ) ), UNO_QUERY );
++        }     
++        catch( Exception& )
++        {
++        }
++    }    
 +    if( xParser.is() )
 +    {
 +        OSL_TRACE("ChartExport::parseFormula, parser is valid");
@@ -1722,7 +1769,6 @@ index 0000000..1123958
 +ChartExport& ChartExport::WriteChartObj( const Reference< XShape >& xShape, sal_Int32 nChartCount )
 +{
 +    OSL_TRACE("ChartExport::WriteChartObj -- writer chart object");
-+/*
 +    FSHelperPtr pFS = GetFS();
 +
 +    pFS->startElementNS( mnXmlNamespace, XML_graphicFrame, FSEND );
@@ -1731,6 +1777,10 @@ index 0000000..1123958
 +
 +    // TODO: get the correct chart name chart id
 +    OUString sName = S("Object 1");
++    Reference< XNamed > xNamed( xShape, UNO_QUERY );
++    if (xNamed.is())
++        sName = xNamed->getName();
++
 +    sal_Int32 nID = GetChartID();
 +
 +    pFS->singleElementNS( mnXmlNamespace, XML_cNvPr,
@@ -1741,12 +1791,13 @@ index 0000000..1123958
 +    pFS->singleElementNS( mnXmlNamespace, XML_cNvGraphicFramePr,
 +                          FSEND );
 +
++    if( GetDocumentType() == DOCUMENT_PPTX )
++        pFS->singleElementNS( mnXmlNamespace, XML_nvPr,
++                          FSEND );
 +    pFS->endElementNS( mnXmlNamespace, XML_nvGraphicFramePr );
 +
 +    // visual chart properties
-+    pFS->startElementNS( mnXmlNamespace, XML_xfrm, FSEND );
-+    WriteShapeTransformation( xShape );
-+    pFS->endElementNS( mnXmlNamespace, XML_xfrm );
++    WriteShapeTransformation( xShape, false, false, 0, mnXmlNamespace );
 +
 +    // writer chart object
 +    pFS->startElement( FSNS( XML_a, XML_graphic ), FSEND );
@@ -1754,10 +1805,49 @@ index 0000000..1123958
 +                       XML_uri, "http://schemas.openxmlformats.org/drawingml/2006/chart",
 +                       FSEND );
 +    OUString sId;
-+    FSHelperPtr pChart = pFS->CreateOutputStream(
-+            XclXmlUtils::GetStreamName( "xl/", "charts/chart", nChartCount ),
-+            XclXmlUtils::GetStreamName( "../", "charts/chart", nChartCount ),
-+            pFS->GetCurrentStream()->getOutputStream(),
++    const char* sFullPath = NULL;
++    const char* sRelativePath = NULL;
++    switch( GetDocumentType() )
++    {
++        case DOCUMENT_DOCX:
++        {
++            sFullPath = "word/charts/chart";
++            sRelativePath = "charts/chart";
++            break;
++        }
++        case DOCUMENT_PPTX:
++        {
++            sFullPath = "ppt/charts/chart";
++            sRelativePath = "../charts/chart";
++            break;
++        }
++        case DOCUMENT_XLSX:
++        {
++            sFullPath = "xl/charts/chart";
++            sRelativePath = "../charts/chart";
++            break;
++        }
++        default:
++        {
++            sFullPath = "charts/chart";
++            sRelativePath = "charts/chart";
++            break;
++        }
++    }
++    OUString sFullStream = OUStringBuffer()
++                            .appendAscii(sFullPath)
++                            .append(nChartCount)
++                            .appendAscii( ".xml" )
++                            .makeStringAndClear();
++    OUString sRelativeStream = OUStringBuffer()
++                            .appendAscii(sRelativePath)
++                            .append(nChartCount)
++                            .appendAscii( ".xml" )
++                            .makeStringAndClear();
++    FSHelperPtr pChart = CreateOutputStream(
++            sFullStream,
++            sRelativeStream,
++            pFS->getOutputStream(),
 +            "application/vnd.openxmlformats-officedocument.drawingml.chart+xml",
 +            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart",
 +            &sId );
@@ -1765,25 +1855,15 @@ index 0000000..1123958
 +    pFS->singleElement(  FSNS( XML_c, XML_chart ),
 +            FSNS( XML_xmlns, XML_c ), "http://schemas.openxmlformats.org/drawingml/2006/chart",
 +            FSNS( XML_xmlns, XML_r ), "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
-+            FSNS( XML_r, XML_id ), XclXmlUtils::ToOString( sId ).getStr(),
++            FSNS( XML_r, XML_id ), USS( sId ),
 +            FSEND );
-+    
-+    pFS->PushStream( pChart );
-+    pChart->startElement( FSNS( XML_c, XML_chartSpace ),
-+            FSNS( XML_xmlns, XML_c ), "http://schemas.openxmlformats.org/drawingml/2006/chart",
-+            FSNS( XML_xmlns, XML_a ), "http://schemas.openxmlformats.org/drawingml/2006/main",
-+            FSNS( XML_xmlns, XML_r ), "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
-+            FSEND );
-+    // TODO: export chart body        
-+    pChart->endElement( FSNS( XML_c, XML_chartSpace ) );
 +
-+    pFS->PopStream();
-+    
-+
-+    pFS->endElement( FSNS( XML_a, XML_graphic ) ); 
 +    pFS->endElement( FSNS( XML_a, XML_graphicData ) ); 
++    pFS->endElement( FSNS( XML_a, XML_graphic ) ); 
 +    pFS->endElementNS( mnXmlNamespace, XML_graphicFrame );
-+    */
++    
++    SetFS( pChart );
++    ExportContent();        
 +
 +    return *this;
 +}
@@ -2388,7 +2468,7 @@ index 0000000..1123958
 +    pFS->endElement( FSNS( XML_c, XML_lineChart ) );
 +}
 +
-+void ChartExport::exportOfPieChart( Reference< chart2::XChartType > xChartType )
++void ChartExport::exportOfPieChart( Reference< chart2::XChartType > /*xChartType*/ )
 +{
 +    // TODO:
 +}
@@ -2708,7 +2788,7 @@ index 0000000..1123958
 +
 +void ChartExport::exportCandleStickSeries(
 +    const Sequence< Reference< chart2::XDataSeries > > & aSeriesSeq,
-+    sal_Bool bJapaneseCandleSticks,
++    sal_Bool /*bJapaneseCandleSticks*/,
 +    sal_Int32& nAttachedAxis )
 +{
 +    for( sal_Int32 nSeriesIdx=0; nSeriesIdx<aSeriesSeq.getLength(); ++nSeriesIdx )
@@ -3706,7 +3786,7 @@ index 0000000..1123958
 +}// oox
 +
 diff --git oox/source/export/drawingml.cxx oox/source/export/drawingml.cxx
-index 77bcdf4..8548acb 100644
+index 77bcdf4..88012cd 100644
 --- oox/source/export/drawingml.cxx
 +++ oox/source/export/drawingml.cxx
 @@ -54,6 +54,8 @@
@@ -3718,8 +3798,36 @@ index 77bcdf4..8548acb 100644
  #include <com/sun/star/i18n/ScriptType.hpp>
  #include <com/sun/star/io/XOutputStream.hpp>
  #include <com/sun/star/style/LineSpacing.hpp>
-@@ -675,7 +677,7 @@ void DrawingML::WriteShapeTransformation( Reference< XShape > rXShape, sal_Bool
-     WriteTransformation( Rectangle( Point( aPos.X, aPos.Y ), Size( aSize.Width, aSize.Height ) ), bFlipH, bFlipV, nRotation );
+@@ -651,9 +653,9 @@ void DrawingML::WriteStretch()
+ }
+ 
+ void DrawingML::WriteTransformation( const Rectangle& rRect,
+-        sal_Bool bFlipH, sal_Bool bFlipV, sal_Int32 nRotation )
++        sal_Bool bFlipH, sal_Bool bFlipV, sal_Int32 nRotation, sal_Int32 nXmlNamespace )
+ {
+-    mpFS->startElementNS( XML_a, XML_xfrm,
++    mpFS->startElementNS( nXmlNamespace, XML_xfrm,
+                           XML_flipH, bFlipH ? "1" : NULL,
+                           XML_flipV, bFlipV ? "1" : NULL,
+                           XML_rot, nRotation ? I32S( nRotation ) : NULL,
+@@ -662,20 +664,20 @@ void DrawingML::WriteTransformation( const Rectangle& rRect,
+     mpFS->singleElementNS( XML_a, XML_off, XML_x, IS( MM100toEMU( rRect.Left() ) ), XML_y, IS( MM100toEMU( rRect.Top() ) ), FSEND );
+     mpFS->singleElementNS( XML_a, XML_ext, XML_cx, IS( MM100toEMU( rRect.GetWidth() ) ), XML_cy, IS( MM100toEMU( rRect.GetHeight() ) ), FSEND );
+ 
+-    mpFS->endElementNS( XML_a, XML_xfrm );
++    mpFS->endElementNS( nXmlNamespace, XML_xfrm );
+ }
+ 
+-void DrawingML::WriteShapeTransformation( Reference< XShape > rXShape, sal_Bool bFlipH, sal_Bool bFlipV, sal_Int32 nRotation )
++void DrawingML::WriteShapeTransformation( Reference< XShape > rXShape, sal_Bool bFlipH, sal_Bool bFlipV, sal_Int32 nRotation, sal_Int32 nXmlNamespace )
+ {
+     DBG(printf( "write shape transformation\n" ));
+ 
+     awt::Point aPos = rXShape->getPosition();
+     awt::Size aSize = rXShape->getSize();
+ 
+-    WriteTransformation( Rectangle( Point( aPos.X, aPos.Y ), Size( aSize.Width, aSize.Height ) ), bFlipH, bFlipV, nRotation );
++    WriteTransformation( Rectangle( Point( aPos.X, aPos.Y ), Size( aSize.Width, aSize.Height ) ), bFlipH, bFlipV, nRotation, nXmlNamespace );
  }
  
 -void DrawingML::WriteRunProperties( Reference< XTextRange > rRun, sal_Bool bIsField )
@@ -3817,10 +3925,36 @@ index 08fa7a0..97891cf 100644
          $(SLO)$/vmlexport-shape-types.obj
  
 diff --git oox/source/export/shapes.cxx oox/source/export/shapes.cxx
-index 3c3af21..36e0c43 100644
+index 3c3af21..35fa1aa 100644
 --- oox/source/export/shapes.cxx
 +++ oox/source/export/shapes.cxx
-@@ -569,39 +569,6 @@ ShapeExport& ShapeExport::WriteEllipseShape( Reference< XShape > xShape )
+@@ -59,6 +59,8 @@
+ #include <com/sun/star/text/XTextContent.hpp>
+ #include <com/sun/star/text/XTextField.hpp>
+ #include <com/sun/star/text/XTextRange.hpp>
++#include <com/sun/star/chart2/XChartDocument.hpp>
++#include <com/sun/star/frame/XModel.hpp>
+ #include <tools/stream.hxx>
+ #include <tools/string.hxx>
+ #include <vcl/cvtgrf.hxx>
+@@ -73,6 +75,7 @@
+ #include <svx/svdoashp.hxx>
+ #include <svx/svxenum.hxx>
+ #include <svx/unoapi.hxx>
++#include <oox/export/chartexport.hxx>
+ 
+ using namespace ::com::sun::star;
+ using namespace ::com::sun::star::uno;
+@@ -92,6 +95,8 @@ using ::com::sun::star::text::XText;
+ using ::com::sun::star::text::XTextContent;
+ using ::com::sun::star::text::XTextField;
+ using ::com::sun::star::text::XTextRange;
++using ::com::sun::star::chart2::XChartDocument;
++using ::com::sun::star::frame::XModel;
+ using ::oox::core::XmlFilterBase;
+ using ::rtl::OString;
+ using ::rtl::OStringBuffer;
+@@ -569,39 +574,6 @@ ShapeExport& ShapeExport::WriteEllipseShape( Reference< XShape > xShape )
      return *this;
  }
  
@@ -3860,6 +3994,40 @@ index 3c3af21..36e0c43 100644
  ShapeExport& ShapeExport::WriteGraphicObjectShape( Reference< XShape > xShape )
  {
      DBG(printf("write graphic object shape\n"));
+@@ -898,6 +870,7 @@ static const NameToConvertMapType& lcl_GetConverters()
+     shape_converters[ "com.sun.star.drawing.LineShape" ]                = &ShapeExport::WriteLineShape;
+     shape_converters[ "com.sun.star.drawing.OpenBezierShape" ]          = &ShapeExport::WriteOpenBezierShape;
+     shape_converters[ "com.sun.star.drawing.RectangleShape" ]           = &ShapeExport::WriteRectangleShape;
++    shape_converters[ "com.sun.star.drawing.OLE2Shape" ]                = &ShapeExport::WriteOLE2Shape;
+     shape_converters[ "com.sun.star.drawing.TextShape" ]                = &ShapeExport::WriteTextShape;
+     shape_converters[ "com.sun.star.presentation.DateTimeShape" ]       = &ShapeExport::WriteTextShape;
+     shape_converters[ "com.sun.star.presentation.FooterShape" ]         = &ShapeExport::WriteTextShape;
+@@ -967,6 +940,25 @@ ShapeExport& ShapeExport::WriteTextShape( Reference< XShape > xShape )
+     return *this;
+ }
+ 
++ShapeExport& ShapeExport::WriteOLE2Shape( Reference< XShape > xShape )
++{
++    Reference< XPropertySet > xPropSet( xShape, UNO_QUERY );
++    if( xPropSet.is() && GetProperty( xPropSet, S("Model") ) )
++    {
++        Reference< XChartDocument > xChartDoc;
++        mAny >>= xChartDoc;
++        if( xChartDoc.is() )
++        {
++            //export the chart
++            Reference< XModel > xModel( xChartDoc, UNO_QUERY );
++            ChartExport aChartExport( mnXmlNamespace, GetFS(), xModel, GetFB(), GetDocumentType() );
++            static sal_Int32 nChartCount = 0;
++            aChartExport.WriteChartObj( xShape, ++nChartCount );
++        }
++    }
++    return *this;
++}
++
+ ShapeExport& ShapeExport::WriteUnknownShape( Reference< XShape > )
+ {
+     // Override this method to do something useful.
 diff --git sc/source/filter/xlsx/xcl97rec.hxx sc/source/filter/xlsx/xcl97rec.hxx
 index 01adc19..0ab5c3c 100644
 --- sc/source/filter/xlsx/xcl97rec.hxx
@@ -3951,7 +4119,7 @@ index 2c73dff..e463be9 100644
  WritePicPr( sax_fastparser::FSHelperPtr pDrawing, sal_Int32 nId, Reference< XPropertySet > xPropSet )
  {
 diff --git sc/source/filter/xlsx/xlsx-xeescher.cxx sc/source/filter/xlsx/xlsx-xeescher.cxx
-index e224fc2..cbd1031 100644
+index e224fc2..897373c 100644
 --- sc/source/filter/xlsx/xlsx-xeescher.cxx
 +++ sc/source/filter/xlsx/xlsx-xeescher.cxx
 @@ -47,6 +47,10 @@
@@ -4006,7 +4174,7 @@ index e224fc2..cbd1031 100644
      ::com::sun::star::awt::Rectangle aBoundRect;
      aShapeProp.GetProperty( aBoundRect, CREATE_OUSTRING( "BoundRect" ) );
      Size aSize( aBoundRect.Width, aBoundRect.Height );
-@@ -854,6 +865,115 @@ void XclExpChartObj::Save( XclExpStream& /*rStrm*/ )
+@@ -854,6 +865,118 @@ void XclExpChartObj::Save( XclExpStream& /*rStrm*/ )
  #endif // xlsx
  }
  
@@ -4023,9 +4191,13 @@ index e224fc2..cbd1031 100644
 +    if (xPropSet.is())
 +    {
 +        XclObjAny::WriteFromTo( rStrm, mxShape, GetTab() );
-+        //ChartExport aChartExport( XML_xdr, pDrawing, mxChartDoc, &rStrm, DrawingML::DOCUMENT_XLSX );
++        Reference< XModel > xModel( mxChartDoc, UNO_QUERY );
++        ChartExport aChartExport( XML_xdr, pDrawing, xModel, &rStrm, DrawingML::DOCUMENT_XLSX );
++        static sal_Int32 nChartCount = 0;
++        nChartCount++;
++        aChartExport.WriteChartObj( mxShape, nChartCount );
 +        // TODO: get the correcto chart number
-+        WriteChartObj( pDrawing, rStrm );
++        //WriteChartObj( pDrawing, rStrm );
 +    }
 +
 +    pDrawing->singleElement( FSNS( XML_xdr, XML_clientData),
@@ -4090,7 +4262,6 @@ index e224fc2..cbd1031 100644
 +    
 +    rStrm.PushStream( pChart );
 +    Reference< XModel > xModel( mxChartDoc, UNO_QUERY );
-+    //GetDoc().SetGrammar( formula::FormulaGrammar::GRAM_ENGLISH_XL_A1);
 +    ChartExport aChartExport( XML_xdr, pChart, xModel, &rStrm, DrawingML::DOCUMENT_XLSX );
 +    aChartExport.ExportContent();
 +
@@ -4122,3 +4293,219 @@ index e224fc2..cbd1031 100644
  // ============================================================================
  
  XclExpNote::XclExpNote( const XclExpRoot& rRoot, const ScAddress& rScPos,
+diff --git sw/source/filter/ww8/docxattributeoutput.cxx sw/source/filter/ww8/docxattributeoutput.cxx
+index 44a5c32..13083c7 100644
+--- sw/source/filter/ww8/docxattributeoutput.cxx
++++ sw/source/filter/ww8/docxattributeoutput.cxx
+@@ -120,6 +120,11 @@
+ #include <tools/color.hxx>
+ 
+ #include <com/sun/star/i18n/ScriptType.hdl>
++#include <com/sun/star/drawing/XShape.hpp>
++#include <com/sun/star/frame/XModel.hpp>
++#include <com/sun/star/chart2/XChartDocument.hpp>
++#include <com/sun/star/beans/XPropertySet.hpp>
++#include <com/sun/star/container/XNamed.hpp>
+ 
+ #if OSL_DEBUG_LEVEL > 0
+ #include <stdio.h>
+@@ -136,6 +141,7 @@ using namespace sax_fastparser;
+ using namespace nsSwDocInfoSubType;
+ using namespace nsFieldFlags;
+ using namespace sw::util;
++using namespace ::com::sun::star;
+ 
+ void DocxAttributeOutput::RTLAndCJKState( bool bIsRTL, sal_uInt16 /*nScript*/ )
+ {
+@@ -1667,6 +1673,81 @@ void DocxAttributeOutput::FlyFrameGraphic( const SwGrfNode& rGrfNode, const Size
+     m_pSerializer->endElementNS( XML_w, XML_drawing );
+ }
+ 
++void DocxAttributeOutput::WriteOLE2Obj( const SdrObject* pSdrObj, const Size& rSize )
++{
++    uno::Reference< chart2::XChartDocument > xChartDoc;
++    uno::Reference< drawing::XShape > xShape( ((SdrObject*)pSdrObj)->getUnoShape(), uno::UNO_QUERY );
++    if( xShape.is() )
++    {
++        uno::Reference< beans::XPropertySet > xPropSet( xShape, uno::UNO_QUERY );
++        if( xPropSet.is() )
++            xChartDoc.set( xPropSet->getPropertyValue( rtl::OUString::createFromAscii("Model") ), uno::UNO_QUERY );
++    }
++
++    if( xChartDoc.is() )
++    {
++        OSL_TRACE("DocxAttributeOutput::WriteOLE2Obj: export chart ");
++        m_pSerializer->startElementNS( XML_w, XML_drawing,
++            FSEND );
++        m_pSerializer->startElementNS( XML_wp, XML_inline,
++            XML_distT, "0", XML_distB, "0", XML_distL, "0", XML_distR, "0",
++            FSEND );
++
++        OString aWidth( OString::valueOf( TwipsToEMU( rSize.Width() ) ) );
++        OString aHeight( OString::valueOf( TwipsToEMU( rSize.Height() ) ) );
++        m_pSerializer->singleElementNS( XML_wp, XML_extent,
++            XML_cx, aWidth.getStr(),
++            XML_cy, aHeight.getStr(),
++            FSEND );
++        // TODO - the right effectExtent, extent including the effect
++        m_pSerializer->singleElementNS( XML_wp, XML_effectExtent,
++            XML_l, "0", XML_t, "0", XML_r, "0", XML_b, "0",
++            FSEND );
++
++        // should get the unique id
++        sal_Int32 nID = 1;
++        OUString sName = rtl::OUString::createFromAscii("Object 1");
++        uno::Reference< container::XNamed > xNamed( xShape, uno::UNO_QUERY );
++        if( xNamed.is() )
++            sName = xNamed->getName();
++
++        m_pSerializer->singleElementNS( XML_wp, XML_docPr,
++            XML_id, I32S( nID ),
++            XML_name, USS( sName ),
++            FSEND );
++
++        m_pSerializer->singleElementNS( XML_wp, XML_cNvGraphicFramePr,
++            FSEND );
++
++        m_pSerializer->startElementNS( XML_a, XML_graphic,
++            FSNS( XML_xmlns, XML_a ), "http://schemas.openxmlformats.org/drawingml/2006/main",
++            FSEND );
++        
++        m_pSerializer->startElementNS( XML_a, XML_graphicData,
++            XML_uri, "http://schemas.openxmlformats.org/drawingml/2006/chart",
++            FSEND );
++
++        
++
++        OString aRelId;
++        static sal_Int32 nChartCount = 0;
++        nChartCount++;
++        uno::Reference< frame::XModel > xModel( xChartDoc, uno::UNO_QUERY );
++        aRelId = m_rExport.OutputChart( xModel, nChartCount );
++
++        m_pSerializer->singleElementNS( XML_c, XML_chart,
++            FSNS( XML_xmlns, XML_c ), "http://schemas.openxmlformats.org/drawingml/2006/chart",
++            FSNS( XML_xmlns, XML_r ), "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
++            FSNS( XML_r, XML_id ), aRelId.getStr(),
++            FSEND );
++
++        m_pSerializer->endElementNS( XML_a, XML_graphicData );
++        m_pSerializer->endElementNS( XML_a, XML_graphic );
++        m_pSerializer->endElementNS( XML_wp, XML_inline );
++        m_pSerializer->endElementNS( XML_w, XML_drawing );
++    }
++}
++
+ void DocxAttributeOutput::OutputFlyFrame_Impl( const sw::Frame &rFrame, const Point& /*rNdTopLeft*/ )
+ {
+     m_pSerializer->mark();
+@@ -1711,6 +1792,13 @@ void DocxAttributeOutput::OutputFlyFrame_Impl( const sw::Frame &rFrame, const Po
+                 }
+             }
+             break;
++        case sw::Frame::eOle:
++            {
++                const SdrObject* pSdrObj = rFrame.GetFrmFmt().FindRealSdrObject();
++                if ( pSdrObj )
++                    WriteOLE2Obj( pSdrObj, rFrame.GetLayoutSize() );
++            }
++            break;
+         default:
+ #if OSL_DEBUG_LEVEL > 0
+             fprintf( stderr, "TODO DocxAttributeOutput::OutputFlyFrame_Impl( const sw::Frame& rFrame, const Point& rNdTopLeft ) - frame type '%s'\n",
+diff --git sw/source/filter/ww8/docxattributeoutput.hxx sw/source/filter/ww8/docxattributeoutput.hxx
+index d751e6c..ee19058 100644
+--- sw/source/filter/ww8/docxattributeoutput.hxx
++++ sw/source/filter/ww8/docxattributeoutput.hxx
+@@ -45,6 +45,7 @@
+ class DocxExport;
+ 
+ class SwGrfNode;
++class SdrObject;
+ 
+ namespace docx { class FootnotesList; }
+ namespace oox { namespace drawingml { class DrawingML; } }
+@@ -301,6 +302,7 @@ private:
+ 
+     /// Output graphic fly frames.
+     void FlyFrameGraphic( const SwGrfNode& rGrfNode, const Size& rSize );
++    void WriteOLE2Obj( const SdrObject* pSdrObj, const Size& rSize );
+     
+     void InitTableHelper( ww8::WW8TableNodeInfoInner::Pointer_t pTableTextNodeInfoInner );
+ 
+diff --git sw/source/filter/ww8/docxexport.cxx sw/source/filter/ww8/docxexport.cxx
+index b66b059..e2401f4 100644
+--- sw/source/filter/ww8/docxexport.cxx
++++ sw/source/filter/ww8/docxexport.cxx
+@@ -34,10 +34,12 @@
+ #include <com/sun/star/document/XDocumentPropertiesSupplier.hpp>
+ #include <com/sun/star/document/XDocumentProperties.hpp>
+ #include <com/sun/star/i18n/ScriptType.hdl>
++#include <com/sun/star/frame/XModel.hpp>
+ 
+ #include <oox/core/tokens.hxx>
+ #include <oox/export/drawingml.hxx>
+ #include <oox/export/vmlexport.hxx>
++#include <oox/export/chartexport.hxx>
+ 
+ #include <map>
+ #include <algorithm>
+@@ -423,6 +425,33 @@ void DocxExport::DoFormText(const SwInputField* /*pFld*/)
+ #endif
+ }
+ 
++rtl::OString DocxExport::OutputChart( uno::Reference< frame::XModel >& xModel, sal_Int32 nCount )
++{
++    rtl::OUString aFileName = rtl::OUStringBuffer()
++                                .appendAscii("charts/chart")
++                                .append(nCount)
++                                .appendAscii( ".xml" )
++                                .makeStringAndClear();
++
++    OUString sId = m_pFilter->addRelation( m_pDocumentFS->getOutputStream(),
++                    S( "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" ),
++                    aFileName );
++
++    aFileName = rtl::OUStringBuffer()
++                  .appendAscii("word/charts/chart")
++                  .append(nCount)
++                  .appendAscii( ".xml" )
++                  .makeStringAndClear();
++
++    ::sax_fastparser::FSHelperPtr pChartFS =
++        m_pFilter->openFragmentStreamWithSerializer( aFileName,
++            S( "application/vnd.openxmlformats-officedocument.drawingml.chart" ) );
++
++    oox::drawingml::ChartExport aChartExport( XML_w, pChartFS, xModel, m_pFilter, oox::drawingml::DrawingML::DOCUMENT_DOCX );
++    aChartExport.ExportContent();
++    return ::rtl::OUStringToOString( sId, RTL_TEXTENCODING_UTF8 );
++}
++
+ void DocxExport::ExportDocument_Impl()
+ {
+     InitStyles();
+diff --git sw/source/filter/ww8/docxexport.hxx sw/source/filter/ww8/docxexport.hxx
+index 183b1f3..f732272 100644
+--- sw/source/filter/ww8/docxexport.hxx
++++ sw/source/filter/ww8/docxexport.hxx
+@@ -55,6 +55,10 @@ namespace oox {
+     namespace vml { class VMLExport; }
+ }
+ 
++namespace com { namespace sun { namespace star {
++    namespace frame { class XModel; }
++} } }    
++
+ /// The class that does all the actual DOCX export-related work.
+ class DocxExport : public MSWordExportBase
+ {
+@@ -136,6 +140,9 @@ public:
+     
+     virtual ULONG ReplaceCr( BYTE nChar );
+ 
++    /// Returns the relationd id
++    rtl::OString OutputChart( com::sun::star::uno::Reference< com::sun::star::frame::XModel >& xModel, sal_Int32 nCount );
++
+ protected:
+     /// Format-dependant part of the actual export.
+     virtual void ExportDocument_Impl();
