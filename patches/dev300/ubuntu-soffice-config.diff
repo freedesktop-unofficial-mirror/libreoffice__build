@@ -2,7 +2,7 @@ Index: soffice.sh
 ===================================================================
 --- desktop/scripts/soffice.sh	(Revision 277909)
 +++ desktop/scripts/soffice.sh	(Arbeitskopie)
-@@ -30,19 +30,108 @@
+@@ -30,19 +30,122 @@
  #
  #*************************************************************************
  
@@ -18,11 +18,14 @@ Index: soffice.sh
 -SAL_ENABLE_FILE_LOCKING=1
 -export SAL_ENABLE_FILE_LOCKING
 +# Ubuntu helper functions
-+file_or_home_on_nfs()
++home_on_nfs()
 +{
 +    case $(stat -f -c %T $HOME) in nfs*|smb)
 +        return 0
 +    esac
++    return 1
++}
++file_on_nfs(){
 +    for i; do
 +       case "$i" in -*) continue; esac
 +       [ -f "$i" ] || continue
@@ -76,15 +79,23 @@ Index: soffice.sh
 +if [ -z "$SAL_ENABLE_FILE_LOCKING" ]; then
 +    case "$FILE_LOCKING" in
 +	auto)
-+        file_or_home_on_nfs "$@"
-+        if [ $? != 0 ]; then
-+            # file locking now enabled by default
-+	    SAL_ENABLE_FILE_LOCKING=1
-+	    export SAL_ENABLE_FILE_LOCKING
-+	 else
++        home_on_nfs "$@"
++        if [ $? = 0 ]; then
 +	    STAR_PROFILE_LOCKING_DISABLED=1
 +	    export STAR_PROFILE_LOCKING_DISABLED
 +	fi
++	file_on_nfs "$@"
++       if [ $? = 0 ]; then
++	    SAL_ENABLE_FILE_LOCKING=0
++	    export SAL_ENABLE_FILE_LOCKING
++	    # for safety
++           STAR_ENABLE_FILE_LOCKING=0
++	    export STAR_ENABLE_FILE_LOCKING
++	else
++	     # file locking now enabled by default
++	    SAL_ENABLE_FILE_LOCKING=1
++	    export SAL_ENABLE_FILE_LOCKING
++       fi
 +        ;;
 +	yes)
 +	SAL_ENABLE_FILE_LOCKING=1
@@ -93,6 +104,9 @@ Index: soffice.sh
 +	no)
 +	SAL_ENABLE_FILE_LOCKING=0
 +	export SAL_ENABLE_FILE_LOCKING
++	# for safety
++       STAR_ENABLE_FILE_LOCKING=0
++	export STAR_ENABLE_FILE_LOCKING
 +	STAR_PROFILE_LOCKING_DISABLED=1
 +	export STAR_PROFILE_LOCKING_DISABLED
 +    esac
@@ -123,7 +137,7 @@ Index: soffice.sh
      JITC_PROCESSOR_TYPE=6
 --- desktop/scripts/unopkg.sh-old	2010-02-08 14:53:54.000000000 +0100
 +++ desktop/scripts/unopkg.sh	2010-02-08 14:56:44.000000000 +0100
-@@ -30,9 +30,69 @@
+@@ -30,9 +30,45 @@
  #
  #*************************************************************************
  
@@ -135,11 +149,14 @@ Index: soffice.sh
 +fi
 +
 +# Ubuntu helper functions
-+file_or_home_on_nfs()
++home_on_nfs()
 +{
 +    case $(stat -f -c %T $HOME) in nfs*|smb)
 +        return 0
 +    esac
++    return 1
++}
++file_on_nfs() {
 +    for i; do
 +       case "$i" in -*) continue; esac
 +       [ -f "$i" ] || continue
@@ -166,21 +183,39 @@ Index: soffice.sh
 +       FILE_LOCKING=auto
 +       echo >&2 "FILE_LOCKING reset to '$FILE_LOCKING'"
 +esac
-+
+ 
+ # resolve installation directory
+ sd_cwd="`pwd`"
+@@ -70,6 +106,48 @@
+     fi
+ fi
+ 
 +# adjust environment
 +
 +if [ -z "$SAL_ENABLE_FILE_LOCKING" ]; then
 +    case "$FILE_LOCKING" in
 +       auto)
-+        file_or_home_on_nfs "$@"
-+        if [ $? != 0 ]; then
-+            # file locking now enabled by default
-+           SAL_ENABLE_FILE_LOCKING=1
-+           export SAL_ENABLE_FILE_LOCKING
-+        else
++        home_on_nfs "$@"
++        if [ $? = 0 ]; then
 +           STAR_PROFILE_LOCKING_DISABLED=1
 +           export STAR_PROFILE_LOCKING_DISABLED
 +       fi
++        if [ "$isshared" = "1" ]; then
++            file_on_nfs "/var/spool/openoffice/uno_packages"
++            if [ $? = 0 ]; then
++                SAL_ENABLE_FILE_LOCKING=0
++                export SAL_ENABLE_FILE_LOCKING
++	         # for safety
++                STAR_ENABLE_FILE_LOCKING=0
++	         export STAR_ENABLE_FILE_LOCKING
++                STAR_PROFILE_LOCKING_DISABLED=1
++                export STAR_PROFILE_LOCKING_DISABLED
++            else
++                 # file locking now enabled by default
++                SAL_ENABLE_FILE_LOCKING=1
++                export SAL_ENABLE_FILE_LOCKING
++            fi
++        fi
 +        ;;
 +       yes)
 +       SAL_ENABLE_FILE_LOCKING=1
@@ -189,10 +224,14 @@ Index: soffice.sh
 +       no)
 +       SAL_ENABLE_FILE_LOCKING=0
 +       export SAL_ENABLE_FILE_LOCKING
++	# for safety
++       STAR_ENABLE_FILE_LOCKING=0
++	export STAR_ENABLE_FILE_LOCKING
 +       STAR_PROFILE_LOCKING_DISABLED=1
 +       export STAR_PROFILE_LOCKING_DISABLED
 +    esac
 +fi
- 
- # resolve installation directory
- sd_cwd="`pwd`"
++
+ #collect all bootstrap variables specified on the command line
+ #so that they can be passed as arguments to javaldx later on
+ for arg in $@
