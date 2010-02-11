@@ -1,9 +1,9 @@
 diff --git oox/inc/oox/export/chartexport.hxx oox/inc/oox/export/chartexport.hxx
 new file mode 100644
-index 0000000..5e2c6e7
+index 0000000..ddf738f
 --- /dev/null
 +++ oox/inc/oox/export/chartexport.hxx
-@@ -0,0 +1,214 @@
+@@ -0,0 +1,216 @@
 +/*************************************************************************
 + *
 + * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
@@ -178,7 +178,7 @@ index 0000000..5e2c6e7
 +    void exportDataPoints( 
 +        const ::com::sun::star::uno::Reference< ::com::sun::star::beans::XPropertySet >& xSeriesProperties,
 +        sal_Int32 nSeriesLength );
-+    void exportGrouping();
++    void exportGrouping( sal_Bool isBar = sal_False );
 +    void exportMarker();
 +    void exportSmooth();
 +    void exportFirstSliceAng();
@@ -196,6 +196,8 @@ index 0000000..5e2c6e7
 +        const char* sAxisPos,
 +        AxisIdPair aAxisIdPair );
 +    void exportAxesId( sal_Int32 nAttachedAxis );
++    void exportView3D();
++    sal_Bool isDeep3dChart();
 +
 +public:
 +
@@ -1077,10 +1079,10 @@ index 0000000..6c8a458
 +#endif
 diff --git oox/source/export/chartexport.cxx oox/source/export/chartexport.cxx
 new file mode 100644
-index 0000000..bba4b80
+index 0000000..dc82c0b
 --- /dev/null
 +++ oox/source/export/chartexport.cxx
-@@ -0,0 +1,2696 @@
+@@ -0,0 +1,2849 @@
 +/*************************************************************************
 + *
 + * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
@@ -1135,6 +1137,7 @@ index 0000000..bba4b80
 +#include <com/sun/star/chart/ChartAxisMarks.hpp>
 +#include <com/sun/star/chart/ChartAxisLabelPosition.hpp>
 +#include <com/sun/star/chart/ChartAxisPosition.hpp>
++#include <com/sun/star/chart/ChartSolidType.hpp>
 +
 +#include <com/sun/star/chart2/XChartDocument.hpp>
 +#include <com/sun/star/chart2/XDiagram.hpp>
@@ -1143,6 +1146,7 @@ index 0000000..bba4b80
 +#include <com/sun/star/chart2/XRegressionCurveContainer.hpp>
 +#include <com/sun/star/chart2/XChartTypeContainer.hpp>
 +#include <com/sun/star/chart2/XDataSeriesContainer.hpp>
++#include <com/sun/star/chart2/DataPointGeometry3D.hpp>
 +#include <com/sun/star/chart2/data/XDataSource.hpp>
 +#include <com/sun/star/chart2/data/XDataSink.hpp>
 +#include <com/sun/star/chart2/data/XDataReceiver.hpp>
@@ -2074,6 +2078,34 @@ index 0000000..bba4b80
 +        if( xShape.is() )
 +            exportTitle( xShape );
 +    }
++    InitPlotArea( );
++    if( mbIs3DChart )
++    {
++        exportView3D();
++        
++        // sideWall
++
++        // backWall
++        Reference< beans::XPropertySet > xBackWall( mxNewDiagram->getWall(), uno::UNO_QUERY );
++        if( xBackWall.is() )
++        {
++            pFS->startElement( FSNS( XML_c, XML_backWall ),
++                FSEND );
++            exportShapeProps( xBackWall );
++            pFS->endElement( FSNS( XML_c, XML_backWall ) );
++        }    
++
++        // floor
++        Reference< beans::XPropertySet > xFloor( mxNewDiagram->getFloor(), uno::UNO_QUERY );
++        if( xFloor.is() )
++        {
++            pFS->startElement( FSNS( XML_c, XML_floor ),
++                FSEND );
++            exportShapeProps( xFloor );
++            pFS->endElement( FSNS( XML_c, XML_floor ) );
++        }    
++
++    }
 +    // plot area
 +    exportPlotArea( );
 +    // legend
@@ -2218,7 +2250,6 @@ index 0000000..bba4b80
 +    if( ! xBCooSysCnt.is())
 +        return;
 +
-+    InitPlotArea( );
 +    // plot-area element
 +    // -----------------
 +    FSHelperPtr pFS = GetFS();
@@ -2336,7 +2367,10 @@ index 0000000..bba4b80
 +void ChartExport::exportAreaChart( Reference< chart2::XChartType > xChartType )
 +{
 +    FSHelperPtr pFS = GetFS();
-+    pFS->startElement( FSNS( XML_c, XML_areaChart ),
++    sal_Int32 nTypeId = XML_areaChart;
++    if( mbIs3DChart )
++        nTypeId = XML_area3DChart;
++    pFS->startElement( FSNS( XML_c, nTypeId ),
 +            FSEND );
 +
 +    exportGrouping( );
@@ -2344,13 +2378,16 @@ index 0000000..bba4b80
 +    exportSeries( xChartType, nAttachedAxis );
 +    exportAxesId( nAttachedAxis );
 +
-+    pFS->endElement( FSNS( XML_c, XML_areaChart ) );
++    pFS->endElement( FSNS( XML_c, nTypeId ) );
 +}
 +
 +void ChartExport::exportBarChart( Reference< chart2::XChartType > xChartType )
 +{
++    sal_Int32 nTypeId = XML_barChart;
++    if( mbIs3DChart )
++        nTypeId = XML_bar3DChart;
 +    FSHelperPtr pFS = GetFS();
-+    pFS->startElement( FSNS( XML_c, XML_barChart ),
++    pFS->startElement( FSNS( XML_c, nTypeId ),
 +            FSEND );
 +    // bar direction
 +    sal_Bool bVertical = sal_False;
@@ -2363,12 +2400,43 @@ index 0000000..bba4b80
 +            XML_val, bardir,
 +            FSEND );
 +
-+    exportGrouping( );
++    exportGrouping( sal_True );
 +    sal_Int32 nAttachedAxis = AXIS_PRIMARY_Y;
 +    exportSeries( xChartType, nAttachedAxis );
 +    
-+    //overlap
 +    Reference< XPropertySet > xTypeProp( xChartType, uno::UNO_QUERY );
++    if( mbIs3DChart )
++    {
++        // Shape
++        namespace cssc = ::com::sun::star::chart;
++        sal_Int32 nGeom3d = cssc::ChartSolidType::RECTANGULAR_SOLID;
++        if( xPropSet.is() && GetProperty( xPropSet, S("SolidType") ) )
++            mAny >>= nGeom3d;
++        const char* sShapeType = NULL;
++        switch( nGeom3d )
++        {
++            case cssc::ChartSolidType::RECTANGULAR_SOLID:
++                sShapeType = "box";
++                break;
++            case cssc::ChartSolidType::CONE:
++            //case cssc::DataPointGeometry3D::CONE:
++                sShapeType = "cone";
++                break;
++            case cssc::ChartSolidType::CYLINDER:
++            //case cssc::DataPointGeometry3D::CYLINDER:
++                sShapeType = "cylinder";
++                break;
++            case cssc::ChartSolidType::PYRAMID:
++            //case cssc::DataPointGeometry3D::PYRAMID:
++                sShapeType = "pyramid";
++                break;
++        }
++        pFS->singleElement( FSNS( XML_c, XML_shape ),
++            XML_val, sShapeType,
++            FSEND );
++    }
++    
++    //overlap
 +    if( xTypeProp.is() && GetProperty( xTypeProp, S("OverlapSequence") ) )
 +    {
 +        uno::Sequence< sal_Int32 > aBarPositionSequence;
@@ -2376,9 +2444,10 @@ index 0000000..bba4b80
 +        if( aBarPositionSequence.getLength() )
 +        {
 +            sal_Int32 nOverlap = aBarPositionSequence[0];
-+            pFS->singleElement( FSNS( XML_c, XML_overlap ),
-+                XML_val, I32S( nOverlap ),
-+                FSEND );
++            if( nOverlap > 0 ) 
++                pFS->singleElement( FSNS( XML_c, XML_overlap ),
++                    XML_val, I32S( nOverlap ),
++                    FSEND );
 +        }
 +    }
 +    if( xTypeProp.is() && GetProperty( xTypeProp, S("GapwidthSequence") ) )
@@ -2396,7 +2465,7 @@ index 0000000..bba4b80
 +
 +    exportAxesId( nAttachedAxis );
 +
-+    pFS->endElement( FSNS( XML_c, XML_barChart ) );
++    pFS->endElement( FSNS( XML_c, nTypeId ) );
 +}
 +
 +void ChartExport::exportBubbleChart( Reference< chart2::XChartType > xChartType )
@@ -2436,7 +2505,10 @@ index 0000000..bba4b80
 +void ChartExport::exportLineChart( Reference< chart2::XChartType > xChartType )
 +{
 +    FSHelperPtr pFS = GetFS();
-+    pFS->startElement( FSNS( XML_c, XML_lineChart ),
++    sal_Int32 nTypeId = XML_lineChart;
++    if( mbIs3DChart )
++        nTypeId = XML_line3DChart;
++    pFS->startElement( FSNS( XML_c, nTypeId ),
 +            FSEND );
 +
 +    exportGrouping( );
@@ -2457,7 +2529,7 @@ index 0000000..bba4b80
 +
 +    exportAxesId( nAttachedAxis );
 +
-+    pFS->endElement( FSNS( XML_c, XML_lineChart ) );
++    pFS->endElement( FSNS( XML_c, nTypeId ) );
 +}
 +
 +void ChartExport::exportOfPieChart( Reference< chart2::XChartType > /*xChartType*/ )
@@ -2468,7 +2540,10 @@ index 0000000..bba4b80
 +void ChartExport::exportPieChart( Reference< chart2::XChartType > xChartType )
 +{
 +    FSHelperPtr pFS = GetFS();
-+    pFS->startElement( FSNS( XML_c, XML_pieChart ),
++    sal_Int32 nTypeId = XML_pieChart;
++    if( mbIs3DChart )
++        nTypeId = XML_pie3DChart;
++    pFS->startElement( FSNS( XML_c, nTypeId ),
 +            FSEND );
 +    // TODO: varyColors
 +    const char* varyColors = "1";
@@ -2482,7 +2557,7 @@ index 0000000..bba4b80
 +    // firstSliceAng
 +    exportFirstSliceAng( );
 +
-+    pFS->endElement( FSNS( XML_c, XML_pieChart ) );
++    pFS->endElement( FSNS( XML_c, nTypeId ) );
 +}
 +
 +void ChartExport::exportRadarChart( Reference< chart2::XChartType > xChartType)
@@ -2585,13 +2660,16 @@ index 0000000..bba4b80
 +void ChartExport::exportSuffaceChart( Reference< chart2::XChartType > xChartType )
 +{
 +    FSHelperPtr pFS = GetFS();
-+    pFS->startElement( FSNS( XML_c, XML_surfaceChart ),
++    sal_Int32 nTypeId = XML_surfaceChart;
++    if( mbIs3DChart )
++        nTypeId = XML_surface3DChart;
++    pFS->startElement( FSNS( XML_c, nTypeId ),
 +            FSEND );
 +    sal_Int32 nAttachedAxis = AXIS_PRIMARY_Y;
 +    exportSeries( xChartType, nAttachedAxis );
 +    exportAxesId( nAttachedAxis );
 +
-+    pFS->endElement( FSNS( XML_c, XML_surfaceChart ) );
++    pFS->endElement( FSNS( XML_c, nTypeId ) );
 +}
 +
 +void ChartExport::exportSeries( Reference< chart2::XChartType > xChartType, sal_Int32& nAttachedAxis )
@@ -3682,7 +3760,6 @@ index 0000000..bba4b80
 +{
 +    sal_Int32 nAxisIdx = lcl_generateRandomValue();
 +    sal_Int32 nAxisIdy = lcl_generateRandomValue();
-+    sal_Int32 nAxisIdz = lcl_generateRandomValue();
 +    maAxes.push_back( AxisIdPair( AXIS_PRIMARY_X, nAxisIdx, nAxisIdy ) );
 +    maAxes.push_back( AxisIdPair( nAttachedAxis, nAxisIdy, nAxisIdx ) );
 +    FSHelperPtr pFS = GetFS();
@@ -3694,14 +3771,19 @@ index 0000000..bba4b80
 +            FSEND );
 +    if( mbHasZAxis )        
 +    {
-+        maAxes.push_back( AxisIdPair( AXIS_PRIMARY_Z, nAxisIdz, nAxisIdy ) );
++        sal_Int32 nAxisIdz = 0;
++        if( isDeep3dChart() )
++        {
++            nAxisIdz = lcl_generateRandomValue();
++            maAxes.push_back( AxisIdPair( AXIS_PRIMARY_Z, nAxisIdz, nAxisIdy ) );
++        }
 +        pFS->singleElement( FSNS( XML_c, XML_axId ),
 +            XML_val, I32S( nAxisIdz ),
 +            FSEND );
 +    }
 +}
 +
-+void ChartExport::exportGrouping()
++void ChartExport::exportGrouping( sal_Bool isBar )
 +{
 +    FSHelperPtr pFS = GetFS();
 +    Reference< XPropertySet > xPropSet( mxDiagram , uno::UNO_QUERY);
@@ -3719,7 +3801,12 @@ index 0000000..bba4b80
 +    else if( bPercentage )
 +        grouping = "percentStacked";
 +    else
-+        grouping = "standard";
++    {
++        if( isBar && !isDeep3dChart() )
++            grouping = "clustered";
++        else
++            grouping = "standard";
++    }    
 +    pFS->singleElement( FSNS( XML_c, XML_grouping ),
 +            XML_val, grouping,
 +            FSEND );
@@ -3773,6 +3860,74 @@ index 0000000..bba4b80
 +            XML_val, I32S( nStartingAngle ),
 +            FSEND );
 +}    
++
++void ChartExport::exportView3D()
++{
++    Reference< XPropertySet > xPropSet( mxDiagram , uno::UNO_QUERY);
++    if( !xPropSet.is() )
++        return;
++    FSHelperPtr pFS = GetFS();
++    pFS->startElement( FSNS( XML_c, XML_view3D ),
++            FSEND );
++    // rotX
++    if( GetProperty( xPropSet, S( "RotationHorizontal" ) ) )
++    {
++        sal_Int32 nRotationX = 0;
++        mAny >>= nRotationX;
++        // X rotation (map Chart2 [-179,180] to OOXML [0..359])
++        if( nRotationX < 0 )
++            nRotationX += 360;
++        pFS->singleElement( FSNS( XML_c, XML_rotX ),
++            XML_val, I32S( nRotationX ),
++            FSEND );
++    }
++    // rotY
++    if( GetProperty( xPropSet, S( "RotationVertical" ) ) )
++    {
++        sal_Int32 nRotationY = 0;
++        mAny >>= nRotationY;
++        // Y rotation (map Chart2 [-179,180] to OOXML [0..359])
++        if( nRotationY < 0 )
++            nRotationY += 360;
++        pFS->singleElement( FSNS( XML_c, XML_rotY ),
++            XML_val, I32S( nRotationY ),
++            FSEND );
++    }
++    // perspective
++    if( GetProperty( xPropSet, S( "Perspective" ) ) )
++    {
++        sal_Int32 nPerspective = 0;
++        mAny >>= nPerspective;
++        // map Chart2 [0,100] to OOXML [0..200]
++        nPerspective *= 2;
++        pFS->singleElement( FSNS( XML_c, XML_perspective ),
++            XML_val, I32S( nPerspective ),
++            FSEND );
++    }
++    // rAngAx
++    if( GetProperty( xPropSet, S( "RightAngledAxes" ) ) )
++    {
++        sal_Bool bRightAngled = sal_False;
++        mAny >>= bRightAngled;
++        const char* sRightAngled = bRightAngled ? "1":"0";
++        pFS->singleElement( FSNS( XML_c, XML_rAngAx ),
++            XML_val, sRightAngled,
++            FSEND );
++    }
++    pFS->endElement( FSNS( XML_c, XML_view3D ) );
++}
++
++sal_Bool ChartExport::isDeep3dChart()
++{
++    sal_Bool isDeep = sal_False;
++    if( mbIs3DChart )
++    {
++        Reference< XPropertySet > xPropSet( mxDiagram , uno::UNO_QUERY);
++        if( GetProperty( xPropSet, S( "Deep" ) ) )
++            mAny >>= isDeep;
++    }        
++    return isDeep;
++}
 +
 +}// drawingml
 +}// oox
