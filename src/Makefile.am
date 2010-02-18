@@ -32,6 +32,7 @@ EXTRA_DIST=\
 	openabout_translateorgza.png \
 	openintro_pld.bmp \
 	openabout_pld.bmp \
+	openintro_fsfhu.bmp \
 	sg3.sdg sg3.sdv sg3.thm \
 	tango_mainapp_16.png \
 	glib-1.2.10-ooo.patch \
