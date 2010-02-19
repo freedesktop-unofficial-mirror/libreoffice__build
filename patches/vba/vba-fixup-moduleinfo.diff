@@ -649,6 +649,18 @@ index 754a253..d0348b9 100644
  {
          m_xModel.set( mInfo.ModuleObject, uno::UNO_QUERY_THROW );
  }
+diff --git basic/source/inc/namecont.hxx basic/source/inc/namecont.hxx
+index 7fbe37c..c88b594 100644
+--- basic/source/inc/namecont.hxx
++++ basic/source/inc/namecont.hxx
+@@ -225,6 +225,7 @@ public:
+ class SfxLibraryContainer   :public LibraryContainerHelper
+                             ,public ::utl::OEventListenerAdapter
+ {
++    sal_Bool mbVBACompat;
+ protected:
+     ::com::sun::star::uno::Reference< ::com::sun::star::lang::XMultiServiceFactory >   mxMSF;
+     ::com::sun::star::uno::Reference< ::com::sun::star::ucb::XSimpleFileAccess >       mxSFI;
 diff --git basic/source/inc/scriptcont.hxx basic/source/inc/scriptcont.hxx
 index e9b4409..2b589cc 100644
 --- basic/source/inc/scriptcont.hxx
@@ -699,7 +711,7 @@ index e9b4409..2b589cc 100644
  
  protected:
 diff --git basic/source/uno/namecont.cxx basic/source/uno/namecont.cxx
-index 4499663..7e0c2f0 100644
+index 4499663..e3047a0 100644
 --- basic/source/uno/namecont.cxx
 +++ basic/source/uno/namecont.cxx
 @@ -76,10 +76,6 @@
@@ -731,7 +743,40 @@ index 4499663..7e0c2f0 100644
          throw IllegalArgumentException();
  
      NameContainerNameMap::iterator aIt = mHashMap.find( aName );
-@@ -2759,6 +2755,9 @@ void SAL_CALL SfxLibraryContainer::setVBACompatModeOn( ::sal_Bool _vbacompatmode
+@@ -338,7 +334,7 @@ SfxLibraryContainer::SfxLibraryContainer( void )
+     , mbOldInfoFormat( sal_False )
+     , mbOasis2OOoFormat( sal_False )
+     , mpBasMgr( NULL )
+-    , mbOwnBasMgr( sal_False )
++    , mbOwnBasMgr( sal_False ), mbVBACompat( sal_False )
+ {
+     DBG_CTOR( SfxLibraryContainer, NULL );
+ 
+@@ -2734,22 +2730,7 @@ OUString SfxLibraryContainer::expand_url( const OUString& url )
+ 
+ ::sal_Bool SAL_CALL SfxLibraryContainer::getVBACompatModeOn() throw (RuntimeException)
+ {
+-	sal_Bool bVBACompat = sal_False;
+-	BasicManager* pBasMgr = getBasicManager();
+-	if( pBasMgr )
+-	{
+-		// get the standard library
+-		String aLibName( RTL_CONSTASCII_USTRINGPARAM( "Standard" ) );
+-
+-                if ( pBasMgr->GetName().Len() )
+-                    aLibName = pBasMgr->GetName();
+-
+-		StarBASIC* pBasic = pBasMgr->GetLib( aLibName );
+-		if( pBasic )
+-			bVBACompat = pBasic->isVBAEnabled();
+-	}
+-
+-	return bVBACompat;
++	return mbVBACompat;
+ }
+ 
+ void SAL_CALL SfxLibraryContainer::setVBACompatModeOn( ::sal_Bool _vbacompatmodeon ) throw (RuntimeException)
+@@ -2759,10 +2740,14 @@ void SAL_CALL SfxLibraryContainer::setVBACompatModeOn( ::sal_Bool _vbacompatmode
  	{
  		// get the standard library
  		String aLibName( RTL_CONSTASCII_USTRINGPARAM( "Standard" ) );
@@ -741,6 +786,11 @@ index 4499663..7e0c2f0 100644
  		StarBASIC* pBasic = pBasMgr->GetLib( aLibName );
  		if( pBasic )
  			pBasic->SetVBAEnabled( _vbacompatmodeon );
+ 	}
++        mbVBACompat = _vbacompatmodeon;
+ }
+ 
+ // Methods XServiceInfo
 diff --git basic/source/uno/scriptcont.cxx basic/source/uno/scriptcont.cxx
 index 8bebf5a..8bea27b 100644
 --- basic/source/uno/scriptcont.cxx
@@ -1364,3 +1414,22 @@ index 00204f9..036a42a 100644
  };
  
  //=============================================================================
+diff --git xmlscript/source/xmldlg_imexp/xmldlg_import.cxx xmlscript/source/xmldlg_imexp/xmldlg_import.cxx
+index 8e041ae..f835e8d 100644
+--- xmlscript/source/xmldlg_imexp/xmldlg_import.cxx
++++ xmlscript/source/xmldlg_imexp/xmldlg_import.cxx
+@@ -1954,11 +1954,9 @@ Reference< script::XLibraryContainer > DialogImport::getScriptLibraryContainer()
+ 	{
+ 		try
+ 		{
+-			Reference< document::XStorageBasedDocument > xStorageDoc( _xDoc, UNO_QUERY );
+-			if( xStorageDoc.is() )
+-				_xScriptLibraryContainer.set(
+-									script::DocumentScriptLibraryContainer::create( comphelper_getProcessComponentContext(), xStorageDoc ), 
+-									UNO_QUERY );
++			Reference< beans::XPropertySet > xProps( _xDoc, UNO_QUERY );
++			if( xProps.is() )
++				_xScriptLibraryContainer.set( xProps->getPropertyValue( OUSTR("BasicLibraries") ), UNO_QUERY );
+ 		}
+ 		catch( const Exception& )
+ 		{
