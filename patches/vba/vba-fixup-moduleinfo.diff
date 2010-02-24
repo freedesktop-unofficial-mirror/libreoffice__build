@@ -960,7 +960,7 @@ index 4e6d8e6..e843e86 100644
  # ------------------------------------------------------------------
  
 diff --git sc/inc/document.hxx sc/inc/document.hxx
-index 3075abc..dd00170 100644
+index 3075abc..a7cae55 100644
 --- sc/inc/document.hxx
 +++ sc/inc/document.hxx
 @@ -1780,6 +1780,8 @@ public:
@@ -972,6 +972,60 @@ index 3075abc..dd00170 100644
  private: // CLOOK-Impl-Methoden
  
      /** 
+diff --git sc/source/core/data/documen2.cxx sc/source/core/data/documen2.cxx
+index 9640aef..cbcd57a 100644
+--- sc/source/core/data/documen2.cxx
++++ sc/source/core/data/documen2.cxx
+@@ -942,6 +942,8 @@ BOOL ScDocument::CopyTab( SCTAB nOldPos, SCTAB nNewPos, const ScMarkData* pOnlyM
+     return bValid;
+ }
+ 
++void VBA_InsertModule( ScDocument& rDoc, SCTAB nTab, String& sModuleName, String& sModuleSource );
++
+ ULONG ScDocument::TransferTab( ScDocument* pSrcDoc, SCTAB nSrcPos,
+                                 SCTAB nDestPos, BOOL bInsertNew,
+                                 BOOL bResultsOnly )
+@@ -1112,6 +1114,40 @@ ULONG ScDocument::TransferTab( ScDocument* pSrcDoc, SCTAB nSrcPos,
+     }
+     if (!bValid)
+         nRetVal = 0;
++    SfxObjectShell* pDestShell = pSrcDoc ? pSrcDoc->GetDocumentShell() : NULL;
++    StarBASIC* pStarBASIC = pDestShell ? pDestShell->GetBasic() : NULL;
++    String aLibName( RTL_CONSTASCII_USTRINGPARAM( "Standard" ) );
++    if ( pDestShell && pDestShell->GetBasicManager()->GetName().Len() > 0 )
++    {
++        aLibName = pDestShell->GetBasicManager()->GetName();
++        pStarBASIC = pDestShell->GetBasicManager()->GetLib( aLibName );
++    }
++
++    BOOL bVbaEnabled = IsInVBAMode();
++
++    if ( bVbaEnabled && pDestShell )
++    {
++        String sCodeName;
++        String sSource;
++        com::sun::star::uno::Reference< com::sun::star::script::XLibraryContainer > xLibContainer = pDestShell->GetBasicContainer();
++        com::sun::star::uno::Reference< com::sun::star::container::XNameContainer > xLib;
++        if( xLibContainer.is() )
++        {
++            com::sun::star::uno::Any aLibAny = xLibContainer->getByName( aLibName );
++            aLibAny >>= xLib;
++        }
++
++        if( xLib.is() )
++        {
++            String sSrcCodeName;
++            pSrcDoc->GetCodeName( nSrcPos, sSrcCodeName );
++            rtl::OUString sRTLSource;
++            xLib->getByName( sSrcCodeName ) >>= sRTLSource;
++            sSource = sRTLSource;
++        } 
++        VBA_InsertModule( *this, nDestPos, sCodeName, sSource );
++    }
++
+     return nRetVal;
+ }
+ 
 diff --git sc/source/core/data/document.cxx sc/source/core/data/document.cxx
 index 320239b..6bc2923 100644
 --- sc/source/core/data/document.cxx
@@ -1018,7 +1072,7 @@ index 3703d3a..4adee80 100644
                  if ( bIsVBAMode )
                      rParam.bRegExp = FALSE;
 diff --git sc/source/ui/docshell/docfunc.cxx sc/source/ui/docshell/docfunc.cxx
-index 9955730..6ad6e6e 100644
+index 9955730..264b48a 100644
 --- sc/source/ui/docshell/docfunc.cxx
 +++ sc/source/ui/docshell/docfunc.cxx
 @@ -54,7 +54,7 @@
@@ -1038,14 +1092,14 @@ index 9955730..6ad6e6e 100644
  
  using namespace com::sun::star;
  using ::com::sun::star::uno::Sequence;
-@@ -2651,32 +2652,30 @@ uno::Reference< uno::XInterface > GetDocModuleObject( SfxObjectShell& rDocSh, St
+@@ -2651,25 +2652,19 @@ uno::Reference< uno::XInterface > GetDocModuleObject( SfxObjectShell& rDocSh, St
  
  }
  
 -script::ModuleInfo lcl_InitModuleInfo( SfxObjectShell& rDocSh, String& sModule, String& sSource )
 +script::ModuleInfo lcl_InitModuleInfo( SfxObjectShell& rDocSh, String& sModule )
  {
-     ::rtl::OUString aModName( sModule );
+-    ::rtl::OUString aModName( sModule );
      ::rtl::OUString sVbaOption( RTL_CONSTASCII_USTRINGPARAM( "Rem Attribute VBA_ModuleType=VBADocumentModule\nOption VBASupport 1\n" ));
      script::ModuleInfo sModuleInfo;
 -    sModuleInfo.ModuleName = aModName;
@@ -1059,16 +1113,15 @@ index 9955730..6ad6e6e 100644
  }
  
 -void lcl_InsertModule( ScDocShell& rDocSh, SCTAB nTab, String& sModuleName, String& sSource )
-+void VBA_InsertModule( ScDocShell& rDocSh, SCTAB nTab, String& sModuleName, String& sSource )
++void VBA_InsertModule( ScDocument& rDoc, SCTAB nTab, String& sModuleName, String& sSource )
  {
      SFX_APP()->EnterBasicCall();
 -    script::ModuleInfo sModuleInfo = lcl_InitModuleInfo(  rDocSh, sModuleName, sSource );
-+    script::ModuleInfo sModuleInfo = lcl_InitModuleInfo(  rDocSh, sModuleName );
++    SfxObjectShell& rDocSh = *rDoc.GetDocumentShell();
      uno::Reference< script::XLibraryContainer > xLibContainer = rDocSh.GetBasicContainer();
-+     
      DBG_ASSERT( xLibContainer.is(), "No BasicContainer!" );
  
-     uno::Reference< container::XNameContainer > xLib;
+@@ -2677,30 +2672,46 @@ void lcl_InsertModule( ScDocShell& rDocSh, SCTAB nTab, String& sModuleName, Stri
      if( xLibContainer.is() )
      {
          String aLibName( RTL_CONSTASCII_USTRINGPARAM( "Standard" ) );
@@ -1077,36 +1130,46 @@ index 9955730..6ad6e6e 100644
          uno::Any aLibAny = xLibContainer->getByName( aLibName );
          aLibAny >>= xLib;
      }
-@@ -2684,23 +2683,31 @@ void lcl_InsertModule( ScDocShell& rDocSh, SCTAB nTab, String& sModuleName, Stri
+     if( xLib.is() )
      {
          // if the Module with codename exists then find a new name
-         sal_Int32 nNum = 1;
+-        sal_Int32 nNum = 1;
 -        sModuleInfo.ModuleName = sModuleName;
 -        while( xLib->hasByName( sModuleInfo.ModuleName  ) )
-+        String genModuleName = sModuleName;
-+        while( xLib->hasByName( genModuleName  ) )
++        sal_Int32 nNum = 0;
++        String genModuleName;
++        if ( sModuleName.Len() ) 
++            sModuleName = sModuleName;
++        else
          {
 -            sModuleInfo.ModuleName = rtl::OUString::createFromAscii( "Sheet" ) + rtl::OUString::valueOf( nNum );
-+            genModuleName = rtl::OUString::createFromAscii( "Sheet" ) + rtl::OUString::valueOf( nNum );
-             nNum += 1;
+-            nNum += 1;
++             genModuleName = String::CreateFromAscii( "Sheet1" );
++             nNum = 1;
          }
++        while( xLib->hasByName( genModuleName  ) )
++            genModuleName = rtl::OUString::createFromAscii( "Sheet" ) + rtl::OUString::valueOf( ++nNum );
 +        
          uno::Any aSourceAny;
 -        aSourceAny <<= sModuleInfo;
 -        xLib->insertByName( sModuleInfo.ModuleName, aSourceAny );
+-        ScDocument* pDoc = rDocSh.GetDocument();
+-        String sCodeName( sModuleInfo.ModuleName );
+-        pDoc->SetCodeName( nTab, sCodeName );
 +        rtl::OUString sTmpSource = sSource;
 +        if ( sTmpSource.getLength() == 0 )
 +            sTmpSource = ::rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( "Rem Attribute VBA_ModuleType=VBADocumentModule\nOption VBASupport 1\n" ));
 +        aSourceAny <<= sTmpSource;
 +        uno::Reference< script::XVBAModuleInfo > xVBAModuleInfo( xLib, uno::UNO_QUERY );
 +        if ( xVBAModuleInfo.is() )
++        {
++            String sCodeName( genModuleName );
++            rDoc.SetCodeName( nTab, sCodeName );
++            script::ModuleInfo sModuleInfo = lcl_InitModuleInfo(  rDocSh, genModuleName );
 +            xVBAModuleInfo->insertModuleInfo( genModuleName, sModuleInfo );
++            xLib->insertByName( genModuleName, aSourceAny );
++        }
 +
-+        xLib->insertByName( genModuleName, aSourceAny );
-         ScDocument* pDoc = rDocSh.GetDocument();
--        String sCodeName( sModuleInfo.ModuleName );
-+        String sCodeName( genModuleName );
-         pDoc->SetCodeName( nTab, sCodeName );
      }
      SFX_APP()->LeaveBasicCall();
  }
@@ -1116,7 +1179,7 @@ index 9955730..6ad6e6e 100644
  {
      SFX_APP()->EnterBasicCall();
      uno::Reference< script::XLibraryContainer > xLibContainer = rDocSh.GetBasicContainer();
-@@ -2710,15 +2717,19 @@ void lcl_DeleteModule( ScDocShell& rDocSh, String& sModuleName )
+@@ -2710,15 +2721,19 @@ void lcl_DeleteModule( ScDocShell& rDocSh, String& sModuleName )
      if( xLibContainer.is() )
      {
          String aLibName( RTL_CONSTASCII_USTRINGPARAM( "Standard" ) );
@@ -1138,7 +1201,7 @@ index 9955730..6ad6e6e 100644
      }
      SFX_APP()->LeaveBasicCall();
  }
-@@ -2732,14 +2743,15 @@ BOOL ScDocFunc::InsertTable( SCTAB nTab, const String& rName, BOOL bRecord, BOOL
+@@ -2732,14 +2747,15 @@ BOOL ScDocFunc::InsertTable( SCTAB nTab, const String& rName, BOOL bRecord, BOOL
      ScDocShellModificator aModificator( rDocShell );
  
      ScDocument* pDoc = rDocShell.GetDocument();
@@ -1156,16 +1219,19 @@ index 9955730..6ad6e6e 100644
      }
  	if ( bInsertDocModule || ( bRecord && !pDoc->IsUndoEnabled() ) )
  		bRecord = FALSE;
-@@ -2765,7 +2777,7 @@ BOOL ScDocFunc::InsertTable( SCTAB nTab, const String& rName, BOOL bRecord, BOOL
-             if ( sCodeName.Len() == 0 )
- 		sCodeName = rName;
+@@ -2762,10 +2778,8 @@ BOOL ScDocFunc::InsertTable( SCTAB nTab, const String& rName, BOOL bRecord, BOOL
+         // Only insert vba modules if vba mode ( and not currently importing XML )
+         if( bInsertDocModule )
+         {
+-            if ( sCodeName.Len() == 0 )
+-		sCodeName = rName;
              String sSource;
 -            lcl_InsertModule( rDocShell, nTab, sCodeName, sSource );
-+            VBA_InsertModule( rDocShell, nTab, sCodeName, sSource );
++            VBA_InsertModule( *pDoc, nTab, sCodeName, sSource );
          }
          rDocShell.Broadcast( ScTablesHint( SC_TAB_INSERTED, nTab ) );
  
-@@ -2788,8 +2800,7 @@ BOOL ScDocFunc::DeleteTable( SCTAB nTab, BOOL bRecord, BOOL /* bApi */ )
+@@ -2788,8 +2802,7 @@ BOOL ScDocFunc::DeleteTable( SCTAB nTab, BOOL bRecord, BOOL /* bApi */ )
  
      BOOL bSuccess = FALSE;
      ScDocument* pDoc = rDocShell.GetDocument();
@@ -1175,7 +1241,7 @@ index 9955730..6ad6e6e 100644
  	if (bRecord && !pDoc->IsUndoEnabled())
  		bRecord = FALSE;
      if ( bVbaEnabled )
-@@ -2850,7 +2861,7 @@ BOOL ScDocFunc::DeleteTable( SCTAB nTab, BOOL bRecord, BOOL /* bApi */ )
+@@ -2850,7 +2863,7 @@ BOOL ScDocFunc::DeleteTable( SCTAB nTab, BOOL bRecord, BOOL /* bApi */ )
          {
              if( bHasCodeName )
              {
@@ -1185,7 +1251,7 @@ index 9955730..6ad6e6e 100644
          }
          rDocShell.Broadcast( ScTablesHint( SC_TAB_DELETED, nTab ) );
 diff --git sc/source/ui/docshell/docsh5.cxx sc/source/ui/docshell/docsh5.cxx
-index 672dbcc..12b5339 100644
+index 672dbcc..7961883 100644
 --- sc/source/ui/docshell/docsh5.cxx
 +++ sc/source/ui/docshell/docsh5.cxx
 @@ -72,7 +72,7 @@
@@ -1193,7 +1259,7 @@ index 672dbcc..12b5339 100644
  
  // defined in docfunc.cxx
 -void lcl_InsertModule( ScDocShell& rDocSh, SCTAB nTab, String& sModuleName, String& sModuleSource );
-+void VBA_InsertModule( ScDocShell& rDocSh, SCTAB nTab, String& sModuleName, String& sModuleSource );
++void VBA_InsertModule( ScDocument& rDoc, SCTAB nTab, String& sModuleName, String& sModuleSource );
  
  // ---------------------------------------------------------------------------
  
@@ -1206,7 +1272,15 @@ index 672dbcc..12b5339 100644
  			SCTAB nTabToUse = nDestTab; 
  
  			if ( nDestTab == SC_TAB_APPEND )
-@@ -907,12 +907,11 @@ BOOL ScDocShell::MoveTable( SCTAB nSrcTab, SCTAB nDestTab, BOOL bCopy, BOOL bRec
+@@ -895,7 +895,6 @@ BOOL ScDocShell::MoveTable( SCTAB nSrcTab, SCTAB nDestTab, BOOL bCopy, BOOL bRec
+ 			{
+ 				String sCodeName;
+ 				String sSource;
+-				aDocument.GetCodeName( nTabToUse, sCodeName );
+ 				com::sun::star::uno::Reference< com::sun::star::script::XLibraryContainer > xLibContainer = GetBasicContainer();
+ 				com::sun::star::uno::Reference< com::sun::star::container::XNameContainer > xLib;
+     				if( xLibContainer.is() )
+@@ -907,12 +906,11 @@ BOOL ScDocShell::MoveTable( SCTAB nSrcTab, SCTAB nDestTab, BOOL bCopy, BOOL bRec
      				{
  					String sSrcCodeName;
  					aDocument.GetCodeName( nSrcTab, sSrcCodeName );
@@ -1219,7 +1293,7 @@ index 672dbcc..12b5339 100644
 +                                        sSource = sRTLSource;
  				} 
 -				lcl_InsertModule( *this, nTabToUse, sCodeName, sSource );
-+				VBA_InsertModule( *this, nTabToUse, sCodeName, sSource );
++				VBA_InsertModule( aDocument, nTabToUse, sCodeName, sSource );
  			}
          }
  
