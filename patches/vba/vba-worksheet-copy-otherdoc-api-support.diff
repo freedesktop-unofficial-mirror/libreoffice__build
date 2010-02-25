@@ -1,0 +1,197 @@
+diff --git sc/source/ui/docshell/docsh5.cxx sc/source/ui/docshell/docsh5.cxx
+index 12b5339..ed4bd2e 100644
+--- sc/source/ui/docshell/docsh5.cxx
++++ sc/source/ui/docshell/docsh5.cxx
+@@ -840,6 +840,47 @@ SCTAB ScDocShell::MakeScenario( SCTAB nTab, const String& rName, const String& r
+     return nTab;
+ }
+ 
++ULONG ScDocShell::TransferTab( ScDocShell& rSrcDocShell, SCTAB nSrcPos,
++                                SCTAB nDestPos, BOOL bInsertNew,
++                                BOOL bNotifyAndPaint )
++{
++    ScDocument* pSrcDoc = rSrcDocShell.GetDocument();
++
++    ULONG nErrVal =  aDocument.TransferTab( pSrcDoc, nSrcPos, nDestPos,
++                    bInsertNew );		// no insert
++
++    // TransferTab doesn't copy drawing objects with bInsertNew=FALSE
++    if ( nErrVal > 0 && !bInsertNew)
++        aDocument.TransferDrawPage( pSrcDoc, nSrcPos, nDestPos );
++
++    if(nErrVal>0 && pSrcDoc->IsScenario( nSrcPos ))
++    {
++        String aComment;
++        Color  aColor;
++        USHORT nFlags;
++
++        pSrcDoc->GetScenarioData( nSrcPos, aComment,aColor, nFlags);
++        aDocument.SetScenario(nDestPos,TRUE);
++        aDocument.SetScenarioData(nDestPos,aComment,aColor,nFlags);
++        BOOL bActive = pSrcDoc->IsActiveScenario(nSrcPos);
++        aDocument.SetActiveScenario(nDestPos, bActive );
++
++        BOOL bVisible=pSrcDoc->IsVisible(nSrcPos);
++        aDocument.SetVisible(nDestPos,bVisible );
++
++    }
++
++    if ( nErrVal > 0 && pSrcDoc->IsTabProtected( nSrcPos ) )
++        aDocument.SetTabProtection(nDestPos, pSrcDoc->GetTabProtection(nSrcPos));
++    if ( bNotifyAndPaint )
++    {
++            Broadcast( ScTablesHint( SC_TAB_INSERTED, nDestPos ) );
++            PostPaintExtras();
++            PostPaintGridAll();
++    } 
++    return nErrVal;
++}
++
+ BOOL ScDocShell::MoveTable( SCTAB nSrcTab, SCTAB nDestTab, BOOL bCopy, BOOL bRecord )
+ {
+     ScDocShellModificator aModificator( *this );
+diff --git sc/source/ui/inc/docsh.hxx sc/source/ui/inc/docsh.hxx
+index d999580..5ec5591 100644
+--- sc/source/ui/inc/docsh.hxx
++++ sc/source/ui/inc/docsh.hxx
+@@ -305,6 +305,10 @@ public:
+                                     ScMarkData& rMark, BOOL bRecord = TRUE );
+     void			ModifyScenario( SCTAB nTab, const String& rName, const String& rComment,
+                                     const Color& rColor, USHORT nFlags );
++    ULONG TransferTab( ScDocShell& rSrcDocShell, SCTAB nSrcPos,
++                                SCTAB nDestPos, BOOL bInsertNew,
++                                BOOL bNotifyAndPaint );
++
+     BOOL			MoveTable( SCTAB nSrcTab, SCTAB nDestTab, BOOL bCopy, BOOL bRecord );
+ 
+     void			DoRecalc( BOOL bApi );
+diff --git sc/source/ui/vba/vbaworksheet.cxx sc/source/ui/vba/vbaworksheet.cxx
+index 5584cab..9025bc4 100644
+--- sc/source/ui/vba/vbaworksheet.cxx
++++ sc/source/ui/vba/vbaworksheet.cxx
+@@ -501,20 +501,43 @@ ScVbaWorksheet::Copy( const uno::Any& Before, const uno::Any& After ) throw (uno
+         return;
+     }
+ 
+-    uno::Reference <sheet::XSpreadsheetDocument> xSpreadDoc( getModel(), uno::UNO_QUERY );
++    ScVbaWorksheet* pDestSheet = static_cast< ScVbaWorksheet* >(xSheet.get());
++    uno::Reference <sheet::XSpreadsheetDocument> xDestDoc( pDestSheet->getModel(), uno::UNO_QUERY );
++    uno::Reference <sheet::XSpreadsheetDocument> xSrcDoc( getModel(), uno::UNO_QUERY );
++
+     SCTAB nDest = 0;
++    SCTAB nSrc = 0;
+     aSheetName = xSheet->getName();
+-    bool bSheetExists = nameExists (xSpreadDoc, aSheetName, nDest );
+ 
+-    if ( bSheetExists )
++    bool bSameDoc = ( pDestSheet->getModel() == getModel() );
++    bool bDestSheetExists = nameExists (xDestDoc, aSheetName, nDest );
++    bool bSheetExists = nameExists (xSrcDoc, aCurrSheetName, nSrc );
++
++    // set sheet name to be newSheet name
++    aSheetName = aCurrSheetName;
++    SCTAB nDummy=0;
++    if ( bSheetExists && bDestSheetExists )
+     {
+         sal_Bool bAfter = After.hasValue();
+         if(bAfter)
+               nDest++;
+-        uno::Reference<sheet::XSpreadsheets> xSheets = xSpreadDoc->getSheets();
+-        getNewSpreadsheetName(aSheetName,aCurrSheetName,xSpreadDoc);
+-        xSheets->copyByName(aCurrSheetName,aSheetName,nDest);
++        uno::Reference<sheet::XSpreadsheets> xSheets = xDestDoc->getSheets();
++        if ( bSameDoc || nameExists( xDestDoc, aCurrSheetName, nDummy ) )
++            getNewSpreadsheetName(aSheetName,aCurrSheetName,xDestDoc);
++        if ( bSameDoc )
++            xSheets->copyByName(aCurrSheetName,aSheetName,nDest);
++        else
++        {
++            ScDocShell* pDestDocShell = excel::getDocShell( pDestSheet->getModel() );
++            ScDocShell* pSrcDocShell = excel::getDocShell( getModel() );
++            if ( pDestDocShell && pSrcDocShell )
++                pDestDocShell->TransferTab( *pSrcDocShell, static_cast<SCTAB>(nSrc), static_cast<SCTAB>(nDest), TRUE, TRUE );
++        }
+     }
++    // active the new sheet
++    uno::Reference< excel::XApplication > xApplication( Application(), uno::UNO_QUERY_THROW );
++    uno::Reference< excel::XWorksheet > xNewSheet( xApplication->Worksheets( uno::makeAny( aSheetName ) ), uno::UNO_QUERY_THROW );
++    xNewSheet->Activate();
+ }
+ 
+ 
+diff --git sc/source/ui/view/viewfun2.cxx sc/source/ui/view/viewfun2.cxx
+index 523f23a..e2255e0 100644
+--- sc/source/ui/view/viewfun2.cxx
++++ sc/source/ui/view/viewfun2.cxx
+@@ -2480,8 +2480,8 @@ void ScViewFunc::ImportTables( ScDocShell* pSrcShell,
+     {
+         SCTAB nSrcTab = pSrcTabs[i];
+         SCTAB nDestTab1=nTab+i;
+-        ULONG nErrVal = pDoc->TransferTab( pSrcDoc, nSrcTab, nDestTab1,
+-            FALSE );		// no insert
++        ULONG nErrVal = pDocSh->TransferTab( *pSrcShell, nSrcTab, nDestTab1,
++            FALSE, FALSE );		// no insert
+ 
+         switch (nErrVal)
+         {
+@@ -2499,25 +2499,6 @@ void ScViewFunc::ImportTables( ScDocShell* pSrcShell,
+                 break;
+         }
+ 
+-        // TransferTab doesn't copy drawing objects with bInsertNew=FALSE
+-        if ( !bError )
+-            pDoc->TransferDrawPage( pSrcDoc, nSrcTab, nDestTab1 );
+-
+-        if(!bError &&pSrcDoc->IsScenario(nSrcTab))
+-        {
+-            String aComment;
+-            Color  aColor;
+-            USHORT nFlags;
+-
+-            pSrcDoc->GetScenarioData(nSrcTab, aComment,aColor, nFlags);
+-            pDoc->SetScenario( nDestTab1,TRUE);
+-            pDoc->SetScenarioData( nTab+i,aComment,aColor,nFlags);
+-            BOOL bActive = pSrcDoc->IsActiveScenario(nSrcTab );
+-            pDoc->SetActiveScenario( nDestTab1, bActive );
+-            BOOL bVisible=pSrcDoc->IsVisible(nSrcTab);
+-            pDoc->SetVisible(nDestTab1,bVisible );
+-
+-        }
+     }
+ 
+     if (bLink)
+@@ -2701,33 +2682,7 @@ void ScViewFunc::MoveTable( USHORT nDestDocNo, SCTAB nDestTab, BOOL bCopy )
+             nDestTab1 = nDestTab;
+             for(USHORT i=0;i<TheTabs.Count();i++)
+             {
+-                nErrVal = pDestDoc->TransferTab( pDoc, TheTabs[i], nDestTab1,
+-                    FALSE );		// no insert
+-
+-                // TransferTab doesn't copy drawing objects with bInsertNew=FALSE
+-                if ( nErrVal > 0 )
+-                    pDestDoc->TransferDrawPage( pDoc, TheTabs[i], nDestTab1 );
+-
+-                if(nErrVal>0 && pDoc->IsScenario(TheTabs[i]))
+-                {
+-                    String aComment;
+-                    Color  aColor;
+-                    USHORT nFlags;
+-
+-                    pDoc->GetScenarioData(TheTabs[i], aComment,aColor, nFlags);
+-                    pDestDoc->SetScenario(nDestTab1,TRUE);
+-                    pDestDoc->SetScenarioData(nDestTab1,aComment,aColor,nFlags);
+-                    BOOL bActive = pDoc->IsActiveScenario(TheTabs[i]);
+-                    pDestDoc->SetActiveScenario(nDestTab1, bActive );
+-
+-                    BOOL bVisible=pDoc->IsVisible(TheTabs[i]);
+-                    pDestDoc->SetVisible(nDestTab1,bVisible );
+-
+-                }
+-
+-                if ( nErrVal > 0 && pDoc->IsTabProtected( TheTabs[i] ) )
+-                    pDestDoc->SetTabProtection(nDestTab1, pDoc->GetTabProtection(TheTabs[i]));
+-
++                nErrVal = pDestShell->TransferTab( *pDocShell, static_cast<SCTAB>(TheTabs[i]), static_cast<SCTAB>(nDestTab1), FALSE, FALSE );
+                 nDestTab1++;
+             }
+         }
