@@ -1,6 +1,7 @@
 SUBDIRS=piece
 
 script_files = \
+	add_acor.py \
 	amt-license-patch \
 	applyflags \
 	a2az.pl \

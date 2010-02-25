@@ -4,8 +4,10 @@ EXTRA_DIST=\
 	default_images \
 	${wildcard *.dic} \
 	Draft.jpg \
+	acor.csv \
 	acor_ru-RU.dat \
 	acor_sk-SK.dat \
+	acor_vi-VN.dat \
 	banner_go-oo.bmp \
 	banner_nld.bmp \
 	cli_uno_bridge.dll.config.in \
