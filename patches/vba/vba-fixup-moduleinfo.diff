@@ -12,9 +12,22 @@ index 2ec681c..ebba146 100644
          switch( xModule->GetModuleType() )
          {
 diff --git basctl/source/basicide/baside3.cxx basctl/source/basicide/baside3.cxx
-index 211c105..a3300b2 100644
+index 211c105..804a0b6 100644
 --- basctl/source/basicide/baside3.cxx
 +++ basctl/source/basicide/baside3.cxx
+@@ -116,10 +116,10 @@ DialogWindow::DialogWindow( Window* pParent, const ScriptDocument& rDocument, St
+ {
+     InitSettings( TRUE, TRUE, TRUE );
+ 
+-	pEditor = new DlgEditor( rDocument.getDocument() );
++	pEditor = new DlgEditor( rDocument.isDocument() ? rDocument.getDocument() : Reference< frame::XModel >() );
+     pEditor->SetWindow( this );
+ 	// set vba mode on DialogModel ( allows it to work in 100thmm instead of MAP_APPFONT )
+-	if ( rDocument.getDocument().is() )
++	if ( rDocument.isDocument() && rDocument.getDocument().is() )
+ 	{
+ 		uno::Reference< script::XVBACompat > xDocVBAMode( rDocument.getLibraryContainer( E_SCRIPTS ), uno::UNO_QUERY );
+ 		uno::Reference< script::XVBACompat > xDialogModelVBAMode( xDialogModel, uno::UNO_QUERY );
 @@ -740,7 +740,7 @@ BOOL DialogWindow::SaveDialog()
          Reference< beans::XPropertySet > xProps( ::comphelper::getProcessServiceFactory(), UNO_QUERY );
          OSL_ASSERT( xProps.is() );
@@ -93,7 +106,7 @@ index 23f70e0..e28b567 100644
  
                  // new dialog window
 diff --git basctl/source/basicide/basidesh.cxx basctl/source/basicide/basidesh.cxx
-index 2727c90..6842228 100644
+index 2727c90..cb48ef8 100644
 --- basctl/source/basicide/basidesh.cxx
 +++ basctl/source/basicide/basidesh.cxx
 @@ -105,31 +105,31 @@ public:
@@ -168,7 +181,33 @@ index 2727c90..6842228 100644
      
      // MI: Das gab einen GPF im SDT beim Schliessen da dann der ViewFrame die
      // ObjSh loslaesst. Es wusste auch keiner mehr wozu das gut war.
-@@ -996,14 +996,18 @@ void BasicIDEShell::SetCurLib( const ScriptDocument& rDocument, String aLibName,
+@@ -906,9 +906,22 @@ void BasicIDEShell::RemoveWindow( IDEBaseWindow* pWindow_, BOOL bDestroy, BOOL b
+         {
+             pWindow_->AddStatus( BASWIN_TOBEKILLED );
+             pWindow_->Hide();
+-            StarBASIC::Stop();
+-            // Es kommt kein Notify...
+-            pWindow_->BasicStopped();
++            // In normal mode stop basic in windows to be deleted
++            // In VBA stop basic only if the running script is trying to delete
++            // its parent module
++            bool bStop = true;
++            if ( pWindow_->GetDocument().isInVBAMode() )
++            {
++                SbModule* pMod = StarBASIC::GetActiveModule();
++                if ( !pMod || ( pMod && ( pMod->GetName() != pWindow_->GetName() ) ) )
++                    bStop = false;
++            }
++            if ( bStop )
++            {
++                StarBASIC::Stop();
++                // Es kommt kein Notify...
++                pWindow_->BasicStopped();
++            }
+             aIDEWindowTable.Insert( nKey, pWindow_ );	// wieder einhaegen
+         }
+     }
+@@ -996,14 +1009,18 @@ void BasicIDEShell::SetCurLib( const ScriptDocument& rDocument, String aLibName,
  {
      if ( !bCheck || ( rDocument != m_aCurDocument || aLibName != m_aCurLibName ) )
      {
@@ -275,7 +314,7 @@ index cf38077..59ddd7a 100644
                          // add the new module in the "Modules" entry
                          SvLBoxEntry* pLibSubEntry = rBasicBox.FindEntry( pLibEntry, String( IDEResId( RID_STR_NORMAL_MODULES ) ) , OBJ_TYPE_NORMAL_MODULES );
 diff --git basctl/source/basicide/scriptdocument.cxx basctl/source/basicide/scriptdocument.cxx
-index afa4240..e95e87f 100644
+index afa4240..f3f7707 100644
 --- basctl/source/basicide/scriptdocument.cxx
 +++ basctl/source/basicide/scriptdocument.cxx
 @@ -56,7 +56,8 @@
@@ -324,7 +363,16 @@ index afa4240..e95e87f 100644
      //--------------------------------------------------------------------
      BasicManager* ScriptDocument_Impl::getBasicManager() const
      {
-@@ -663,7 +679,7 @@ namespace basctl
+@@ -467,6 +483,8 @@ namespace basctl
+     {
+         OSL_ENSURE( isValid(), "ScriptDocument_Impl::getDocument: invalid state!" );
+         OSL_ENSURE( isDocument(), "ScriptDocument_Impl::getDocument: for documents only!" );
++        if ( !isDocument() )
++            OSL_TRACE("**** BAHHHH!!!*****");
+         if ( !isValid() || !isDocument() )
+             return NULL;
+ 
+@@ -663,7 +681,7 @@ namespace basctl
                  if ( !_rxExistingDialogModel.is() )
                  {
                      Reference< XInputStream > xInput( xISP->createInputStream(), UNO_QUERY_THROW );
@@ -333,7 +381,7 @@ index afa4240..e95e87f 100644
                  }
  
                  // set new name as property
-@@ -671,18 +687,19 @@ namespace basctl
+@@ -671,18 +689,19 @@ namespace basctl
                  xDlgPSet->setPropertyValue( DLGED_PROP_NAME, makeAny( _rNewName ) );
  
                  // export dialog model
@@ -358,7 +406,7 @@ index afa4240..e95e87f 100644
                  }
              }
              xLib->insertByName( _rNewName, aElement );
-@@ -749,16 +766,7 @@ namespace basctl
+@@ -749,16 +768,7 @@ namespace basctl
              Reference< XNameContainer > xLib( getOrCreateLibrary( E_SCRIPTS, _rLibName ), UNO_QUERY_THROW );
              if ( !xLib->hasByName( _rModName ) )
                  return false;
@@ -376,7 +424,7 @@ index afa4240..e95e87f 100644
              return true;
          }
          catch( const Exception& )
-@@ -791,7 +799,7 @@ namespace basctl
+@@ -791,7 +801,7 @@ namespace basctl
              xDlgPSet->setPropertyValue( DLGED_PROP_NAME, makeAny( _rDialogName ) );
  
              // export dialog model
@@ -385,7 +433,7 @@ index afa4240..e95e87f 100644
  
              // insert dialog into library
              xLib->insertByName( _rDialogName, makeAny( _out_rDialogProvider ) );
-@@ -1373,6 +1381,11 @@ namespace basctl
+@@ -1373,6 +1383,11 @@ namespace basctl
          return m_pImpl->isApplication();
      }
  
@@ -397,7 +445,7 @@ index afa4240..e95e87f 100644
      //--------------------------------------------------------------------
      BasicManager* ScriptDocument::getBasicManager() const
      {
-@@ -1411,15 +1424,7 @@ namespace basctl
+@@ -1411,15 +1426,7 @@ namespace basctl
          Any aCode;
          if ( !m_pImpl->getModuleOrDialog( E_SCRIPTS, _rLibName, _rModName, aCode ) )
              return false;
@@ -1251,7 +1299,7 @@ index 9955730..264b48a 100644
          }
          rDocShell.Broadcast( ScTablesHint( SC_TAB_DELETED, nTab ) );
 diff --git sc/source/ui/docshell/docsh5.cxx sc/source/ui/docshell/docsh5.cxx
-index 672dbcc..8f251c5 100644
+index 672dbcc..fc3d997 100644
 --- sc/source/ui/docshell/docsh5.cxx
 +++ sc/source/ui/docshell/docsh5.cxx
 @@ -72,7 +72,7 @@
