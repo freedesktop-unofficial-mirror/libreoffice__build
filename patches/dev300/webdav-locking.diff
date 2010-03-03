@@ -1,5 +1,5 @@
---- officecfg/registry/data/org/openoffice/ucb/Configuration.xcu
-+++ officecfg/registry/data/org/openoffice/ucb/Configuration.xcu
+--- officecfg/registry/data/org/openoffice/ucb/Configuration.xcu.old	2009-10-07 15:07:00.000000000 +0200
++++ officecfg/registry/data/org/openoffice/ucb/Configuration.xcu	2010-03-03 16:59:07.000000000 +0100
 @@ -178,6 +178,28 @@
                  <value/>
                </prop>
@@ -29,24 +29,24 @@
              <!-- We want the Provider to be the final fallback provider -->
              <node oor:name="Provider999" oor:op="replace" install:module="gio">
                <prop oor:name="ServiceName">
---- sc/source/ui/docshell/docsh.cxx
-+++ sc/source/ui/docshell/docsh.cxx
+--- sc/source/ui/docshell/docsh.cxx.old	2010-03-03 16:44:02.000000000 +0100
++++ sc/source/ui/docshell/docsh.cxx	2010-03-03 16:59:07.000000000 +0100
 @@ -856,7 +856,7 @@ BOOL __EXPORT ScDocShell::ConvertFrom( S
- 	//	Alle Filter brauchen die komplette Datei am Stueck (nicht asynchron),
- 	//	darum vorher per CreateFileStream dafuer sorgen, dass die komplette
- 	//	Datei uebertragen wird.
--	rMedium.GetPhysicalName();	//! CreateFileStream direkt rufen, wenn verfuegbar
+     //	Alle Filter brauchen die komplette Datei am Stueck (nicht asynchron),
+     //	darum vorher per CreateFileStream dafuer sorgen, dass die komplette
+     //	Datei uebertragen wird.
+-    rMedium.GetPhysicalName();	//! CreateFileStream direkt rufen, wenn verfuegbar
 +	rMedium.GetPhysicalName( sal_False );	//! CreateFileStream direkt rufen, wenn verfuegbar
  
      SFX_ITEMSET_ARG( rMedium.GetItemSet(), pUpdateDocItem, SfxUInt16Item, SID_UPDATEDOCMODE, sal_False);
      nCanUpdate = pUpdateDocItem ? pUpdateDocItem->GetValue() : com::sun::star::document::UpdateDocMode::NO_UPDATE;
---- sfx2/inc/sfx2/docfile.hxx
-+++ sfx2/inc/sfx2/docfile.hxx
+--- sfx2/inc/sfx2/docfile.hxx.old	2010-01-21 01:00:49.000000000 +0100
++++ sfx2/inc/sfx2/docfile.hxx	2010-03-03 16:59:07.000000000 +0100
 @@ -187,7 +187,7 @@ public:
      ::com::sun::star::util::DateTime GetInitFileDate( sal_Bool bIgnoreOldValue );
  
      ::com::sun::star::uno::Reference< ::com::sun::star::ucb::XContent > GetContent() const;
--	const String&       GetPhysicalName() const;
+-    const String&       GetPhysicalName() const;
 +	const String&       GetPhysicalName( sal_Bool bForceCreateTempIfRemote = sal_True ) const;
      void                SetTemporary( sal_Bool bTemp );
      sal_Bool            IsTemporary() const;
@@ -60,9 +60,9 @@
  #if _SOLAR__PRIVATE
      SAL_DLLPRIVATE BOOL HasStorage_Impl() const;
  
---- sfx2/source/doc/docfile.cxx
-+++ sfx2/source/doc/docfile.cxx
-@@ -582,7 +582,7 @@
+--- sfx2/source/doc/docfile.cxx.old	2010-01-21 01:00:49.000000000 +0100
++++ sfx2/source/doc/docfile.cxx	2010-03-03 16:59:07.000000000 +0100
+@@ -586,7 +586,7 @@ void SfxMedium::CheckFileDate( const uti
  //------------------------------------------------------------------
  sal_Bool SfxMedium::DocNeedsFileDateCheck()
  {
@@ -71,7 +71,7 @@
  }
  
  //------------------------------------------------------------------
-@@ -804,10 +804,13 @@
+@@ -811,10 +811,13 @@ sal_Bool SfxMedium::CloseOutStream_Impl(
  }
  
  //------------------------------------------------------------------
@@ -87,11 +87,10 @@
  
      // return the name then
      return aName;
-@@ -916,15 +916,35 @@
-     return bPreview;
+@@ -924,6 +927,26 @@ sal_Bool SfxMedium::IsPreview_Impl()
  }
  
-+//------------------------------------------------------------------
+ //------------------------------------------------------------------
 +sal_Bool SfxMedium::SupportsActiveStreaming( const rtl::OUString &rName ) const
 +{
 +    if ( ::utl::LocalFileHelper::IsLocalFile( rName ) )
@@ -111,11 +110,11 @@
 +    return sal_False;
 +}
 +
- //------------------------------------------------------------------
++//------------------------------------------------------------------
  void SfxMedium::StorageBackup_Impl()
  {
      ::ucbhelper::Content aOriginalContent;
-     Reference< ::com::sun::star::ucb::XCommandEnvironment > xDummyEnv;
+@@ -931,7 +954,7 @@ void SfxMedium::StorageBackup_Impl()
  
      sal_Bool bBasedOnOriginalFile = ( !pImp->pTempFile && !( aLogicName.Len() && pImp->m_bSalvageMode )
          && GetURLObject().GetMainURL( INetURLObject::NO_DECODE ).getLength()
@@ -124,7 +123,7 @@
          && ::utl::UCBContentHelper::IsDocument( GetURLObject().GetMainURL( INetURLObject::NO_DECODE ) ) );
  
      if ( bBasedOnOriginalFile && !pImp->m_aBackupURL.getLength()
-@@ -1995,7 +1995,7 @@ void SfxMedium::Transfer_Impl()
+@@ -2015,7 +2038,7 @@ void SfxMedium::Transfer_Impl()
              xComEnv = new ::ucbhelper::CommandEnvironment( xInteractionHandler,
                                                        Reference< ::com::sun::star::ucb::XProgressHandler >() );
  
@@ -133,12 +132,15 @@
          {
              TransactedTransferForFS_Impl( aSource, aDest, xComEnv );
          }
-@@ -2108,11 +2108,20 @@ void SfxMedium::DoInternalBackup_Impl( const ::ucbhelper::Content& aOriginalCont
- 	if ( pImp->m_aBackupURL.getLength() )
- 		return; // the backup was done already
+@@ -2128,11 +2151,20 @@ void SfxMedium::DoInternalBackup_Impl( c
+     if ( pImp->m_aBackupURL.getLength() )
+         return; // the backup was done already
  
--	::utl::TempFile aTransactTemp( aPrefix, &aExtension, &aDestDir );
--	aTransactTemp.EnableKillingFile( sal_False );
+-    ::utl::TempFile aTransactTemp( aPrefix, &aExtension, &aDestDir );
+-    aTransactTemp.EnableKillingFile( sal_False );
+-
+-    INetURLObject aBackObj( aTransactTemp.GetURL() );
+-    ::rtl::OUString aBackupName = aBackObj.getName( INetURLObject::LAST_SEGMENT, true, INetURLObject::DECODE_WITH_CHARSET );
 +	::rtl::OUString aBackupName;
 +	::rtl::OUString aBackupURL;
 +	{
@@ -147,55 +149,53 @@
 +		// file name...
 +		::utl::TempFile aTransactTemp( aPrefix, &aExtension, &aDestDir );
 +		aTransactTemp.EnableKillingFile( sal_True );
- 
--	INetURLObject aBackObj( aTransactTemp.GetURL() );
--	::rtl::OUString aBackupName = aBackObj.getName( INetURLObject::LAST_SEGMENT, true, INetURLObject::DECODE_WITH_CHARSET );
++
 +		INetURLObject aBackObj( aTransactTemp.GetURL() );
 +
 +		aBackupName = aBackObj.getName( INetURLObject::LAST_SEGMENT, true, INetURLObject::DECODE_WITH_CHARSET );
 +		aBackupURL = aBackObj.GetMainURL( INetURLObject::NO_DECODE );
 +	}
  
- 	Reference < ::com::sun::star::ucb::XCommandEnvironment > xDummyEnv;
- 	::ucbhelper::Content aBackupCont;
-@@ -2125,16 +2125,13 @@ void SfxMedium::DoInternalBackup_Impl( const ::ucbhelper::Content& aOriginalCont
- 											aBackupName,
- 											NameClash::OVERWRITE ) )
- 			{
--				pImp->m_aBackupURL = aBackObj.GetMainURL( INetURLObject::NO_DECODE );
+     Reference < ::com::sun::star::ucb::XCommandEnvironment > xDummyEnv;
+     ::ucbhelper::Content aBackupCont;
+@@ -2145,16 +2177,13 @@ void SfxMedium::DoInternalBackup_Impl( c
+                                             aBackupName,
+                                             NameClash::OVERWRITE ) )
+             {
+-                pImp->m_aBackupURL = aBackObj.GetMainURL( INetURLObject::NO_DECODE );
 +				pImp->m_aBackupURL = aBackupURL;
- 				pImp->m_bRemoveBackup = sal_True;
- 			}
- 		}
- 		catch( Exception& )
- 		{}
- 	}
+                 pImp->m_bRemoveBackup = sal_True;
+             }
+         }
+         catch( Exception& )
+         {}
+     }
 -
--	if ( !pImp->m_aBackupURL.getLength() )
--		aTransactTemp.EnableKillingFile( sal_True );
+-    if ( !pImp->m_aBackupURL.getLength() )
+-        aTransactTemp.EnableKillingFile( sal_True );
  }
  
  //------------------------------------------------------------------
-@@ -2327,7 +2327,7 @@ void SfxMedium::GetMedium_Impl()
-                     aMedium.erase( comphelper::MediaDescriptor::PROP_READONLY() );
-                     aMedium.addInputStream();
-                 }
--                else if ( ::utl::LocalFileHelper::IsLocalFile( GetURLObject().GetMainURL( INetURLObject::NO_DECODE ) ) )
+@@ -2393,7 +2422,7 @@ void SfxMedium::GetMedium_Impl()
+                         aMedium.erase( comphelper::MediaDescriptor::PROP_READONLY() );
+                         aMedium.addInputStream();
+                     }
+-                    else if ( ::utl::LocalFileHelper::IsLocalFile( GetURLObject().GetMainURL( INetURLObject::NO_DECODE ) ) )
 +                else if ( SupportsActiveStreaming( GetURLObject().GetMainURL( INetURLObject::NO_DECODE ) ) )
-                 {
-                     // use the special locking approach only for file URLs
-                     aMedium.addInputStreamOwnLock();
-@@ -3423,7 +3423,7 @@
-     if ( !( nStorOpenMode & STREAM_TRUNC ) )
-     {
+                     {
+                         // use the special locking approach only for file URLs
+                         aMedium.addInputStreamOwnLock();
+@@ -3519,7 +3548,7 @@ void SfxMedium::CreateTempFile( sal_Bool
+         sal_Bool bTransferSuccess = sal_False;
+ 
          if ( GetContent().is()
 -          && ::utl::LocalFileHelper::IsLocalFile( GetURLObject().GetMainURL( INetURLObject::NO_DECODE ) )
 +          && SupportsActiveStreaming( GetURLObject().GetMainURL( INetURLObject::NO_DECODE ) )
            && ::utl::UCBContentHelper::IsDocument( GetURLObject().GetMainURL( INetURLObject::NO_DECODE ) ) )
          {
              // if there is already such a document, we should copy it
---- sfx2/source/view/viewfrm.cxx
-+++ sfx2/source/view/viewfrm.cxx
+--- sfx2/source/view/viewfrm.cxx.old	2009-10-08 16:17:55.000000000 +0200
++++ sfx2/source/view/viewfrm.cxx	2010-03-03 16:59:07.000000000 +0100
 @@ -632,6 +632,11 @@ void SfxViewFrame::ExecReload_Impl( SfxR
                  sal_Bool bHandsOff =
                      ( pMedium->GetURLObject().GetProtocol() == INET_PROT_FILE && !xOldObj->IsDocShared() );
@@ -208,15 +208,15 @@
                  // bestehende SfxMDIFrames f"ur dieses Doc leeren
                  // eigenes Format oder R/O jetzt editierbar "offnen?
                  SfxViewNotificatedFrameList_Impl aFrames;
---- tools/inc/tools/urlobj.hxx
-+++ tools/inc/tools/urlobj.hxx
+--- tools/inc/tools/urlobj.hxx.old	2010-03-03 16:44:12.000000000 +0100
++++ tools/inc/tools/urlobj.hxx	2010-03-03 16:59:07.000000000 +0100
 @@ -141,9 +141,14 @@ enum INetProtocol
      INET_PROT_TELNET = 28,
      INET_PROT_VND_SUN_STAR_EXPAND = 29,
      INET_PROT_VND_SUN_STAR_TDOC = 30,
 -    INET_PROT_GENERIC = 31,
 -    INET_PROT_SMB = 32,
--	INET_PROT_END = 33
+-    INET_PROT_END = 33
 +    INET_PROT_SMB = 31,
 +    INET_PROT_DAV = 32,
 +    INET_PROT_DAVS = 33,
@@ -228,36 +228,36 @@
  };
  
  //============================================================================
---- tools/source/fsys/urlobj.cxx
-+++ tools/source/fsys/urlobj.cxx
+--- tools/source/fsys/urlobj.cxx.old	2010-03-03 16:44:12.000000000 +0100
++++ tools/source/fsys/urlobj.cxx	2010-03-03 16:59:07.000000000 +0100
 @@ -374,21 +374,21 @@ static INetURLObject::SchemeInfo const a
- 		  false },
- 		{ "ftp", "ftp://", 21, true, true, false, true, true, true, true,
- 		  false },
--		{ "http", "http://", 80, true, false, false, false, true, true,
+           false },
+         { "ftp", "ftp://", 21, true, true, false, true, true, true, true,
+           false },
+-        { "http", "http://", 80, true, false, false, false, true, true,
 +		{ "http", "http://", 80, true, true, false, true, true, true,
- 		  true, true },
- 		{ "file", "file://", 0, true, false, false, false, true, false,
- 		  true, false },
- 		{ "mailto", "mailto:", 0, false, false, false, false, false,
- 		  false, false, true },
--		{ "vnd.sun.star.webdav", "vnd.sun.star.webdav://", 80, true, false,
--		  false, false, true, true, true, true },
+           true, true },
+         { "file", "file://", 0, true, false, false, false, true, false,
+           true, false },
+         { "mailto", "mailto:", 0, false, false, false, false, false,
+           false, false, true },
+-        { "vnd.sun.star.webdav", "vnd.sun.star.webdav://", 80, true, false,
+-          false, false, true, true, true, true },
 +		{ "vnd.sun.star.webdav", "vnd.sun.star.webdav://", 80, true, true,
 +		  false, true, true, true, true, true },
- 		{ "news", "news:", 0, false, false, false, false, false, false, false,
+         { "news", "news:", 0, false, false, false, false, false, false, false,
            false },
- 		{ "private", "private:", 0, false, false, false, false, false,
- 		  false, false, true },
- 		{ "vnd.sun.star.help", "vnd.sun.star.help://", 0, true, false, false,
- 		  false, false, false, true, true },
--		{ "https", "https://", 443, true, false, false, false, true, true,
+         { "private", "private:", 0, false, false, false, false, false,
+           false, false, true },
+         { "vnd.sun.star.help", "vnd.sun.star.help://", 0, true, false, false,
+           false, false, false, true, true },
+-        { "https", "https://", 443, true, false, false, false, true, true,
 +		{ "https", "https://", 443, true, true, false, true, true, true,
- 		  true, true },
- 		{ "slot", "slot:", 0, false, false, false, false, false, false,
- 		  false, true },
+           true, true },
+         { "slot", "slot:", 0, false, false, false, false, false, false,
+           false, true },
 @@ -432,9 +432,19 @@ static INetURLObject::SchemeInfo const a
- 		  false, false, false, false, false },
+           false, false, false, false, false },
          { "vnd.sun.star.tdoc", "vnd.sun.star.tdoc:", 0, false, false, false,
            false, false, false, true, false },
 -        { "", "", 0, false, false, false, false, false, false, false, false },
@@ -291,8 +291,8 @@
              }
          }
 @@ -866,8 +879,9 @@ bool INetURLObject::setAbsURIRef(rtl::OU
- 			return false;
- 		}
+             return false;
+         }
  
 -        if (m_eScheme != INET_PROT_GENERIC) {
 -            aSynScheme = rtl::OUString::createFromAscii(getSchemeInfo().m_pScheme);
@@ -302,61 +302,61 @@
          }
          m_aScheme.set(aSynAbsURIRef, aSynScheme, aSynAbsURIRef.getLength());
          aSynAbsURIRef.append(sal_Unicode(':'));
-@@ -2127,6 +2127,8 @@ INetURLObject::getPrefix(sal_Unicode con
- 			  PrefixInfo::INTERNAL },
- 			{ "cid:", 0, INET_PROT_CID, PrefixInfo::OFFICIAL },
- 			{ "data:", 0, INET_PROT_DATA, PrefixInfo::OFFICIAL },
+@@ -2125,6 +2139,8 @@ INetURLObject::getPrefix(sal_Unicode con
+               PrefixInfo::INTERNAL },
+             { "cid:", 0, INET_PROT_CID, PrefixInfo::OFFICIAL },
+             { "data:", 0, INET_PROT_DATA, PrefixInfo::OFFICIAL },
 +			{ "dav:", 0, INET_PROT_DAV, PrefixInfo::OFFICIAL },
 +			{ "davs:", 0, INET_PROT_DAVS, PrefixInfo::OFFICIAL },
- 			{ "db:", "staroffice.db:", INET_PROT_DB, PrefixInfo::INTERNAL },
- 			{ "file:", 0, INET_PROT_FILE, PrefixInfo::OFFICIAL },
- 			{ "ftp:", 0, INET_PROT_FTP, PrefixInfo::OFFICIAL },
-@@ -2208,6 +2208,8 @@ INetURLObject::getPrefix(sal_Unicode con
- 			  PrefixInfo::OFFICIAL },
- 			{ "vnd.sun.star.wfs:", 0, INET_PROT_VND_SUN_STAR_WFS,
- 			  PrefixInfo::OFFICIAL },
+             { "db:", "staroffice.db:", INET_PROT_DB, PrefixInfo::INTERNAL },
+             { "file:", 0, INET_PROT_FILE, PrefixInfo::OFFICIAL },
+             { "ftp:", 0, INET_PROT_FTP, PrefixInfo::OFFICIAL },
+@@ -2206,6 +2222,8 @@ INetURLObject::getPrefix(sal_Unicode con
+               PrefixInfo::OFFICIAL },
+             { "vnd.sun.star.wfs:", 0, INET_PROT_VND_SUN_STAR_WFS,
+               PrefixInfo::OFFICIAL },
 +			{ "webdav:", 0, INET_PROT_WEBDAV, PrefixInfo::OFFICIAL },
 +			{ "webdavs:", 0, INET_PROT_WEBDAVS, PrefixInfo::OFFICIAL },
- 			{ "wfs:", "vnd.sun.star.wfs:", INET_PROT_VND_SUN_STAR_WFS,
- 			  PrefixInfo::ALIAS } };
- 	PrefixInfo const * pFirst = aMap + 1;
-@@ -3011,6 +3011,10 @@ bool INetURLObject::parsePath(INetProtoc
- 		case INET_PROT_VND_SUN_STAR_WEBDAV:
- 		case INET_PROT_HTTPS:
+             { "wfs:", "vnd.sun.star.wfs:", INET_PROT_VND_SUN_STAR_WFS,
+               PrefixInfo::ALIAS } };
+     PrefixInfo const * pFirst = aMap + 1;
+@@ -3009,6 +3027,10 @@ bool INetURLObject::parsePath(INetProtoc
+         case INET_PROT_VND_SUN_STAR_WEBDAV:
+         case INET_PROT_HTTPS:
          case INET_PROT_SMB:
 +        case INET_PROT_DAV:
 +        case INET_PROT_DAVS:
 +        case INET_PROT_WEBDAV:
 +        case INET_PROT_WEBDAVS:
- 			if (pPos < pEnd && *pPos != '/')
- 				return false;
- 			while (pPos < pEnd && *pPos != nQueryDelimiter
-@@ -3429,6 +3429,7 @@ bool INetURLObject::parsePath(INetProtoc
- 			break;
+             if (pPos < pEnd && *pPos != '/')
+                 return false;
+             while (pPos < pEnd && *pPos != nQueryDelimiter
+@@ -3427,6 +3449,7 @@ bool INetURLObject::parsePath(INetProtoc
+             break;
  
          case INET_PROT_GENERIC:
 +        case INET_PROT_GENERIC_HIERARCHICAL:
- 			while (pPos < pEnd && *pPos != nFragmentDelimiter)
- 			{
- 				EscapeType eEscapeType;
-@@ -4140,10 +4140,13 @@ bool INetURLObject::ConcatData(INetProto
+             while (pPos < pEnd && *pPos != nFragmentDelimiter)
+             {
+                 EscapeType eEscapeType;
+@@ -4138,10 +4161,13 @@ bool INetURLObject::ConcatData(INetProto
  {
- 	setInvalid();
- 	m_eScheme = eTheScheme;
--	if (HasError() || m_eScheme == INET_PROT_GENERIC)
+     setInvalid();
+     m_eScheme = eTheScheme;
+-    if (HasError() || m_eScheme == INET_PROT_GENERIC)
 +	const char *pSchemeName = getSchemeInfo().m_pScheme;
 +
 +	if (HasError() || pSchemeName[0] == '\0')
- 		return false;
+         return false;
 +
- 	m_aAbsURIRef.setLength(0);
--	m_aAbsURIRef.appendAscii(getSchemeInfo().m_pScheme);
+     m_aAbsURIRef.setLength(0);
+-    m_aAbsURIRef.appendAscii(getSchemeInfo().m_pScheme);
 +	m_aAbsURIRef.appendAscii(pSchemeName);
- 	m_aAbsURIRef.append(sal_Unicode(':'));
- 	if (getSchemeInfo().m_bAuthority)
- 	{
---- tools/workben/urltest.cxx
-+++ tools/workben/urltest.cxx
+     m_aAbsURIRef.append(sal_Unicode(':'));
+     if (getSchemeInfo().m_bAuthority)
+     {
+--- tools/workben/urltest.cxx.old	2010-01-21 01:00:41.000000000 +0100
++++ tools/workben/urltest.cxx	2010-03-03 16:59:07.000000000 +0100
 @@ -1495,7 +1495,7 @@ main()
  
          url = rtl::OUString(RTL_CONSTASCII_USTRINGPARAM("A-b.3:/%2f?x#y"));
@@ -393,8 +393,8 @@
          bSuccess &= assertEqual(
              url, url,
              rtl::OUString(urlobj.GetMainURL(INetURLObject::NO_DECODE)));
---- ucb/source/ucp/webdav/DAVRequestEnvironment.hxx
-+++ ucb/source/ucp/webdav/DAVRequestEnvironment.hxx
+--- ucb/source/ucp/webdav/DAVRequestEnvironment.hxx.old	2009-10-07 15:07:04.000000000 +0200
++++ ucb/source/ucp/webdav/DAVRequestEnvironment.hxx	2010-03-03 16:59:07.000000000 +0100
 @@ -34,6 +34,8 @@
  #include <rtl/ref.hxx>
  #include "DAVAuthListener.hxx"
@@ -404,7 +404,7 @@
  namespace webdav_ucp
  {
      typedef std::pair< rtl::OUString, rtl::OUString > DAVRequestHeader;
-@@ -46,12 +50,12 @@ struct DAVRequestEnvironment
+@@ -46,12 +48,12 @@ struct DAVRequestEnvironment
  //    rtl::Reference< DAVStatusListener >   m_xStatusListener;
  //    rtl::Reference< DAVProgressListener > m_xStatusListener;
      DAVRequestHeaders                     m_aRequestHeaders;
@@ -420,8 +420,8 @@
      : m_aRequestURI( rRequestURI ), 
        m_xAuthListener( xListener ),
        m_aRequestHeaders( rRequestHeaders ),
---- ucb/source/ucp/webdav/DAVResourceAccess.cxx
-+++ ucb/source/ucp/webdav/DAVResourceAccess.cxx
+--- ucb/source/ucp/webdav/DAVResourceAccess.cxx.old	2009-12-03 13:52:17.000000000 +0100
++++ ucb/source/ucp/webdav/DAVResourceAccess.cxx	2010-03-03 16:59:07.000000000 +0100
 @@ -42,6 +42,9 @@
  #include "DAVAuthListenerImpl.hxx"
  #include "DAVResourceAccess.hxx"
@@ -432,7 +432,7 @@
  using namespace webdav_ucp;
  using namespace com::sun::star;
  
-@@ -63,11 +63,18 @@ int DAVAuthListener_Impl::authenticate(
+@@ -63,11 +66,18 @@ int DAVAuthListener_Impl::authenticate(
      sal_Bool bAllowPersistentStoring,
      sal_Bool bCanUseSystemCredentials )
  {
@@ -442,6 +442,7 @@
      {
 -        uno::Reference< task::XInteractionHandler > xIH
 -            = m_xEnv->getInteractionHandler();
+-        if ( xIH.is() )
 +        xIH = m_xEnv->getInteractionHandler();
 +    }
 +    else
@@ -450,11 +451,10 @@
 +    }
 +
 +    {
--        if ( xIH.is() )
          {
              // #102871# - Supply username and password from previous try.
              // Password container service depends on this!
-@@ -444,15 +446,16 @@ void DAVResourceAccess::GET(
+@@ -465,15 +475,16 @@ void DAVResourceAccess::GET(
  }
  
  //=========================================================================
@@ -474,7 +474,7 @@
      int errorCount = 0;
      bool bRetry;
      do
-@@ -472,7 +475,8 @@ uno::Reference< io::XInputStream > DAVRe
+@@ -493,7 +504,8 @@ uno::Reference< io::XInputStream > DAVRe
                                         DAVRequestEnvironment(
                                             getRequestURI(),
                                             new DAVAuthListener_Impl( xEnv, m_aURL ),
@@ -484,7 +484,7 @@
          }
          catch ( DAVException & e )
          {
-@@ -606,6 +610,45 @@ void DAVResourceAccess::PUT(
+@@ -635,6 +647,45 @@ void DAVResourceAccess::PUT(
  }
  
  //=========================================================================
@@ -528,9 +528,9 @@
 +
 +//=========================================================================
  uno::Reference< io::XInputStream > DAVResourceAccess::POST(
- 	const rtl::OUString & rContentType,
- 	const rtl::OUString & rReferer,
-@@ -888,22 +931,44 @@ void DAVResourceAccess::DESTROY(
+     const rtl::OUString & rContentType,
+     const rtl::OUString & rReferer,
+@@ -917,22 +968,44 @@ void DAVResourceAccess::DESTROY(
  
  //=========================================================================
  void DAVResourceAccess::LOCK ( 
@@ -583,7 +583,7 @@
  }
  
  //=========================================================================
-@@ -1008,6 +1073,18 @@ void DAVResourceAccess::getUserRequestHe
+@@ -1037,6 +1110,18 @@ void DAVResourceAccess::getUserRequestHe
      }
  }
  
@@ -602,10 +602,10 @@
  //=========================================================================
  sal_Bool DAVResourceAccess::detectRedirectCycle(
                                  const rtl::OUString& rRedirectURL )
---- ucb/source/ucp/webdav/DAVResourceAccess.hxx
-+++ ucb/source/ucp/webdav/DAVResourceAccess.hxx
+--- ucb/source/ucp/webdav/DAVResourceAccess.hxx.old	2009-10-08 16:17:56.000000000 +0200
++++ ucb/source/ucp/webdav/DAVResourceAccess.hxx	2010-03-03 16:59:07.000000000 +0100
 @@ -134,11 +134,12 @@ public:
- 	     com::sun::star::ucb::XCommandEnvironment > & xEnv )
+          com::sun::star::ucb::XCommandEnvironment > & xEnv )
          throw( DAVException );
  
 -    com::sun::star::uno::Reference< com::sun::star::io::XInputStream >
@@ -613,15 +613,15 @@
      GET( const std::vector< rtl::OUString > & rHeaderNames, // empty == 'all'
           DAVResource & rResource,
           const com::sun::star::uno::Reference<
--	     com::sun::star::ucb::XCommandEnvironment > & xEnv )
+-         com::sun::star::ucb::XCommandEnvironment > & xEnv )
 +	     com::sun::star::ucb::XCommandEnvironment > & xEnv,
 +         sal_Bool bAllowEmpty = sal_False )
          throw( DAVException );
  
      void
 @@ -157,6 +158,11 @@ public:
- 	     com::sun::star::ucb::XCommandEnvironment > & xEnv )
- 	throw( DAVException );
+          com::sun::star::ucb::XCommandEnvironment > & xEnv )
+     throw( DAVException );
  
 +    void
 +    PUT( const char * buffer, size_t size,
@@ -630,25 +630,25 @@
 +
      com::sun::star::uno::Reference< com::sun::star::io::XInputStream >
      POST( const rtl::OUString & rContentType,
- 	  const rtl::OUString & rReferer,
+       const rtl::OUString & rReferer,
 @@ -204,13 +210,13 @@ public:
- 	throw( DAVException );
+     throw( DAVException );
  
      void
 -    LOCK( const com::sun::star::ucb::Lock & rLock,
 +    LOCK( com::sun::star::ucb::Lock & rLock,
- 	  const com::sun::star::uno::Reference<
- 	      com::sun::star::ucb::XCommandEnvironment > & xEnv )
- 	throw( DAVException );
+       const com::sun::star::uno::Reference<
+           com::sun::star::ucb::XCommandEnvironment > & xEnv )
+     throw( DAVException );
  
      void
 -    UNLOCK( const com::sun::star::ucb::Lock & rLock,
 +    UNLOCK( com::sun::star::ucb::Lock & rLock,
- 	    const com::sun::star::uno::Reference<
- 	        com::sun::star::ucb::XCommandEnvironment > & xEnv )
- 	throw( DAVException );
-@@ -223,6 +229,8 @@ public:
- 	const rtl::OUString & rMethod,
+         const com::sun::star::uno::Reference<
+             com::sun::star::ucb::XCommandEnvironment > & xEnv )
+     throw( DAVException );
+@@ -227,6 +233,8 @@ public:
+     const rtl::OUString & rMethod,
      DAVRequestHeaders & rRequestHeaders );
  
 +    static com::sun::star::uno::Reference< com::sun::star::ucb::XCommandEnvironment > createCommandEnvironment( void );
@@ -656,8 +656,8 @@
  private:
      const rtl::OUString & getRequestURI() const;
      sal_Bool detectRedirectCycle( const rtl::OUString& rRedirectURL )
---- ucb/source/ucp/webdav/DAVSession.hxx
-+++ ucb/source/ucp/webdav/DAVSession.hxx
+--- ucb/source/ucp/webdav/DAVSession.hxx.old	2009-10-08 16:17:56.000000000 +0200
++++ ucb/source/ucp/webdav/DAVSession.hxx	2010-03-03 16:59:07.000000000 +0100
 @@ -33,8 +33,11 @@
  
  #include <memory>
@@ -681,7 +681,7 @@
  
 @@ -114,11 +115,12 @@ public:
          const DAVRequestEnvironment & rEnv )
- 		throw( DAVException ) = 0;
+         throw( DAVException ) = 0;
  
 -    virtual com::sun::star::uno::Reference< com::sun::star::io::XInputStream >
 +    virtual com::sun::star::uno::Reference< com::sun::star::io::XStream >
@@ -694,9 +694,9 @@
          throw( DAVException ) = 0;
  
      virtual void    GET( const ::rtl::OUString & inPath,
-@@ -134,6 +136,12 @@ public:
- 	virtual void	ABORT()
- 		throw( DAVException ) = 0;
+@@ -137,6 +139,12 @@ public:
+     virtual void	ABORT()
+         throw( DAVException ) = 0;
  
 +    virtual void PUT( const ::rtl::OUString & inPath,
 +             const char * buffer,
@@ -707,28 +707,28 @@
      virtual com::sun::star::uno::Reference< com::sun::star::io::XInputStream >
                      POST( const rtl::OUString & inPath,
                            const rtl::OUString & rContentType,
-@@ -173,16 +181,14 @@ public:
+@@ -176,16 +184,14 @@ public:
                               const DAVRequestEnvironment & rEnv )
- 		throw( DAVException ) = 0;
+         throw( DAVException ) = 0;
  
--	// Note: Uncomment the following if locking support is required
--	/*
--	virtual void LOCK ( const Lock & inLock,
+-    // Note: Uncomment the following if locking support is required
+-    /*
+-    virtual void LOCK ( const Lock & inLock,
 +	virtual void LOCK ( com::sun::star::ucb::Lock & rLock,
                          const DAVRequestEnvironment & rEnv )
- 		throw( DAVException ) = 0;
+         throw( DAVException ) = 0;
  
--	virtual void UNLOCK ( const Lock & inLock,
+-    virtual void UNLOCK ( const Lock & inLock,
 +	virtual void UNLOCK ( com::sun::star::ucb::Lock & rLock,
                            const DAVRequestEnvironment & rEnv )
- 		throw( DAVException ) = 0;
--	*/
+         throw( DAVException ) = 0;
+-    */
 +
  protected:
      rtl::Reference< DAVSessionFactory > m_xFactory;
  
---- ucb/source/ucp/webdav/NeonInputStream.cxx
-+++ ucb/source/ucp/webdav/NeonInputStream.cxx
+--- ucb/source/ucp/webdav/NeonInputStream.cxx.old	2009-10-07 15:07:04.000000000 +0200
++++ ucb/source/ucp/webdav/NeonInputStream.cxx	2010-03-03 16:59:07.000000000 +0100
 @@ -31,21 +31,28 @@
  // MARKER(update_precomp.py): autogen include statement, do not remove
  #include "precompiled_ucb.hxx"
@@ -770,7 +770,7 @@
  {
 -    mInputBuffer.realloc( sal::static_int_cast<sal_Int32>(mLen) + inLen );
 -    rtl_copyMemory( mInputBuffer.getArray() + mLen, inBuf, inLen );
--	mLen += inLen;
+-    mLen += inLen;
 +    OSL_ENSURE( !m_bDirty, "Cannot AddToStream() when it was already written to it." );
 +
 +    m_aInputBuffer.realloc( sal::static_int_cast<sal_Int32>(m_nLen) + inLen );
@@ -792,20 +792,20 @@
  // queryInterface
  // -------------------------------------------------------------------
 -Any NeonInputStream::queryInterface( const Type &type )
--						throw( RuntimeException )
+-                        throw( RuntimeException )
 +uno::Any NeonInputStream::queryInterface( const uno::Type &type )
 +						throw( uno::RuntimeException )
  {
--	Any aRet = ::cppu::queryInterface( type,
--									   static_cast< XInputStream * >( this ),
--									   static_cast< XSeekable * >( this ) );
+-    Any aRet = ::cppu::queryInterface( type,
+-                                       static_cast< XInputStream * >( this ),
+-                                       static_cast< XSeekable * >( this ) );
 +    uno::Any aRet = ::cppu::queryInterface( type,
 +            static_cast< XStream * >( this ),
 +            static_cast< XInputStream * >( this ),
 +            static_cast< XOutputStream * >( this ),
 +            static_cast< XSeekable * >( this ),
 +            static_cast< XTruncate * >( this ) );
- 	return aRet.hasValue() ? aRet : OWeakObject::queryInterface( type );
+     return aRet.hasValue() ? aRet : OWeakObject::queryInterface( type );
  }
  
  // -------------------------------------------------------------------
@@ -834,22 +834,22 @@
  // -------------------------------------------------------------------
 @@ -92,7 +134,7 @@ sal_Int32 SAL_CALL NeonInputStream::read
  {
- 	// Work out how much we're actually going to write
- 	sal_Int32 theBytes2Read = nBytesToRead;
--	sal_Int32 theBytesLeft  = sal::static_int_cast<sal_Int32>(mLen - mPos);
+     // Work out how much we're actually going to write
+     sal_Int32 theBytes2Read = nBytesToRead;
+-    sal_Int32 theBytesLeft  = sal::static_int_cast<sal_Int32>(mLen - mPos);
 +	sal_Int32 theBytesLeft  = sal::static_int_cast<sal_Int32>(m_nLen - m_nPos);
- 	if ( theBytes2Read > theBytesLeft )
- 		theBytes2Read = theBytesLeft;
+     if ( theBytes2Read > theBytesLeft )
+         theBytes2Read = theBytesLeft;
  
 @@ -101,10 +143,10 @@ sal_Int32 SAL_CALL NeonInputStream::read
  
- 	// Write the data
- 	rtl_copyMemory(
--		aData.getArray(), mInputBuffer.getConstArray() + mPos, theBytes2Read );
+     // Write the data
+     rtl_copyMemory(
+-        aData.getArray(), mInputBuffer.getConstArray() + mPos, theBytes2Read );
 +		aData.getArray(), m_aInputBuffer.getConstArray() + m_nPos, theBytes2Read );
  
- 	// Update our stream position for next time
--	mPos += theBytes2Read;
+     // Update our stream position for next time
+-    mPos += theBytes2Read;
 +	m_nPos += theBytes2Read;
  
      return theBytes2Read;
@@ -858,9 +858,9 @@
                 ::com::sun::star::io::IOException,
                 ::com::sun::star::uno::RuntimeException )
  {
--	mPos += nBytesToSkip;
--	if ( mPos >= mLen )
--		mPos = mLen;
+-    mPos += nBytesToSkip;
+-    if ( mPos >= mLen )
+-        mPos = mLen;
 +    m_nPos += nBytesToSkip;
 +    if ( m_nPos >= m_nLen )
 +        m_nPos = m_nLen;
@@ -871,43 +871,36 @@
                 ::com::sun::star::io::IOException,
                 ::com::sun::star::uno::RuntimeException )
  {
--	return sal::static_int_cast<sal_Int32>(mLen - mPos);
+-    return sal::static_int_cast<sal_Int32>(mLen - mPos);
 +    return sal::static_int_cast<sal_Int32>(m_nLen - m_nPos);
  }
  
  // -------------------------------------------------------------------
-@@ -168,12 +210,12 @@ void SAL_CALL NeonInputStream::seek( sal
- 			   ::com::sun::star::io::IOException,
- 			   ::com::sun::star::uno::RuntimeException )
- {
--	if ( location < 0 )
--		throw ::com::sun::star::lang::IllegalArgumentException();
-+    if ( location < 0 )
-+        throw ::com::sun::star::lang::IllegalArgumentException();
+@@ -171,8 +213,8 @@ void SAL_CALL NeonInputStream::seek( sal
+     if ( location < 0 )
+         throw ::com::sun::star::lang::IllegalArgumentException();
  
 -    if ( location <= mLen )
--		mPos = location;
--	else
+-        mPos = location;
 +    if ( location <= m_nLen )
 +        m_nPos = location;
-+    else
+     else
          throw ::com::sun::star::lang::IllegalArgumentException();
  }
- 
 @@ -184,7 +226,7 @@ sal_Int64 SAL_CALL NeonInputStream::getP
- 		throw( ::com::sun::star::io::IOException,
- 			   ::com::sun::star::uno::RuntimeException )
+         throw( ::com::sun::star::io::IOException,
+                ::com::sun::star::uno::RuntimeException )
  {
--	return mPos;
+-    return mPos;
 +    return m_nPos;
  }
  
  // -------------------------------------------------------------------
 @@ -194,5 +236,108 @@ sal_Int64 SAL_CALL NeonInputStream::getL
- 		throw( ::com::sun::star::io::IOException,
- 			   ::com::sun::star::uno::RuntimeException )
+         throw( ::com::sun::star::io::IOException,
+                ::com::sun::star::uno::RuntimeException )
  {
--	return mLen;
+-    return mLen;
 +    return m_nLen;
 +}
 +
@@ -1013,8 +1006,8 @@
 +        m_bDirty = sal_True;
 +    }
  }
---- ucb/source/ucp/webdav/NeonInputStream.hxx
-+++ ucb/source/ucp/webdav/NeonInputStream.hxx
+--- ucb/source/ucp/webdav/NeonInputStream.hxx.old	2009-10-07 15:07:04.000000000 +0200
++++ ucb/source/ucp/webdav/NeonInputStream.hxx	2010-03-03 16:59:07.000000000 +0100
 @@ -31,11 +31,19 @@
  #define _NEONINPUTSTREAM_HXX_
  
@@ -1043,18 +1036,18 @@
 +class NeonInputStream : public ::com::sun::star::io::XStream,
 +                        public ::com::sun::star::io::XInputStream,
 +                        public ::com::sun::star::io::XOutputStream,
- 						public ::com::sun::star::io::XSeekable,
+                         public ::com::sun::star::io::XSeekable,
 +                        public ::com::sun::star::io::XTruncate,
- 						public ::cppu::OWeakObject
+                         public ::cppu::OWeakObject
  {
--	private:
--		com::sun::star::uno::Sequence< sal_Int8 > mInputBuffer;
--		sal_Int64 mLen;
--		sal_Int64 mPos;
+-    private:
+-        com::sun::star::uno::Sequence< sal_Int8 > mInputBuffer;
+-        sal_Int64 mLen;
+-        sal_Int64 mPos;
 -
--	public:
--				 NeonInputStream( void );
--		virtual ~NeonInputStream();
+-    public:
+-                 NeonInputStream( void );
+-        virtual ~NeonInputStream();
 +private:
 +    com::sun::star::uno::Sequence< sal_Int8 > m_aInputBuffer;
 +    sal_Int64                  m_nLen; // cannot be just m_aInputBuffer.getLength() - the buffer can be bigger
@@ -1066,8 +1059,8 @@
 +
 +    osl::Mutex                 m_aLock;
  
--		// Add some data to the end of the stream
--		void AddToStream( const char * inBuf, sal_Int32 inLen );
+-        // Add some data to the end of the stream
+-        void AddToStream( const char * inBuf, sal_Int32 inLen );
 +public:
 +             NeonInputStream( void );
 +    virtual ~NeonInputStream();
@@ -1078,11 +1071,11 @@
 +    // Associate a URL with this stream
 +    void SetURL( const rtl::OUString &rURL );
  
- 	// XInterface
- 	virtual com::sun::star::uno::Any SAL_CALL queryInterface(
+     // XInterface
+     virtual com::sun::star::uno::Any SAL_CALL queryInterface(
 @@ -74,6 +94,12 @@ class NeonInputStream : public ::com::su
- 							throw()
- 								{ OWeakObject::release(); }
+                             throw()
+                                 { OWeakObject::release(); }
  
 +    // XStream
 +    virtual com::sun::star::uno::Reference< com::sun::star::io::XInputStream > SAL_CALL getInputStream( void )
@@ -1091,12 +1084,12 @@
 +    virtual com::sun::star::uno::Reference< com::sun::star::io::XOutputStream > SAL_CALL getOutputStream( void )
 +        throw( com::sun::star::uno::RuntimeException );
  
- 	// XInputStream
- 	virtual sal_Int32 SAL_CALL readBytes(
+     // XInputStream
+     virtual sal_Int32 SAL_CALL readBytes(
 @@ -121,6 +147,30 @@ class NeonInputStream : public ::com::su
- 	virtual sal_Int64 SAL_CALL getLength()
- 		throw( ::com::sun::star::io::IOException,
- 			   ::com::sun::star::uno::RuntimeException );
+     virtual sal_Int64 SAL_CALL getLength()
+         throw( ::com::sun::star::io::IOException,
+                ::com::sun::star::uno::RuntimeException );
 +
 +    // XOutputStream
 +    virtual void SAL_CALL writeBytes( const com::sun::star::uno::Sequence< sal_Int8 >& aData )
@@ -1124,9 +1117,9 @@
  };
  
  } // namespace webdav_ucp
---- ucb/source/ucp/webdav/NeonSession.cxx
-+++ ucb/source/ucp/webdav/NeonSession.cxx
-@@ -65,6 +65,7 @@
+--- ucb/source/ucp/webdav/NeonSession.cxx.old	2009-12-03 13:52:17.000000000 +0100
++++ ucb/source/ucp/webdav/NeonSession.cxx	2010-03-03 16:59:07.000000000 +0100
+@@ -44,6 +44,7 @@
  #include "rtl/ustrbuf.hxx"
  #include "comphelper/sequence.hxx"
  #include "ucbhelper/simplecertificatevalidationrequest.hxx"
@@ -1134,7 +1127,7 @@
  
  #include "DAVAuthListener.hxx"
  #include "NeonTypes.hxx"
-@@ -153,6 +154,12 @@ static sal_uInt16 makeStatusCode( const
+@@ -147,6 +148,12 @@ static sal_uInt16 makeStatusCode( const
      return sal_uInt16( rStatusText.copy( 0, nPos ).toInt32() );
  }
  
@@ -1147,7 +1140,7 @@
  // -------------------------------------------------------------------
  struct NeonRequestContext
  {
-@@ -196,12 +203,13 @@ struct NeonRequestContext
+@@ -190,12 +197,13 @@ struct NeonRequestContext
  // -------------------------------------------------------------------
  
  #if NEON_VERSION >= 0x0250
@@ -1165,7 +1158,7 @@
  {
      // neon calls this function with (inLen == 0)...
      if ( inLen > 0 )
-@@ -226,12 +234,13 @@ extern "C" void NeonSession_ResponseBloc
+@@ -220,12 +228,13 @@ extern "C" void NeonSession_ResponseBloc
  // -------------------------------------------------------------------
  
  #if NEON_VERSION >= 0x0250
@@ -1183,7 +1176,7 @@
  {
      // neon calls this function with (inLen == 0)...
      if ( inLen > 0 )
-@@ -299,11 +308,10 @@ extern "C" int NeonSession_NeonAuth( voi
+@@ -294,11 +303,10 @@ extern "C" int NeonSession_NeonAuth( voi
  
          try
          {
@@ -1197,7 +1190,7 @@
                  if ( nPos == -1 )
                  {
                      theUserName = aUserInfo;
-@@ -564,6 +572,8 @@ extern "C" void NeonSession_PreSendReque
+@@ -640,6 +648,8 @@ extern "C" void NeonSession_PreSendReque
  
  } // namespace
  
@@ -1206,7 +1199,7 @@
  // -------------------------------------------------------------------
  // Constructor
  // -------------------------------------------------------------------
-@@ -581,6 +591,7 @@ NeonSession::NeonSession(
+@@ -657,6 +667,7 @@ NeonSession::NeonSession(
      m_aScheme    = theUri.GetScheme();
      m_aHostName  = theUri.GetHost();
      m_nPort      = theUri.GetPort();
@@ -1214,22 +1207,22 @@
  
  //   Init();
  }
-@@ -594,14 +605,6 @@ NeonSession::~NeonSession( )
+@@ -670,14 +681,6 @@ NeonSession::~NeonSession( )
      {
          ne_session_destroy( m_pHttpSession );
          m_pHttpSession = 0;
--	// Note: Uncomment the following if locking support is required
--	/*
--	  if ( mNeonLockSession != NULL )
--	  {
--	  ne_lock_unregister( mNeonLockSession );
--	  mNeonLockSession = NULL;
--	  }
--	*/
+-    // Note: Uncomment the following if locking support is required
+-    /*
+-      if ( mNeonLockSession != NULL )
+-      {
+-      ne_lock_unregister( mNeonLockSession );
+-      mNeonLockSession = NULL;
+-      }
+-    */
      }
  
      delete static_cast<RequestDataMap*>(m_pRequestData);
-@@ -629,6 +632,9 @@ void NeonSession::Init()
+@@ -705,6 +708,9 @@ void NeonSession::Init()
                  throw DAVException( DAVException::DAV_SESSION_CREATE,
                                      NeonUri::makeConnectionEndPointString(
                                                      m_aHostName, m_nPort ) );
@@ -1239,7 +1232,7 @@
              // #122205# - libxml2 needs to be initialized once if used by 
              // multithreaded programs like OOo.
              xmlInitParser();
-@@ -746,14 +752,15 @@ void NeonSession::Init()
+@@ -821,14 +827,15 @@ void NeonSession::Init()
                                m_nProxyPort );
          }
  
@@ -1261,22 +1254,22 @@
  
          // Register for redirects.
          ne_redirect_register( m_pHttpSession );
-@@ -1088,11 +1095,12 @@ void NeonSession::GET( const rtl::OUStri
+@@ -1156,11 +1163,12 @@ void NeonSession::GET( const rtl::OUStri
  // -------------------------------------------------------------------
  // GET
  // -------------------------------------------------------------------
 -uno::Reference< io::XInputStream > 
 +uno::Reference< io::XStream > 
  NeonSession::GET( const rtl::OUString & inPath,
- 		  const std::vector< ::rtl::OUString > & inHeaderNames,
- 		  DAVResource & ioResource,
--		  const DAVRequestEnvironment & rEnv )
+           const std::vector< ::rtl::OUString > & inHeaderNames,
+           DAVResource & ioResource,
+-          const DAVRequestEnvironment & rEnv )
 +		  const DAVRequestEnvironment & rEnv,
 +		  sal_Bool bAllowEmpty )
      throw ( DAVException )
  {
      osl::Guard< osl::Mutex > theGuard( m_aMutex );
-@@ -1104,16 +1112,23 @@ NeonSession::GET( const rtl::OUString &
+@@ -1172,16 +1180,23 @@ NeonSession::GET( const rtl::OUString &
      ioResource.uri = inPath;
      ioResource.properties.clear();
  
@@ -1304,7 +1297,7 @@
  }
  
  // -------------------------------------------------------------------
-@@ -1153,22 +1168,38 @@ void NeonSession::PUT( const rtl::OUStri
+@@ -1221,22 +1236,38 @@ void NeonSession::PUT( const rtl::OUStri
                         const DAVRequestEnvironment & rEnv )
      throw ( DAVException )
  {
@@ -1350,7 +1343,7 @@
  
      HandleError( theRetVal );
  }
-@@ -1344,9 +1375,7 @@ void NeonSession::DESTROY( const rtl::OU
+@@ -1425,9 +1456,7 @@ void NeonSession::DESTROY( const rtl::OU
  // -------------------------------------------------------------------
  // LOCK
  // -------------------------------------------------------------------
@@ -1359,13 +1352,13 @@
 -void NeonSession::LOCK( const Lock & inLock,
 +void NeonSession::LOCK( ucb::Lock & rLock,
                          const DAVRequestEnvironment & rEnv )
- 	throw ( DAVException )
+     throw ( DAVException )
  {
-@@ -1356,16 +1385,13 @@ void NeonSession::LOCK( const Lock & inL
+@@ -1437,16 +1466,13 @@ void NeonSession::LOCK( const Lock & inL
  
      m_aEnv = rEnv;
  
--	Lockit( inLock, true );
+-    Lockit( inLock, true );
 +    Lockit( rLock, true );
  }
 -*/
@@ -1378,24 +1371,24 @@
 -void NeonSession::UNLOCK( const Lock & inLock,
 +void NeonSession::UNLOCK( ucb::Lock & rLock,
                            const DAVRequestEnvironment & rEnv )
- 	throw ( DAVException )
+     throw ( DAVException )
  {
-@@ -1375,9 +1401,8 @@ void NeonSession::UNLOCK( const Lock & i
+@@ -1456,9 +1482,8 @@ void NeonSession::UNLOCK( const Lock & i
  
      m_aEnv = rEnv;
  
--	Lockit( inLock, false );
+-    Lockit( inLock, false );
 +    Lockit( rLock, false );
  }
 -*/
  
  // -------------------------------------------------------------------
  const ucbhelper::InternetProxyServer & NeonSession::getProxySettings() const
-@@ -1416,7 +1441,10 @@ void NeonSession::HandleError( int nErro
+@@ -1497,7 +1522,10 @@ void NeonSession::HandleError( int nErro
          case NE_ERROR:        // Generic error
          {
              rtl::OUString aText = rtl::OUString::createFromAscii(
--		ne_get_error( m_pHttpSession ) );
+-        ne_get_error( m_pHttpSession ) );
 +                    ne_get_error( m_pHttpSession ) );
 +#if OSL_DEBUG_LEVEL > 0
 +            fprintf( stderr, "WebDAV: got error '%s'\n", rtl::OUStringToOString( aText, RTL_TEXTENCODING_UTF8 ).getStr() );
@@ -1403,7 +1396,7 @@
              throw DAVException( DAVException::DAV_HTTP_ERROR,
                                  aText,
                                  makeStatusCode( aText ) );
-@@ -1473,77 +1501,156 @@ void NeonSession::HandleError( int nErro
+@@ -1554,77 +1582,156 @@ void NeonSession::HandleError( int nErro
      }
  }
  
@@ -1411,35 +1404,21 @@
 -/*
 -void NeonSession::Lockit( const Lock & inLock, bool inLockit )
 +void NeonSession::Lockit( ucb::Lock & rLock, bool bLockit )
- 	throw ( DAVException )
+     throw ( DAVException )
  {
      osl::Guard< osl::Mutex > theGuard( m_aMutex );
  
--	// Create the neon lock
--	NeonLock * theLock = new NeonLock;
--	int theRetVal;
--
--	// Set the lock uri
--	NeonUri theUri( inLock.uri );
--	theLock->uri = const_cast< char * >
--        ( rtl::OUStringToOString(
--                theUri.GetPath(), RTL_TEXTENCODING_UTF8 ).getStr() );
+-    // Create the neon lock
+-    NeonLock * theLock = new NeonLock;
+-    int theRetVal;
 +    if ( !s_aNeonLockStore )
 +        throw DAVException( DAVException::DAV_INVALID_ARG );
  
--	if ( inLockit )
--	{
--		// Set the lock depth
--		switch( inLock.depth )
--		{
--			case DAVZERO:
--			case DAVINFINITY:
--				theLock->depth = int ( inLock.depth );
--				break;
--			default:
--				throw DAVException( DAVException::DAV_INVALID_ARG );
--				break;
--		}
+-    // Set the lock uri
+-    NeonUri theUri( inLock.uri );
+-    theLock->uri = const_cast< char * >
+-        ( rtl::OUStringToOString(
+-                theUri.GetPath(), RTL_TEXTENCODING_UTF8 ).getStr() );
 +    ne_uri aUri;
 +    ne_uri_parse( rtl::OUStringToOString( m_aEnv.m_aRequestURI, RTL_TEXTENCODING_UTF8 ).getStr(),
 +            &aUri );
@@ -1452,78 +1431,67 @@
 +#undef FILLIN
 +#endif
  
--		// Set the lock scope
--		switch ( inLock.scope )
--		{
--			case EXCLUSIVE:
--                theLock->scope = ne_lockscope_exclusive;
--				break;
--			case SHARED:
--                theLock->scope = ne_lockscope_shared;
--				break;
--			default:
--				throw DAVException( DAVException::DAV_INVALID_ARG );
--				break;
--		}
+-    if ( inLockit )
 +    // Create the neon lock
 +    NeonLock * theLock = ne_lockstore_findbyuri( s_aNeonLockStore, &aUri );
 +    bool bAlreadyExists = false;
 +    if ( theLock )
 +        bAlreadyExists = true;
 +    else
-+    {
+     {
 +        theLock = ne_lock_create();
- 
--		// Set the lock owner
--        const char * theOwner = rtl::OUStringToOString( inLock.owner,
--                                                        RTL_TEXTENCODING_UTF8 );
--		theLock->owner = const_cast< char * > ( theOwner );
--
--		// Set the lock timeout
--		// Note: Neon ignores the timeout
--		//theLock->timeout = inLock.timeout;
++
 +        // Set the lock uri
 +        theLock->uri = aUri;
- 
--        theRetVal = ne_lock( m_pHttpSession, theLock );
--	}
--	else
--	{
-+        // Set the lock depth
++
+         // Set the lock depth
+-        switch( inLock.depth )
 +        switch( rLock.Depth )
-+        {
+         {
+-            case DAVZERO:
+-            case DAVINFINITY:
+-                theLock->depth = int ( inLock.depth );
+-                break;
 +            case ucb::LockDepth_ZERO:     theLock->depth = NE_DEPTH_ZERO;     break;
 +            case ucb::LockDepth_ONE:      theLock->depth = NE_DEPTH_ONE;      break;
 +            case ucb::LockDepth_INFINITY: theLock->depth = NE_DEPTH_INFINITE; break;
-+            default:
+             default:
+-                throw DAVException( DAVException::DAV_INVALID_ARG );
+-                break;
 +                                          throw DAVException( DAVException::DAV_INVALID_ARG );
-+        }
+         }
  
--		// Set the lock token
--        rtl::OUString theToken = inLock.locktoken.getConstArray()[ 0 ];
--		theLock->token = const_cast< char * >
--            ( rtl::OUStringToOString(
--                    theToken, RTL_TEXTENCODING_UTF8 ).getStr() );
-+        // Set the lock scope
+         // Set the lock scope
+-        switch ( inLock.scope )
 +        switch ( rLock.Scope )
-+        {
+         {
+-            case EXCLUSIVE:
+-                theLock->scope = ne_lockscope_exclusive;
+-                break;
+-            case SHARED:
+-                theLock->scope = ne_lockscope_shared;
+-                break;
 +            case ucb::LockScope_EXCLUSIVE: theLock->scope = ne_lockscope_exclusive; break;
 +            case ucb::LockScope_SHARED:    theLock->scope = ne_lockscope_shared;    break;
-+            default:
+             default:
+-                throw DAVException( DAVException::DAV_INVALID_ARG );
+-                break;
 +                                           throw DAVException( DAVException::DAV_INVALID_ARG );
 +                                           break;
-+        }
+         }
  
--        theRetVal = ne_unlock( m_pHttpSession, theLock );
--	}
-+        // Set the lock owner
+         // Set the lock owner
+-        const char * theOwner = rtl::OUStringToOString( inLock.owner,
+-                                                        RTL_TEXTENCODING_UTF8 );
+-        theLock->owner = const_cast< char * > ( theOwner );
 +        rtl::OUString aValue;
 +        rLock.Owner >>= aValue;
- 
--	HandleError( theRetVal );
-+        theLock->owner = strdup( rtl::OUStringToOString( aValue, RTL_TEXTENCODING_UTF8 ).getStr() );
 +
-+        // Set the lock timeout
++        theLock->owner = strdup( rtl::OUStringToOString( aValue, RTL_TEXTENCODING_UTF8 ).getStr() );
+ 
+         // Set the lock timeout
+-        // Note: Neon ignores the timeout
+-        //theLock->timeout = inLock.timeout;
 +        // We re-new the lock while the stream is open
 +        theLock->timeout = rLock.Timeout;
 +    }
@@ -1567,7 +1535,8 @@
 +        if ( !bAlreadyExists )
 +        {
 +            nRet = ne_lock( m_pHttpSession, theLock );
-+
+ 
+-        theRetVal = ne_lock( m_pHttpSession, theLock );
 +            if ( nRet == NE_OK )
 +            {
 +                ne_lockstore_add( s_aNeonLockStore, theLock );
@@ -1596,19 +1565,27 @@
 +        else
 +            fprintf( stderr, "WebDAV: failed to lock the file: %s\n", ne_get_error( m_pHttpSession ) );
 +#endif
-+    }
-+    else
-+    {
-+        // Set the lock token
+     }
+     else
+     {
+-
+         // Set the lock token
+-        rtl::OUString theToken = inLock.locktoken.getConstArray()[ 0 ];
+-        theLock->token = const_cast< char * >
+-            ( rtl::OUStringToOString(
+-                    theToken, RTL_TEXTENCODING_UTF8 ).getStr() );
 +        if ( rLock.LockTokens.getLength() > 0 )
 +        {
 +            rtl::OUString theToken = rLock.LockTokens.getConstArray()[ 0 ];
 +            theLock->token = strdup( rtl::OUStringToOString( theToken, RTL_TEXTENCODING_UTF8 ).getStr() );
-+
+ 
+-        theRetVal = ne_unlock( m_pHttpSession, theLock );
+-    }
 +#if OSL_DEBUG_LEVEL > 0
 +            fprintf( stderr, "WebDAV: going to unlock the URL, the token is: %s\n", theLock->token );
 +#endif
-+
+ 
+-    HandleError( theRetVal );
 +            ne_unlock( m_pHttpSession, theLock );
 +            ne_lockstore_remove( s_aNeonLockStore, theLock );
 +            // FIXME even ne_lock_destroy( theLock )?
@@ -1619,8 +1596,8 @@
  
  // -------------------------------------------------------------------
  namespace {
---- ucb/source/ucp/webdav/NeonSession.hxx
-+++ ucb/source/ucp/webdav/NeonSession.hxx
+--- ucb/source/ucp/webdav/NeonSession.hxx.old	2009-10-08 16:17:56.000000000 +0200
++++ ucb/source/ucp/webdav/NeonSession.hxx	2010-03-03 16:59:07.000000000 +0100
 @@ -57,6 +57,7 @@ class NeonSession : public DAVSession
          rtl::OUString     m_aScheme;
          rtl::OUString     m_aHostName;
@@ -1633,7 +1610,7 @@
          // moment.
          DAVRequestEnvironment m_aEnv;
  
--		// Note: Uncomment the following if locking support is required
+-        // Note: Uncomment the following if locking support is required
 -        // NeonLockSession *      mNeonLockSession;
 +        static NeonLockStore *s_aNeonLockStore;
  
@@ -1649,7 +1626,7 @@
          OPTIONS( const ::rtl::OUString &  inPath,
                   DAVCapabilities & outCapabilities,
 @@ -142,11 +144,12 @@ class NeonSession : public DAVSession
- 			throw ( DAVException );
+             throw ( DAVException );
  
          virtual com::sun::star::uno::Reference<
 -            com::sun::star::io::XInputStream >
@@ -1665,7 +1642,7 @@
          virtual void
 @@ -165,6 +168,13 @@ class NeonSession : public DAVSession
                  const DAVRequestEnvironment & rEnv )
- 			throw ( DAVException );
+             throw ( DAVException );
  
 +        virtual void
 +        PUT( const ::rtl::OUString & inPath,
@@ -1677,41 +1654,41 @@
          virtual com::sun::star::uno::Reference<
              com::sun::star::io::XInputStream >
          POST( const rtl::OUString & inPath,
-@@ -209,16 +219,13 @@ class NeonSession : public DAVSession
- 		virtual void ABORT()
- 			throw ( DAVException );
+@@ -212,16 +222,13 @@ class NeonSession : public DAVSession
+         virtual void ABORT()
+             throw ( DAVException );
  
--		// Note: Uncomment the following if locking support is required
--		/*
--		virtual void LOCK (const Lock & inLock,
+-        // Note: Uncomment the following if locking support is required
+-        /*
+-        virtual void LOCK (const Lock & inLock,
 -                           const DAVRequestEnvironment & rEnv )
 +		virtual void LOCK ( com::sun::star::ucb::Lock & rLock,
 +                            const DAVRequestEnvironment & rEnv )
- 			throw ( DAVException );
+             throw ( DAVException );
  
--		virtual void UNLOCK (const Lock & inLock,
+-        virtual void UNLOCK (const Lock & inLock,
 -                             const DAVRequestEnvironment & rEnv )
 +		virtual void UNLOCK ( com::sun::star::ucb::Lock & rLock,
 +                              const DAVRequestEnvironment & rEnv )
- 			throw ( DAVException );
--		*/
+             throw ( DAVException );
+-        */
  
          // helpers
          const rtl::OUString & getHostName() const { return m_aHostName; }
-@@ -239,9 +246,8 @@ class NeonSession : public DAVSession
+@@ -242,9 +249,8 @@ class NeonSession : public DAVSession
  
          const ucbhelper::InternetProxyServer & getProxySettings() const;
  
--		// Note: Uncomment the following if locking support is required
--		// void			Lockit( const Lock & inLock, bool inLockit )
--		//	throw ( DAVException );
+-        // Note: Uncomment the following if locking support is required
+-        // void			Lockit( const Lock & inLock, bool inLockit )
+-        //	throw ( DAVException );
 +		void Lockit( com::sun::star::ucb::Lock & rLock, bool bLockit )
 +			throw ( DAVException );
  
          // low level GET implementation, used by public GET implementations
          static int GET( ne_session * sess,
---- ucb/source/ucp/webdav/NeonTypes.hxx
-+++ ucb/source/ucp/webdav/NeonTypes.hxx
+--- ucb/source/ucp/webdav/NeonTypes.hxx.old	2009-10-07 15:07:04.000000000 +0200
++++ ucb/source/ucp/webdav/NeonTypes.hxx	2010-03-03 16:59:07.000000000 +0100
 @@ -35,6 +35,7 @@
  #include <ne_utils.h>
  #include <ne_basic.h>
@@ -1728,8 +1705,8 @@
 +typedef struct ne_lock              NeonLock;
 +
  #endif // _NEONTYPES_HXX_
---- ucb/source/ucp/webdav/webdavcontent.cxx
-+++ ucb/source/ucp/webdav/webdavcontent.cxx
+--- ucb/source/ucp/webdav/webdavcontent.cxx.old	2009-10-08 16:17:56.000000000 +0200
++++ ucb/source/ucp/webdav/webdavcontent.cxx	2010-03-03 16:59:07.000000000 +0100
 @@ -37,6 +37,7 @@
  
   *************************************************************************/
@@ -1921,7 +1898,7 @@
      }
      catch ( DAVException const & )
      {
-@@ -390,12 +518,24 @@ Content::Content(
+@@ -390,12 +519,24 @@ Content::Content(
    m_pProvider( pProvider ),
    m_bTransient( true ),
    m_bCollection( isCollection ),
@@ -1947,7 +1924,7 @@
      }
      catch ( DAVException const & )
      {
-@@ -409,6 +548,47 @@ Content::Content(
+@@ -409,6 +550,47 @@ Content::Content(
  // virtual
  Content::~Content()
  {
@@ -1995,7 +1972,7 @@
  }
  
  //=========================================================================
-@@ -630,6 +811,11 @@ uno::Any SAL_CALL Content::execute(
+@@ -630,6 +812,11 @@ uno::Any SAL_CALL Content::execute(
             ucb::CommandAbortedException,
             uno::RuntimeException )
  {
@@ -2007,7 +1984,7 @@
      uno::Any aRet;
      
      if ( aCommand.Name.equalsAsciiL(
-@@ -1000,6 +1000,11 @@
+@@ -899,6 +1086,11 @@ void SAL_CALL Content::addProperty( cons
      if ( !Name.getLength() )
          throw lang::IllegalArgumentException();
  
@@ -2019,7 +1996,7 @@
      // Check property type.
      if ( !UCBDeadPropertyValue::supportsType( DefaultValue.getValueType() ) )
      {
-@@ -1100,6 +1100,11 @@
+@@ -1048,6 +1240,11 @@ void SAL_CALL Content::removeProperty( c
      // Try to remove property from server.
      //////////////////////////////////////////////////////////////////////
  
@@ -2031,7 +2008,7 @@
      try
      {
          std::vector< ProppatchValue > aProppatchValues;
-@@ -1349,6 +1535,31 @@ uno::Reference< sdbc::XRow > Content::ge
+@@ -1361,6 +1558,31 @@ uno::Reference< sdbc::XRow > Content::ge
      uno::Reference< ucb::XContentIdentifier >    xIdentifier;
      rtl::Reference< ::ucbhelper::ContentProviderImplHelper > xProvider;
  
@@ -2063,12 +2040,12 @@
      {
          osl::Guard< osl::Mutex > aGuard( m_aMutex );
  
-@@ -1475,8 +1686,13 @@ uno::Reference< sdbc::XRow > Content::ge
- 						
- 						if ( !bNetworkAccessAllowed )
- 						{
--							cancelCommandExecution( e, xEnv );
--							// unreachable
+@@ -1487,8 +1709,13 @@ uno::Reference< sdbc::XRow > Content::ge
+                         
+                         if ( !bNetworkAccessAllowed )
+                         {
+-                            cancelCommandExecution( e, xEnv );
+-                            // unreachable
 +                            if ( e.getStatus() == SC_NOT_FOUND )
 +                                xProps.reset();
 +                            else
@@ -2076,10 +2053,10 @@
 +                                cancelCommandExecution( e, xEnv );
 +                                // unreachable
 +                            }
- 						}
- 					}
- 				}
-@@ -2000,6 +2000,10 @@
+                         }
+                     }
+                 }
+@@ -2063,6 +2290,10 @@ uno::Any Content::open(
  {
      uno::Any aRet;
  
@@ -2090,7 +2067,7 @@
      sal_Bool bOpenFolder = ( ( rArg.Mode == ucb::OpenMode::ALL ) ||
                               ( rArg.Mode == ucb::OpenMode::FOLDERS ) ||
                               ( rArg.Mode == ucb::OpenMode::DOCUMENTS ) );
-@@ -2092,13 +2308,16 @@ uno::Any Content::open(
+@@ -2104,13 +2335,16 @@ uno::Any Content::open(
          }
      }
  
@@ -2102,8 +2079,8 @@
 +
 +       // Open document.
  
--    if ( ( rArg.Mode == ucb::OpenMode::DOCUMENT_SHARE_DENY_NONE ) ||
--         ( rArg.Mode == ucb::OpenMode::DOCUMENT_SHARE_DENY_WRITE ) )
+-        if ( ( rArg.Mode == ucb::OpenMode::DOCUMENT_SHARE_DENY_NONE ) ||
+-             ( rArg.Mode == ucb::OpenMode::DOCUMENT_SHARE_DENY_WRITE ) )
 +    if ( rArg.Mode == ucb::OpenMode::DOCUMENT_SHARE_DENY_WRITE )
          {
 +#if OSL_DEBUG_LEVEL > 0
@@ -2112,7 +2089,7 @@
              // Currently(?) unsupported.
              ucbhelper::cancelCommandExecution(
                  uno::makeAny(
-@@ -2115,6 +2332,9 @@ uno::Any Content::open(
+@@ -2127,6 +2361,9 @@ uno::Any Content::open(
              = uno::Reference< io::XOutputStream >( rArg.Sink, uno::UNO_QUERY );
          if ( xOut.is() )
          {
@@ -2122,7 +2099,7 @@
              // PUSH: write data
              try
              {
-@@ -2159,6 +2379,60 @@ uno::Any Content::open(
+@@ -2171,6 +2408,60 @@ uno::Any Content::open(
                                                           uno::UNO_QUERY );
              if ( xDataSink.is() )
              {
@@ -2183,7 +2160,7 @@
                  // PULL: wait for client read
                  try
                  {
-@@ -2174,9 +2448,31 @@ uno::Any Content::open(
+@@ -2186,9 +2477,31 @@ uno::Any Content::open(
                      DAVResource aResource;
                      std::vector< rtl::OUString > aHeaders;
  
@@ -2210,14 +2187,14 @@
 +
 +                    uno::Reference< io::XStream > xStream
 +                        = xResAccess->GET( aHeaders, aResource, xEnv, sal_True );
- 					m_bDidGetOrHead = true;
+                     m_bDidGetOrHead = true;
 +
 +                    // pass the URL to the stream
 +                    static_cast< NeonInputStream* >( xStream.get() )->SetURL( m_xResAccess->getURL() );
- 					
+                     
                      {
                          osl::MutexGuard aGuard( m_aMutex );
-@@ -2191,16 +2487,24 @@ uno::Any Content::open(
+@@ -2203,16 +2516,24 @@ uno::Any Content::open(
                              new DAVResourceAccess( *xResAccess.get() ) );
                      }
  
@@ -2243,7 +2220,7 @@
                  // Note: aOpenCommand.Sink may contain an XStream
                  //       implementation. Support for this type of
                  //       sink is optional...
-@@ -2228,9 +2532,16 @@ void Content::post(
+@@ -2237,9 +2558,16 @@ void Content::post(
                  const uno::Reference< ucb::XCommandEnvironment > & xEnv )
      throw( uno::Exception )
  {
@@ -2260,7 +2237,7 @@
          try
          {
              std::auto_ptr< DAVResourceAccess > xResAccess;
-@@ -2262,6 +2569,9 @@ void Content::post(
+@@ -2274,6 +2602,9 @@ void Content::post(
          uno::Reference< io::XOutputStream > xResult( rArg.Sink, uno::UNO_QUERY );
          if ( xResult.is() )
          {
@@ -2270,7 +2247,7 @@
              try
              {
                  std::auto_ptr< DAVResourceAccess > xResAccess;
-@@ -2291,6 +2601,9 @@ void Content::post(
+@@ -2303,6 +2634,9 @@ void Content::post(
          }
          else
          {
@@ -2280,7 +2257,7 @@
              ucbhelper::cancelCommandExecution(
                  uno::makeAny(
                      ucb::UnsupportedDataSinkException(
-@@ -2600,6 +2600,10 @@
+@@ -2377,6 +2711,10 @@ void Content::insert(
      rtl::OUString aEscapedTitle;
      std::auto_ptr< DAVResourceAccess > xResAccess;
  
@@ -2291,7 +2268,7 @@
      {
          osl::Guard< osl::Mutex > aGuard( m_aMutex );
  
-@@ -2643,11 +2956,23 @@ void Content::transfer(
+@@ -2655,11 +2993,23 @@ void Content::transfer(
                  rtl::OUString::createFromAscii( HTTP_URL_SCHEME ) );
          }
          else if ( aScheme.equalsAsciiL(
@@ -2315,7 +2292,7 @@
          else
          {
              if ( !aScheme.equalsAsciiL(
-@@ -2674,6 +2999,18 @@ void Content::transfer(
+@@ -2686,6 +3036,18 @@ void Content::transfer(
                   RTL_CONSTASCII_STRINGPARAM( DAV_URL_SCHEME ) ) )
              targetURI.SetScheme(
                  rtl::OUString::createFromAscii( HTTP_URL_SCHEME ) );
@@ -2331,11 +2308,11 @@
 +                 RTL_CONSTASCII_STRINGPARAM( PLAIN_WEBDAVS_URL_SCHEME ) ) )
 +            targetURI.SetScheme(
 +                rtl::OUString::createFromAscii( HTTPS_URL_SCHEME ) );
- 	
+     
          // @@@ This implementation of 'transfer' only works
          //     if the source and target are located at same host.
---- ucb/source/ucp/webdav/webdavcontent.hxx
-+++ ucb/source/ucp/webdav/webdavcontent.hxx
+--- ucb/source/ucp/webdav/webdavcontent.hxx.old	2009-10-07 15:07:04.000000000 +0200
++++ ucb/source/ucp/webdav/webdavcontent.hxx	2010-03-03 16:59:07.000000000 +0100
 @@ -33,10 +33,13 @@
  
  #include <memory>
@@ -2351,13 +2328,13 @@
  #include "PropertyMap.hxx"
  
 @@ -91,6 +94,9 @@ class Content : public ::ucbhelper::Cont
-   	bool			  m_bTransient;
- 	bool              m_bCollection;
- 	bool              m_bDidGetOrHead;
+       bool			  m_bTransient;
+     bool              m_bCollection;
+     bool              m_bDidGetOrHead;
 +	bool              m_bForceReadOnly;
 +	com::sun::star::ucb::Lock *m_pLock;
 +	uno::Reference< ucb::XCommandEnvironment > m_xLockEnv;
- 	std::vector< rtl::OUString > m_aFailedPropNames;
+     std::vector< rtl::OUString > m_aFailedPropNames;
  
  private:
 @@ -184,6 +190,17 @@ private:
@@ -2376,12 +2353,12 @@
 +    static oslSignalAction HandleLockingSignal( void* pData, oslSignalInfo* pInfo );
 +
  public:
-   	Content( const ::com::sun::star::uno::Reference<
- 	   		 ::com::sun::star::lang::XMultiServiceFactory >& rxSMgr,
---- ucb/source/ucp/webdav/webdavcontentcaps.cxx
-+++ ucb/source/ucp/webdav/webdavcontentcaps.cxx
+       Content( const ::com::sun::star::uno::Reference<
+                 ::com::sun::star::lang::XMultiServiceFactory >& rxSMgr,
+--- ucb/source/ucp/webdav/webdavcontentcaps.cxx.old	2009-10-07 15:07:04.000000000 +0200
++++ ucb/source/ucp/webdav/webdavcontentcaps.cxx	2010-03-03 16:59:07.000000000 +0100
 @@ -263,6 +263,24 @@ bool ContentProvider::getProperty(
- 				    -1,
+                     -1,
                      getCppuType( static_cast< const rtl::OUString * >( 0 ) ),
                      beans::PropertyAttribute::BOUND ) );
 +
@@ -2402,11 +2379,11 @@
 +					getCppuBooleanType(),
 +					beans::PropertyAttribute::BOUND
 +						| beans::PropertyAttribute::READONLY ) );
- 		}
- 	}
+         }
+     }
  
---- ucb/source/ucp/webdav/webdavprovider.cxx
-+++ ucb/source/ucp/webdav/webdavprovider.cxx
+--- ucb/source/ucp/webdav/webdavprovider.cxx.old	2009-10-07 15:07:04.000000000 +0200
++++ ucb/source/ucp/webdav/webdavprovider.cxx	2010-03-03 16:59:07.000000000 +0100
 @@ -36,6 +36,9 @@
   **************************************************************************
  
@@ -2436,6 +2413,15 @@
      bool bNewId = false;
 -    if ( aScheme.equalsAsciiL(
 -            RTL_CONSTASCII_STRINGPARAM( WEBDAV_URL_SCHEME ) ) )
+-    {
+-        aURL = aURL.replaceAt( 0,
+-                               WEBDAV_URL_SCHEME_LENGTH,
+-                               rtl::OUString::createFromAscii(
+-                                                    HTTP_URL_SCHEME ) );
+-        bNewId = true;
+-    }
+-    else if ( aScheme.equalsAsciiL(
+-            RTL_CONSTASCII_STRINGPARAM( DAV_URL_SCHEME ) ) )
 +    struct {
 +        const char *from;
 +        const char *to;
@@ -2449,15 +2435,6 @@
 +    };
 +    for ( pScheme = pReplace; pScheme->from ; ++pScheme )
      {
--        aURL = aURL.replaceAt( 0,
--                               WEBDAV_URL_SCHEME_LENGTH,
--                               rtl::OUString::createFromAscii(
--                                                    HTTP_URL_SCHEME ) );
--        bNewId = true;
--    }
--    else if ( aScheme.equalsAsciiL(
--            RTL_CONSTASCII_STRINGPARAM( DAV_URL_SCHEME ) ) )
--    {
 -        aURL = aURL.replaceAt( 0,
 -                               DAV_URL_SCHEME_LENGTH,
 -                               rtl::OUString::createFromAscii(
@@ -2483,7 +2460,7 @@
      }
  
      sal_Int32 nPos = aURL.lastIndexOf( '/' );
-@@ -208,6 +208,12 @@
+@@ -206,6 +208,12 @@ ContentProvider::queryContent(
      else
          xCanonicId = Identifier;
  
@@ -2493,20 +2470,20 @@
 +                rtl::OUStringToOString( xCanonicId->getContentIdentifier(), RTL_TEXTENCODING_UTF8 ).getStr() );
 +#endif
 +
- 	osl::MutexGuard aGuard( m_aMutex );
+     osl::MutexGuard aGuard( m_aMutex );
  
- 	// Check, if a content with given id already exists...
-@@ -232,4 +234,3 @@ ContentProvider::queryContent(
+     // Check, if a content with given id already exists...
+@@ -232,4 +240,3 @@ ContentProvider::queryContent(
  
- 	return xContent;
+     return xContent;
  }
 -
---- ucb/source/ucp/webdav/webdavprovider.hxx
-+++ ucb/source/ucp/webdav/webdavprovider.hxx
+--- ucb/source/ucp/webdav/webdavprovider.hxx.old	2009-10-07 15:07:04.000000000 +0200
++++ ucb/source/ucp/webdav/webdavprovider.hxx	2010-03-03 16:59:07.000000000 +0100
 @@ -52,13 +52,10 @@ namespace webdav_ucp {
  // contents ) according to this scheme.
  #define WEBDAV_URL_SCHEME \
- 				"vnd.sun.star.webdav"
+                 "vnd.sun.star.webdav"
 -#define WEBDAV_URL_SCHEME_LENGTH	19
  
  #define HTTP_URL_SCHEME 		"http"
@@ -2528,21 +2505,21 @@
 +#define PLAIN_WEBDAVS_URL_SCHEME "webdavs"
 +
  #define HTTP_CONTENT_TYPE \
- 				"application/" HTTP_URL_SCHEME "-content"
+                 "application/" HTTP_URL_SCHEME "-content"
  
---- unotools/source/ucbhelper/ucblockbytes.cxx
-+++ unotools/source/ucbhelper/ucblockbytes.cxx
+--- unotools/source/ucbhelper/ucblockbytes.cxx.old	2009-10-07 15:06:52.000000000 +0200
++++ unotools/source/ucbhelper/ucblockbytes.cxx	2010-03-03 16:59:07.000000000 +0100
 @@ -964,6 +964,10 @@ static sal_Bool UCBOpenContentSync(
      if( ! aScheme.equalsIgnoreAsciiCaseAscii("http")                &&
- 		! aScheme.equalsIgnoreAsciiCaseAscii("https")                &&
+         ! aScheme.equalsIgnoreAsciiCaseAscii("https")                &&
          ! aScheme.equalsIgnoreAsciiCaseAscii("vnd.sun.star.webdav") &&
 +        ! aScheme.equalsIgnoreAsciiCaseAscii("dav") &&
 +        ! aScheme.equalsIgnoreAsciiCaseAscii("davs") &&
 +        ! aScheme.equalsIgnoreAsciiCaseAscii("webdav") &&
 +        ! aScheme.equalsIgnoreAsciiCaseAscii("webdavs") &&
          ! aScheme.equalsIgnoreAsciiCaseAscii("ftp"))
- 		return _UCBOpenContentSync(
- 			xLockBytes,xContent,rArg,xSink,xInteract,xProgress,xHandler);
+         return _UCBOpenContentSync(
+             xLockBytes,xContent,rArg,xSink,xInteract,xProgress,xHandler);
 @@ -1541,7 +1545,13 @@ ErrCode UcbLockBytes::Flush() const
      Reference <XOutputStream > xOutputStream = getOutputStream_Impl();
      if ( !xOutputStream.is() )
