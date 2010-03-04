@@ -1,0 +1,1103 @@
+diff --git sc/inc/mdds/flatsegmenttree.hxx sc/inc/mdds/flatsegmenttree.hxx
+index 3128888..71e9f97 100644
+--- sc/inc/mdds/flatsegmenttree.hxx
++++ sc/inc/mdds/flatsegmenttree.hxx
+@@ -72,6 +72,21 @@ public:
+         {
+         }
+ 
++        node(const node& r) :
++            node_base(r)
++        {
++            if (is_leaf)
++            {
++                value_leaf.key = r.value_leaf.key;
++                value_leaf.value = r.value_leaf.value;
++            }
++            else
++            {
++                value_nonleaf.low = r.value_nonleaf.low;
++                value_nonleaf.high = r.value_nonleaf.high;
++            }
++        }
++
+         virtual ~node()
+         {
+         }
+@@ -148,6 +163,11 @@ public:
+         {
+             return new node(leaf);
+         }
++
++        virtual node_base* clone() const
++        {
++            return new node(*this);
++        }
+     };
+ 
+ private:
+@@ -306,43 +326,19 @@ public:
+         return static_cast<node*>(base_node.get());
+     }
+ 
+-    flat_segment_tree(key_type min_val, key_type max_val, value_type init_val) :
+-        m_root_node(static_cast<node*>(NULL)),
+-        m_left_leaf(new node(true)),
+-        m_right_leaf(new node(true)),
+-        m_init_val(init_val),
+-        m_valid_tree(false)
++    static node* get_node(const node_base* base_node)
+     {
+-        // we need to create two end nodes during initialization.
+-        get_node(m_left_leaf)->value_leaf.key = min_val;
+-        get_node(m_left_leaf)->value_leaf.value = init_val;
+-        m_left_leaf->right = m_right_leaf;
+-
+-        get_node(m_right_leaf)->value_leaf.key = max_val;
+-        m_right_leaf->left = m_left_leaf;
+-
+-        // We don't ever use the value of the right leaf node, but we need the
+-        // value to be always the same, to make it easier to check for
+-        // equality.
+-        get_node(m_right_leaf)->value_leaf.value = ::std::numeric_limits<value_type>::max();
++        return static_cast<node*>(base_node);
+     }
+ 
+-    ~flat_segment_tree()
+-    {
+-        // Go through all leaf nodes, and disconnect their links.
+-        node_base* cur_node = m_left_leaf.get();
+-        do
+-        {
+-            node_base* next_node = cur_node->right.get();
+-            disconnect_node(cur_node);
+-            cur_node = next_node;
+-        }
+-        while (cur_node != m_right_leaf.get());
++    flat_segment_tree(key_type min_val, key_type max_val, value_type init_val);
+ 
+-        disconnect_node(m_right_leaf.get());
+-        clear_tree(m_root_node);
+-        disconnect_node(m_root_node.get());
+-    }
++    /** 
++     * Copy constructor only copies the leaf nodes.  
++     */
++    flat_segment_tree(const flat_segment_tree<key_type, value_type>& r);
++
++    ~flat_segment_tree();
+ 
+     /** 
+      * Insert a new segment into the tree.  It searches for the point of 
+@@ -413,6 +409,11 @@ public:
+     }
+ 
+ #ifdef UNIT_TEST
++    node_base_ptr get_root_node() const
++    {
++        return m_root_node;
++    }
++
+     void dump_tree() const
+     {
+         using ::std::cout;
+@@ -513,7 +514,7 @@ public:
+ #endif
+ 
+ private:
+-    flat_segment_tree();
++    flat_segment_tree(); // default constructor is not allowed.
+ 
+     void append_new_segment(key_type start_key)
+     {
+@@ -601,6 +602,79 @@ private:
+ };
+ 
+ template<typename _Key, typename _Value>
++flat_segment_tree<_Key, _Value>::flat_segment_tree(key_type min_val, key_type max_val, value_type init_val) :
++    m_root_node(static_cast<node*>(NULL)),
++    m_left_leaf(new node(true)),
++    m_right_leaf(new node(true)),
++    m_init_val(init_val),
++    m_valid_tree(false)
++{
++    // we need to create two end nodes during initialization.
++    get_node(m_left_leaf)->value_leaf.key = min_val;
++    get_node(m_left_leaf)->value_leaf.value = init_val;
++    m_left_leaf->right = m_right_leaf;
++
++    get_node(m_right_leaf)->value_leaf.key = max_val;
++    m_right_leaf->left = m_left_leaf;
++
++    // We don't ever use the value of the right leaf node, but we need the
++    // value to be always the same, to make it easier to check for
++    // equality.
++    get_node(m_right_leaf)->value_leaf.value = ::std::numeric_limits<value_type>::max();
++}
++
++template<typename _Key, typename _Value>
++flat_segment_tree<_Key, _Value>::flat_segment_tree(const flat_segment_tree<_Key, _Value>& r) :
++    m_root_node(static_cast<node*>(NULL)),
++    m_left_leaf(new node(static_cast<const node&>(*r.m_left_leaf))),
++    m_right_leaf(static_cast<node*>(NULL)),
++    m_init_val(r.m_init_val),
++    m_valid_tree(false) // tree is invalid because we only copy the leaf nodes.
++{
++    // Copy all the leaf nodes from the original instance.
++    node_base* src_node = r.m_left_leaf.get();
++    node_base_ptr dest_node = m_left_leaf;
++    while (true)
++    {
++        dest_node->right.reset(src_node->right->clone());
++
++        // Move on to the next source node.
++        src_node = src_node->right.get();
++
++        // Move on to the next destination node, and have the next node point
++        // back to the previous node.
++        node_base_ptr old_node = dest_node;
++        dest_node = dest_node->right;
++        dest_node->left = old_node;
++
++        if (src_node == r.m_right_leaf.get())
++        {
++            // Reached the right most leaf node.  We can stop here.
++            m_right_leaf = dest_node;
++            break;
++        }
++    }
++}
++
++template<typename _Key, typename _Value>
++flat_segment_tree<_Key, _Value>::~flat_segment_tree()
++{
++    // Go through all leaf nodes, and disconnect their links.
++    node_base* cur_node = m_left_leaf.get();
++    do
++    {
++        node_base* next_node = cur_node->right.get();
++        disconnect_node(cur_node);
++        cur_node = next_node;
++    }
++    while (cur_node != m_right_leaf.get());
++
++    disconnect_node(m_right_leaf.get());
++    clear_tree(m_root_node);
++    disconnect_node(m_root_node.get());
++}
++
++template<typename _Key, typename _Value>
+ void flat_segment_tree<_Key, _Value>::insert_segment_impl(key_type start_key, key_type end_key, value_type val, bool forward)
+ {
+     if (end_key < get_node(m_left_leaf)->value_leaf.key || start_key > get_node(m_right_leaf)->value_leaf.key)
+diff --git sc/inc/mdds/node.hxx sc/inc/mdds/node.hxx
+index 04da08c..f7865cf 100644
+--- sc/inc/mdds/node.hxx
++++ sc/inc/mdds/node.hxx
+@@ -107,6 +107,35 @@ struct node_base : public intrusive_ref_base
+ #endif
+     }
+ 
++    /** 
++     * When copying node, only the stored values should be copied. 
++     * Connections to the parent, left and right nodes must not be copied. 
++     */
++    node_base(const node_base& r) :
++        intrusive_ref_base(),
++        parent(static_cast<node_base*>(NULL)),
++        left(static_cast<node_base*>(NULL)),
++        right(static_cast<node_base*>(NULL)),
++        is_leaf(r.is_leaf)
++    {
++#ifdef DEBUG_NODE_BASE
++        ++node_instance_count;
++#endif
++    }
++
++    /** 
++     * Like the copy constructor, only the stored values should be copied. 
++     */
++    node_base& operator=(const node_base& r)
++    {
++        if (this == &r)
++            // assignment to self.
++            return *this;
++
++        is_leaf = r.is_leaf;
++        return *this;
++    }
++
+     virtual ~node_base()
+     {
+ #ifdef DEBUG_NODE_BASE
+@@ -119,6 +148,7 @@ struct node_base : public intrusive_ref_base
+     virtual void fill_nonleaf_value(const node_base_ptr& left_node, const node_base_ptr& right_node) = 0;
+     virtual void dump_value() const = 0;
+     virtual node_base* create_new(bool leaf) const = 0;
++    virtual node_base* clone() const = 0;
+ };
+ 
+ template<typename _NodePtr>
+diff --git sc/inc/segmenttree.hxx sc/inc/segmenttree.hxx
+index b946f6c..4b45d20 100644
+--- sc/inc/segmenttree.hxx
++++ sc/inc/segmenttree.hxx
+@@ -74,6 +74,7 @@ public:
+     };
+ 
+     ScFlatBoolRowSegments();
++    ScFlatBoolRowSegments(const ScFlatBoolRowSegments& r);
+     ~ScFlatBoolRowSegments();
+ 
+     void setTrue(SCROW nRow1, SCROW nRow2);
+@@ -85,6 +86,9 @@ public:
+ 
+     SCROW findLastNotOf(bool bValue) const;
+ 
++    void enableTreeSearch(bool bEnable);
++    void setInsertFromBack(bool bInsertFromBack);
++
+ private:
+     ::std::auto_ptr<ScFlatBoolSegmentsImpl> mpImpl;
+ };
+@@ -101,6 +105,7 @@ public:
+         bool    mbValue;
+     };
+     ScFlatBoolColSegments();
++    ScFlatBoolColSegments(const ScFlatBoolColSegments& r);
+     ~ScFlatBoolColSegments();
+ 
+     void setTrue(SCCOL nCol1, SCCOL nCol2);
+@@ -145,6 +150,7 @@ public:
+     };
+ 
+     ScFlatUInt16RowSegments(sal_uInt16 nDefault);
++    ScFlatUInt16RowSegments(const ScFlatUInt16RowSegments& r);
+     ~ScFlatUInt16RowSegments();
+ 
+     void setValue(SCROW nRow1, SCROW nRow2, sal_uInt16 nValue);
+diff --git sc/inc/simplerangelist.hxx sc/inc/simplerangelist.hxx
+new file mode 100644
+index 0000000..359f01f
+--- /dev/null
++++ sc/inc/simplerangelist.hxx
+@@ -0,0 +1,82 @@
++/*************************************************************************
++ *
++ * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
++ * 
++ * Copyright 2008 by Sun Microsystems, Inc.
++ *
++ * OpenOffice.org - a multi-platform office productivity suite
++ *
++ * $RCSfile: rangelst.hxx,v $
++ * $Revision: 1.9.32.3 $
++ *
++ * This file is part of OpenOffice.org.
++ *
++ * OpenOffice.org is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU Lesser General Public License version 3
++ * only, as published by the Free Software Foundation.
++ *
++ * OpenOffice.org is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU Lesser General Public License version 3 for more details
++ * (a copy is included in the LICENSE file that accompanied this code).
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * version 3 along with OpenOffice.org.  If not, see
++ * <http://www.openoffice.org/license.html>
++ * for a copy of the LGPLv3 License.
++ *
++ ************************************************************************/
++
++#ifndef __SC_SIMPLERANGELIST_HXX__
++#define __SC_SIMPLERANGELIST_HXX__
++
++#include <boost/shared_ptr.hpp>
++
++#include "address.hxx"
++
++#include <map>
++#include <list>
++
++class ScAddress;
++class ScRange;
++class ScRangeList;
++
++/** 
++ * This container is optimized for use in the ods import filter, to store 
++ * ranges for cell styles.  We may change the name of this class once we 
++ * have a better name for what it does.  Using this is way more efficient 
++ * than ScRangeList. 
++ */
++class ScSimpleRangeList
++{
++public:
++    struct Range
++    {
++        SCCOL mnCol1;
++        SCROW mnRow1;
++        SCCOL mnCol2;
++        SCROW mnRow2;
++        explicit Range(SCCOL nCol1, SCROW nRow1, SCCOL nCol2, SCROW nRow2);
++
++        bool contains(const Range& r) const;
++    };
++    typedef ::boost::shared_ptr< ::std::list<Range> > RangeListRef;
++    typedef ::std::map<SCTAB, RangeListRef> TabType;
++
++    ScSimpleRangeList();
++
++    void addRange(const ScRange& rRange);
++    void insertCol(SCCOL nCol, SCTAB nTab);
++    void insertRow(SCROW nRow, SCTAB nTab);
++    void getRangeList(::std::list<ScRange>& rList) const;
++    void clear();
++
++private:
++    RangeListRef findTab(SCTAB nTab);
++
++private:
++    TabType maTabs;
++};
++
++#endif
+diff --git sc/source/core/data/segmenttree.cxx sc/source/core/data/segmenttree.cxx
+index 8c4740d..b0ac112 100644
+--- sc/source/core/data/segmenttree.cxx
++++ sc/source/core/data/segmenttree.cxx
+@@ -54,7 +54,8 @@ public:
+         ValueType   mnValue;
+     };
+ 
+-    inline ScFlatSegmentsImpl(SCCOLROW nMax, ValueType nDefault);
++    ScFlatSegmentsImpl(SCCOLROW nMax, ValueType nDefault);
++    ScFlatSegmentsImpl(const ScFlatSegmentsImpl& r);
+     ~ScFlatSegmentsImpl();
+ 
+     void setValue(SCCOLROW nPos1, SCCOLROW nPos2, ValueType nValue);
+@@ -98,6 +99,14 @@ ScFlatSegmentsImpl<_ValueType, _ExtValueType>::ScFlatSegmentsImpl(SCCOLROW nMax,
+ }
+ 
+ template<typename _ValueType, typename _ExtValueType>
++ScFlatSegmentsImpl<_ValueType, _ExtValueType>::ScFlatSegmentsImpl(const ScFlatSegmentsImpl<_ValueType, _ExtValueType>& r) :
++    maSegments(r.maSegments),
++    mbTreeSearchEnabled(r.mbTreeSearchEnabled),
++    mbInsertFromBack(r.mbInsertFromBack)
++{
++}
++
++template<typename _ValueType, typename _ExtValueType>
+ ScFlatSegmentsImpl<_ValueType, _ExtValueType>::~ScFlatSegmentsImpl()
+ {
+ }
+@@ -345,6 +354,11 @@ ScFlatBoolRowSegments::ScFlatBoolRowSegments() :
+ {
+ }
+ 
++ScFlatBoolRowSegments::ScFlatBoolRowSegments(const ScFlatBoolRowSegments& r) :
++    mpImpl(new ScFlatBoolSegmentsImpl(*r.mpImpl))
++{
++}
++
+ ScFlatBoolRowSegments::~ScFlatBoolRowSegments()
+ {
+ }
+@@ -391,6 +405,16 @@ SCROW ScFlatBoolRowSegments::findLastNotOf(bool bValue) const
+     return static_cast<SCROW>(mpImpl->findLastNotOf(bValue));
+ }
+ 
++void ScFlatBoolRowSegments::enableTreeSearch(bool bEnable)
++{
++    mpImpl->enableTreeSearch(bEnable);
++}
++
++void ScFlatBoolRowSegments::setInsertFromBack(bool bInsertFromBack)
++{
++    mpImpl->setInsertFromBack(bInsertFromBack);
++}
++
+ // ============================================================================
+ 
+ ScFlatBoolColSegments::ScFlatBoolColSegments() :
+@@ -398,6 +422,11 @@ ScFlatBoolColSegments::ScFlatBoolColSegments() :
+ {
+ }
+ 
++ScFlatBoolColSegments::ScFlatBoolColSegments(const ScFlatBoolColSegments& r) :
++    mpImpl(new ScFlatBoolSegmentsImpl(*r.mpImpl))
++{
++}
++
+ ScFlatBoolColSegments::~ScFlatBoolColSegments()
+ {
+ }
+@@ -482,6 +511,11 @@ ScFlatUInt16RowSegments::ScFlatUInt16RowSegments(sal_uInt16 nDefault) :
+ {
+ }
+ 
++ScFlatUInt16RowSegments::ScFlatUInt16RowSegments(const ScFlatUInt16RowSegments& r) :
++    mpImpl(new ScFlatUInt16SegmentsImpl(*r.mpImpl))
++{
++}
++
+ ScFlatUInt16RowSegments::~ScFlatUInt16RowSegments()
+ {
+ }
+diff --git sc/source/core/tool/makefile.mk sc/source/core/tool/makefile.mk
+index bd9f56c..24283c0 100644
+--- sc/source/core/tool/makefile.mk
++++ sc/source/core/tool/makefile.mk
+@@ -109,6 +109,7 @@ SLOFILES =  \
+         $(SLO)$/refupdat.obj \
+         $(SLO)$/scmatrix.obj \
+         $(SLO)$/sctictac.obj \
++        $(SLO)$/simplerangelist.obj \
+ 		$(SLO)$/stringutil.obj \
+         $(SLO)$/subtotal.obj \
+         $(SLO)$/token.obj \
+@@ -137,6 +138,7 @@ EXCEPTIONSFILES= \
+         $(SLO)$/prnsave.obj \
+ 		$(SLO)$/queryparam.obj \
+         $(SLO)$/reftokenhelper.obj \
++        $(SLO)$/simplerangelist.obj \
+ 		$(SLO)$/stringutil.obj \
+         $(SLO)$/token.obj
+ 
+diff --git sc/source/core/tool/simplerangelist.cxx sc/source/core/tool/simplerangelist.cxx
+new file mode 100644
+index 0000000..fcddbca
+--- /dev/null
++++ sc/source/core/tool/simplerangelist.cxx
+@@ -0,0 +1,243 @@
++/*************************************************************************
++ *
++ * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
++ * 
++ * Copyright 2008 by Sun Microsystems, Inc.
++ *
++ * OpenOffice.org - a multi-platform office productivity suite
++ *
++ * $RCSfile: rangelst.hxx,v $
++ * $Revision: 1.9.32.3 $
++ *
++ * This file is part of OpenOffice.org.
++ *
++ * OpenOffice.org is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU Lesser General Public License version 3
++ * only, as published by the Free Software Foundation.
++ *
++ * OpenOffice.org is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU Lesser General Public License version 3 for more details
++ * (a copy is included in the LICENSE file that accompanied this code).
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * version 3 along with OpenOffice.org.  If not, see
++ * <http://www.openoffice.org/license.html>
++ * for a copy of the LGPLv3 License.
++ *
++ ************************************************************************/
++
++// MARKER(update_precomp.py): autogen include statement, do not remove
++#include "precompiled_sc.hxx"
++
++
++//------------------------------------------------------------------------
++
++#include "simplerangelist.hxx"
++#include "rangelst.hxx"
++
++using ::std::list;
++using ::std::pair;
++using ::std::max;
++
++// ============================================================================
++
++ScSimpleRangeList::Range::Range(SCCOL nCol1, SCROW nRow1, SCCOL nCol2, SCROW nRow2) :
++    mnCol1(nCol1), mnRow1(nRow1), mnCol2(nCol2), mnRow2(nRow2) {}
++
++bool ScSimpleRangeList::Range::contains(const Range& r) const
++{
++    return mnCol1 <= r.mnCol1 && mnRow1 <= r.mnRow1 && r.mnCol2 <= mnCol2 && r.mnRow2 <= mnRow2;
++}
++
++// ----------------------------------------------------------------------------
++
++ScSimpleRangeList::ScSimpleRangeList()
++{
++}
++
++namespace {
++
++bool maybeJoin(ScSimpleRangeList::Range& rOld, SCCOL nCol1, SCROW nRow1, SCCOL nCol2, SCROW nRow2)
++{
++    if (rOld.mnRow1 == nRow1 && rOld.mnRow2 == nRow2)
++    {
++        // Check their column spans to see if they overlap.
++        if (rOld.mnCol1 == nCol1)
++        {
++            // Their share the start column position.
++            rOld.mnCol2 = max(rOld.mnCol2, nCol2);
++            return true;
++        }
++        else if (rOld.mnCol1 < nCol1)
++        {
++            // Old range sits on the left.
++            if (nCol1 - rOld.mnCol2 <= 1)
++            {
++                rOld.mnCol2 = max(rOld.mnCol2, nCol2);
++                return true;
++            }
++        }
++        else if (nCol1 < rOld.mnCol1)
++        {
++            // New range sits on the left.
++            if (nCol1 - rOld.mnCol2 <= 1)
++            {
++                rOld.mnCol1 = nCol1;
++                rOld.mnCol2 = max(rOld.mnCol2, nCol2);
++                return true;
++            }
++        }
++    }
++
++    if (rOld.mnCol1 == nCol1 && rOld.mnCol2 == nCol2)
++    {
++        if (rOld.mnRow1 == nRow1)
++        {
++            // Their share the start row position.
++            rOld.mnRow2 = max(rOld.mnRow2, nRow2);
++            return true;
++        }
++        else if (rOld.mnRow1 < nRow1)
++        {
++            // Old range sits above.
++            if (nRow1 - rOld.mnRow2 <= 1)
++            {
++                rOld.mnRow2 = max(rOld.mnRow2, nRow2);
++                return true;
++            }
++        }
++        else if (nRow1 < rOld.mnRow1)
++        {
++            // New range sits above.
++            if (nRow1 - rOld.mnRow2 <= 1)
++            {
++                rOld.mnRow1 = nRow1;
++                rOld.mnRow2 = max(rOld.mnRow2, nRow2);
++                return true;
++            }
++        }
++    }
++
++    return false;
++}
++
++}
++
++void ScSimpleRangeList::addRange(const ScRange& rRange)
++{
++    SCCOL nCol1 = rRange.aStart.Col();
++    SCROW nRow1 = rRange.aStart.Row();
++    SCTAB nTab1 = rRange.aStart.Tab();
++    SCCOL nCol2 = rRange.aEnd.Col();
++    SCROW nRow2 = rRange.aEnd.Row();
++    SCTAB nTab2 = rRange.aEnd.Tab();
++
++    for (SCTAB nTab = nTab1; nTab <= nTab2; ++nTab)
++    {
++        RangeListRef pRef = findTab(nTab);
++        if (!pRef)
++            // This should never happen!
++            return;
++
++        if (pRef->empty() || !maybeJoin(pRef->back(), nCol1, nRow1, nCol2, nRow2))
++            // Not joinable.  Append it to the list.
++            pRef->push_back(Range(nCol1, nRow1, nCol2, nRow2));
++    }
++}
++
++void ScSimpleRangeList::insertCol(SCCOL nCol, SCTAB nTab)
++{
++    RangeListRef pRef = findTab(nTab);
++    if (!pRef)
++        // This should never happen!
++        return;
++
++    list<Range>::iterator itr = pRef->begin(), itrEnd = pRef->end();
++    for (; itr != itrEnd; ++itr)
++    {
++        Range& r = *itr;
++        if (r.mnCol2 < nCol)
++            // insertion point to the right of the range.
++            continue;
++
++        if (nCol <= r.mnCol1)
++        {   
++            // insertion point to the left of the range.
++            ++r.mnCol1;
++            ++r.mnCol2;
++        }
++        else if (nCol <= r.mnCol2)
++        {
++            // insertion point cuts through the range.
++            ++r.mnCol2;
++        }
++    }
++}
++
++void ScSimpleRangeList::insertRow(SCROW nRow, SCTAB nTab)
++{
++    RangeListRef pRef = findTab(nTab);
++    if (!pRef)
++        // This should never happen!
++        return;
++
++    list<Range>::iterator itr = pRef->begin(), itrEnd = pRef->end();
++    for (; itr != itrEnd; ++itr)
++    {
++        Range& r = *itr;
++        if (r.mnRow2 < nRow)
++            // insertion point is below the range.
++            continue;
++
++        if (nRow <= r.mnRow1)
++        {   
++            // insertion point is above the range.
++            ++r.mnRow1;
++            ++r.mnRow2;
++        }
++        else if (nRow <= r.mnRow2)
++        {
++            // insertion point cuts through the range.
++            ++r.mnRow2;
++        }
++    }
++}
++
++void ScSimpleRangeList::getRangeList(list<ScRange>& rList) const
++{
++    list<ScRange> aList;
++    for (TabType::const_iterator itrTab = maTabs.begin(), itrTabEnd = maTabs.end(); itrTab != itrTabEnd; ++itrTab)
++    {
++        SCTAB nTab = itrTab->first;
++        const RangeListRef& pRanges = itrTab->second;
++        list<Range>::const_iterator itr = pRanges->begin(), itrEnd = pRanges->end();
++        for (; itr != itrEnd; ++itr)
++        {
++            const Range& r = *itr;
++            aList.push_back(ScRange(r.mnCol1, r.mnRow1, nTab, r.mnCol2, r.mnRow2, nTab));
++        }
++    }
++    rList.swap(aList);
++}
++
++void ScSimpleRangeList::clear()
++{
++    maTabs.clear();
++}
++
++ScSimpleRangeList::RangeListRef ScSimpleRangeList::findTab(SCTAB nTab)
++{
++    TabType::iterator itr = maTabs.find(nTab);
++    if (itr == maTabs.end())
++    {
++        RangeListRef p(new list<Range>);
++        pair<TabType::iterator, bool> r = maTabs.insert(TabType::value_type(nTab, p));
++        if (!r.second)
++            return RangeListRef();
++        itr = r.first;
++    }
++
++    return itr->second;
++}
+diff --git sc/source/filter/xml/XMLStylesImportHelper.cxx sc/source/filter/xml/XMLStylesImportHelper.cxx
+index e1c608e..2805546 100644
+--- sc/source/filter/xml/XMLStylesImportHelper.cxx
++++ sc/source/filter/xml/XMLStylesImportHelper.cxx
+@@ -40,6 +40,7 @@
+ #include <com/sun/star/util/NumberFormat.hpp>
+ 
+ using namespace com::sun::star;
++using ::std::list;
+ 
+ void ScMyStyleNumberFormats::AddStyleNumberFormat(const rtl::OUString& rStyleName, const sal_Int32 nNumberFormat)
+ {
+@@ -56,37 +57,14 @@ sal_Int32 ScMyStyleNumberFormats::GetStyleNumberFormat(const rtl::OUString& rSty
+         return aItr->nNumberFormat;
+ }
+ 
+-ScMyStyleRanges::ScMyStyleRanges()
+-    :
+-    pTextList(NULL),
+-    pNumberList(NULL),
+-    pTimeList(NULL),
+-    pDateTimeList(NULL),
+-    pPercentList(NULL),
+-    pLogicalList(NULL),
+-    pUndefinedList(NULL),
++ScMyStyleRanges::ScMyStyleRanges() :
+     pCurrencyList(NULL)
+ {
+ }
+ 
+ ScMyStyleRanges::~ScMyStyleRanges()
+ {
+-    if (pTextList)
+-        delete pTextList;
+-    if (pNumberList)
+-        delete pNumberList;
+-    if (pTimeList)
+-        delete pTimeList;
+-    if (pDateTimeList)
+-        delete pDateTimeList;
+-    if (pPercentList)
+-        delete pPercentList;
+-    if (pLogicalList)
+-        delete pLogicalList;
+-    if (pUndefinedList)
+-        delete pUndefinedList;
+-    if (pCurrencyList)
+-        delete pCurrencyList;
++    delete pCurrencyList;
+ }
+ 
+ void ScMyStyleRanges::AddRange(const ScRange& rRange, ScRangeList* pList,
+@@ -138,58 +116,58 @@ void ScMyStyleRanges::AddCurrencyRange(const ScRange& rRange, ScRangeListRef xLi
+ }
+ 
+ void ScMyStyleRanges::AddRange(const ScRange& rRange,
+-    const rtl::OUString* pStyleName, const sal_Int16 nType,
+-    ScXMLImport& rImport, const sal_uInt32 nMaxRanges)
++    const rtl::OUString* /*pStyleName*/, const sal_Int16 nType,
++    ScXMLImport& /*rImport*/, const sal_uInt32 /*nMaxRanges*/)
+ {
+     switch (nType)
+     {
+         case util::NumberFormat::NUMBER:
+         {
+-            if (!pNumberList)
+-                pNumberList = new ScRangeList();
+-            AddRange(rRange, pNumberList, pStyleName, nType, rImport, nMaxRanges);
++            if (!mpNumberList)
++                mpNumberList.reset(new ScSimpleRangeList);
++            mpNumberList->addRange(rRange);
+         }
+         break;
+         case util::NumberFormat::TEXT:
+         {
+-            if (!pTextList)
+-                pTextList = new ScRangeList();
+-            AddRange(rRange, pTextList, pStyleName, nType, rImport, nMaxRanges);
++            if (!mpTextList)
++                mpTextList.reset(new ScSimpleRangeList);
++            mpTextList->addRange(rRange);
+         }
+         break;
+         case util::NumberFormat::TIME:
+         {
+-            if (!pTimeList)
+-                pTimeList = new ScRangeList();
+-            AddRange(rRange, pTimeList, pStyleName, nType, rImport, nMaxRanges);
++            if (!mpTimeList)
++                mpTimeList.reset(new ScSimpleRangeList);
++            mpTimeList->addRange(rRange);
+         }
+         break;
+         case util::NumberFormat::DATETIME:
+         {
+-            if (!pDateTimeList)
+-                pDateTimeList = new ScRangeList();
+-            AddRange(rRange, pDateTimeList, pStyleName, nType, rImport, nMaxRanges);
++            if (!mpDateTimeList)
++                mpDateTimeList.reset(new ScSimpleRangeList);
++            mpDateTimeList->addRange(rRange);
+         }
+         break;
+         case util::NumberFormat::PERCENT:
+         {
+-            if (!pPercentList)
+-                pPercentList = new ScRangeList();
+-            AddRange(rRange, pPercentList, pStyleName, nType, rImport, nMaxRanges);
++            if (!mpPercentList)
++                mpPercentList.reset(new ScSimpleRangeList);
++            mpPercentList->addRange(rRange);
+         }
+         break;
+         case util::NumberFormat::LOGICAL:
+         {
+-            if (!pLogicalList)
+-                pLogicalList = new ScRangeList();
+-            AddRange(rRange, pLogicalList, pStyleName, nType, rImport, nMaxRanges);
++            if (!mpLogicalList)
++                mpLogicalList.reset(new ScSimpleRangeList);
++            mpLogicalList->addRange(rRange);
+         }
+         break;
+         case util::NumberFormat::UNDEFINED:
+         {
+-            if (!pUndefinedList)
+-                pUndefinedList = new ScRangeList();
+-            AddRange(rRange, pUndefinedList, pStyleName, nType, rImport, nMaxRanges);
++            if (!mpUndefinedList)
++                mpUndefinedList.reset(new ScSimpleRangeList);
++            mpUndefinedList->addRange(rRange);
+         }
+         break;
+         default:
+@@ -216,53 +194,78 @@ void ScMyStyleRanges::AddCurrencyRange(const ScRange& rRange,
+         if (aPair.second)
+         {
+             aItr = aPair.first;
+-            AddCurrencyRange(rRange, aItr->xRanges, pStyleName, pCurrency, rImport, nMaxRanges);
++            aItr->mpRanges->addRange(rRange);
+         }
+     }
+     else
+-        aItr->xRanges->Join(rRange);
++        aItr->mpRanges->addRange(rRange);
+ }
+ 
+-void ScMyStyleRanges::InsertColRow(const ScRange& rRange, const SCsCOL nDx, const SCsROW nDy,
+-        const SCsTAB nDz, ScDocument* pDoc)
++void ScMyStyleRanges::InsertRow(const sal_Int32 nRow, const sal_Int32 nTab, ScDocument* pDoc)
+ {
+-    UpdateRefMode aRefMode(URM_INSDEL);
+-    if (pNumberList)
+-        pNumberList->UpdateReference(aRefMode, pDoc, rRange, nDx, nDy, nDz);
+-    if (pTextList)
+-        pTextList->UpdateReference(aRefMode, pDoc, rRange, nDx, nDy, nDz);
+-    if (pTimeList)
+-        pTimeList->UpdateReference(aRefMode, pDoc, rRange, nDx, nDy, nDz);
+-    if (pDateTimeList)
+-        pDateTimeList->UpdateReference(aRefMode, pDoc, rRange, nDx, nDy, nDz);
+-    if (pPercentList)
+-        pPercentList->UpdateReference(aRefMode, pDoc, rRange, nDx, nDy, nDz);
+-    if (pLogicalList)
+-        pLogicalList->UpdateReference(aRefMode, pDoc, rRange, nDx, nDy, nDz);
+-    if (pUndefinedList)
+-        pUndefinedList->UpdateReference(aRefMode, pDoc, rRange, nDx, nDy, nDz);
++    if (mpTextList)
++        mpTextList->insertRow(static_cast<SCROW>(nRow), static_cast<SCTAB>(nTab));
++    if (mpNumberList)
++        mpNumberList->insertRow(static_cast<SCROW>(nRow), static_cast<SCTAB>(nTab));
++    if (mpTimeList)
++        mpTimeList->insertRow(static_cast<SCROW>(nRow), static_cast<SCTAB>(nTab));
++    if (mpDateTimeList)
++        mpDateTimeList->insertRow(static_cast<SCROW>(nRow), static_cast<SCTAB>(nTab));
++    if (mpPercentList)
++        mpPercentList->insertRow(static_cast<SCROW>(nRow), static_cast<SCTAB>(nTab));
++    if (mpLogicalList)
++        mpLogicalList->insertRow(static_cast<SCROW>(nRow), static_cast<SCTAB>(nTab));
++    if (mpUndefinedList)
++        mpUndefinedList->insertRow(static_cast<SCROW>(nRow), static_cast<SCTAB>(nTab));
++
+     if (pCurrencyList)
+     {
+         ScMyCurrencyStylesSet::iterator aItr(pCurrencyList->begin());
+         ScMyCurrencyStylesSet::iterator aEndItr(pCurrencyList->end());
+         while (aItr != aEndItr)
+         {
+-            aItr->xRanges->UpdateReference(aRefMode, pDoc, rRange, nDx, nDy, nDz);
++            aItr->mpRanges->insertRow(static_cast<SCROW>(nRow), static_cast<SCTAB>(nTab));
+             ++aItr;
+         }
+     }
+ }
+ 
+-void ScMyStyleRanges::InsertRow(const sal_Int32 nRow, const sal_Int32 nTab, ScDocument* pDoc)
++void ScMyStyleRanges::InsertCol(const sal_Int32 nCol, const sal_Int32 nTab, ScDocument* pDoc)
+ {
+-    InsertColRow(ScRange(0, static_cast<SCROW>(nRow), static_cast<SCTAB>(nTab),
+-        MAXCOL, MAXROW, static_cast<SCTAB>(nTab)), 0, 1, 0, pDoc);
++    if (mpTextList)
++        mpTextList->insertCol(static_cast<SCCOL>(nCol), static_cast<SCTAB>(nTab));
++    if (mpNumberList)
++        mpNumberList->insertCol(static_cast<SCCOL>(nCol), static_cast<SCTAB>(nTab));
++    if (mpTimeList)
++        mpTimeList->insertCol(static_cast<SCCOL>(nCol), static_cast<SCTAB>(nTab));
++    if (mpDateTimeList)
++        mpDateTimeList->insertCol(static_cast<SCCOL>(nCol), static_cast<SCTAB>(nTab));
++    if (mpPercentList)
++        mpPercentList->insertCol(static_cast<SCCOL>(nCol), static_cast<SCTAB>(nTab));
++    if (mpLogicalList)
++        mpLogicalList->insertCol(static_cast<SCCOL>(nCol), static_cast<SCTAB>(nTab));
++    if (mpUndefinedList)
++        mpUndefinedList->insertCol(static_cast<SCCOL>(nCol), static_cast<SCTAB>(nTab));
++
++    if (pCurrencyList)
++    {
++        ScMyCurrencyStylesSet::iterator aItr(pCurrencyList->begin());
++        ScMyCurrencyStylesSet::iterator aEndItr(pCurrencyList->end());
++        while (aItr != aEndItr)
++        {
++            aItr->mpRanges->insertCol(static_cast<SCCOL>(nCol), static_cast<SCTAB>(nTab));
++            ++aItr;
++        }
++    }
+ }
+ 
+-void ScMyStyleRanges::InsertCol(const sal_Int32 nCol, const sal_Int32 nTab, ScDocument* pDoc)
++void ScMyStyleRanges::SetStylesToRanges(const list<ScRange>& rRanges,
++    const rtl::OUString* pStyleName, const sal_Int16 nCellType,
++    const rtl::OUString* pCurrency, ScXMLImport& rImport)
+ {
+-    InsertColRow(ScRange(static_cast<SCCOL>(nCol), 0, static_cast<SCTAB>(nTab),
+-        MAXCOL, MAXROW, static_cast<SCTAB>(nTab)), 1, 0, 0, pDoc);
++    list<ScRange>::const_iterator itr = rRanges.begin(), itrEnd = rRanges.end();
++    for (; itr != itrEnd; ++itr)
++        rImport.SetStyleToRange(*itr, pStyleName, nCellType, pCurrency);
+ }
+ 
+ void ScMyStyleRanges::SetStylesToRanges(ScRangeList* pList,
+@@ -285,27 +288,64 @@ void ScMyStyleRanges::SetStylesToRanges(ScRangeListRef xList,
+ 
+ void ScMyStyleRanges::SetStylesToRanges(const rtl::OUString* pStyleName, ScXMLImport& rImport)
+ {
+-    if (pNumberList)
+-        SetStylesToRanges(pNumberList, pStyleName, util::NumberFormat::NUMBER, NULL, rImport);
+-    if (pTextList)
+-        SetStylesToRanges(pTextList, pStyleName, util::NumberFormat::TEXT, NULL, rImport);
+-    if (pTimeList)
+-        SetStylesToRanges(pTimeList, pStyleName, util::NumberFormat::TIME, NULL, rImport);
+-    if (pDateTimeList)
+-        SetStylesToRanges(pDateTimeList, pStyleName, util::NumberFormat::DATETIME, NULL, rImport);
+-    if (pPercentList)
+-        SetStylesToRanges(pPercentList, pStyleName, util::NumberFormat::PERCENT, NULL, rImport);
+-    if (pLogicalList)
+-        SetStylesToRanges(pLogicalList, pStyleName, util::NumberFormat::LOGICAL, NULL, rImport);
+-    if (pUndefinedList)
+-        SetStylesToRanges(pUndefinedList, pStyleName, util::NumberFormat::UNDEFINED, NULL, rImport);
++    if (mpNumberList)
++    {
++        list<ScRange> aList;
++        mpNumberList->getRangeList(aList);
++        SetStylesToRanges(aList, pStyleName, util::NumberFormat::NUMBER, NULL, rImport);
++        mpNumberList->clear();
++    }
++    if (mpTextList)
++    {
++        list<ScRange> aList;
++        mpTextList->getRangeList(aList);
++        SetStylesToRanges(aList, pStyleName, util::NumberFormat::TEXT, NULL, rImport);
++        mpTextList->clear();
++    }
++    if (mpTimeList)
++    {
++        list<ScRange> aList;
++        mpTimeList->getRangeList(aList);
++        SetStylesToRanges(aList, pStyleName, util::NumberFormat::TIME, NULL, rImport);
++        mpTimeList->clear();
++    }
++    if (mpDateTimeList)
++    {
++        list<ScRange> aList;
++        mpDateTimeList->getRangeList(aList);
++        SetStylesToRanges(aList, pStyleName, util::NumberFormat::DATETIME, NULL, rImport);
++        mpDateTimeList->clear();
++    }
++    if (mpPercentList)
++    {
++        list<ScRange> aList;
++        mpPercentList->getRangeList(aList);
++        SetStylesToRanges(aList, pStyleName, util::NumberFormat::PERCENT, NULL, rImport);
++        mpPercentList->clear();
++    }
++    if (mpLogicalList)
++    {
++        list<ScRange> aList;
++        mpLogicalList->getRangeList(aList);
++        SetStylesToRanges(aList, pStyleName, util::NumberFormat::LOGICAL, NULL, rImport);
++        mpLogicalList->clear();
++    }
++    if (mpUndefinedList)
++    {
++        list<ScRange> aList;
++        mpUndefinedList->getRangeList(aList);
++        SetStylesToRanges(aList, pStyleName, util::NumberFormat::UNDEFINED, NULL, rImport);
++        mpUndefinedList->clear();
++    }
+     if (pCurrencyList)
+     {
+         ScMyCurrencyStylesSet::iterator aItr(pCurrencyList->begin());
+         ScMyCurrencyStylesSet::iterator aEndItr(pCurrencyList->end());
+         while (aItr != aEndItr)
+         {
+-            SetStylesToRanges(aItr->xRanges, pStyleName, util::NumberFormat::CURRENCY, &aItr->sCurrency, rImport);
++            list<ScRange> aList;
++            aItr->mpRanges->getRangeList(aList);
++            SetStylesToRanges(aList, pStyleName, util::NumberFormat::CURRENCY, &aItr->sCurrency, rImport);
+             ++aItr;
+         }
+     }
+diff --git sc/source/filter/xml/XMLStylesImportHelper.hxx sc/source/filter/xml/XMLStylesImportHelper.hxx
+index ca5a62a..0e2b760 100644
+--- sc/source/filter/xml/XMLStylesImportHelper.hxx
++++ sc/source/filter/xml/XMLStylesImportHelper.hxx
+@@ -32,12 +32,15 @@
+ #define SC_XMLSTYLESIMPORTHELPER_HXX
+ 
+ #include "rangelst.hxx"
++#include "simplerangelist.hxx"
+ #include <rtl/ustring.hxx>
+ #include <com/sun/star/table/CellRangeAddress.hpp>
+ #include <com/sun/star/table/CellAddress.hpp>
+ 
+ #include <set>
+ #include <vector>
++#include <list>
++#include <boost/shared_ptr.hpp>
+ 
+ class ScXMLImport;
+ 
+@@ -75,9 +78,11 @@ public:
+ struct ScMyCurrencyStyle
+ {
+     rtl::OUString		sCurrency;
+-    ScRangeListRef		xRanges;
++    ::boost::shared_ptr<ScSimpleRangeList> mpRanges;
+ 
+-    ScMyCurrencyStyle() : xRanges(new ScRangeList()) {}
++    ScMyCurrencyStyle() : 
++        mpRanges(new ScSimpleRangeList)
++    {}
+     ~ScMyCurrencyStyle() {}
+ };
+ 
+@@ -93,13 +98,13 @@ typedef std::set<ScMyCurrencyStyle, LessCurrencyStyle>	ScMyCurrencyStylesSet;
+ 
+ class ScMyStyleRanges : public SvRefBase
+ {
+-    ScRangeList*			pTextList;
+-    ScRangeList*			pNumberList;
+-    ScRangeList*			pTimeList;
+-    ScRangeList*			pDateTimeList;
+-    ScRangeList*			pPercentList;
+-    ScRangeList*			pLogicalList;
+-    ScRangeList*			pUndefinedList;
++    ::boost::shared_ptr<ScSimpleRangeList> mpTextList;
++    ::boost::shared_ptr<ScSimpleRangeList> mpNumberList;
++    ::boost::shared_ptr<ScSimpleRangeList> mpTimeList;
++    ::boost::shared_ptr<ScSimpleRangeList> mpDateTimeList;
++    ::boost::shared_ptr<ScSimpleRangeList> mpPercentList;
++    ::boost::shared_ptr<ScSimpleRangeList> mpLogicalList;
++    ::boost::shared_ptr<ScSimpleRangeList> mpUndefinedList;
+     ScMyCurrencyStylesSet*	pCurrencyList;
+ 
+     void AddRange(const ScRange& rRange, ScRangeList* pList,
+@@ -108,8 +113,9 @@ class ScMyStyleRanges : public SvRefBase
+     void AddCurrencyRange(const ScRange& rRange, ScRangeListRef xList,
+         const rtl::OUString* pStyleName, const rtl::OUString* pCurrency,
+         ScXMLImport& rImport, const sal_uInt32 nMaxRanges);
+-    void InsertColRow(const ScRange& rRange, const SCsCOL nDx, const SCsROW nDy,
+-        const SCsTAB nDz, ScDocument* pDoc);
++    void SetStylesToRanges(const ::std::list<ScRange>& rList,
++        const rtl::OUString* pStyleName, const sal_Int16 nCellType,
++        const rtl::OUString* pCurrency, ScXMLImport& rImport);
+     void SetStylesToRanges(ScRangeList* pList,
+         const rtl::OUString* pStyleName, const sal_Int16 nCellType,
+         const rtl::OUString* pCurrency, ScXMLImport& rImport);
