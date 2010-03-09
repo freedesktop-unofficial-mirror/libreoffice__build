@@ -1,0 +1,248 @@
+#! /usr/bin/perl -w
+
+$default_mws = 'DEV300';
+
+sub usage()
+{
+    print STDERR "cws-commit-patch - automate the creation of CWSes
+Usage: cws-commit-patch ...params... patch1.diff patch2.diff ...
+
+  -i, --iz        IZ number (XXXX or iXXXX)
+  -b              Mercurial bundle to use
+  -c, --cws       CWS name (to be created or existing
+  -d              Path to an existing clone
+  -h, --help      Help
+  -m, --milestone Milestone to base the CWS (defaults to current)
+  -w, --mws       Master Workspace name (defaults to $default_mws)
+                  Use with care! Almost all CWSs are created for $default_mws.
+                  They are cloned for branches by need.
+  -s, --summary   Summary describing the change (for the hg commit)
+  
+Note: You should use the up-stream version available from m196 instead.\n";
+    exit 1;
+}
+
+sub cws_create($$$)
+{
+    my ( $mws, $cws, $milestone ) = @_;
+    system( "echo '===== cws_create =====' >> .log" );
+
+    my $state = `cws query -M $mws -c $cws status 2>> .log | tail -n 1`;
+    $state =~ s/\n//g;
+    if ( $state ne "" && $state ne "planned" ) {
+        print "CWS:\t\t'$cws' already exists, its state is '$state'\n";
+    }
+    else {
+        print "CWS:\t\tcreating '$cws'\n";
+
+        if ( system( "cws create --hg -m $milestone $mws $cws 2>> .log" ) != 0 ) {
+            print STDERR "Unable to execute 'cws create'.\n";
+            exit 1;
+        }
+        print "CWS:\t\t'$cws' created\n";
+    }
+}
+
+sub cws_clone($$)
+{
+    my ( $cws, $bundle ) = @_;
+    system( "echo '===== cws_checkout =====' >> .log" );
+
+    if ( system( "mkdir $cws 2>> .log" ) != 0 ) {
+        print "Cannot create '$cws' subdir, already exists.  Consider using '-d'.\n";
+        exit 1;
+    }
+    if ( system( "cd $cws && \
+                  hg init && \
+                  echo -e 'Mercurial:\tUnbundling $bundle, go and have some tea...' && \
+                  hg unbundle $bundle && \
+                  hg pull -u http://hg.services.openoffice.org/cws/$cws" ) != 0 ) {
+        print STDERR "Unable to get the CWS clone, check the log for details.\n";
+        exit 1;
+    }
+}
+
+sub cws_add_task($)
+{
+    my ( $iz ) = @_;
+    system( "echo '===== cws_add_task =====' >> .log" );
+
+    if ( system( "cws task i$iz 2>> .log" ) != 0 ) {
+        print STDERR "Unable to add task number $iz.\n";
+        exit 1;
+    }
+
+    print "IZ:\t\tSet to '$iz'\n";
+}
+
+sub cws_commit($$$$$$$@)
+{
+    my ( $mws, $cws, $iz, $summary, $milestone, $clone, $bundle, @patches ) = @_;
+
+    my $up_to_date = 0;
+
+    if ( $clone eq "" ) {
+        cws_create( $mws, $cws, $milestone );
+
+        if ( $bundle eq "" ) {
+            $bundle = "/tmp/DEV300.hg";
+            if ( ! -f $bundle || ( -M $bundle > 14 ) ) {
+                if ( system( "mv $bundle $bundle.save" ) == 0 ) {
+                    print "Bundle:\t\tSaved the old one as '$bundle.save'\n";
+                }
+                system( "wget http://hg.services.openoffice.org/bundle/DEV300.hg -O $bundle" );
+            }
+        }
+        cws_clone( $cws, $bundle );
+        $clone = `pwd` . "/$cws";
+        $up_to_date = 1;
+    }
+    cws_add_task( $iz );
+
+    chdir $clone;
+
+    my $commit_message = "#i$iz# " . $summary;
+    $commit_message =~ s/'/'\\''/g;
+
+    if ( !$up_to_date ) {
+        if ( system( "echo -en 'Mercurial:\t' ; hg pull -u http://hg.services.openoffice.org/cws/$cws") != 0 ) {
+            print STDERR "Unable to update the CWS.\n";
+            exit 1;
+        }
+    }
+
+    for $patch ( @patches ) {
+        if ( system( "hg import -m '$commit_message' -p0 $patch" ) != 0 ) {
+            print STDERR "Failed to commit the patch '$patch'.\n";
+            exit 1;
+        }
+    }
+}
+
+#
+# main()
+#
+if ( !defined( $ENV{'SOLARENV'} ) || $ENV{'SOLARENV'} eq '' ) {
+    my $my_path = $0;
+    $my_path =~ s#/[^/]*$##;    # confuses vim syntax highlighting :-(
+    my $build_dir = `. $my_path/setup > /dev/null 2>&1 ; echo \$OOBUILDDIR`;
+    if ( $build_dir eq "" ) {
+        print STDERR "Unable to find build dir, check OOBUILDDIR in bin/setup.\n";
+        exit 1;
+    }
+    $build_dir =~ s/\n//;
+    if ( ! -f "$build_dir/LinuxIntelEnv.Set.sh" ) {
+        print STDERR "Unable to find '$build_dir/LinuxIntelEnv.Set.sh'.\n";
+        exit 1;
+    }
+    open( $VARS, "bash -c '. $build_dir/LinuxIntelEnv.Set.sh ; set'|");
+    while ( <$VARS> ) {
+        /([^=]*)=(.*)/ || next;
+        $ENV{$1} = $2 unless "$1" eq "SHELLOPTS";
+    }
+    close( $VARS );
+}
+
+my $iz = "";
+my $cws = "";
+my $milestone = "";
+my $summary = "";
+my $bundle = "";
+my $clone = "";
+my @patches = ();
+
+( my $pwd = `pwd` ) =~ s/\n//;
+
+while (@ARGV) {
+    $opt = shift @ARGV;
+
+    if ( $opt eq "-i" || $opt eq "--iz" ) {
+        $iz = shift @ARGV;
+    }
+    elsif ( $opt eq "-b" ) {
+        $bundle = shift @ARGV;
+    }
+    elsif ( $opt eq "-c" || $opt eq "--cws" ) {
+        $cws = shift @ARGV;
+    }
+    elsif ( $opt eq "-d" ) {
+        $clone = shift @ARGV;
+    }
+    elsif ( $opt eq "-h" || $opt eq "--help" ) {
+        usage();
+    }
+    elsif ( $opt eq "-s" || $opt eq "--summary" ) {
+        $summary = shift @ARGV;
+    }
+    elsif ( $opt eq "-m" || $opt eq "--milestone" ) {
+        $milestone = shift @ARGV;
+        if (! ( $milestone =~ m/^m/ ) ) {
+            $milestone = "m$milestone";
+            print "Re-writing milestone to $milestone\n";
+        }
+    }
+    elsif ( $opt eq "-w" || $opt eq "--mws" ) {
+        $mws = shift @ARGV;
+    }
+    else {
+        my $patch = $opt;
+        if ( $patch =~ /^[^\/]/ ) {
+            $patch = "$pwd/$opt";
+        }
+
+        if ( -f $patch ) {
+            push @patches, $patch;
+        }
+        else {
+            print STDERR "Unable to find patch '$patch'.\n";
+            exit 1;
+        }
+    }
+}
+
+if ( !defined( $cws ) || $cws eq "" ) {
+    print STDERR "Please specify CWS.\n";
+    exit 1;
+}
+if ( !defined( $iz ) || !( $iz =~ /^i?[0-9]+$/ ) ) {
+    print STDERR "Please specify IZ number as XXXX, or iXXXX.\n";
+    exit 1;
+}
+if ( ( $#patches >= 0 ) && ( !defined( $summary ) || $summary eq "" ) ) {
+    print STDERR "Please provide summary.\n";
+    exit 1;
+}
+if ( !defined( $mws ) || $mws eq "" ) {
+    $mws = $default_mws;
+    print "MWS:\t\tnot specified, assuming '$mws'\n";
+}
+if ( !defined( $milestone ) || $milestone eq "" ) {
+    ( $milestone = `cws query -M $mws -c $cws current 2> /dev/null | tail -n 1` ) =~ s/\n//;
+}
+if ( $milestone ne "" ) {
+    print "Milestone:\t$milestone\n";
+}
+else {
+    my $latest = `cws query -M $mws latest 2> /dev/null | tail -n 1`;
+
+    ( $_, $milestone ) = split( ' ', $latest );
+    print "Milestone:\tnot specified, assuming '$milestone'\n";
+}
+
+$iz =~ s/^i//;
+$ENV{'CWS_WORK_STAMP'} = $cws;
+$ENV{'WORK_STAMP'} = $mws;
+
+cws_commit( $mws, $cws, $iz, $summary, $milestone, $clone, $bundle, @patches );
+
+( my $tmp = `pwd` ) =~ s/\n//;
+print "
+Finished, please check '$tmp' that everything is as expected.
+Then:
+
+- Set 'http://www.openoffice.org/issues/show_bug.cgi?id=$iz' to FIXED
+  with a 'Committed to CWS $cws.' comment.
+- Fill the '$cws' info in 'http://eis.services.openoffice.org'.
+
+It's also usually a good thing to mark the patch in the apply file as
+committed to '$cws'.\n";
