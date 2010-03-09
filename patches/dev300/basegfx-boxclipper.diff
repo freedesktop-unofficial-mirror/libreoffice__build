@@ -1,0 +1,3359 @@
+The new boxclipper code from 3.3
+
+From: Thorsten Behrens <tbehrens@novell.com>
+
+
+---
+
+ basegfx/inc/basegfx/polygon/b2dpolygon.hxx     |   10 
+ basegfx/inc/basegfx/polygon/b2dpolypolygon.hxx |    6 
+ basegfx/inc/basegfx/range/b2dmultirange.hxx    |  117 ---
+ basegfx/inc/basegfx/range/b2dpolyrange.hxx     |  139 ++++
+ basegfx/inc/basegfx/range/b2drangeclipper.hxx  |   53 +
+ basegfx/qa/mkpolygons.pl                       |  344 +++++++++
+ basegfx/source/polygon/b2dpolygon.cxx          |  102 ++-
+ basegfx/source/polygon/b2dpolypolygon.cxx      |   40 +
+ basegfx/source/range/b2dmultirange.cxx         |  282 -------
+ basegfx/source/range/b2dpolyrange.cxx          |  371 +++++++++
+ basegfx/source/range/b2drangeclipper.cxx       |  950 ++++++++++++++++++++++++
+ basegfx/source/range/makefile.mk               |    3 
+ basegfx/test/basegfx2d.cxx                     |  248 +-----
+ basegfx/test/boxclipper.cxx                    |  426 +++++++++++
+ basegfx/test/makefile.mk                       |    5 
+ 15 files changed, 2457 insertions(+), 639 deletions(-)
+ delete mode 100644 basegfx/inc/basegfx/range/b2dmultirange.hxx
+ create mode 100644 basegfx/inc/basegfx/range/b2dpolyrange.hxx
+ create mode 100644 basegfx/inc/basegfx/range/b2drangeclipper.hxx
+ create mode 100644 basegfx/qa/mkpolygons.pl
+ delete mode 100644 basegfx/source/range/b2dmultirange.cxx
+ create mode 100644 basegfx/source/range/b2dpolyrange.cxx
+ create mode 100644 basegfx/source/range/b2drangeclipper.cxx
+ create mode 100644 basegfx/test/boxclipper.cxx
+
+
+diff --git basegfx/inc/basegfx/polygon/b2dpolygon.hxx basegfx/inc/basegfx/polygon/b2dpolygon.hxx
+index 067680e..e7f60c1 100644
+--- basegfx/inc/basegfx/polygon/b2dpolygon.hxx
++++ basegfx/inc/basegfx/polygon/b2dpolygon.hxx
+@@ -83,7 +83,7 @@ namespace basegfx
+         sal_uInt32 count() const;
+ 
+         /// Coordinate interface
+-        basegfx::B2DPoint getB2DPoint(sal_uInt32 nIndex) const;
++        const basegfx::B2DPoint& getB2DPoint(sal_uInt32 nIndex) const;
+         void setB2DPoint(sal_uInt32 nIndex, const basegfx::B2DPoint& rValue);
+ 
+         /// Coordinate insert/append
+@@ -201,7 +201,7 @@ namespace basegfx
+             @return
+             The outer range of the bezier curve/polygon
+         */
+-        B2DRange getB2DRange() const;
++        const B2DRange& getB2DRange() const;
+ 
+         /** insert other 2D polygons
+ 
+@@ -261,6 +261,12 @@ namespace basegfx
+ 
+         /// apply transformation given in matrix form
+         void transform(const basegfx::B2DHomMatrix& rMatrix);
++
++        // point iterators
++        const B2DPoint* begin() const;
++        const B2DPoint* end() const;
++        B2DPoint* begin();
++        B2DPoint* end();
+     };
+ } // end of namespace basegfx
+ 
+diff --git basegfx/inc/basegfx/polygon/b2dpolypolygon.hxx basegfx/inc/basegfx/polygon/b2dpolypolygon.hxx
+index 38048f8..1b8ba65 100644
+--- basegfx/inc/basegfx/polygon/b2dpolypolygon.hxx
++++ basegfx/inc/basegfx/polygon/b2dpolypolygon.hxx
+@@ -128,6 +128,12 @@ namespace basegfx
+ 
+         // apply transformation given in matrix form to the polygon
+         void transform(const basegfx::B2DHomMatrix& rMatrix);
++
++        // polygon iterators
++        const B2DPolygon* begin() const;
++        const B2DPolygon* end() const;
++        B2DPolygon* begin();
++        B2DPolygon* end();
+     };
+ } // end of namespace basegfx
+ 
+diff --git basegfx/inc/basegfx/range/b2dmultirange.hxx basegfx/inc/basegfx/range/b2dmultirange.hxx
+deleted file mode 100644
+index 447b0bf..0000000
+--- basegfx/inc/basegfx/range/b2dmultirange.hxx
++++ /dev/null
+@@ -1,117 +0,0 @@
+-/*************************************************************************
+- *
+- * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+- * 
+- * Copyright 2008 by Sun Microsystems, Inc.
+- *
+- * OpenOffice.org - a multi-platform office productivity suite
+- *
+- * $RCSfile: b2dmultirange.hxx,v $
+- * $Revision: 1.6 $
+- *
+- * This file is part of OpenOffice.org.
+- *
+- * OpenOffice.org is free software: you can redistribute it and/or modify
+- * it under the terms of the GNU Lesser General Public License version 3
+- * only, as published by the Free Software Foundation.
+- *
+- * OpenOffice.org is distributed in the hope that it will be useful,
+- * but WITHOUT ANY WARRANTY; without even the implied warranty of
+- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+- * GNU Lesser General Public License version 3 for more details
+- * (a copy is included in the LICENSE file that accompanied this code).
+- *
+- * You should have received a copy of the GNU Lesser General Public License
+- * version 3 along with OpenOffice.org.  If not, see
+- * <http://www.openoffice.org/license.html>
+- * for a copy of the LGPLv3 License.
+- *
+- ************************************************************************/
+-
+-#ifndef _BGFX_RANGE_B2DMULTIRANGE_HXX
+-#define _BGFX_RANGE_B2DMULTIRANGE_HXX
+-
+-#include <o3tl/cow_wrapper.hxx>
+-#include <memory>
+-
+-
+-namespace basegfx
+-{
+-    class B2DTuple;
+-    class B2DRange;
+-    class B2DPolyPolygon;
+-    class ImplB2DMultiRange;
+-
+-    /** Multiple ranges in one object.
+-
+-        This class combines multiple ranges in one object, providing a
+-        total, enclosing range for it.
+-
+-        You can use this class e.g. when updating views containing
+-        rectangular objects. Add each modified object to a
+-        B2DMultiRange, then test each viewable object against
+-        intersection with the multi range.
+-     */
+-    class B2DMultiRange
+-    {
+-    public:
+-        B2DMultiRange();
+-        ~B2DMultiRange();
+-
+-        /** Create a multi range with exactly one containing range
+-         */
+-        explicit B2DMultiRange( const B2DRange& rRange );
+-
+-        B2DMultiRange( const B2DMultiRange& );
+-        B2DMultiRange& operator=( const B2DMultiRange& );
+-
+-        /** Check whether range is empty.
+-
+-            @return true, if this object either contains no ranges at
+-            all, or all contained ranges are empty.
+-         */
+-        bool 			isEmpty() const;
+-
+-        /** Reset to empty.
+-
+-            After this call, the object will not contain any ranges,
+-            and isEmpty() will return true.
+-         */
+-        void 			reset();
+-
+-        /** Test whether given tuple is inside one or more of the
+-            included ranges.
+-         */
+-        bool 			isInside( const B2DTuple& rTuple ) const;
+-
+-        /** Test whether given range is inside one or more of the
+-            included ranges.
+-         */
+-        bool 			isInside( const B2DRange& rRange ) const;
+-
+-        /** Test whether given range overlaps one or more of the
+-            included ranges.
+-         */
+-        bool 			overlaps( const B2DRange& rRange ) const;
+-
+-        /** Add given range to the number of contained ranges.
+-         */
+-        void 			addRange( const B2DRange& rRange );
+-
+-        /** Get overall bound rect for all included ranges.
+-         */ 
+-        B2DRange 		getBounds() const;
+-
+-        /** Request poly-polygon representing the added ranges.
+-
+-            This method creates a poly-polygon, consisting exactly out
+-            of the contained ranges.
+-         */
+-        B2DPolyPolygon	getPolyPolygon() const;
+-
+-    private:
+-        o3tl::cow_wrapper< ImplB2DMultiRange > mpImpl;
+-    };
+-}
+-
+-#endif /* _BGFX_RANGE_B2DMULTIRANGE_HXX */
+diff --git basegfx/inc/basegfx/range/b2dpolyrange.hxx basegfx/inc/basegfx/range/b2dpolyrange.hxx
+new file mode 100644
+index 0000000..0c07dc2
+--- /dev/null
++++ basegfx/inc/basegfx/range/b2dpolyrange.hxx
+@@ -0,0 +1,139 @@
++/*************************************************************************
++ *
++ * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
++ * 
++ * Copyright 2008 by Sun Microsystems, Inc.
++ *
++ * OpenOffice.org - a multi-platform office productivity suite
++ *
++ * $RCSfile: b2dmultirange.hxx,v $
++ * $Revision: 1.6 $
++ *
++ * This file is part of OpenOffice.org.
++ *
++ * OpenOffice.org is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU Lesser General Public License version 3
++ * only, as published by the Free Software Foundation.
++ *
++ * OpenOffice.org is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU Lesser General Public License version 3 for more details
++ * (a copy is included in the LICENSE file that accompanied this code).
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * version 3 along with OpenOffice.org.  If not, see
++ * <http://www.openoffice.org/license.html>
++ * for a copy of the LGPLv3 License.
++ *
++ ************************************************************************/
++
++#ifndef _BGFX_RANGE_B2DPOLYRANGE_HXX
++#define _BGFX_RANGE_B2DPOLYRANGE_HXX
++
++#include <o3tl/cow_wrapper.hxx>
++#include <boost/tuple/tuple.hpp>
++#include <basegfx/vector/b2enums.hxx>
++
++namespace basegfx
++{
++    class B2DTuple;
++    class B2DRange;
++    class B2DPolyPolygon;
++    class ImplB2DPolyRange;
++
++    /** Multiple ranges in one object.
++
++        This class combines multiple ranges in one object, providing a
++        total, enclosing range for it.
++
++        You can use this class e.g. when updating views containing
++        rectangular objects. Add each modified object to a
++        B2DMultiRange, then test each viewable object against
++        intersection with the multi range.
++
++        Similar in spirit to the poly-polygon vs. polygon relationship.
++
++        Note that comparable to polygons, a poly-range can also
++        contain 'holes' - this is encoded via polygon orientation at
++        the poly-polygon, and via explicit flags for the poly-range.
++     */
++    class B2DPolyRange
++    {
++    public:
++        typedef boost::tuple<B2DRange,B2VectorOrientation> ElementType ;
++
++        B2DPolyRange();
++        ~B2DPolyRange();
++
++        /** Create a multi range with exactly one containing range
++         */
++        explicit B2DPolyRange( const ElementType& rElement );
++        B2DPolyRange( const B2DRange& rRange, B2VectorOrientation eOrient );
++        B2DPolyRange( const B2DPolyRange& );
++        B2DPolyRange& operator=( const B2DPolyRange& );
++
++        /// unshare this poly-range with all internally shared instances
++        void makeUnique();
++
++        bool operator==(const B2DPolyRange&) const;
++        bool operator!=(const B2DPolyRange&) const;
++
++        /// Number of included ranges
++        sal_uInt32 count() const;
++
++        ElementType getElement(sal_uInt32 nIndex) const;
++        void        setElement(sal_uInt32 nIndex, const ElementType& rElement );
++        void        setElement(sal_uInt32 nIndex, const B2DRange& rRange, B2VectorOrientation eOrient );
++
++        // insert/append a single range
++        void insertElement(sal_uInt32 nIndex, const ElementType& rElement, sal_uInt32 nCount = 1);
++        void insertElement(sal_uInt32 nIndex, const B2DRange& rRange, B2VectorOrientation eOrient, sal_uInt32 nCount = 1);
++        void appendElement(const ElementType& rElement, sal_uInt32 nCount = 1);
++        void appendElement(const B2DRange& rRange, B2VectorOrientation eOrient, sal_uInt32 nCount = 1);
++
++        // insert/append multiple ranges
++        void insertPolyRange(sal_uInt32 nIndex, const B2DPolyRange&);
++        void appendPolyRange(const B2DPolyRange&);
++
++        void remove(sal_uInt32 nIndex, sal_uInt32 nCount = 1);
++        void clear();
++
++        // flip range orientations - converts holes to solids, and vice versa
++        void flip();
++
++        /** Get overall range
++
++            @return
++            The union range of all contained ranges
++        */
++        B2DRange getBounds() const;
++
++        /** Test whether given tuple is inside one or more of the
++            included ranges. Does *not* use overall range, but checks
++            individually.
++         */
++        bool isInside( const B2DTuple& rTuple ) const;
++
++        /** Test whether given range is inside one or more of the
++            included ranges. Does *not* use overall range, but checks
++            individually.
++         */
++        bool isInside( const B2DRange& rRange ) const;
++
++        /** Test whether given range overlaps one or more of the
++            included ranges. Does *not* use overall range, but checks
++            individually.
++         */
++        bool overlaps( const B2DRange& rRange ) const;
++
++        /** Request a poly-polygon with solved cross-overs
++         */
++        B2DPolyPolygon solveCrossovers() const;
++
++    private:
++        o3tl::cow_wrapper< ImplB2DPolyRange > mpImpl;
++    };
++}
++
++#endif /* _BGFX_RANGE_B2DPOLYRANGE_HXX */
+diff --git basegfx/inc/basegfx/range/b2drangeclipper.hxx basegfx/inc/basegfx/range/b2drangeclipper.hxx
+new file mode 100644
+index 0000000..1b08bbf
+--- /dev/null
++++ basegfx/inc/basegfx/range/b2drangeclipper.hxx
+@@ -0,0 +1,53 @@
++/*************************************************************************
++ *
++ * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
++ * 
++ * Copyright 2008 by Sun Microsystems, Inc.
++ *
++ * OpenOffice.org - a multi-platform office productivity suite
++ *
++ * $RCSfile: b2dmultirange.hxx,v $
++ * $Revision: 1.6 $
++ *
++ * This file is part of OpenOffice.org.
++ *
++ * OpenOffice.org is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU Lesser General Public License version 3
++ * only, as published by the Free Software Foundation.
++ *
++ * OpenOffice.org is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU Lesser General Public License version 3 for more details
++ * (a copy is included in the LICENSE file that accompanied this code).
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * version 3 along with OpenOffice.org.  If not, see
++ * <http://www.openoffice.org/license.html>
++ * for a copy of the LGPLv3 License.
++ *
++ ************************************************************************/
++
++#ifndef _BGFX_RANGE_B2DRANGECLIPPER_HXX
++#define _BGFX_RANGE_B2DRANGECLIPPER_HXX
++
++#include <basegfx/range/b2dpolyrange.hxx>
++#include <vector>
++
++namespace basegfx
++{
++    namespace tools
++    {
++        /** Extract poly-polygon w/o self-intersections from poly-range
++            
++            Similar to the solveCrossovers(const B2DPolyPolygon&)
++            method, this one calculates a self-intersection-free
++            poly-polygon with the same topology, and encoding
++            inside/outsidedness via polygon orientation and layering.
++         */
++        B2DPolyPolygon solveCrossovers(const std::vector<B2DRange>& rRanges, 
++                                       const std::vector<B2VectorOrientation>& rOrientations);
++    }
++}
++
++#endif /* _BGFX_RANGE_B2DRANGECLIPPER_HXX */
+diff --git basegfx/qa/mkpolygons.pl basegfx/qa/mkpolygons.pl
+new file mode 100644
+index 0000000..47ef7ba
+--- /dev/null
++++ basegfx/qa/mkpolygons.pl
+@@ -0,0 +1,344 @@
++:
++eval 'exec perl -wS $0 ${1+"$@"}'
++    if 0; 
++
++#
++# 2009 Copyright Novell, Inc. & Sun Microsystems, Inc.
++#
++# OpenOffice.org is free software: you can redistribute it and/or modify
++# it under the terms of the GNU Lesser General Public License version 3
++# only, as published by the Free Software Foundation.
++#
++
++use	IO::File;
++use	Cwd;
++use File::Spec;
++use File::Spec::Functions;
++use File::Temp;
++use File::Path;
++
++$TempDir = "";
++
++
++# all the XML package generation is a blatant rip from AF's
++# write-calc-doc.pl
++
++
++###############################################################################
++#	Open a file with the given name.
++#	First it is checked if the temporary directory, in which all files for
++#	the document are gathered, is already present and create it if it is not.
++#	Then create the path to the file inside the temporary directory.
++#	Finally open the file and return a file handle to it.
++#
++sub	open_file
++{
++    my	$filename = pop @_;
++    
++    #	Create base directory of temporary directory tree if not alreay
++    #	present.
++    if ($TempDir eq "")
++    {
++        $TempDir = File::Temp::tempdir (CLEANUP => 1);
++    }
++    
++    #	Create the path to the file.
++    my $fullname = File::Spec->catfile ($TempDir, $filename);
++    my ($volume,$directories,$file) = File::Spec->splitpath ($fullname);
++    mkpath (File::Spec->catpath ($volume,$directories,""));
++    
++    #	Open the file and return a file handle to it.
++    return new IO::File ($fullname, "w");
++}
++
++
++###############################################################################
++#	Zip the files in the directory tree into the given file.
++#
++sub	zip_dirtree
++{
++    my	$filename = pop @_;
++    
++    my	$cwd = getcwd;
++    my	$zip_name = $filename;
++    
++    #	We are about to change the directory.
++    #	Therefore create an absolute pathname for the zip archive.
++    
++    #	First transfer the drive from $cwd to $zip_name.  This is a
++    #	workaround for a bug in file_name_is_absolute which thinks
++    #	the the path \bla is an absolute path under DOS.
++    my ($volume,$directories,$file) = File::Spec->splitpath ($zip_name);
++    my ($volume_cwd,$directories_cwd,$file_cwd) = File::Spec->splitpath ($cwd);
++    $volume = $volume_cwd if ($volume eq "");
++    $zip_name = File::Spec->catpath ($volume,$directories,$file);
++    
++    #	Add the current working directory to a relative path.
++    if ( ! file_name_is_absolute ($zip_name))
++    {
++        $zip_name = File::Spec->catfile ($cwd, $zip_name);
++        
++        #	Try everything to clean up the name.
++        $zip_name = File::Spec->rel2abs ($filename);
++        $zip_name = File::Spec->canonpath ($zip_name);
++        
++        #	Remove .. directories from the middle of the path.
++        while ($zip_name =~ /\/[^\/][^\.\/][^\/]*\/\.\.\//)
++        {
++            $zip_name = $` . "/" . $';
++        }
++    }
++
++    #	Just in case the zip program gets confused by an existing file with the
++    #	same name as the one to be written that file is removed first.
++    if ( -e $filename)
++    {
++        if (unlink ($filename) == 0)
++        {
++            print "Existing file $filename could not be deleted.\n";
++            print "Please close the application that uses it, then try again.\n";
++            return;
++        }
++    }
++    
++    #	Finally create the zip file.  First change into the temporary directory
++    #	so that the resulting zip file contains only paths relative to it.
++    print "zipping [$ZipCmd $ZipFlags $zip_name *]\n";
++    chdir ($TempDir);
++    system ("$ZipCmd $ZipFlags $zip_name *");
++    chdir ($cwd);
++}
++
++
++sub writeHeader
++{
++    print $OUT qq~<?xml version="1.0" encoding="UTF-8"?>
++
++<office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:meta="urn:oasis:names:tc:opendocument:xmlns:meta:1.0" xmlns:number="urn:oasis:names:tc:opendocument:xmlns:datastyle:1.0" xmlns:presentation="urn:oasis:names:tc:opendocument:xmlns:presentation:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0" xmlns:chart="urn:oasis:names:tc:opendocument:xmlns:chart:1.0" xmlns:dr3d="urn:oasis:names:tc:opendocument:xmlns:dr3d:1.0" xmlns:math="http://www.w3.org/1998/Math/MathML" xmlns:form="urn:oasis:names:tc:opendocument:xmlns:form:1.0" xmlns:script="urn:oasis:names:tc:opendocument:xmlns:script:1.0" xmlns:ooo="http://openoffice.org/2004/office" xmlns:ooow="http://openoffice.org/2004/writer" xmlns:oooc="http://openoffice.org/2004/calc" xmlns:dom="http://www.w3.org/2001/xml-events" xmlns:xforms="http://www.w3.org/2002/xforms" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:smil="urn:oasis:names:tc:opendocument:xmlns:smil-compatible:1.0" xmlns:anim="urn:oasis:names:tc:opendocument:xmlns:animation:1.0" office:version="1.0">
++ <office:scripts/>
++ <office:automatic-styles>
++  <style:style style:name="dp1" style:family="drawing-page">
++   <style:drawing-page-properties presentation:background-visible="true" presentation:background-objects-visible="true" presentation:display-footer="true" presentation:display-page-number="false" presentation:display-date-time="true"/>
++  </style:style>
++  <style:style style:name="gr1" style:family="graphic" style:parent-style-name="standard">
++   <style:graphic-properties draw:textarea-horizontal-align="center" draw:fill="none" draw:stroke="none" draw:textarea-vertical-align="middle"/>
++  </style:style>
++  <style:style style:name="gr2" style:family="graphic" style:parent-style-name="standard">
++   <style:graphic-properties draw:textarea-horizontal-align="center" draw:textarea-vertical-align="middle"/>
++  </style:style>
++  <style:style style:name="pr1" style:family="presentation" style:parent-style-name="Default-title">
++   <style:graphic-properties draw:fill-color="#ffffff" draw:auto-grow-height="true" fo:min-height="3.508cm"/>
++  </style:style>
++  <style:style style:name="pr2" style:family="presentation" style:parent-style-name="Default-notes">
++   <style:graphic-properties draw:fill-color="#ffffff" draw:auto-grow-height="true" fo:min-height="13.367cm"/>
++  </style:style>
++  <style:style style:name="P1" style:family="paragraph">
++   <style:paragraph-properties fo:margin-left="0cm" fo:margin-right="0cm" fo:text-indent="0cm"/>
++  </style:style>
++  <style:style style:name="P2" style:family="paragraph">
++   <style:paragraph-properties fo:margin-left="0.6cm" fo:margin-right="0cm" fo:text-indent="-0.6cm"/>
++  </style:style>
++  <text:list-style style:name="L1">
++   <text:list-level-style-bullet text:level="1" text:bullet-char="●">
++    <style:text-properties fo:font-family="StarSymbol" style:use-window-font-color="true" fo:font-size="45%"/>
++   </text:list-level-style-bullet>
++   <text:list-level-style-bullet text:level="2" text:bullet-char="●">
++    <style:list-level-properties text:space-before="0.6cm" text:min-label-width="0.6cm"/>
++    <style:text-properties fo:font-family="StarSymbol" style:use-window-font-color="true" fo:font-size="45%"/>
++   </text:list-level-style-bullet>
++   <text:list-level-style-bullet text:level="3" text:bullet-char="●">
++    <style:list-level-properties text:space-before="1.2cm" text:min-label-width="0.6cm"/>
++    <style:text-properties fo:font-family="StarSymbol" style:use-window-font-color="true" fo:font-size="45%"/>
++   </text:list-level-style-bullet>
++   <text:list-level-style-bullet text:level="4" text:bullet-char="●">
++    <style:list-level-properties text:space-before="1.8cm" text:min-label-width="0.6cm"/>
++    <style:text-properties fo:font-family="StarSymbol" style:use-window-font-color="true" fo:font-size="45%"/>
++   </text:list-level-style-bullet>
++   <text:list-level-style-bullet text:level="5" text:bullet-char="●">
++    <style:list-level-properties text:space-before="2.4cm" text:min-label-width="0.6cm"/>
++    <style:text-properties fo:font-family="StarSymbol" style:use-window-font-color="true" fo:font-size="45%"/>
++   </text:list-level-style-bullet>
++   <text:list-level-style-bullet text:level="6" text:bullet-char="●">
++    <style:list-level-properties text:space-before="3cm" text:min-label-width="0.6cm"/>
++    <style:text-properties fo:font-family="StarSymbol" style:use-window-font-color="true" fo:font-size="45%"/>
++   </text:list-level-style-bullet>
++   <text:list-level-style-bullet text:level="7" text:bullet-char="●">
++    <style:list-level-properties text:space-before="3.6cm" text:min-label-width="0.6cm"/>
++    <style:text-properties fo:font-family="StarSymbol" style:use-window-font-color="true" fo:font-size="45%"/>
++   </text:list-level-style-bullet>
++   <text:list-level-style-bullet text:level="8" text:bullet-char="●">
++    <style:list-level-properties text:space-before="4.2cm" text:min-label-width="0.6cm"/>
++    <style:text-properties fo:font-family="StarSymbol" style:use-window-font-color="true" fo:font-size="45%"/>
++   </text:list-level-style-bullet>
++   <text:list-level-style-bullet text:level="9" text:bullet-char="●">
++    <style:list-level-properties text:space-before="4.8cm" text:min-label-width="0.6cm"/>
++    <style:text-properties fo:font-family="StarSymbol" style:use-window-font-color="true" fo:font-size="45%"/>
++   </text:list-level-style-bullet>
++  </text:list-style>
++ </office:automatic-styles>
++ <office:body>
++  <office:presentation>
++~;
++
++}
++
++sub writeSlideHeader
++{
++    my $titleText = pop @_;
++    my $slideNum = pop @_;
++
++    print $OUT "    <draw:page draw:name=\"page1\" draw:style-name=\"dp1\" draw:master-page-name=\"Default\">\n";
++    print $OUT "     <office:forms form:automatic-focus=\"false\" form:apply-design-mode=\"false\"/>\n";
++    print $OUT "     <draw:rect draw:style-name=\"gr1\" draw:text-style-name=\"P1\" draw:id=\"id$slideNum\" draw:layer=\"layout\" svg:width=\"17.5cm\" svg:height=\"6cm\" svg:x=\"5cm\" svg:y=\"4cm\">\n";
++    print $OUT "      <text:p text:style-name=\"P2\">Slide: $slideNum</text:p>\n";
++    print $OUT "      <text:p text:style-name=\"P2\">Path: $titleText</text:p>\n";
++    print $OUT "     </draw:rect>\n";
++}
++
++
++sub writeSlideFooter
++{
++    print $OUT "    <presentation:notes draw:style-name=\"dp1\">\n";
++    print $OUT "     <draw:page-thumbnail draw:style-name=\"gr1\" draw:layer=\"layout\" svg:width=\"14.851cm\" svg:height=\"11.138cm\" svg:x=\"3.068cm\" svg:y=\"2.257cm\" draw:page-number=\"1\" presentation:class=\"page\"/>\n";
++    print $OUT "     <draw:frame presentation:style-name=\"pr3\" draw:layer=\"layout\" svg:width=\"16.79cm\" svg:height=\"13.116cm\" svg:x=\"2.098cm\" svg:y=\"14.109cm\" presentation:class=\"notes\" presentation:placeholder=\"true\">\n";
++    print $OUT "      <draw:text-box/>\n";
++    print $OUT "     </draw:frame>\n";
++    print $OUT "    </presentation:notes>\n";
++    print $OUT "   </draw:page>\n";
++}
++
++sub writeFooter
++{
++    print $OUT qq~   <presentation:settings presentation:full-screen="false"/>
++  </office:presentation>
++ </office:body>
++</office:document-content>
++~;
++
++}
++
++sub writePath
++{
++    my $pathAry = pop @_;
++    my $path = $pathAry->[1];
++    my $viewBox = $pathAry->[0];
++
++    print $OUT "       <draw:path draw:style-name=\"gr2\" draw:text-style-name=\"P1\" draw:layer=\"layout\" svg:width=\"10cm\" svg:height=\"10cm\" svg:x=\"5cm\" svg:y=\"5cm\" svg:viewBox=\"";
++    print $OUT $viewBox;
++    print $OUT "\" svg:d=\"";
++    print $OUT $path;
++    print $OUT "\">\n";
++    print $OUT "         <text:p/>\n";
++    print $OUT "       </draw:path>\n";
++}
++
++sub writeManifest
++{
++    my $outFile = open_file("META-INF/manifest.xml");
++
++    print $outFile qq~<?xml version="1.0" encoding="UTF-8"?>
++<!DOCTYPE manifest:manifest PUBLIC "-//OpenOffice.org//DTD Manifest 1.0//EN" "Manifest.dtd">
++<manifest:manifest xmlns:manifest="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0">
++ <manifest:file-entry manifest:media-type="application/vnd.oasis.opendocument.presentation" manifest:full-path="/"/>
++ <manifest:file-entry manifest:media-type="text/xml" manifest:full-path="content.xml"/>
++</manifest:manifest>
++~;
++
++    $outFile->close;
++}
++
++
++###############################################################################
++#	Print usage information.
++#
++sub	usage	()
++{
++    print <<END_OF_USAGE;
++usage: $0 <option>* [<SvgD-values>]
++
++output-file-name defaults to polygons.odp.
++
++         -h    Print this usage information.
++         -o    output-file-name
++END_OF_USAGE
++}
++
++###############################################################################
++#	Process the command line.
++#
++sub	process_command_line
++{
++    foreach (@ARGV)
++    {
++        if (/^-h/)
++        {
++            usage;
++            exit 0;
++        }
++    }
++    
++    $global_output_name = "polygons.odp";
++    my	$j = 0, $noMoreOptions = 0;
++    for (my $i=0; $i<$#ARGV; $i++)
++    {
++        if ( !$noMoreOptions and $ARGV[$i] eq "-o")
++        {
++			$i++;
++			$global_output_name = $ARGV[$i];
++        }
++        elsif ( !$noMoreOptions and $ARGV[$i] eq "--")
++        {
++			$noMoreOptions = 1;
++        }
++        elsif ( !$noMoreOptions and $ARGV[$i] =~ /^-/)
++        {
++            print "Unknown option $ARGV[$i]\n";
++            usage;
++            exit 1;
++        }
++        else
++        {
++            push(@paths, [$ARGV[$i],$ARGV[$i+1]]);
++			$i++;
++        }
++    }
++
++    print "output to $global_output_name\n";
++}
++
++###############################################################################
++#	Main
++###############################################################################
++
++$ZipCmd = $ENV{LOG_FILE_ZIP_CMD};
++$ZipFlags = $ENV{LOG_FILE_ZIP_FLAGS};
++#	Provide default values for the zip command and it's flags.
++if ( ! defined $ZipCmd)
++{
++    $ZipCmd = "zip" unless defined $ZipCmd;
++    $ZipFlags = "-r -q" unless defined $ZipFlags;
++}
++
++process_command_line();
++
++writeManifest();
++
++$OUT = open_file( "content.xml" );
++
++writeHeader();
++
++$pathNum=0;
++foreach $path (@paths)
++{
++	writeSlideHeader($pathNum, $path->[1]);
++	writePath($path);
++	writeSlideFooter();
++	$pathNum++;
++}
++
++writeFooter();
++
++$OUT->close;
++
++zip_dirtree ($global_output_name);
++
+diff --git basegfx/source/polygon/b2dpolygon.cxx basegfx/source/polygon/b2dpolygon.cxx
+index 02a25e6..c30d070 100644
+--- basegfx/source/polygon/b2dpolygon.cxx
++++ basegfx/source/polygon/b2dpolygon.cxx
+@@ -44,38 +44,24 @@
+ 
+ //////////////////////////////////////////////////////////////////////////////
+ 
+-class CoordinateData2D
++struct CoordinateData2D : public basegfx::B2DPoint
+ {
+-    basegfx::B2DPoint								maPoint;
+-
+ public:
+-    CoordinateData2D()
+-    :	maPoint() 
+-    {}
+-    
++    CoordinateData2D() {}
++
+     explicit CoordinateData2D(const basegfx::B2DPoint& rData) 
+-    :	maPoint(rData) 
++    :	B2DPoint(rData) 
+     {}
+ 
+-    const basegfx::B2DPoint& getCoordinate() const 
+-    { 
+-        return maPoint; 
++    CoordinateData2D& operator=(const basegfx::B2DPoint& rData)
++    {
++        B2DPoint::operator=(rData);
++        return *this;
+     }
+ 
+-    void setCoordinate(const basegfx::B2DPoint& rValue) 
+-    { 
+-        if(rValue != maPoint) 
+-            maPoint = rValue; 
+-    }
+-    
+-    bool operator==(const CoordinateData2D& rData ) const 
+-    {	
+-        return (maPoint == rData.getCoordinate()); 
+-    }
+-    
+     void transform(const basegfx::B2DHomMatrix& rMatrix) 
+     { 
+-        maPoint *= rMatrix; 
++        *this *= rMatrix; 
+     }
+ };
+ 
+@@ -115,12 +101,12 @@ public:
+ 
+     const basegfx::B2DPoint& getCoordinate(sal_uInt32 nIndex) const
+     {
+-        return maVector[nIndex].getCoordinate();
++        return maVector[nIndex];
+     }
+ 
+     void setCoordinate(sal_uInt32 nIndex, const basegfx::B2DPoint& rValue)
+     {
+-        maVector[nIndex].setCoordinate(rValue);
++        maVector[nIndex] = rValue;
+     }
+ 
+     void insert(sal_uInt32 nIndex, const CoordinateData2D& rValue, sal_uInt32 nCount)
+@@ -221,6 +207,26 @@ public:
+             aStart->transform(rMatrix);
+         }
+     }
++
++    const basegfx::B2DPoint* begin() const
++    {
++        return &maVector.front();
++    }
++
++    const basegfx::B2DPoint* end() const
++    {
++        return &maVector[maVector.size()];
++    }
++
++    basegfx::B2DPoint* begin()
++    {
++        return &maVector.front();
++    }
++
++    basegfx::B2DPoint* end()
++    {
++        return &maVector[maVector.size()];
++    }
+ };
+ 
+ //////////////////////////////////////////////////////////////////////////////
+@@ -1113,6 +1119,28 @@ public:
+             maPoints.transform(rMatrix);
+         }
+     }
++
++    const basegfx::B2DPoint* begin() const
++    {
++        return maPoints.begin();
++    }
++
++    const basegfx::B2DPoint* end() const
++    {
++        return maPoints.end();
++    }
++
++    basegfx::B2DPoint* begin()
++    {
++       mpBufferedData.reset();
++       return maPoints.begin();
++    }
++
++    basegfx::B2DPoint* end()
++    {
++        mpBufferedData.reset();
++        return maPoints.end();
++    }
+ };
+ 
+ //////////////////////////////////////////////////////////////////////////////
+@@ -1173,7 +1201,7 @@ namespace basegfx
+         return mpPolygon->count();
+     }
+ 
+-    B2DPoint B2DPolygon::getB2DPoint(sal_uInt32 nIndex) const
++    const B2DPoint& B2DPolygon::getB2DPoint(sal_uInt32 nIndex) const
+     {
+         OSL_ENSURE(nIndex < mpPolygon->count(), "B2DPolygon access outside range (!)");
+         
+@@ -1432,7 +1460,7 @@ namespace basegfx
+         return mpPolygon->getDefaultAdaptiveSubdivision(*this);
+     }
+ 
+-    B2DRange B2DPolygon::getB2DRange() const
++    const B2DRange& B2DPolygon::getB2DRange() const
+     {
+         return mpPolygon->getB2DRange(*this);
+     }
+@@ -1540,6 +1568,26 @@ namespace basegfx
+             mpPolygon->transform(rMatrix);
+         }
+     }
++
++    const B2DPoint* B2DPolygon::begin() const
++    {
++        return mpPolygon->begin();
++    }
++
++    const B2DPoint* B2DPolygon::end() const
++    {
++        return mpPolygon->end();
++    }
++
++    B2DPoint* B2DPolygon::begin()
++    {
++        return mpPolygon->begin();
++    }
++
++    B2DPoint* B2DPolygon::end()
++    {
++        return mpPolygon->end();
++    }
+ } // end of namespace basegfx
+ 
+ //////////////////////////////////////////////////////////////////////////////
+diff --git basegfx/source/polygon/b2dpolypolygon.cxx basegfx/source/polygon/b2dpolypolygon.cxx
+index 67cd079..4be35f7 100644
+--- basegfx/source/polygon/b2dpolypolygon.cxx
++++ basegfx/source/polygon/b2dpolypolygon.cxx
+@@ -166,6 +166,26 @@ public:
+                        maPolygons.end(),
+                        std::mem_fun_ref( &basegfx::B2DPolygon::makeUnique ));
+     }
++
++    const basegfx::B2DPolygon* begin() const
++    {
++        return &maPolygons.front();
++    }
++
++    const basegfx::B2DPolygon* end() const
++    {
++        return &maPolygons[maPolygons.size()];
++    }
++
++    basegfx::B2DPolygon* begin()
++    {
++        return &maPolygons.front();
++    }
++
++    basegfx::B2DPolygon* end()
++    {
++        return &maPolygons[maPolygons.size()];
++    }
+ };
+ 
+ //////////////////////////////////////////////////////////////////////////////
+@@ -378,6 +398,26 @@ namespace basegfx
+             mpPolyPolygon->transform(rMatrix);
+         }
+     }
++
++    const B2DPolygon* B2DPolyPolygon::begin() const
++    {
++        return mpPolyPolygon->begin();
++    }
++
++    const B2DPolygon* B2DPolyPolygon::end() const
++    {
++        return mpPolyPolygon->end();
++    }
++
++    B2DPolygon* B2DPolyPolygon::begin()
++    {
++        return mpPolyPolygon->begin();
++    }
++
++    B2DPolygon* B2DPolyPolygon::end()
++    {
++        return mpPolyPolygon->end();
++    }
+ } // end of namespace basegfx
+ 
+ // eof
+diff --git basegfx/source/range/b2dmultirange.cxx basegfx/source/range/b2dmultirange.cxx
+deleted file mode 100644
+index 738c5d1..0000000
+--- basegfx/source/range/b2dmultirange.cxx
++++ /dev/null
+@@ -1,282 +0,0 @@
+-/*************************************************************************
+- *
+- * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+- * 
+- * Copyright 2008 by Sun Microsystems, Inc.
+- *
+- * OpenOffice.org - a multi-platform office productivity suite
+- *
+- * $RCSfile: b2dmultirange.cxx,v $
+- * $Revision: 1.8 $
+- *
+- * This file is part of OpenOffice.org.
+- *
+- * OpenOffice.org is free software: you can redistribute it and/or modify
+- * it under the terms of the GNU Lesser General Public License version 3
+- * only, as published by the Free Software Foundation.
+- *
+- * OpenOffice.org is distributed in the hope that it will be useful,
+- * but WITHOUT ANY WARRANTY; without even the implied warranty of
+- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+- * GNU Lesser General Public License version 3 for more details
+- * (a copy is included in the LICENSE file that accompanied this code).
+- *
+- * You should have received a copy of the GNU Lesser General Public License
+- * version 3 along with OpenOffice.org.  If not, see
+- * <http://www.openoffice.org/license.html>
+- * for a copy of the LGPLv3 License.
+- *
+- ************************************************************************/
+-
+-// MARKER(update_precomp.py): autogen include statement, do not remove
+-#include "precompiled_basegfx.hxx"
+-#include <basegfx/range/b2drange.hxx>
+-#include <basegfx/tuple/b2dtuple.hxx>
+-#include <basegfx/polygon/b2dpolypolygon.hxx>
+-#include <basegfx/range/b2dmultirange.hxx>
+-#include <basegfx/polygon/b2dpolygontools.hxx>
+-#include <basegfx/polygon/b2dpolypolygontools.hxx>
+-#include <basegfx/polygon/b2dpolypolygoncutter.hxx>
+-#include <boost/bind.hpp>
+-#include <boost/mem_fn.hpp>
+-#include <algorithm>
+-#include <vector>
+-
+-
+-namespace basegfx
+-{
+-    class ImplB2DMultiRange
+-    {
+-    public:
+-        ImplB2DMultiRange() :
+-            maBounds(),
+-            maRanges()
+-        {
+-        }
+-
+-        explicit ImplB2DMultiRange( const B2DRange& rRange ) :
+-            maBounds(),
+-            maRanges( 1, rRange )
+-        {
+-        }
+-
+-        bool isEmpty() const
+-        {
+-            // no ranges at all, or all ranges empty
+-            return maRanges.empty() || 
+-                ::std::count_if( maRanges.begin(), 
+-                                 maRanges.end(), 
+-                                 ::boost::mem_fn( &B2DRange::isEmpty ) )
+-                == static_cast<VectorOfRanges::difference_type>(maRanges.size());
+-        }
+-
+-        void reset()
+-        {
+-            // swap in empty vector
+-            VectorOfRanges aTmp;
+-            maRanges.swap( aTmp );
+-
+-            maBounds.reset();
+-        }
+-
+-        template< typename ValueType > bool isInside( const ValueType& rValue ) const
+-        {
+-            if( !maBounds.isInside( rValue ) )
+-                return false;
+-
+-            // cannot use ::boost::bind here, since isInside is overloaded.
+-            // It is currently not possible to resolve the overload
+-            // by considering one of the other template arguments.
+-            VectorOfRanges::const_iterator 		 aCurr( maRanges.begin() );
+-            const VectorOfRanges::const_iterator aEnd ( maRanges.end() );
+-            while( aCurr != aEnd )
+-                if( aCurr->isInside( rValue ) )
+-                    return true;
+-
+-            return false;
+-        }
+-
+-        bool overlaps( const B2DRange& rRange ) const
+-        {
+-            if( !maBounds.overlaps( rRange ) )
+-                return false;
+-
+-            const VectorOfRanges::const_iterator aEnd( maRanges.end() );
+-            return ::std::find_if( maRanges.begin(), 
+-                                   aEnd,
+-                                   ::boost::bind<bool>( ::boost::mem_fn( &B2DRange::overlaps ),
+-                                                        _1,
+-                                                        rRange ) ) != aEnd;
+-        }
+-
+-        void addRange( const B2DRange& rRange )
+-        {
+-            maRanges.push_back( rRange );
+-            maBounds.expand( rRange );
+-        }
+-
+-        B2DRange getBounds() const
+-        {
+-            return maBounds;
+-        }
+-
+-        B2DPolyPolygon getPolyPolygon() const
+-        {
+-            B2DPolyPolygon aRes;
+-
+-            // Make range vector unique ( have to avoid duplicate
+-            // rectangles. The polygon clipper will return an empty
+-            // result in this case).
+-            VectorOfRanges	aUniqueRanges;
+-            aUniqueRanges.reserve( maRanges.size() );
+-
+-            VectorOfRanges::const_iterator 		 aCurr( maRanges.begin() );
+-            const VectorOfRanges::const_iterator aEnd ( maRanges.end() );
+-            while( aCurr != aEnd )
+-            {
+-                // TODO(F3): It's plain wasted resources to apply a
+-                // general clipping algorithm to the problem at
+-                // hand. Go for a dedicated, scan-line-based approach.
+-                VectorOfRanges::const_iterator aCurrScan( aCurr+1 );
+-                VectorOfRanges::const_iterator aFound( aEnd );
+-                while( aCurrScan != aEnd )
+-                {
+-                    if( aCurrScan->equal( *aCurr ) ||
+-                        aCurrScan->isInside( *aCurr ) )
+-                    {
+-                        // current probe is equal to aCurr, or
+-                        // completely contains aCurr. Thus, stop
+-                        // searching, because aCurr is definitely not
+-                        // a member of the unique rect list
+-                        aFound = aCurrScan;
+-                        break;
+-                    }
+-
+-                    ++aCurrScan;
+-                }
+-
+-                if( aFound == aEnd )
+-                {
+-                    // check whether aCurr is fully contained in one
+-                    // of the already added rects. If yes, we can skip
+-                    // it.
+-                    bool bUnique( true );
+-                    VectorOfRanges::const_iterator aCurrUnique( aUniqueRanges.begin() );
+-                    VectorOfRanges::const_iterator aEndUnique ( aUniqueRanges.end() );                    
+-                    while( aCurrUnique != aEndUnique )
+-                    {
+-                        if( aCurrUnique->isInside( *aCurr ) )
+-                        {
+-                            // fully contained, no need to add
+-                            bUnique = false;
+-                            break; 
+-                        }
+-
+-                        ++aCurrUnique;
+-                    }
+-
+-                    if( bUnique )
+-                        aUniqueRanges.push_back( *aCurr );
+-                }
+-
+-                ++aCurr;
+-            }            
+-
+-            VectorOfRanges::const_iterator 		 aCurrUnique( aUniqueRanges.begin() );
+-            const VectorOfRanges::const_iterator aEndUnique ( aUniqueRanges.end() );
+-            while( aCurrUnique != aEndUnique )
+-            {
+-                // simply merge all unique parts (OR)
+-                aRes.append( tools::createPolygonFromRect( *aCurrUnique++ ) );
+-            }            
+-
+-            // remove redundant intersections. Note: since all added
+-            // rectangles are positively oriented, this method cannot
+-            // generate any holes.
+-            aRes = basegfx::tools::solveCrossovers(aRes);
+-            aRes = basegfx::tools::stripNeutralPolygons(aRes);
+-            aRes = basegfx::tools::stripDispensablePolygons(aRes, false);
+-
+-            return aRes;
+-        }
+-
+-    private:
+-        typedef ::std::vector< B2DRange > 	VectorOfRanges;
+-
+-        B2DRange		maBounds;
+-        VectorOfRanges	maRanges;
+-    };
+-
+-
+-    // ====================================================================
+-
+-
+-    B2DMultiRange::B2DMultiRange() :
+-        mpImpl()
+-    {
+-    }
+-
+-    B2DMultiRange::B2DMultiRange( const B2DRange& rRange ) :
+-        mpImpl( ImplB2DMultiRange( rRange ) )
+-    {
+-    }
+-
+-    B2DMultiRange::~B2DMultiRange()
+-    {
+-        // otherwise, ImplB2DMultiRange would be an incomplete type
+-    }
+-
+-    B2DMultiRange::B2DMultiRange( const B2DMultiRange& rSrc ) : 
+-        mpImpl( rSrc.mpImpl )
+-    {
+-    }
+-
+-    B2DMultiRange& B2DMultiRange::operator=( const B2DMultiRange& rSrc )
+-    {
+-        mpImpl = rSrc.mpImpl;
+-        return *this;
+-    }
+-
+-    bool B2DMultiRange::isEmpty() const
+-    {
+-        return mpImpl->isEmpty();
+-    }
+-
+-    void B2DMultiRange::reset()
+-    {
+-        mpImpl->reset();
+-    }
+-
+-    bool B2DMultiRange::isInside( const B2DTuple& rTuple ) const
+-    {
+-        return mpImpl->isInside( rTuple );
+-    }
+-
+-    bool B2DMultiRange::isInside( const B2DRange& rRange ) const
+-    {
+-        return mpImpl->isInside( rRange );
+-    }
+-
+-    bool B2DMultiRange::overlaps( const B2DRange& rRange ) const
+-    {
+-        return mpImpl->overlaps( rRange );
+-    }
+-
+-    void B2DMultiRange::addRange( const B2DRange& rRange )
+-    {
+-        mpImpl->addRange( rRange );
+-    }
+-
+-    B2DRange B2DMultiRange::getBounds() const
+-    {
+-        return mpImpl->getBounds();
+-    }
+-
+-    B2DPolyPolygon B2DMultiRange::getPolyPolygon() const
+-    {
+-        return mpImpl->getPolyPolygon();
+-    }
+-
+-} // end of namespace basegfx
+-
+-// eof
+diff --git basegfx/source/range/b2dpolyrange.cxx basegfx/source/range/b2dpolyrange.cxx
+new file mode 100644
+index 0000000..ae94f14
+--- /dev/null
++++ basegfx/source/range/b2dpolyrange.cxx
+@@ -0,0 +1,371 @@
++/*************************************************************************
++ *
++ * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
++ * 
++ * Copyright 2008 by Sun Microsystems, Inc.
++ *
++ * OpenOffice.org - a multi-platform office productivity suite
++ *
++ * $RCSfile: b2dmultirange.cxx,v $
++ * $Revision: 1.8 $
++ *
++ * This file is part of OpenOffice.org.
++ *
++ * OpenOffice.org is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU Lesser General Public License version 3
++ * only, as published by the Free Software Foundation.
++ *
++ * OpenOffice.org is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU Lesser General Public License version 3 for more details
++ * (a copy is included in the LICENSE file that accompanied this code).
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * version 3 along with OpenOffice.org.  If not, see
++ * <http://www.openoffice.org/license.html>
++ * for a copy of the LGPLv3 License.
++ *
++ ************************************************************************/
++
++// MARKER(update_precomp.py): autogen include statement, do not remove
++#include "precompiled_basegfx.hxx"
++#include <basegfx/range/b2dpolyrange.hxx>
++
++#include <basegfx/range/b2drange.hxx>
++#include <basegfx/range/b2drangeclipper.hxx>
++#include <basegfx/tuple/b2dtuple.hxx>
++#include <basegfx/polygon/b2dpolypolygon.hxx>
++
++#include <boost/bind.hpp>
++#include <boost/tuple/tuple.hpp>
++#include <algorithm>
++#include <vector>
++
++static basegfx::B2VectorOrientation flipOrientation( 
++    basegfx::B2VectorOrientation eOrient)
++{
++    return eOrient == basegfx::ORIENTATION_POSITIVE ? 
++        basegfx::ORIENTATION_NEGATIVE : basegfx::ORIENTATION_POSITIVE;
++}
++
++namespace basegfx
++{
++    class ImplB2DPolyRange
++    {
++        void updateBounds()
++        {
++            maBounds.reset();
++            std::for_each(maRanges.begin(),
++                          maRanges.end(),
++                          boost::bind(
++                              (void (B2DRange::*)(const B2DRange&))(
++                 &B2DRange::expand),
++                              boost::ref(maBounds),
++                              _1));
++        }
++
++    public:
++        ImplB2DPolyRange() :
++            maBounds(),
++            maRanges(),
++            maOrient()
++        {}
++
++        explicit ImplB2DPolyRange( const B2DPolyRange::ElementType& rElem ) :
++            maBounds( boost::get<0>(rElem) ),
++            maRanges( 1, boost::get<0>(rElem) ),
++            maOrient( 1, boost::get<1>(rElem) )
++        {}
++
++        explicit ImplB2DPolyRange( const B2DRange& rRange, B2VectorOrientation eOrient ) :
++            maBounds( rRange ),
++            maRanges( 1, rRange ),
++            maOrient( 1, eOrient )
++        {}
++
++        bool operator==(const ImplB2DPolyRange& rRHS) const
++        {
++            return maRanges == rRHS.maRanges && maOrient == rRHS.maOrient;
++        }
++
++        sal_uInt32 count() const
++        {
++            return maRanges.size();
++        }
++
++        B2DPolyRange::ElementType getElement(sal_uInt32 nIndex) const
++        {
++            return boost::make_tuple(maRanges[nIndex],
++                                     maOrient[nIndex]);
++        }
++
++        void setElement(sal_uInt32 nIndex, const B2DPolyRange::ElementType& rElement )
++        {
++            maRanges[nIndex] = boost::get<0>(rElement);
++            maOrient[nIndex] = boost::get<1>(rElement);
++            updateBounds();
++        }
++
++        void setElement(sal_uInt32 nIndex, const B2DRange& rRange, B2VectorOrientation eOrient )
++        {
++            maRanges[nIndex] = rRange;
++            maOrient[nIndex] = eOrient;
++            updateBounds();
++        }
++
++        void insertElement(sal_uInt32 nIndex, const B2DPolyRange::ElementType& rElement, sal_uInt32 nCount)
++        {
++            maRanges.insert(maRanges.begin()+nIndex, nCount, boost::get<0>(rElement));
++            maOrient.insert(maOrient.begin()+nIndex, nCount, boost::get<1>(rElement));
++            maBounds.expand(boost::get<0>(rElement));
++        }
++
++        void insertElement(sal_uInt32 nIndex, const B2DRange& rRange, B2VectorOrientation eOrient, sal_uInt32 nCount)
++        {
++            maRanges.insert(maRanges.begin()+nIndex, nCount, rRange);
++            maOrient.insert(maOrient.begin()+nIndex, nCount, eOrient);
++            maBounds.expand(rRange);
++        }
++
++        void appendElement(const B2DPolyRange::ElementType& rElement, sal_uInt32 nCount)
++        {
++            maRanges.insert(maRanges.end(), nCount, boost::get<0>(rElement));
++            maOrient.insert(maOrient.end(), nCount, boost::get<1>(rElement));
++            maBounds.expand(boost::get<0>(rElement));
++        }
++
++        void appendElement(const B2DRange& rRange, B2VectorOrientation eOrient, sal_uInt32 nCount)
++        {
++            maRanges.insert(maRanges.end(), nCount, rRange);
++            maOrient.insert(maOrient.end(), nCount, eOrient);
++            maBounds.expand(rRange);
++        }
++
++        void insertPolyRange(sal_uInt32 nIndex, const ImplB2DPolyRange& rPolyRange)
++        {
++            maRanges.insert(maRanges.begin()+nIndex, rPolyRange.maRanges.begin(), rPolyRange.maRanges.end());
++            maOrient.insert(maOrient.begin()+nIndex, rPolyRange.maOrient.begin(), rPolyRange.maOrient.end());
++            updateBounds();
++        }
++
++        void appendPolyRange(const ImplB2DPolyRange& rPolyRange)
++        {
++            maRanges.insert(maRanges.end(), 
++                            rPolyRange.maRanges.begin(), 
++                            rPolyRange.maRanges.end());
++            maOrient.insert(maOrient.end(), 
++                            rPolyRange.maOrient.begin(), 
++                            rPolyRange.maOrient.end());
++            updateBounds();
++        }
++
++        void remove(sal_uInt32 nIndex, sal_uInt32 nCount)
++        {
++            maRanges.erase(maRanges.begin()+nIndex,maRanges.begin()+nIndex+nCount);
++            maOrient.erase(maOrient.begin()+nIndex,maOrient.begin()+nIndex+nCount);
++            updateBounds();
++        }
++
++        void clear()
++        {
++            std::vector<B2DRange> aTmpRanges;
++            std::vector<B2VectorOrientation> aTmpOrient;
++
++            maRanges.swap(aTmpRanges);
++            maOrient.swap(aTmpOrient);
++
++            maBounds.reset();
++        }
++
++        void flip()
++        {
++            std::for_each(maOrient.begin(),
++                          maOrient.end(),
++                          boost::bind(
++                              &flipOrientation,
++                              _1));
++        }
++
++        B2DRange getBounds() const
++        {
++            return maBounds;
++        }
++
++		template< typename ValueType > bool isInside( const ValueType& rValue ) const
++        {
++            if( !maBounds.isInside( rValue ) )
++                return false;
++
++            // cannot use boost::bind here, since isInside is overloaded.
++            // It is currently not possible to resolve the overload
++            // by considering one of the other template arguments.
++            std::vector<B2DRange>::const_iterator 		aCurr( maRanges.begin() );
++            const std::vector<B2DRange>::const_iterator aEnd ( maRanges.end() );
++            while( aCurr != aEnd )
++                if( aCurr->isInside( rValue ) )
++                    return true;
++
++            return false;
++        }
++
++		bool overlaps( const B2DRange& rRange ) const
++        {
++            if( !maBounds.overlaps( rRange ) )
++                return false;
++
++            const std::vector<B2DRange>::const_iterator aEnd( maRanges.end() );
++            return std::find_if( maRanges.begin(), 
++                                 aEnd,
++                                 boost::bind<bool>( boost::mem_fn( &B2DRange::overlaps ),
++                                                    _1,
++                                                    boost::cref(rRange) ) ) != aEnd;
++        }
++
++        B2DPolyPolygon solveCrossovers() const
++        {
++            return tools::solveCrossovers(maRanges,maOrient);
++        }
++
++    private:
++        B2DRange						 maBounds;
++        std::vector<B2DRange>			 maRanges;
++        std::vector<B2VectorOrientation> maOrient;
++    };
++
++    B2DPolyRange::B2DPolyRange() :
++        mpImpl()
++    {}
++
++    B2DPolyRange::~B2DPolyRange()
++    {}
++
++    B2DPolyRange::B2DPolyRange( const ElementType& rElem ) :
++        mpImpl( ImplB2DPolyRange( rElem ) )
++    {}
++    
++    B2DPolyRange::B2DPolyRange( const B2DRange& rRange, B2VectorOrientation eOrient ) :
++        mpImpl( ImplB2DPolyRange( rRange, eOrient ) )
++    {}
++
++    B2DPolyRange::B2DPolyRange( const B2DPolyRange& rRange ) :
++        mpImpl( rRange.mpImpl )
++    {}
++
++    B2DPolyRange& B2DPolyRange::operator=( const B2DPolyRange& rRange )
++    {
++        mpImpl = rRange.mpImpl;
++        return *this;
++    }
++
++    void B2DPolyRange::makeUnique()
++    {
++        mpImpl.make_unique();
++    }
++
++    bool B2DPolyRange::operator==(const B2DPolyRange& rRange) const
++    {
++        if(mpImpl.same_object(rRange.mpImpl))
++            return true;
++
++        return ((*mpImpl) == (*rRange.mpImpl));
++    }
++
++    bool B2DPolyRange::operator!=(const B2DPolyRange& rRange) const
++    {
++        return !(*this == rRange);
++    }
++
++    sal_uInt32 B2DPolyRange::count() const
++    {
++        return mpImpl->count();
++    }
++
++    B2DPolyRange::ElementType B2DPolyRange::getElement(sal_uInt32 nIndex) const
++    {
++        return mpImpl->getElement(nIndex);
++    }
++
++    void B2DPolyRange::setElement(sal_uInt32 nIndex, const ElementType& rElement )
++    {
++        mpImpl->setElement(nIndex, rElement);
++    }
++
++    void B2DPolyRange::setElement(sal_uInt32 nIndex, const B2DRange& rRange, B2VectorOrientation eOrient )
++    {
++        mpImpl->setElement(nIndex, rRange, eOrient );
++    }
++
++    void B2DPolyRange::insertElement(sal_uInt32 nIndex, const ElementType& rElement, sal_uInt32 nCount)
++    {
++        mpImpl->insertElement(nIndex, rElement, nCount );
++    }
++
++    void B2DPolyRange::insertElement(sal_uInt32 nIndex, const B2DRange& rRange, B2VectorOrientation eOrient, sal_uInt32 nCount)
++    {
++        mpImpl->insertElement(nIndex, rRange, eOrient, nCount );
++    }
++
++    void B2DPolyRange::appendElement(const ElementType& rElement, sal_uInt32 nCount)
++    {
++        mpImpl->appendElement(rElement, nCount);
++    }
++
++    void B2DPolyRange::appendElement(const B2DRange& rRange, B2VectorOrientation eOrient, sal_uInt32 nCount)
++    {
++        mpImpl->appendElement(rRange, eOrient, nCount );
++    }
++
++    void B2DPolyRange::insertPolyRange(sal_uInt32 nIndex, const B2DPolyRange& rRange)
++    {
++        mpImpl->insertPolyRange(nIndex, *rRange.mpImpl);
++    }
++
++    void B2DPolyRange::appendPolyRange(const B2DPolyRange& rRange)
++    {
++        mpImpl->appendPolyRange(*rRange.mpImpl);
++    }
++
++    void B2DPolyRange::remove(sal_uInt32 nIndex, sal_uInt32 nCount)
++    {
++        mpImpl->remove(nIndex, nCount);
++    }
++
++    void B2DPolyRange::clear()
++    {
++        mpImpl->clear();
++    }
++
++    void B2DPolyRange::flip()
++    {
++        mpImpl->flip();
++    }
++
++    B2DRange B2DPolyRange::getBounds() const
++    {
++        return mpImpl->getBounds();
++    }
++
++    bool B2DPolyRange::isInside( const B2DTuple& rTuple ) const
++    {
++        return mpImpl->isInside(rTuple);
++    }
++    
++    bool B2DPolyRange::isInside( const B2DRange& rRange ) const
++    {
++        return mpImpl->isInside(rRange);
++    }
++
++    bool B2DPolyRange::overlaps( const B2DRange& rRange ) const
++    {
++        return mpImpl->overlaps(rRange);
++    }
++
++    B2DPolyPolygon B2DPolyRange::solveCrossovers() const
++    {
++        return mpImpl->solveCrossovers();
++    }
++
++} // end of namespace basegfx
++
++// eof
+diff --git basegfx/source/range/b2drangeclipper.cxx basegfx/source/range/b2drangeclipper.cxx
+new file mode 100644
+index 0000000..de5c040
+--- /dev/null
++++ basegfx/source/range/b2drangeclipper.cxx
+@@ -0,0 +1,950 @@
++/*************************************************************************
++ *
++ * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
++ * 
++ * Copyright 2008 by Sun Microsystems, Inc.
++ *
++ * OpenOffice.org - a multi-platform office productivity suite
++ *
++ * $RCSfile: b2dmultirange.cxx,v $
++ * $Revision: 1.8 $
++ *
++ * This file is part of OpenOffice.org.
++ *
++ * OpenOffice.org is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU Lesser General Public License version 3
++ * only, as published by the Free Software Foundation.
++ *
++ * OpenOffice.org is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU Lesser General Public License version 3 for more details
++ * (a copy is included in the LICENSE file that accompanied this code).
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * version 3 along with OpenOffice.org.  If not, see
++ * <http://www.openoffice.org/license.html>
++ * for a copy of the LGPLv3 License.
++ *
++ ************************************************************************/
++
++// MARKER(update_precomp.py): autogen include statement, do not remove
++#include "precompiled_basegfx.hxx"
++
++#include <rtl/math.hxx>
++
++#include <basegfx/tuple/b2dtuple.hxx>
++#include <basegfx/range/b2drange.hxx>
++#include <basegfx/range/b2dpolyrange.hxx>
++#include <basegfx/polygon/b2dpolypolygon.hxx>
++#include <basegfx/polygon/b2dpolygontools.hxx>
++#include <basegfx/polygon/b2dpolypolygontools.hxx>
++
++#include <o3tl/vector_pool.hxx>
++#include <boost/bind.hpp>
++#include <boost/utility.hpp>
++
++#include <algorithm>
++#include <deque>
++#include <list>
++
++
++namespace basegfx
++{
++    namespace
++    {
++        // Generating a poly-polygon from a bunch of rectangles 
++        // 
++        // Helper functionality for sweep-line algorithm
++        // ====================================================
++
++        typedef std::vector<B2DRange> VectorOfRanges;
++
++        class ImplPolygon;
++        typedef o3tl::vector_pool<ImplPolygon> VectorOfPolygons;
++
++
++        /** This class represents an active edge
++
++        	As the sweep line traverses across the overall area,
++        	rectangle edges parallel to it generate events, and
++        	rectangle edges orthogonal to it generate active
++        	edges. This class represents the latter.
++         */
++        class ActiveEdge
++        {
++        public:
++            /** The two possible active rectangle edges differ by one
++                coordinate value - the upper edge has the lower, the
++                lower edge the higher value.
++             */
++            enum EdgeType {
++                /// edge with lower coordinate value
++                UPPER=0,
++                /// edge with higher coordinate value
++                LOWER=1
++            };
++
++            enum EdgeDirection {
++                /// edge proceeds to the left
++                PROCEED_LEFT=0,
++                /// edge proceeds to the right
++                PROCEED_RIGHT=1
++            };
++
++            /** Create active edge 
++
++            	@param rRect
++                Rectangle this edge is part of
++
++                @param fInvariantCoord
++                The invariant ccordinate value of this edge 
++
++                @param eEdgeType
++                Is fInvariantCoord the lower or the higher value, for
++                this rect?
++             */
++            ActiveEdge( const B2DRectangle& rRect,
++                        const double&       fInvariantCoord,
++                        std::ptrdiff_t      nPolyIdx,
++                        EdgeType            eEdgeType,
++                        EdgeDirection       eEdgeDirection ) :
++                mfInvariantCoord(fInvariantCoord),
++                mpAssociatedRect( &rRect ),
++                mnPolygonIdx( nPolyIdx ),
++                meEdgeType( eEdgeType ),
++                meEdgeDirection( eEdgeDirection )
++            {}
++
++            double 				getInvariantCoord() const { return mfInvariantCoord; }
++            const B2DRectangle& getRect() const { return *mpAssociatedRect; }
++            std::ptrdiff_t 		getTargetPolygonIndex() const { return mnPolygonIdx; }
++            void				setTargetPolygonIndex( std::ptrdiff_t nIdx ) { mnPolygonIdx = nIdx; }
++            EdgeType 			getEdgeType() const { return meEdgeType; }
++            EdgeDirection 		getEdgeDirection() const { return meEdgeDirection; }
++
++            /// For STL sort
++            bool operator<( const ActiveEdge& rRHS ) const { return mfInvariantCoord < rRHS.mfInvariantCoord; }
++
++        private:
++            /** The invariant coordinate value of this edge (e.g. the
++                common y value, for a horizontal edge)
++             */
++            double              mfInvariantCoord;
++
++            /** Associated rectangle
++
++            	This on the one hand saves some storage space (the
++            	vector of rectangles is persistent, anyway), and on
++            	the other hand provides an identifier to match active
++            	edges and x events (see below)
++
++                Ptr because class needs to be assignable
++             */
++            const B2DRectangle* mpAssociatedRect;
++
++            /** Index of the polygon this edge is currently involved
++                with.
++
++            	Note that this can change for some kinds of edge
++            	intersection, as the algorithm tends to swap
++            	associated polygons there.
++
++                -1 denotes no assigned polygon
++             */
++            std::ptrdiff_t      mnPolygonIdx;
++
++            /// 'upper' or 'lower' edge of original rectangle.
++            EdgeType	        meEdgeType;
++
++            /// 'left' or 'right'
++            EdgeDirection       meEdgeDirection;
++        };
++
++        // Needs to be list - various places hold ptrs to elements
++        typedef std::list< ActiveEdge > ListOfEdges;
++
++
++        /** Element of the sweep line event list
++            
++        	As the sweep line traverses across the overall area,
++        	rectangle edges parallel to it generate events, and
++        	rectangle edges orthogonal to it generate active
++        	edges. This class represents the former.
++
++        	The class defines an element of the sweep line list. The
++        	sweep line's position jumps in steps defined by the
++        	coordinates of the sorted SweepLineEvent entries.
++         */
++        class SweepLineEvent
++        {
++        public:
++            /** The two possible sweep line rectangle edges differ by
++                one coordinate value - the starting edge has the
++                lower, the finishing edge the higher value.
++             */
++            enum EdgeType {
++                /// edge with lower coordinate value
++                STARTING_EDGE=0,
++                /// edge with higher coordinate value
++                FINISHING_EDGE=1
++            };
++
++            /** The two possible sweep line directions
++             */
++            enum EdgeDirection {
++                PROCEED_UP=0,
++                PROCEED_DOWN=1
++            };
++
++            /** Create sweep line event
++
++            	@param fPos
++                Coordinate position of the event
++
++                @param rRect
++                Rectangle this event is generated for.
++
++                @param eEdgeType
++                Is fPos the lower or the higher value, for the
++                rectangle this event is generated for?
++             */
++            SweepLineEvent( double 				fPos,
++                            const B2DRectangle& rRect,
++                            EdgeType			eEdgeType,
++                            EdgeDirection       eDirection) :
++                mfPos( fPos ),
++                mpAssociatedRect( &rRect ),
++                meEdgeType( eEdgeType ),
++                meEdgeDirection( eDirection )
++            {}
++
++            double 				getPos() const { return mfPos; }
++            const B2DRectangle& getRect() const { return *mpAssociatedRect; }
++            EdgeType 			getEdgeType() const { return meEdgeType; }
++            EdgeDirection 		getEdgeDirection() const { return meEdgeDirection; }
++
++            /// For STL sort
++            bool operator<( const SweepLineEvent& rRHS ) const { return mfPos < rRHS.mfPos; }
++
++        private:
++            /// position of the event, in the direction of the line sweep
++            double 		          mfPos;
++
++            /** Rectangle this event is generated for
++
++            	This on the one hand saves some storage space (the
++            	vector of rectangles is persistent, anyway), and on
++            	the other hand provides an identifier to match active
++            	edges and events (see below)
++
++                Ptr because class needs to be assignable
++             */
++            const B2DRectangle*   mpAssociatedRect;
++
++            /// 'upper' or 'lower' edge of original rectangle.
++            EdgeType	          meEdgeType;
++
++            /// 'up' or 'down'
++            EdgeDirection         meEdgeDirection;
++        };
++
++        typedef std::vector< SweepLineEvent > VectorOfEvents;
++
++
++        /** Smart point container for B2DMultiRange::getPolyPolygon()
++            
++        	This class provides methods needed only here, and is used
++        	as a place to store some additional information per
++        	polygon. Also, most of the intersection logic is
++        	implemented here.
++         */
++        class ImplPolygon
++        {
++        public:
++            /** Create polygon
++             */
++            ImplPolygon() : 
++                mpLeadingRightEdge(NULL),
++                mnIdx(-1),
++                maPoints(),
++                mbIsFinished(false)
++            {
++                // completely ad-hoc. but what the hell.
++                maPoints.reserve(11);
++            }
++
++            void setPolygonPoolIndex( std::ptrdiff_t nIdx ) { mnIdx = nIdx; }
++            bool isFinished() const { return mbIsFinished; }
++
++            /// Add point to the end of the existing points
++            void append( const B2DPoint& rPoint ) 
++            { 
++                OSL_PRECOND( maPoints.empty() ||
++                             maPoints.back().getX() == rPoint.getX() ||
++                             maPoints.back().getY() == rPoint.getY(),
++                             "ImplPolygon::append(): added point violates 90 degree line angle constraint!" );
++
++                if( maPoints.empty() ||
++                    maPoints.back() != rPoint )
++                {
++                    // avoid duplicate points
++                    maPoints.push_back( rPoint ); 
++                }
++            }
++
++            /** Perform the intersection of this polygon with an
++                active edge.
++
++                @param rEvent
++                The vertical line event that generated the
++                intersection
++
++                @param rActiveEdge
++                The active edge that generated the intersection
++
++                @param rPolygonPool
++                Polygon pool, we sometimes need to allocate a new one
++
++                @param bIsFinishingEdge
++                True, when this is hitting the last edge of the
++                vertical sweep - every vertical sweep starts and ends
++                with upper and lower edge of the _same_ rectangle.
++
++                @return the new current polygon (that's the one
++                processing must proceed with, when going through the
++                list of upcoming active edges).
++             */
++            std::ptrdiff_t intersect( SweepLineEvent&   rEvent,
++                                      ActiveEdge&		rActiveEdge,
++                                      VectorOfPolygons& rPolygonPool,
++                                      B2DPolyPolygon&   rRes,
++                                      bool              isFinishingEdge )
++            {
++                OSL_PRECOND( !isFinished(),
++                             "ImplPolygon::intersect(): called on already finished polygon!" );
++                OSL_PRECOND( !isFinishingEdge 
++                             || (isFinishingEdge && &rEvent.getRect() == &rActiveEdge.getRect()),
++                             "ImplPolygon::intersect(): inconsistent ending!" );
++
++                const B2DPoint aIntersectionPoint( rEvent.getPos(), 
++                                                   rActiveEdge.getInvariantCoord() );
++
++                // intersection point, goes to our polygon
++                // unconditionally
++                append(aIntersectionPoint);
++
++                const bool isSweepLineEnteringRect( 
++                    rEvent.getEdgeType() == SweepLineEvent::STARTING_EDGE);
++                if( isFinishingEdge )
++                {
++                    if( isSweepLineEnteringRect )
++                        handleFinalOwnRightEdge(rActiveEdge);
++                    else
++                        handleFinalOwnLeftEdge(rActiveEdge,
++                                               rPolygonPool,
++                                               rRes);
++
++                    // we're done with this rect & sweep line
++                    return -1;
++                }
++                else if( metOwnEdge(rEvent,rActiveEdge) )
++                {
++                    handleInitialOwnEdge(rEvent, rActiveEdge);
++
++                    // point already added, all init done, continue
++                    // with same poly
++                    return mnIdx;
++                }
++                else
++                {
++                    OSL_ENSURE( rActiveEdge.getTargetPolygonIndex() != -1,
++                                "ImplPolygon::intersect(): non-trivial intersection hit empty polygon!" );
++                    
++                    const bool isHittingLeftEdge( 
++                        rActiveEdge.getEdgeDirection() == ActiveEdge::PROCEED_LEFT);
++
++                    if( isHittingLeftEdge )
++                        return handleComplexLeftEdge(rActiveEdge,
++                                                     aIntersectionPoint,
++                                                     rPolygonPool,
++                                                     rRes);
++                    else
++                        return handleComplexRightEdge(rActiveEdge,
++                                                      aIntersectionPoint,
++                                                      rPolygonPool);
++                }
++            }
++                        
++        private:
++            std::ptrdiff_t getPolygonPoolIndex() const { return mnIdx; }
++
++            void handleInitialOwnEdge(SweepLineEvent& rEvent,
++                                      ActiveEdge&     rActiveEdge)
++            {
++                const bool isActiveEdgeProceedLeft(
++                    rActiveEdge.getEdgeDirection() == ActiveEdge::PROCEED_LEFT);
++                const bool isSweepLineEnteringRect( 
++                    rEvent.getEdgeType() == SweepLineEvent::STARTING_EDGE);
++                (void)isActiveEdgeProceedLeft;
++                (void)isSweepLineEnteringRect;
++
++                OSL_ENSURE( isSweepLineEnteringRect == isActiveEdgeProceedLeft,
++                            "ImplPolygon::intersect(): sweep initial own edge hit: wrong polygon order" );
++
++                OSL_ENSURE( isSweepLineEnteringRect ||
++                            mpLeadingRightEdge == &rActiveEdge,
++                            "ImplPolygon::intersect(): sweep initial own edge hit: wrong leading edge" );
++            }
++
++            void handleFinalOwnRightEdge(ActiveEdge& rActiveEdge)
++            {
++                OSL_ENSURE( rActiveEdge.getEdgeDirection() == ActiveEdge::PROCEED_RIGHT,
++                            "ImplPolygon::handleInitialOwnRightEdge(): start edge wrong polygon order" );
++                
++                rActiveEdge.setTargetPolygonIndex(mnIdx);
++                mpLeadingRightEdge = &rActiveEdge;
++            }
++
++            void handleFinalOwnLeftEdge(ActiveEdge&       rActiveEdge,
++                                        VectorOfPolygons& rPolygonPool,
++                                        B2DPolyPolygon&   rRes)
++            {
++                OSL_ENSURE( rActiveEdge.getEdgeDirection() == ActiveEdge::PROCEED_LEFT,
++                            "ImplPolygon::handleFinalOwnLeftEdge(): end edge wrong polygon order" );
++
++                const bool isHittingOurTail(
++                    rActiveEdge.getTargetPolygonIndex() == mnIdx);
++
++                if( isHittingOurTail )
++                    finish(rRes); // just finish. no fuss.
++                else
++                {
++                    // temp poly hits final left edge
++                    const std::ptrdiff_t nTmpIdx=rActiveEdge.getTargetPolygonIndex();
++                    ImplPolygon& rTmp=rPolygonPool.get(nTmpIdx);
++
++                    // active edge's polygon has points
++                    // already. ours need to go in front of them.
++                    maPoints.insert(maPoints.end(),
++                                    rTmp.maPoints.begin(),
++                                    rTmp.maPoints.end());
++
++                    // adjust leading edges, we're switching the polygon
++                    ActiveEdge* const pFarEdge=rTmp.mpLeadingRightEdge;
++
++                    mpLeadingRightEdge = pFarEdge;
++                    pFarEdge->setTargetPolygonIndex(mnIdx);
++
++                    // nTmpIdx is an empty shell, get rid of it
++                    rPolygonPool.free(nTmpIdx);
++                }
++            }
++
++            std::ptrdiff_t handleComplexLeftEdge(ActiveEdge&	   rActiveEdge,
++                                                 const B2DPoint&   rIntersectionPoint,
++                                                 VectorOfPolygons& rPolygonPool,
++                                                 B2DPolyPolygon&   rRes)
++            {
++                const bool isHittingOurTail(
++                    rActiveEdge.getTargetPolygonIndex() == mnIdx);
++                if( isHittingOurTail )
++                {
++                    finish(rRes);
++
++                    // so "this" is done - need new polygon to collect
++                    // further points
++                    const std::ptrdiff_t nIdxNewPolygon=rPolygonPool.alloc();
++                    rPolygonPool.get(nIdxNewPolygon).setPolygonPoolIndex(nIdxNewPolygon);
++                    rPolygonPool.get(nIdxNewPolygon).append(rIntersectionPoint);
++
++                    rActiveEdge.setTargetPolygonIndex(nIdxNewPolygon);
++
++                    return nIdxNewPolygon;
++                }
++                else
++                {
++                    const std::ptrdiff_t nTmpIdx=rActiveEdge.getTargetPolygonIndex();
++                    ImplPolygon& rTmp=rPolygonPool.get(nTmpIdx);
++
++                    // active edge's polygon has points
++                    // already. ours need to go in front of them.
++                    maPoints.insert(maPoints.end(),
++                                    rTmp.maPoints.begin(),
++                                    rTmp.maPoints.end());
++
++                    rTmp.maPoints.clear();
++                    rTmp.append(rIntersectionPoint);
++
++                    // adjust leading edges, we're switching the polygon
++                    ActiveEdge* const pFarEdge=rTmp.mpLeadingRightEdge;
++                    ActiveEdge* const pNearEdge=&rActiveEdge;
++
++                    rTmp.mpLeadingRightEdge = NULL;
++                    pNearEdge->setTargetPolygonIndex(nTmpIdx);
++
++                    mpLeadingRightEdge = pFarEdge;
++                    pFarEdge->setTargetPolygonIndex(mnIdx);
++
++                    return nTmpIdx;
++                }
++            }
++
++            std::ptrdiff_t handleComplexRightEdge(ActiveEdge&		rActiveEdge,
++                                                  const B2DPoint&   rIntersectionPoint,
++                                                  VectorOfPolygons& rPolygonPool)
++            {
++                const std::ptrdiff_t nTmpIdx=rActiveEdge.getTargetPolygonIndex();
++                ImplPolygon& rTmp=rPolygonPool.get(nTmpIdx);
++
++                rTmp.append(rIntersectionPoint);
++                
++                rActiveEdge.setTargetPolygonIndex(mnIdx);
++                mpLeadingRightEdge = &rActiveEdge;
++                
++                rTmp.mpLeadingRightEdge = NULL;
++
++                return nTmpIdx;
++            }
++
++            /// True when sweep line hits our own active edge
++            bool metOwnEdge(const SweepLineEvent& rEvent,
++                            ActiveEdge&			  rActiveEdge)
++            {
++                const bool bHitOwnEdge=&rEvent.getRect() == &rActiveEdge.getRect();
++                return bHitOwnEdge;
++            }
++
++            /// Retrieve B2DPolygon from this object
++            B2DPolygon getPolygon() const
++            {
++                B2DPolygon aRes;
++                std::for_each( maPoints.begin(),
++                               maPoints.end(),
++                               boost::bind( 
++                     &B2DPolygon::append,
++                                   boost::ref(aRes),
++                                   _1,
++                                   1 ) );
++                aRes.setClosed( true );
++                return aRes;
++            }
++
++            /** Finish this polygon, push to result set.
++             */
++            void finish(B2DPolyPolygon& rRes) 
++            { 
++                OSL_PRECOND( maPoints.empty() ||
++                             maPoints.front().getX() == maPoints.back().getX() ||
++                             maPoints.front().getY() == maPoints.back().getY(),
++                             "ImplPolygon::finish(): first and last point violate 90 degree line angle constraint!" );
++                
++                mbIsFinished = true;
++                mpLeadingRightEdge = NULL;
++
++                rRes.append(getPolygon());
++            }
++
++            /** Refers to the current leading edge element of this
++                polygon, or NULL. The leading edge denotes the 'front'
++                of the polygon vertex sequence, i.e. the coordinates
++                at the polygon's leading edge are returned from
++                maPoints.front()
++             */
++            ActiveEdge*           mpLeadingRightEdge;
++
++            /// current index into vector pool
++            std::ptrdiff_t        mnIdx;
++
++            /// Container for the actual polygon points
++            std::vector<B2DPoint> maPoints;
++
++            /// When true, this polygon is 'done', i.e. nothing must be added anymore.
++            bool				  mbIsFinished;
++        };
++
++        /** Init sweep line event list
++
++        	This method fills the event list with the sweep line
++        	events generated from the input rectangles, and sorts them
++        	with increasing x.
++         */
++        void setupSweepLineEventListFromRanges( VectorOfEvents& o_rEventVector,
++                                                const std::vector<B2DRange>& rRanges,
++                                                const std::vector<B2VectorOrientation>& rOrientations )
++        {
++            // we need exactly 2*rectVec.size() events: one for the
++            // left, and one for the right edge of each rectangle
++            o_rEventVector.clear();
++            o_rEventVector.reserve( 2*rRanges.size() );
++
++            // generate events
++            // ===============
++
++            // first pass: add all left edges in increasing order
++            std::vector<B2DRange>::const_iterator aCurrRect=rRanges.begin();
++            std::vector<B2VectorOrientation>::const_iterator aCurrOrientation=rOrientations.begin();
++            const std::vector<B2DRange>::const_iterator aEnd=rRanges.end();
++            const std::vector<B2VectorOrientation>::const_iterator aEndOrientation=rOrientations.end();
++            while( aCurrRect != aEnd && aCurrOrientation != aEndOrientation )
++            {
++                const B2DRectangle& rCurrRect( *aCurrRect++ );
++
++                o_rEventVector.push_back( 
++                    SweepLineEvent( rCurrRect.getMinX(),
++                                    rCurrRect,
++                                    SweepLineEvent::STARTING_EDGE,
++                                    (*aCurrOrientation++) == ORIENTATION_POSITIVE ?
++                                    SweepLineEvent::PROCEED_UP : SweepLineEvent::PROCEED_DOWN) );
++            }
++
++            // second pass: add all right edges in reversed order
++            std::vector<B2DRange>::const_reverse_iterator aCurrRectR=rRanges.rbegin();
++            std::vector<B2VectorOrientation>::const_reverse_iterator aCurrOrientationR=rOrientations.rbegin();
++            const std::vector<B2DRange>::const_reverse_iterator aEndR=rRanges.rend();
++            const std::vector<B2VectorOrientation>::const_reverse_iterator aEndOrientationR=rOrientations.rend();
++            while( aCurrRectR != aEndR )
++            {
++                const B2DRectangle& rCurrRect( *aCurrRectR++ );
++
++                o_rEventVector.push_back( 
++                    SweepLineEvent( rCurrRect.getMaxX(),
++                                    rCurrRect,
++                                    SweepLineEvent::FINISHING_EDGE,
++                                    (*aCurrOrientationR++) == ORIENTATION_POSITIVE ?
++                                    SweepLineEvent::PROCEED_DOWN : SweepLineEvent::PROCEED_UP ) );
++            }
++
++            // sort events
++            // ===========
++
++            // since we use stable_sort, the order of events with the
++            // same x value will not change. The elaborate two-pass
++            // add above thus ensures, that for each two rectangles
++            // with similar left and right x coordinates, the
++            // rectangle whose left event comes first will have its
++            // right event come last. This is advantageous for the
++            // clip algorithm below, see handleRightEdgeCrossing().
++
++            // TODO(P3): Use radix sort (from
++            // b2dpolypolygonrasterconverter, or have your own
++            // templatized version).
++            std::stable_sort( o_rEventVector.begin(),
++                              o_rEventVector.end() );
++        }
++
++        /** Insert two active edge segments for the given rectangle.
++
++            This method creates two active edge segments from the
++            given rect, and inserts them into the active edge list,
++            such that this stays sorted (if it was before).
++
++            @param io_rEdgeList
++            Active edge list to insert into
++
++            @param io_rPolygons
++            Vector of polygons. Each rectangle added creates one
++            tentative result polygon in this vector, and the edge list
++            entries holds a reference to that polygon (this _requires_
++            that the polygon vector does not reallocate, i.e. it must
++            have at least the maximal number of rectangles reserved)
++
++            @param o_CurrentPolygon
++            The then-current polygon when processing this sweep line
++            event
++
++            @param rCurrEvent
++            The actual event that caused this call
++         */
++        void createActiveEdgesFromStartEvent( ListOfEdges&		io_rEdgeList,
++                                              VectorOfPolygons&	io_rPolygonPool,
++                                              SweepLineEvent&   rCurrEvent )
++        {
++            ListOfEdges         aNewEdges;
++            const B2DRectangle& rRect=rCurrEvent.getRect();
++            const bool          bGoesDown=rCurrEvent.getEdgeDirection() == SweepLineEvent::PROCEED_DOWN;
++
++            // start event - new rect starts here, needs polygon to
++            // collect points into
++            const std::ptrdiff_t nIdxPolygon=io_rPolygonPool.alloc();
++            io_rPolygonPool.get(nIdxPolygon).setPolygonPoolIndex(nIdxPolygon);
++
++            // upper edge
++            aNewEdges.push_back( 
++                ActiveEdge( 
++                    rRect,
++                    rRect.getMinY(),
++                    bGoesDown ? nIdxPolygon : -1,
++                    ActiveEdge::UPPER,
++                    bGoesDown ? ActiveEdge::PROCEED_LEFT : ActiveEdge::PROCEED_RIGHT) );
++            // lower edge
++            aNewEdges.push_back( 
++                ActiveEdge( 
++                    rRect,
++                    rRect.getMaxY(),
++                    bGoesDown ? -1 : nIdxPolygon,
++                    ActiveEdge::LOWER,
++                    bGoesDown ? ActiveEdge::PROCEED_RIGHT : ActiveEdge::PROCEED_LEFT ) );
++
++            // furthermore, have to respect a special tie-breaking
++            // rule here, for edges which share the same y value:
++            // newly added upper edges must be inserted _before_ any
++            // other edge with the same y value, and newly added lower
++            // edges must be _after_ all other edges with the same
++            // y. This ensures that the left vertical edge processing
++            // below encounters the upper edge of the current rect
++            // first, and the lower edge last, which automatically
++            // starts and finishes this rect correctly (as only then,
++            // the polygon will have their associated active edges
++            // set).
++            const double				nMinY( rRect.getMinY() );
++            const double				nMaxY( rRect.getMaxY() );
++            ListOfEdges::iterator 	    aCurr( io_rEdgeList.begin() );
++            const ListOfEdges::iterator aEnd ( io_rEdgeList.end() );
++            while( aCurr != aEnd )
++            {
++                const double nCurrY( aCurr->getInvariantCoord() );
++
++                if( nCurrY >= nMinY && 
++                    aNewEdges.size() == 2 ) // only add, if not yet done.
++                {
++                    // insert upper edge _before_ aCurr. Thus, it will
++                    // be the first entry for a range of equal y
++                    // values. Using splice here, since we hold
++                    // references to the moved list element!
++                    io_rEdgeList.splice( aCurr, 
++                                         aNewEdges,
++                                         aNewEdges.begin() );
++                }
++
++                if( nCurrY > nMaxY )
++                {
++                    // insert lower edge _before_ aCurr. Thus, it will
++                    // be the last entry for a range of equal y values
++                    // (aCurr is the first entry strictly larger than
++                    // nMaxY). Using splice here, since we hold
++                    // references to the moved list element!
++                    io_rEdgeList.splice( aCurr, 
++                                         aNewEdges,
++                                         aNewEdges.begin() );
++                    // done with insertion, can early-exit here.
++                    return;
++                }
++
++                ++aCurr;
++            }
++
++            // append remainder of aNewList (might still contain 2 or
++            // 1 elements, depending of the contents of io_rEdgeList).
++            io_rEdgeList.splice( aCurr,
++                                 aNewEdges );
++        }
++
++        inline bool isSameRect(ActiveEdge&              rEdge,
++                               const basegfx::B2DRange& rRect)
++        {
++            return &rEdge.getRect() == &rRect;
++        }
++
++        // wow what a hack. necessary because stl's list::erase does
++        // not eat reverse_iterator
++        template<typename Cont, typename Iter> Iter eraseFromList(Cont&, Iter);
++        template<> inline ListOfEdges::iterator eraseFromList(
++            ListOfEdges& rList, ListOfEdges::iterator aIter)
++        {
++            return rList.erase(aIter);
++        }
++        template<> inline ListOfEdges::reverse_iterator eraseFromList(
++            ListOfEdges& rList, ListOfEdges::reverse_iterator aIter)
++        {
++            return ListOfEdges::reverse_iterator(
++                    rList.erase(boost::prior(aIter.base())));
++        }
++
++        template<int bPerformErase,
++                 typename Iterator> inline void processActiveEdges(
++            Iterator          first,
++            Iterator          last,
++            ListOfEdges&      rActiveEdgeList,
++            SweepLineEvent&   rCurrEvent,
++            VectorOfPolygons& rPolygonPool,
++            B2DPolyPolygon&   rRes )
++        {
++            const basegfx::B2DRange& rCurrRect=rCurrEvent.getRect();
++
++            // fast-forward to rCurrEvent's first active edge (holds
++            // for both starting and finishing sweep line events, a
++            // rect is regarded _outside_ any rects whose events have
++            // started earlier
++            first = std::find_if(first, last,
++                                 boost::bind(
++                         &isSameRect,
++                                     _1,
++                                     boost::cref(rCurrRect)));
++
++            if(first == last)
++                return;
++
++            int nCount=0;
++            std::ptrdiff_t nCurrPolyIdx=-1;
++            while(first != last)
++            {
++                if( nCurrPolyIdx == -1 )
++                    nCurrPolyIdx=first->getTargetPolygonIndex();
++
++                OSL_ASSERT(nCurrPolyIdx != -1);
++
++                // second encounter of my rect -> second edge
++                // encountered, done
++                const bool bExit=
++                    nCount && 
++                    isSameRect(*first,
++                               rCurrRect);
++
++                // deal with current active edge
++                nCurrPolyIdx = 
++                    rPolygonPool.get(nCurrPolyIdx).intersect( 
++                        rCurrEvent,
++                        *first,
++                        rPolygonPool,
++                        rRes,
++                        bExit);
++
++                // prune upper & lower active edges, if requested
++                if( bPerformErase && (bExit || !nCount) )
++                    first = eraseFromList(rActiveEdgeList,first);
++                else
++                    ++first;
++
++                // delayed exit, had to prune first
++                if( bExit )
++                    return;
++
++                ++nCount;
++            }
++        }
++
++        template<int bPerformErase> inline void processActiveEdgesTopDown( 
++            SweepLineEvent&   rCurrEvent,
++            ListOfEdges&      rActiveEdgeList,
++            VectorOfPolygons& rPolygonPool,
++            B2DPolyPolygon&   rRes )
++        {
++            processActiveEdges<bPerformErase>(
++                rActiveEdgeList. begin(), 
++                rActiveEdgeList. end(), 
++                rActiveEdgeList,
++                rCurrEvent,
++                rPolygonPool,
++                rRes);
++        }
++
++        template<int bPerformErase> inline void processActiveEdgesBottomUp( 
++            SweepLineEvent&   rCurrEvent,
++            ListOfEdges&      rActiveEdgeList,
++            VectorOfPolygons& rPolygonPool,
++            B2DPolyPolygon&   rRes )
++        {
++            processActiveEdges<bPerformErase>(
++                rActiveEdgeList. rbegin(), 
++                rActiveEdgeList. rend(),
++                rActiveEdgeList,
++                rCurrEvent,
++                rPolygonPool,
++                rRes);
++        }
++
++        enum{ NoErase=0, PerformErase=1 };
++
++        void handleStartingEdge( SweepLineEvent&   rCurrEvent,
++                                 ListOfEdges&      rActiveEdgeList,
++                                 VectorOfPolygons& rPolygonPool,
++                                 B2DPolyPolygon&   rRes)
++        {
++            // inject two new active edges for rect
++            createActiveEdgesFromStartEvent( rActiveEdgeList,
++                                             rPolygonPool,
++                                             rCurrEvent );
++            
++            if( SweepLineEvent::PROCEED_DOWN == rCurrEvent.getEdgeDirection() )
++                processActiveEdgesTopDown<NoErase>(
++                    rCurrEvent, rActiveEdgeList, rPolygonPool, rRes);
++            else
++                processActiveEdgesBottomUp<NoErase>(
++                    rCurrEvent, rActiveEdgeList, rPolygonPool, rRes);
++        }
++
++        void handleFinishingEdge( SweepLineEvent&   rCurrEvent,
++                                  ListOfEdges&      rActiveEdgeList,
++                                  VectorOfPolygons& rPolygonPool,
++                                  B2DPolyPolygon&   rRes)
++        {
++            if( SweepLineEvent::PROCEED_DOWN == rCurrEvent.getEdgeDirection() )
++                processActiveEdgesTopDown<PerformErase>(
++                    rCurrEvent, rActiveEdgeList, rPolygonPool, rRes);
++            else
++                processActiveEdgesBottomUp<PerformErase>(
++                    rCurrEvent, rActiveEdgeList, rPolygonPool, rRes);
++        }
++
++        inline void handleSweepLineEvent( SweepLineEvent&   rCurrEvent,
++                                          ListOfEdges&      rActiveEdgeList,
++                                          VectorOfPolygons& rPolygonPool,
++                                          B2DPolyPolygon&   rRes)
++        {
++            if( SweepLineEvent::STARTING_EDGE == rCurrEvent.getEdgeType() )
++                handleStartingEdge(rCurrEvent,rActiveEdgeList,rPolygonPool,rRes);
++            else
++                handleFinishingEdge(rCurrEvent,rActiveEdgeList,rPolygonPool,rRes);
++        }
++    }
++
++    namespace tools
++    {
++        B2DPolyPolygon solveCrossovers(const std::vector<B2DRange>& rRanges, 
++                                       const std::vector<B2VectorOrientation>& rOrientations)
++        {
++            // sweep-line algorithm to generate a poly-polygon
++            // from a bunch of rectangles
++            // ===============================================
++            //
++            // This algorithm uses the well-known sweep line
++            // concept, explained in every good text book about
++            // computational geometry. 
++            // 
++            // We start with creating two structures for every
++            // rectangle, one representing the left x coordinate,
++            // one representing the right x coordinate (and both
++            // referencing the original rect). These structs are
++            // sorted with increasing x coordinates.
++            //
++            // Then, we start processing the resulting list from
++            // the beginning. Every entry in the list defines a
++            // point in time of the line sweeping from left to
++            // right across all rectangles.
++            VectorOfEvents aSweepLineEvents;
++            setupSweepLineEventListFromRanges( aSweepLineEvents,
++                                               rRanges,
++                                               rOrientations );
++
++            B2DPolyPolygon   aRes;
++            VectorOfPolygons aPolygonPool;
++            ListOfEdges 	 aActiveEdgeList;
++
++            // sometimes not enough, but a usable compromise
++            aPolygonPool.reserve( rRanges.size() );
++
++            std::for_each( aSweepLineEvents.begin(),
++                           aSweepLineEvents.end(),
++                           boost::bind(
++                               &handleSweepLineEvent,
++                               _1,
++                               boost::ref(aActiveEdgeList),
++                               boost::ref(aPolygonPool),
++                               boost::ref(aRes)) );
++
++            return aRes;
++        }
++    }
++}
++
+diff --git basegfx/source/range/makefile.mk basegfx/source/range/makefile.mk
+index 678bb16..3dcf552 100644
+--- basegfx/source/range/makefile.mk
++++ basegfx/source/range/makefile.mk
+@@ -47,7 +47,8 @@ SLOFILES= \
+                 $(SLO)$/b1drange.obj		\
+                 $(SLO)$/b2drange.obj		\
+                 $(SLO)$/b2xrange.obj		\
+-                $(SLO)$/b2dmultirange.obj		\
++                $(SLO)$/b2dpolyrange.obj	\
++                $(SLO)$/b2drangeclipper.obj	\
+                 $(SLO)$/b3drange.obj
+ 
+ # --- Targets ----------------------------------
+diff --git basegfx/test/basegfx2d.cxx basegfx/test/basegfx2d.cxx
+index 3eb6d7e..b9effca 100644
+--- basegfx/test/basegfx2d.cxx
++++ basegfx/test/basegfx2d.cxx
+@@ -41,7 +41,9 @@
+ #include <basegfx/curve/b2dcubicbezier.hxx>
+ #include <basegfx/curve/b2dbeziertools.hxx>
+ #include <basegfx/polygon/b2dpolypolygontools.hxx>
+-#include <basegfx/range/b2dmultirange.hxx>
++#include <basegfx/polygon/b2dpolygonclipper.hxx>
++#include <basegfx/polygon/b2dpolypolygon.hxx>
++#include <basegfx/range/b2dpolyrange.hxx>
+ #include <basegfx/numeric/ftools.hxx>
+ #include <basegfx/color/bcolor.hxx>
+ #include <basegfx/color/bcolortools.hxx>
+@@ -56,214 +58,6 @@ using namespace ::basegfx;
+ 
+ namespace basegfx2d
+ {
+-/// Gets a random ordinal [0,n)
+-inline double getRandomOrdinal( const ::std::size_t n )
+-{
+-    return double(n) * rand() / (RAND_MAX + 1.0);
+-}
+-
+-class b2dmultirange : public CppUnit::TestFixture
+-{
+-private:
+-    B2DMultiRange aDisjunctRanges;
+-    B2DMultiRange aEqualRanges;
+-    B2DMultiRange aIntersectionN;
+-    B2DMultiRange aIntersectionE;
+-    B2DMultiRange aIntersectionS;
+-    B2DMultiRange aIntersectionW;
+-    B2DMultiRange aIntersectionNE;
+-    B2DMultiRange aIntersectionSE;
+-    B2DMultiRange aIntersectionSW;
+-    B2DMultiRange aIntersectionNW;
+-    B2DMultiRange aRingIntersection;
+-    B2DMultiRange aComplexIntersections;
+-    B2DMultiRange aRandomIntersections;
+-
+-public:
+-    // initialise your test code values here.
+-    void setUp()
+-    {
+-        B2DRange aCenter(1.0, 1.0, -1.0, -1.0);
+-        B2DRange aOffside(9.0, 9.0, 11.0, 11.0);
+-        B2DRange aNorth(1.0, 0.0, -1.0, -2.0);
+-        B2DRange aSouth(1.0, 2.0, -1.0, 0.0);
+-        B2DRange aEast(0.0, 1.0, 2.0, -1.0);
+-        B2DRange aWest(-2.0, 1.0, 0.0, -1.0);
+-        B2DRange aNorthEast(0.0, 0.0, 2.0, -2.0);
+-        B2DRange aSouthEast(0.0, 0.0, 2.0, 2.0);
+-        B2DRange aSouthWest(0.0, 0.0, -2.0, 2.0);
+-        B2DRange aNorthWest(0.0, 0.0, -2.0, -2.0);
+-
+-        B2DRange aNorth2(-1.5, 0.5,  1.5,  3.5);
+-        B2DRange aSouth2(-1.5, -0.5, 1.5, -3.5);
+-        B2DRange aEast2 (0.5,  -1.5, 3.5,  1.5);
+-        B2DRange aWest2 (-0.5, -1.5,-3.5,  1.5);
+-
+-        ::std::ofstream output("multirange_testcases.gnuplot");
+-        DebugPlotter aPlotter( "multirange testcases",
+-                               output );
+-
+-        aPlotter.plot( aCenter, "center" );
+-        aPlotter.plot( aOffside, "offside" );
+-        aPlotter.plot( aNorth, "north" );
+-        aPlotter.plot( aSouth, "south" );
+-        aPlotter.plot( aEast, "east" );
+-        aPlotter.plot( aWest, "west" );
+-        aPlotter.plot( aNorthEast, "northeast" );
+-        aPlotter.plot( aSouthEast, "southeast" );
+-        aPlotter.plot( aSouthWest, "southwest" );
+-        aPlotter.plot( aNorthWest, "northwest" );
+-        
+-        aDisjunctRanges.addRange( aCenter );
+-        aDisjunctRanges.addRange( aOffside );
+-
+-        aEqualRanges.addRange( aCenter );
+-        aEqualRanges.addRange( aCenter );
+-
+-        aIntersectionN.addRange( aCenter );
+-        aIntersectionN.addRange( aNorth );
+-
+-        aIntersectionE.addRange( aCenter );
+-        aIntersectionE.addRange( aEast );
+-
+-        aIntersectionS.addRange( aCenter );
+-        aIntersectionS.addRange( aSouth );
+-
+-        aIntersectionW.addRange( aCenter );
+-        aIntersectionW.addRange( aWest );
+-
+-        aIntersectionNE.addRange( aCenter );
+-        aIntersectionNE.addRange( aNorthEast );
+-
+-        aIntersectionSE.addRange( aCenter );
+-        aIntersectionSE.addRange( aSouthEast );
+-
+-        aIntersectionSW.addRange( aCenter );
+-        aIntersectionSW.addRange( aSouthWest );
+-
+-        aIntersectionNW.addRange( aCenter );
+-        aIntersectionNW.addRange( aNorthWest );
+-
+-        aRingIntersection.addRange( aNorth2 );
+-        aRingIntersection.addRange( aEast2 );
+-        aRingIntersection.addRange( aSouth2 );
+-        aRingIntersection.addRange( aWest2 );
+-
+-        aComplexIntersections.addRange( aCenter );
+-        aComplexIntersections.addRange( aOffside );
+-        aComplexIntersections.addRange( aCenter );
+-        aComplexIntersections.addRange( aNorth );
+-        aComplexIntersections.addRange( aEast );
+-        aComplexIntersections.addRange( aSouth );
+-        aComplexIntersections.addRange( aWest );
+-        aComplexIntersections.addRange( aNorthEast );
+-        aComplexIntersections.addRange( aSouthEast );
+-        aComplexIntersections.addRange( aSouthWest );
+-        aComplexIntersections.addRange( aNorthWest );
+-
+-/*
+-        for( int i=0; i<10; ++i )
+-        {
+-            B2DRange aRandomRange(
+-                getRandomOrdinal( 10 ),
+-                getRandomOrdinal( 10 ),
+-                getRandomOrdinal( 10 ),
+-                getRandomOrdinal( 10 ) );
+-
+-            aRandomIntersections.addRange( aRandomRange );
+-        }
+-*/
+-    }
+-
+-    void tearDown()
+-    {
+-    }
+-
+-    ::basegfx::B2DPolyPolygon shiftPoly( int 								nCount,
+-                                         const ::basegfx::B2DPolyPolygon&	rPoly )
+-    {
+-        B2DHomMatrix aMatrix;
+-        aMatrix.translate( nCount*4.0, 
+-                           10.0-nCount*2.0 );
+-
+-        ::basegfx::B2DPolyPolygon aRes( rPoly );
+-        aRes.transform( aMatrix );
+-
+-        return aRes;
+-    } 
+-    
+-    void getPolyPolygon()
+-    {
+-        ::std::ofstream output("multirange_getpolypolygon.gnuplot");
+-        DebugPlotter aPlotter( "multirange getPolyPolygon",
+-                               output );
+-
+-        B2DPolyPolygon result;
+-
+-        aPlotter.plot( shiftPoly(
+-                           0,
+-                           aDisjunctRanges.getPolyPolygon() ),
+-                       "disjunct" );
+-        aPlotter.plot( shiftPoly(
+-                           1,
+-                           aEqualRanges.getPolyPolygon() ),
+-                       "equal" );
+-        aPlotter.plot( shiftPoly(
+-                           2,
+-                           aIntersectionN.getPolyPolygon() ),
+-                       "intersectionN" );
+-        aPlotter.plot( shiftPoly(
+-                           3,
+-                           aIntersectionE.getPolyPolygon() ),
+-                       "intersectionE" );
+-        aPlotter.plot( shiftPoly(
+-                           4,
+-                           aIntersectionS.getPolyPolygon() ),
+-                       "intersectionS" );
+-        aPlotter.plot( shiftPoly(
+-                           5,
+-                           aIntersectionW.getPolyPolygon() ),
+-                       "intersectionW" );
+-        aPlotter.plot( shiftPoly(
+-                           6,
+-                           aIntersectionNE.getPolyPolygon() ),
+-                       "intersectionNE" );
+-        aPlotter.plot( shiftPoly(
+-                           7,
+-                           aIntersectionSE.getPolyPolygon() ),
+-                       "intersectionSE" );
+-        aPlotter.plot( shiftPoly(
+-                           8,
+-                           aIntersectionSW.getPolyPolygon() ),
+-                       "intersectionSW" );
+-        aPlotter.plot( shiftPoly(
+-                           9,
+-                           aIntersectionNW.getPolyPolygon() ),
+-                       "intersectionNW" );
+-        aPlotter.plot( shiftPoly(
+-                           10,
+-                           aRingIntersection.getPolyPolygon() ),
+-                       "intersection ring" );    
+-        aPlotter.plot( shiftPoly(
+-                           11,
+-                           aComplexIntersections.getPolyPolygon() ),
+-                       "intersection complex" );    
+-        aPlotter.plot( shiftPoly(
+-                           12,
+-                           aRandomIntersections.getPolyPolygon() ),
+-                       "intersection random" );    
+-
+-        CPPUNIT_ASSERT_MESSAGE("getPolyPolygon", true );
+-    }
+-
+-    // Change the following lines only, if you add, remove or rename 
+-    // member functions of the current class, 
+-    // because these macros are need by auto register mechanism.
+-
+-    CPPUNIT_TEST_SUITE(b2dmultirange);
+-    CPPUNIT_TEST(getPolyPolygon);
+-    CPPUNIT_TEST_SUITE_END();
+-}; // class b2dmultirange
+ 
+ class b2dsvgdimpex : public CppUnit::TestFixture
+ {
+@@ -505,6 +299,39 @@ public:
+     CPPUNIT_TEST_SUITE_END();
+ }; // class b2dsvgdimpex
+ 
++class b2dpolyrange : public CppUnit::TestFixture
++{
++private:
++public:
++    void setUp()
++    {}
++
++    void tearDown()
++    {}
++
++    void check()
++    {
++        B2DPolyRange aRange;
++        aRange.appendElement(B2DRange(0,0,1,1),ORIENTATION_POSITIVE);
++        aRange.appendElement(B2DRange(2,2,3,3),ORIENTATION_POSITIVE);
++        
++        CPPUNIT_ASSERT_MESSAGE("simple poly range - count", 
++                               aRange.count() == 2);
++        CPPUNIT_ASSERT_MESSAGE("simple poly range - first element", 
++                               aRange.getElement(0).head == B2DRange(0,0,1,1));
++        CPPUNIT_ASSERT_MESSAGE("simple poly range - second element", 
++                               aRange.getElement(1).head == B2DRange(2,2,3,3));
++    }
++
++    // Change the following lines only, if you add, remove or rename 
++    // member functions of the current class, 
++    // because these macros are need by auto register mechanism.
++
++    CPPUNIT_TEST_SUITE(b2dpolyrange);
++    CPPUNIT_TEST(check);
++    CPPUNIT_TEST_SUITE_END();
++};
++
+ class b2dbeziertools : public CppUnit::TestFixture
+ {
+ private:
+@@ -1620,8 +1447,9 @@ public:
+ }; // class b2dvector
+ 
+ // -----------------------------------------------------------------------------
+-//CPPUNIT_TEST_SUITE_NAMED_REGISTRATION(basegfx2d::b2dmultirange, "basegfx2d");
++
+ CPPUNIT_TEST_SUITE_NAMED_REGISTRATION(basegfx2d::b2dsvgdimpex, "basegfx2d");
++CPPUNIT_TEST_SUITE_NAMED_REGISTRATION(basegfx2d::b2dpolyrange, "basegfx2d");
+ //CPPUNIT_TEST_SUITE_NAMED_REGISTRATION(basegfx2d::b2dbeziertools, "basegfx2d");
+ CPPUNIT_TEST_SUITE_NAMED_REGISTRATION(basegfx2d::b2dcubicbezier, "basegfx2d");
+ CPPUNIT_TEST_SUITE_NAMED_REGISTRATION(basegfx2d::b2dhommatrix, "basegfx2d");
+diff --git basegfx/test/boxclipper.cxx basegfx/test/boxclipper.cxx
+new file mode 100644
+index 0000000..51f6c39
+--- /dev/null
++++ basegfx/test/boxclipper.cxx
+@@ -0,0 +1,426 @@
++/*************************************************************************
++ *
++ * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
++ * 
++ * Copyright 2008 by Sun Microsystems, Inc.
++ *
++ * OpenOffice.org - a multi-platform office productivity suite
++ *
++ * $RCSfile: basegfx2d.cxx,v $
++ * $Revision: 1.14 $
++ *
++ * This file is part of OpenOffice.org.
++ *
++ * OpenOffice.org is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU Lesser General Public License version 3
++ * only, as published by the Free Software Foundation.
++ *
++ * OpenOffice.org is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU Lesser General Public License version 3 for more details
++ * (a copy is included in the LICENSE file that accompanied this code).
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * version 3 along with OpenOffice.org.  If not, see
++ * <http://www.openoffice.org/license.html>
++ * for a copy of the LGPLv3 License.
++ *
++ ************************************************************************/
++
++
++// MARKER(update_precomp.py): autogen include statement, do not remove
++#include "precompiled_basegfx.hxx"
++// autogenerated file with codegen.pl
++
++#include <cppunit/simpleheader.hxx>
++
++#include <basegfx/matrix/b2dhommatrix.hxx>
++#include <basegfx/curve/b2dcubicbezier.hxx>
++#include <basegfx/curve/b2dbeziertools.hxx>
++#include <basegfx/range/b2dpolyrange.hxx>
++#include <basegfx/polygon/b2dpolygon.hxx>
++#include <basegfx/polygon/b2dpolygontools.hxx>
++#include <basegfx/polygon/b2dpolypolygontools.hxx>
++#include <basegfx/polygon/b2dpolypolygoncutter.hxx>
++#include <basegfx/polygon/b2dpolygonclipper.hxx>
++#include <basegfx/polygon/b2dpolypolygon.hxx>
++#include <basegfx/numeric/ftools.hxx>
++
++#include <boost/bind.hpp>
++
++using namespace ::basegfx;
++
++
++namespace basegfx2d
++{
++/// Gets a random ordinal [0,n)
++inline double getRandomOrdinal( const ::std::size_t n )
++{
++    // use this one when displaying polygons in OOo, which still sucks
++    // great rocks when trying to import non-integer svg:d attributes
++    // return sal_Int64(double(n) * rand() / (RAND_MAX + 1.0));
++    return double(n) * rand() / (RAND_MAX + 1.0);
++}
++
++inline bool compare(const B2DPoint& left, const B2DPoint& right)
++{
++    return left.getX()<right.getX() 
++        || (left.getX()==right.getX() && left.getY()<right.getY());
++}
++
++
++class boxclipper : public CppUnit::TestFixture
++{
++private:
++    B2DPolyRange aDisjunctRanges;
++    B2DPolyRange aEqualRanges;
++    B2DPolyRange aIntersectionN;
++    B2DPolyRange aIntersectionE;
++    B2DPolyRange aIntersectionS;
++    B2DPolyRange aIntersectionW;
++    B2DPolyRange aIntersectionNE;
++    B2DPolyRange aIntersectionSE;
++    B2DPolyRange aIntersectionSW;
++    B2DPolyRange aIntersectionNW;
++    B2DPolyRange aRingIntersection;
++    B2DPolyRange aRingIntersection2;
++    B2DPolyRange aRingIntersectExtraStrip;
++    B2DPolyRange aComplexIntersections;
++    B2DPolyRange aRandomIntersections;
++
++public:
++    // initialise your test code values here.
++    void setUp()
++    {
++        B2DRange aCenter(100, 100, -100, -100);
++        B2DRange aOffside(800, 800, 1000, 1000);
++        B2DRange aNorth(100, 0, -100, -200);
++        B2DRange aSouth(100, 200, -100, 0);
++        B2DRange aEast(0, 100, 200, -100);
++        B2DRange aWest(-200, 100, 0, -100);
++        B2DRange aNorthEast(0, 0, 200, -200);
++        B2DRange aSouthEast(0, 0, 200, 200);
++        B2DRange aSouthWest(0, 0, -200, 200);
++        B2DRange aNorthWest(0, 0, -200, -200);
++
++        B2DRange aNorth2(-150, 50,  150,  350);
++        B2DRange aSouth2(-150, -50, 150, -350);
++        B2DRange aEast2 (50,  -150, 350,  150);
++        B2DRange aWest2 (-50, -150,-350,  150);
++
++        aDisjunctRanges.appendElement( aCenter, ORIENTATION_NEGATIVE );
++        aDisjunctRanges.appendElement( aOffside, ORIENTATION_NEGATIVE );
++
++        aEqualRanges.appendElement( aCenter, ORIENTATION_NEGATIVE );
++        aEqualRanges.appendElement( aCenter, ORIENTATION_NEGATIVE );
++
++        aIntersectionN.appendElement( aCenter, ORIENTATION_NEGATIVE );
++        aIntersectionN.appendElement( aNorth, ORIENTATION_NEGATIVE );
++
++        aIntersectionE.appendElement( aCenter, ORIENTATION_NEGATIVE );
++        aIntersectionE.appendElement( aEast, ORIENTATION_NEGATIVE );
++
++        aIntersectionS.appendElement( aCenter, ORIENTATION_NEGATIVE );
++        aIntersectionS.appendElement( aSouth, ORIENTATION_NEGATIVE );
++
++        aIntersectionW.appendElement( aCenter, ORIENTATION_NEGATIVE );
++        aIntersectionW.appendElement( aWest, ORIENTATION_NEGATIVE );
++
++        aIntersectionNE.appendElement( aCenter, ORIENTATION_NEGATIVE );
++        aIntersectionNE.appendElement( aNorthEast, ORIENTATION_NEGATIVE );
++
++        aIntersectionSE.appendElement( aCenter, ORIENTATION_NEGATIVE );
++        aIntersectionSE.appendElement( aSouthEast, ORIENTATION_NEGATIVE );
++
++        aIntersectionSW.appendElement( aCenter, ORIENTATION_NEGATIVE );
++        aIntersectionSW.appendElement( aSouthWest, ORIENTATION_NEGATIVE );
++
++        aIntersectionNW.appendElement( aCenter, ORIENTATION_NEGATIVE );
++        aIntersectionNW.appendElement( aNorthWest, ORIENTATION_NEGATIVE );
++
++        aRingIntersection.appendElement( aNorth2, ORIENTATION_NEGATIVE );
++        aRingIntersection.appendElement( aEast2, ORIENTATION_NEGATIVE );
++        aRingIntersection.appendElement( aSouth2, ORIENTATION_NEGATIVE );
++
++        aRingIntersection2 = aRingIntersection;
++        aRingIntersection2.appendElement( aWest2, ORIENTATION_NEGATIVE );
++
++        aRingIntersectExtraStrip = aRingIntersection2;
++        aRingIntersectExtraStrip.appendElement( B2DRange(0, -25, 200, 25), 
++                                                ORIENTATION_NEGATIVE );
++
++        aComplexIntersections.appendElement( aCenter, ORIENTATION_NEGATIVE );
++        aComplexIntersections.appendElement( aOffside, ORIENTATION_NEGATIVE );
++        aComplexIntersections.appendElement( aCenter, ORIENTATION_NEGATIVE );
++        aComplexIntersections.appendElement( aNorth, ORIENTATION_NEGATIVE );
++        aComplexIntersections.appendElement( aEast, ORIENTATION_NEGATIVE );
++        aComplexIntersections.appendElement( aSouth, ORIENTATION_NEGATIVE );
++        aComplexIntersections.appendElement( aWest, ORIENTATION_NEGATIVE );
++        aComplexIntersections.appendElement( aNorthEast, ORIENTATION_NEGATIVE );
++        aComplexIntersections.appendElement( aSouthEast, ORIENTATION_NEGATIVE );
++        aComplexIntersections.appendElement( aSouthWest, ORIENTATION_NEGATIVE );
++        aComplexIntersections.appendElement( aNorthWest, ORIENTATION_NEGATIVE );
++
++#ifdef GENERATE_RANDOM
++        for( int i=0; i<800; ++i )
++        {
++            B2DRange aRandomRange(
++                getRandomOrdinal( 1000 ),
++                getRandomOrdinal( 1000 ),
++                getRandomOrdinal( 1000 ),
++                getRandomOrdinal( 1000 ) );
++
++            aRandomIntersections.appendElement( aRandomRange, ORIENTATION_NEGATIVE );
++        }
++#else
++        const char* randomSvg="m394 783h404v57h-404zm-197-505h571v576h-571zm356-634h75v200h-75zm-40-113h403v588h-403zm93-811h111v494h-111zm-364-619h562v121h-562zm-134-8h292v27h-292zm110 356h621v486h-621zm78-386h228v25h-228zm475-345h201v201h-201zm-2-93h122v126h-122zm-417-243h567v524h-567zm-266-738h863v456h-863zm262-333h315v698h-315zm-328-826h43v393h-43zm830-219h120v664h-120zm-311-636h221v109h-221zm-500 137h628v19h-628zm681-94h211v493h-211zm-366-646h384v355h-384zm-189-199h715v247h-715zm165-459h563v601h-563zm258-479h98v606h-98zm270-517h65v218h-65zm-44-259h96v286h-96zm-599-202h705v468h-705zm216-803h450v494h-450zm-150-22h26v167h-26zm-55-599h50v260h-50zm190-278h490v387h-490zm-290-453h634v392h-634zm257 189h552v300h-552zm-151-690h136v455h-136zm12-597h488v432h-488zm501-459h48v39h-48zm-224-112h429v22h-429zm-281 102h492v621h-492zm519-158h208v17h-208zm-681-563h56v427h-56zm126-451h615v392h-615zm-47-410h598v522h-598zm-32 316h79v110h-79zm-71-129h18v127h-18zm126-993h743v589h-743zm211-430h428v750h-428zm61-554h100v220h-100zm-353-49h658v157h-658zm778-383h115v272h-115zm-249-541h119v712h-119zm203 86h94v40h-94z";
++        B2DPolyPolygon randomPoly;
++        tools::importFromSvgD(
++            randomPoly,
++            rtl::OUString::createFromAscii(randomSvg));
++        std::for_each(randomPoly.begin(),
++                      randomPoly.end(),
++                      boost::bind(
++             &B2DPolyRange::appendElement,
++                          boost::ref(aRandomIntersections),
++                          boost::bind(
++                 &B2DPolygon::getB2DRange,
++                              _1),
++                          ORIENTATION_NEGATIVE,
++                          1));
++#endif
++    }
++
++    void tearDown()
++    {
++    }
++
++    B2DPolyPolygon normalizePoly( const B2DPolyPolygon& rPoly )
++    {
++        B2DPolyPolygon aRes;
++        for( sal_uInt32 i=0; i<rPoly.count(); ++i )
++        {
++            B2DPolygon aTmp=rPoly.getB2DPolygon(i);
++            if( ORIENTATION_NEGATIVE == tools::getOrientation(aTmp) )
++                aTmp.flip();
++
++            aTmp=tools::removeNeutralPoints(aTmp);
++
++            B2DPoint* pSmallest=0;
++            for(B2DPoint* pCurr=aTmp.begin(); pCurr!=aTmp.end(); ++pCurr)
++            {
++                if( ! pSmallest || compare(*pCurr, *pSmallest) )
++                {
++                    pSmallest=pCurr;
++                }
++            }
++
++            if( pSmallest )
++                std::rotate(aTmp.begin(),pSmallest,aTmp.end());
++
++            aRes.append(aTmp);
++        }
++
++        // boxclipper & generic clipper disagree slightly on area-less
++        // polygons (one or two points only)
++        aRes = tools::stripNeutralPolygons(aRes);
++
++        // now, sort all polygons with increasing 0th point
++        std::sort(aRes.begin(),
++                  aRes.end(),
++                  boost::bind(
++                      &compare,
++                      boost::bind(
++                          &B2DPolygon::getB2DPoint,
++                          _1,0),
++                      boost::bind(
++                          &B2DPolygon::getB2DPoint,
++                          _2,0)));
++
++        return aRes;
++    }
++
++    void verifyPoly(const char* sName, const char* sSvg, const B2DPolyRange& toTest)
++    {
++        B2DPolyPolygon aTmp1;
++        CPPUNIT_ASSERT_MESSAGE(sName, 
++                               tools::importFromSvgD(
++                                   aTmp1,
++                                   rtl::OUString::createFromAscii(sSvg)));
++
++        const rtl::OUString aSvg=
++            tools::exportToSvgD(toTest.solveCrossovers());
++        B2DPolyPolygon aTmp2;
++        CPPUNIT_ASSERT_MESSAGE(sName,
++                               tools::importFromSvgD(
++                                   aTmp2,
++                                   aSvg));
++
++        CPPUNIT_ASSERT_MESSAGE(
++            sName,
++            normalizePoly(aTmp2) == normalizePoly(aTmp1));
++    }
++
++    void verifyPoly()
++    {
++        const char* disjunct="m100 100v-200h-200v200zm1100 900v-200h-200v200z";
++        const char* equal="m100 100v-200h-200v200zm200 0v-200h-200v200h200z";
++        const char* intersectionN="m100 0v-100h-200v100zm200 100v-200-100h-200v100 200z";
++        const char* intersectionE="m100 100v-200h-100v200zm200 0v-200h-200-100v200h100z";
++        const char* intersectionS="m100 100v-200h-200v200 100h200v-100zm0 0v-100h-200v100z";
++        const char* intersectionW="m0 100v-200h-100v200zm200 0v-200h-200-100v200h100z";
++        const char* intersectionNE="m100 0v-100h-100v100zm200 0v-200h-200v100h-100v200h200v-100z";
++        const char* intersectionSE="m200 200v-200h-100v-100h-200v200h100v100zm100-100v-100h-100v100z";
++        const char* intersectionSW="m0 100v-100h-100v100zm200 0v-200h-200v100h-100v200h200v-100z";
++        const char* intersectionNW="m100 100v-200h-100v-100h-200v200h100v100zm100-100v-100h-100v100z";
++        const char* ringIntersection="m150 150v-100h-100v100zm300 0v-300h-200v-200h-300v300h200v100h-200v300h300v-200zm0-200v-100h-100v100z";
++        const char* ringIntersection2="m-50-50v-100h-100v100zm100 200v-100h-100v100zm500 0v-300h-200v-200h-300v200h-200v300h200v200h300v-200zm-200-100v-100h100v100zm100-100v-100h-100v100zm100 200v-100h-100v100z";
++        const char* ringIntersectExtraStrip="m-50-50v-100h-100v100zm100 200v-100h-100v100zm500 0v-300h-200v-200h-300v200h-200v300h200v200h300v-200zm-200-100v-100h100v25h-50v50h50v25zm150-25v-50h-150v50zm100-75v-100h-100v100zm100 200v-100h-100v100z";
++        // TODO: old clipper impl. debug difference
++        //const char* complexIntersections="m100 0h-100v-100 100h-100 100v100-100zm0 0zm200 0h-100v-100h-100v-100 100h-100v100h-100 100v100h100v100-100h100v-100zm0 0h-100v-100 100h-100 100v100-100h100zm0 0v-100h-100-100v100 100h100 100v-100zm100 0v-100h-100v-100h-100-100v100h-100v100 100h100v100h100 100v-100h100v-100zm-200 0zm100 0v-100h-100-100v100 100h100 100v-100zm100 100v-200-100h-200-100-100v100 200 100h100 100 200v-100zm-200-100zm1000 1000v-200h-200v200z";
++        const char* complexIntersections="m0 0zm0 0zm0 0zm0 0v-100 100h-100 100v100-100h100zm-100 0v-100 100h-100 100v100-100h100zm0 0v-100h-100-100v100 100h100 100v-100zm0 0v-100h-100-100v100 100h100 100v-100zm0 0v-100h-100v-100 100h-100v100h-100 100v100h100v100-100h100v-100h100zm-100-100v-100h-100-100v100h-100v100 100h100v100h100 100v-100h100v-100-100zm0 0v-100h-200-100-100v100 200 100h100 100 200v-100-200zm600 900v200h200v-200z";
++        const char* randomIntersections="m63 457v-393h-43v393zm114 63v-8h-48v8zm-14 477v-127h-18v127zm693-923v-5h-119v5zm-260 457v-1h-14v1zm-220-375v-27h-8v27zm78 755v-22h-7v22zm203-774v-8h-158v8zm-108 375v-17h23v17zm813-19v-189h-21v-12h-26v-54h-17v-69h-25v-22h-62v-73h104v-5h-104-15v-17h-49v-1h-8v-16h-119v16h-386v18h-38-24v34h-23v26h-23v-26h-8v26h-18v27h18v339h8v-339h23v339h8v17h-8v13h8v5h-8v1h8v42h15v20h17v94h18 3v224h165v39h130v2h75v4h98v-4h153v-2h77v-20h4v-28h11v-218h-11v-27h3v-1h8v-17h-8v-63h8v-51h18v-32zm-581 32v-13h-14v13zm-78-78v-7h-32v7zm124 14v-21h-14v21zm595 32v-189h-26v-12h-4v-9h-13v-45h-13v-10h-12v-59h-62v-22h-26v-10h11v-63h15v-5h-15-49v-17h-8v-1h-119v1h-107v17h-279-38v34h-24v26h-23v27h23v284h-15v55h15v17h-15v13h15v5h-15v1h15v42h17v20h18v94h3 14v62h8v48h90v32h18v61h35v21h8v2h122v37h75v2h98v-2h153v-20h77v-28h4v-29h5v-40h-5v-149h-1v-27h1v-1h3v-17h-3v-46h3v-17-51h8v-32zm-563 2v-13h-14v13zm198 30v-13h-39v13zm204-43v-21h3v21zm-168-21v-21h-39v21zm306 0v-21h-5v21zm178 115v-272h-20v-12h-2v-54h-21v-164h1v-22h-27v-48h-743v47h-23v18h-71v24h-8v419h-39v19h60v156h66 32v202h-72v110h79v-88h11v39h3v48h621v-14h96v-82h35v-326zm-570-420v-4h-156v4zm63 481v-18h-11v18zm72 0v-25h-14v25zm465-112v-13h-5v13zm-46-43v-21h1v21zm-37-21v-21h-12v21zm-352 21v-21h23v21zm-23 30v-17h23v17zm-23 18v-5h23v5zm-23 82v-19h23v19zm272 75v-3h-35v3zm-76-192v-13h-39v13zm150 30v-13h-35v13zm-76 6v-1h-39v1zm11 106v-25h-11v25zm150 160v-14h-75v14zm318-304v-11h-13v-43h-2v-2h-10v-37h-4v37h-27v3h-31v-3-37h-5v37h-43v3h-2v21h2v21h-2v30h-1v-30h-8v-21h8v-21h-8v-3h-5v-62h5v-11h-5v-29h-8v-52h-15v-17-38h-15v-52h-89v16h-22v36h-175v55h-15v1h-25v51h-23v-41h-14v41h-2v105h-4v21h4v21h-4v13h4v17h-4-18v13h18v5h-18v1h18v42h4v11h2v9h14v-9h23v9h40v19h-40v25h40v2h82v2h75v43h-75v3h75 40v60h35v-60h23 34 12 15v-3h-15v-43h15v-48h10v-37h11v-31h1v1h45v30h5v-30h20v-1h11v1h8v30h19v20h3v-20h1v-30h10v-1h2v-32zm-146-329v-1h-2v1zm-117 211v-11 11zm-76 0v-11h-13v11zm13 65v-65h1v65zm-1 42v-21h1v16h35v5zm-36 30v-17h36v17zm-36 18v-5h36v5zm180-5v-13h-13v-17h5v-13h-5v-21h5v-21h-5v-3h-8v-62h8v-11h-8v-29h-9v-51h-6v-1-17h-15v-38h-54v-36h-35v36h-22v38h-67v17h-108v1h-15v51h-25v105h-23v-105h-14v105h-2v21h2v21h-2v13h2v17h-2-4v13h4v5h-4v1h4v42h2v11h14v-11h23v11h40v9h82v19h-82v25h82v2h75v2h40v43h-40v3h40 35 23v-3h-23v-43h23v-2h34v2h12v-2h6v-46h9v-20h8v-17h2v-26h-2v-5zm-127-64v-21 21zm89 51v-17h3v17zm-57-17v-13h-35v13zm58 61v-26h-19v-5h19v-13h-23v-17h23v-13h-23v-21h23v-21h-23v-65h23v-11h-23v-14h-35v-15 15h-22v14h-18v11h18v65h-18v21h18v16h22v5h-22v13h22v17h-22-18v13h18v5h-18v1h18v25h22v17h35v-17zm0-25v-1h-35v1zm-22-390v6h-175v5h-31v-15h228v4zm344 352v-189h-2v-12h-21v-54h-26v-164h26v-5h-26v-17h-119v-36h-562v35h-62v18h-23v34h-23v-10h-48v419h-8v8h8v5h71v5h-58v1h58v42h8v114h32 18v224h3v39h165v34h456v-32h77v-2h4v-20h11v-28h4v-218h-4v-28h36v-17h-36v-63h39v-83zm-50 0v-11h-1v-43h-3v-2h-6v-39h-4v-34h-13v-60h-12v-12h-31v72h-31v-72-9h-59v-17-38h-5v-59h-8v-5h8v-1h-8v-16h-2v16h-13v-11h-15v-5h-89v5h-22v11h-175v6h-15v7h-25v16h-43v36h-18v66h-54v-107h-32v107h-4v41h-8v105h-6v7h6v14h8v21h-8v13h8v17h-8-14v13h14v5h-14v1h14v42h8v20h90v19h-34v7h-15v68h26v-50h23v50h18 4v62h16v-62h15v110h8v10h3v22h119v11h75v50h75v-50h23v-11h34v11h48v-11h30v-22h21v-120h20v-3h11v3h30v-3h13-13v-27h13v-1h17v-17h-17v-46h17v-17h6v-51h3v-32zm-256-32v-21h-35v-65h35v-11h-35v-14 14h-22v11h22v65h-22v21h22v16-16zm89 69v-5h3v5zm-3 26v-26h-31v-5h31v-13h-31v-17h31v-13h-31v-21h31v-21h-31v-65h31v-11h-31v-14h-23v-15h-35v-51 51h-22v15h-18v14h-35v11h35v65h-35v21h35v16h18v5h-18v13h18v17h-18-36-39-61v13h61v5h-61v1h61v25h39v-25h36v25h18v17h22v11h35v-11h23v-17zm-19-25v-1h-4v-5h4v-13h-4-35-22v13h22v5h-22v1h22v25h35v-25zm23 252v-36h34v36zm-34-99v-43h34v43zm35-128v-26h-8v-5h8v-13h-8v-17h8v-13h-8v-21h8v-21h-8v-3h-9v-62h9v-11h-9v-29h-6v-51-1h-15v-17h-54v-38h-35v38h-22v11h-53v6h-14v1h-108v51h-15v105h-25v21h25v21h-25v13h25v17h-25-23-14-2v13h2v5h-2v1h2v42h14v-42h23v42h40v11h82v9h75v46h40v2h35v-2h23v-4h31v-42h3v46h12v-46h6v-20h9v-17zm-15-61v-13h-12v13zm12 30v-13h-12v13zm12 31v-26h-12v26zm12 131v-3h-12v3zm12 110v-14h-12v14zm27-241v-26h-9v-5h9v-13h-9v-17h9v-13h-9v-21h9v-21h-9v-3h-6v-62h6v-11h-6v-29-51h-15v-1h-54v-17h-35v11h-22v6h-53v1h-14v51h-108v105h-15v21h15v21h-15v13h15v17h-15-25v13h25v5h-25v1h25v25h15v17h21v6h61v5h75v9h18v42h22v4h35v-4h23v-42h31v-9h3v9h12v-9-11h6v-17zm0 0v-26h-6v-5h6v-13h-6v-17h6v-13h-6v-21h6v-21h-6v-3-62-11-29h-15v-51h-54v-1h-35v-6 6h-22v1h-53v51h-14v24h-87v81h-21v21h21v21h-21v13h21v17h-21-15v13h15v5h-15v1h15v25h21v17h61v6h39v-6h36v11h18v9h22v42h35v-42h23v-9h31v-11h3v11h12v-11-17zm0 0v-26-5-13-17-13-21-21-3h-12v3h-3v-65h15v-11h-15v-29h-54v-51h-35v-1 1h-22v51h-53v29h-1v-5h-13v5h-26v76h-61v21h61v21h-61v13h61v17h-61-21v13h21v5h-21v1h21v25h61v17h39v-17h36v17h18v11h22v9h35v-9h23v-11h31v-17h3v17h12v-17zm15-419v-12h-2v12zm186 356v-56h-8v-133h-4v-12h-13v-9h-13v-45h-12v-10h-62v-59-6h-26v-16h-33v-10h33v-12h-33v-22h-5v-29h49v-5h-49-8v-17h-119v17h-107-279v34h-38v26h-24v27h24v179h-7v105h-17v55h17v17h-17v13h17v5h-17v1h17v42h18v20h3v94h14 8v62h41v37h26v-37h23v48h18v32h35v61h8v21h122v2h75v37h98v-37h34v17h119v-57h11v29h66v-29h4v-40h-4v-26h3v-123h-3v-27h3v-1h1v-17h-1v-46h1v-17h3v-51-32zm0 0v-54h-4v-2h-3v-73h-10v-60h-13v-12h-12v-9h-31v9h-31v-9-55h-59v-59h-5v-5h5v-1h-5v-16h-8v-10h8v-12h-8v-22h-119v34h117v10h-28v-6h-89v6h-22v5h-175v11h-40v13h-147v11h-4v107h-8v41h-6v105h-22v21h28v21h-17v13h17v17h-14-3v13h3v5h-3v1h3v42h14v20h8v94h41 26 23 18v62h4v48h31v10h8v22h3v11h119v50h75v21h98v-71h34v71h48v-71h30v-11h21v-22h20v-120h11v120h43v-123h17-17v-27h17v-1h6v-17h-6v-46h6v-17h3v-51h1v-32zm-4 0v-11h-6v-43h-4v-2h-13v-39h-12v-34h-4v34h-27v2h-31v-2-34h-48v36h-2v37h-1v-73h-8v-29-52h-5v-17h-8v-38h-15v-59h-15v-6h-89v6h-22v7h-175v16h-15v36h-25v55h-39v11h-4v41h-18v105h-54v-105h-32v105h-4v7h4v14h86v21h-86v13h86v17h-86-4v13h4v5h-4v1h4v42h86v11h18v9h4v19h-4v25h4v50h16v-48h23v45h-8v3h8 122v96h-119v14h119v10h75v22h75v-22h23v-10h34v10h48v-24h-36v-36h15v-60h21v-3h-11v-43h2v15h9v-15h46v15h5v-15h20v-2h-20v-46h20v-37h11v37h8v46h-8v2h8v15h22v-15h1v-2h-1v-46h1v-17h12v-20h13v-31h4v-32zm-142 148v-2h-9v2zm9-2v-46h46v46zm-46 45v-28h46v28zm67-191v-11h-1v-42h-3v42h-19v11h19v32h3v-32zm-61 0v-11h-5v11zm96 0v-11h-4v-43h-13v-2h-2v-37h-10v-2h-4v2h-27v37h-31v-37-2h-5v2h-43v37h-2v3h-1v-3h-8v-62-11-29h-5v-52h-8v-17h-15v-38-52h-15v-7h-89v7h-22v16h-175v36h-15v55h-25v1h-37v10h-2v41h-4v105h-18v21h18v21h-18v13h18v17h-18-86v13h86v5h-86v1h86v42h18v11h4v9h2v19h-2v25h2v2h14v-2h23v2h40v2h82v43h-122v3h122 75v96h-75v14h75v10h75v-10h23v-14h-23v-36h23v-60h34v60h12v-60h15 10v-3h-10v-43h10v-48h11v-37h46v37h5v-37h20v-30h11v30h8v37h22v-17h1v-20h12v-31h13v-32zm-13 0v-11h-2v-43h-10v-2h-4v2h-19v1h-8v42h-31v-21-21-3h-5v3h-43v21h43v21h-43v11h43v19h-45v13h45v1h5v-1h20v-13h-20v-19h31v32h8v1h19v30h3v-30h1v-1h10v-32zm-72 148v-2h-5v2zm5 43h-5zm66-191v-11h-3v11zm-38 146v-46h11v46zm-11 45v-28h11v28zm-11 149v-4h11v4zm-11 40v-40h-8v40zm92-380v-54-2h-4v-133h-13v-12h-13v-9h-12v-45h-31v45h-31v-55-59h-59v-5h33v-1h-33v-16h-5v-10h5v-12h-5v-22h-8v-29h8v-5h-8-119-107v5h107v29h-386v26h-38v27h40v20h-4v11h-14v148h-22v105h-7v55h18v17h-18v13h18v5h-18v1h18v42h3v20h14v94h8 41v62h26v-62h23v62h18v48h4v10h31v22h8v61h122v21h75v2h98v-2h34v2h99v-84h20v-22h11v22h43v-22h23v-123h-6v-27h6v-1h3v-17h-3v-46h3v-17h1v-51h3v-32zm-43 148v-2h-22v2zm22 43h-30zm66 189v-40h-66v40zm41-380v-11h-10v-43h-4v1h-19v42h-8v11h8v32h19v1h3v-1h1v-32zm38 0v-11h-3v-43h-6v-2h-4v-39h-13v-34h-12v-60h-4v60h-27v34h-31v-34-72h-48v72h-3v-29h-8v-52-17h-5v-38h-8v-59h-15v-6h-15v-11h-89v11h-22v6h-175v7h-15v16h-25v36h-43v66h-18v41h-54v-41h-32v41h-4v105h-8v7h8v14h4v21h-4v13h4v17h-4-8v13h8v5h-8v1h8v42h4v11h86v9h18v19h-18v25h18v50h4 16 15 8v110h3v10h119v22h75v11h75v-11h23v-22h34v22h48v-22h30v-24h-30v-96h51v-3h20-20v-28h20v-15h11v15h8v1h22v-1h13v-17h-12v-46h12v-17h17v-51h6v-32z";
++
++        verifyPoly("disjunct", disjunct, aDisjunctRanges);
++        verifyPoly("equal", equal, aEqualRanges);
++        verifyPoly("intersectionN", intersectionN, aIntersectionN);
++        verifyPoly("intersectionE", intersectionE, aIntersectionE);
++        verifyPoly("intersectionS", intersectionS, aIntersectionS);
++        verifyPoly("intersectionW", intersectionW, aIntersectionW);
++        verifyPoly("intersectionNE", intersectionNE, aIntersectionNE);
++        verifyPoly("intersectionSE", intersectionSE, aIntersectionSE);
++        verifyPoly("intersectionSW", intersectionSW, aIntersectionSW);
++        verifyPoly("intersectionNW", intersectionNW, aIntersectionNW);
++        verifyPoly("ringIntersection", ringIntersection, aRingIntersection);
++        verifyPoly("ringIntersection2", ringIntersection2, aRingIntersection2);
++        verifyPoly("ringIntersectExtraStrip", ringIntersectExtraStrip, aRingIntersectExtraStrip);
++        verifyPoly("complexIntersections", complexIntersections, aComplexIntersections);
++        verifyPoly("randomIntersections", randomIntersections, aRandomIntersections);
++    }
++
++    void dumpSvg(const char* pName, 
++                 const ::basegfx::B2DPolyPolygon& rPoly)
++    {
++        (void)pName; (void)rPoly;
++#if defined(VERBOSE)
++        fprintf(stderr, "%s - svg:d=\"%s\"\n", 
++                pName, rtl::OUStringToOString(
++                    basegfx::tools::exportToSvgD(rPoly),
++                    RTL_TEXTENCODING_UTF8).getStr() );
++#endif
++    }
++
++    void getPolyPolygon()
++    {
++        dumpSvg("disjunct",aDisjunctRanges.solveCrossovers());
++        dumpSvg("equal",aEqualRanges.solveCrossovers());
++        dumpSvg("intersectionN",aIntersectionN.solveCrossovers());
++        dumpSvg("intersectionE",aIntersectionE.solveCrossovers());
++        dumpSvg("intersectionS",aIntersectionS.solveCrossovers());
++        dumpSvg("intersectionW",aIntersectionW.solveCrossovers());
++        dumpSvg("intersectionNE",aIntersectionNE.solveCrossovers());
++        dumpSvg("intersectionSE",aIntersectionSE.solveCrossovers());
++        dumpSvg("intersectionSW",aIntersectionSW.solveCrossovers());
++        dumpSvg("intersectionNW",aIntersectionNW.solveCrossovers());
++        dumpSvg("ringIntersection",aRingIntersection.solveCrossovers());
++        dumpSvg("ringIntersection2",aRingIntersection2.solveCrossovers());
++        dumpSvg("aRingIntersectExtraStrip",aRingIntersectExtraStrip.solveCrossovers());
++        dumpSvg("complexIntersections",aComplexIntersections.solveCrossovers());
++        dumpSvg("randomIntersections",aRandomIntersections.solveCrossovers());
++
++        CPPUNIT_ASSERT_MESSAGE("getPolyPolygon", true );
++    }
++
++    void validatePoly( const char* pName, const B2DPolyRange& rRange )
++    {
++        B2DPolyPolygon genericClip;
++        const sal_uInt32 nCount=rRange.count();
++        for( sal_uInt32 i=0; i<nCount; ++i )
++        {
++            B2DPolygon aRect=tools::createPolygonFromRect(
++                rRange.getElement(i).head);
++            if( rRange.getElement(i).tail.head == ORIENTATION_NEGATIVE )
++                aRect.flip();
++            
++            genericClip.append(aRect);
++        }
++
++#if defined(VERBOSE)
++        fprintf(stderr, "%s input      - svg:d=\"%s\"\n", 
++                pName, rtl::OUStringToOString(
++                    basegfx::tools::exportToSvgD(
++                        genericClip),
++                    RTL_TEXTENCODING_UTF8).getStr() );
++#endif
++
++        const B2DPolyPolygon boxClipResult=rRange.solveCrossovers();
++        const rtl::OUString boxClipSvg(
++            basegfx::tools::exportToSvgD(
++                normalizePoly(
++                    boxClipResult)));
++#if defined(VERBOSE)
++        fprintf(stderr, "%s boxclipper - svg:d=\"%s\"\n", 
++                pName, rtl::OUStringToOString(
++                    boxClipSvg,
++                    RTL_TEXTENCODING_UTF8).getStr() );
++#endif
++
++        genericClip = tools::solveCrossovers(genericClip);
++        const rtl::OUString genericClipSvg(
++            basegfx::tools::exportToSvgD(
++                normalizePoly(
++                    genericClip)));
++#if defined(VERBOSE)
++        fprintf(stderr, "%s genclipper - svg:d=\"%s\"\n", 
++                pName, rtl::OUStringToOString(
++                    genericClipSvg,
++                    RTL_TEXTENCODING_UTF8).getStr() );
++#endif
++
++        CPPUNIT_ASSERT_MESSAGE(pName, 
++                               genericClipSvg == boxClipSvg);
++    }
++
++    void validatePoly()
++    {
++        validatePoly("disjunct", aDisjunctRanges);
++        validatePoly("equal", aEqualRanges);
++        validatePoly("intersectionN", aIntersectionN);
++        validatePoly("intersectionE", aIntersectionE);
++        validatePoly("intersectionS", aIntersectionS);
++        validatePoly("intersectionW", aIntersectionW);
++        validatePoly("intersectionNE", aIntersectionNE);
++        validatePoly("intersectionSE", aIntersectionSE);
++        validatePoly("intersectionSW", aIntersectionSW);
++        validatePoly("intersectionNW", aIntersectionNW);
++        validatePoly("ringIntersection", aRingIntersection);
++        validatePoly("ringIntersection2", aRingIntersection2);
++        validatePoly("ringIntersectExtraStrip", aRingIntersectExtraStrip);
++        // generic clipper buggy here, likely
++        //validatePoly("complexIntersections", aComplexIntersections);
++        //validatePoly("randomIntersections", aRandomIntersections);
++    }
++
++    // Change the following lines only, if you add, remove or rename 
++    // member functions of the current class, 
++    // because these macros are need by auto register mechanism.
++
++    CPPUNIT_TEST_SUITE(boxclipper);
++    CPPUNIT_TEST(validatePoly);
++    CPPUNIT_TEST(verifyPoly);
++    CPPUNIT_TEST(getPolyPolygon);    
++    CPPUNIT_TEST_SUITE_END();
++};
++
++// -----------------------------------------------------------------------------
++CPPUNIT_TEST_SUITE_NAMED_REGISTRATION(basegfx2d::boxclipper, "boxclipper");
++} // namespace basegfx2d
++
++
++// -----------------------------------------------------------------------------
++
++// this macro creates an empty function, which will called by the RegisterAllFunctions()
++// to let the user the possibility to also register some functions by hand.
++// NOADDITIONAL;
++
+diff --git basegfx/test/makefile.mk basegfx/test/makefile.mk
+index 1bd4d59..8bdd3e8 100644
+--- basegfx/test/makefile.mk
++++ basegfx/test/makefile.mk
+@@ -46,6 +46,7 @@ SHL1OBJS=  \
+     $(SLO)$/basegfx1d.obj \
+     $(SLO)$/basegfx2d.obj \
+     $(SLO)$/basegfx3d.obj \
++    $(SLO)$/boxclipper.obj \
+     $(SLO)$/testtools.obj	
+ 
+ # linking statically against basegfx parts
+@@ -84,6 +85,10 @@ SLOFILES=$(SHL1OBJS)
+ .INCLUDE : target.mk
+ .INCLUDE : _cppunit.mk 
+ 
++.IF "$(verbose)"!="" || "$(VERBOSE)"!=""
++CDEFS+= -DVERBOSE
++.ENDIF
++
+ # --- Enable testshl2 execution in normal build ------------------------
+ 
+ $(MISC)$/unittest_succeeded : $(SHL1TARGETN)
