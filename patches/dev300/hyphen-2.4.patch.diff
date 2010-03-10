@@ -1,0 +1,146 @@
+--- hyphen.old/hyphen-2.4.patch	2009-03-04 11:51:42.000000000 +0100
++++ hyphen/hyphen-2.4.patch	2010-02-12 04:39:46.000000000 +0100
+@@ -1,6 +1,6 @@
+-diff -u misc/hyphen-2.4/csutil.c misc/build/hyphen-2.4/csutil.c
++diff -r -u misc/hyphen-2.4/csutil.c misc/build/hyphen-2.4/csutil.c
+ --- misc/hyphen-2.4/csutil.c	2003-06-01 02:04:00.000000000 +0200
+-+++ misc/build/hyphen-2.4/csutil.c	2008-06-04 10:03:40.000000000 +0200
+++++ misc/build/hyphen-2.4/csutil.c	2010-02-12 04:35:45.000000000 +0100
+ @@ -3493,7 +3493,7 @@
+  };
+  
+@@ -10,10 +10,9 @@
+  {"ISO8859-1",iso1_tbl},
+  {"ISO8859-2",iso2_tbl},
+  {"ISO8859-3",iso3_tbl},
+-Common subdirectories: misc/hyphen-2.4/doc and misc/build/hyphen-2.4/doc
+-diff -u misc/hyphen-2.4/hyphen.c misc/build/hyphen-2.4/hyphen.c
++diff -r -u misc/hyphen-2.4/hyphen.c misc/build/hyphen-2.4/hyphen.c
+ --- misc/hyphen-2.4/hyphen.c	2008-05-01 02:18:15.000000000 +0200
+-+++ misc/build/hyphen-2.4/hyphen.c	2008-06-04 10:06:57.000000000 +0200
+++++ misc/build/hyphen-2.4/hyphen.c	2010-02-12 04:38:54.000000000 +0100
+ @@ -326,7 +326,7 @@
+              } else {
+                  hnj_strchomp(repl + 1);
+@@ -45,7 +44,69 @@
+            } else {
+              dict[k]->states[state_num].replcut = replcut;
+            }
+-@@ -702,7 +702,7 @@
++@@ -599,6 +599,19 @@
++   return 0;    
++ }
++ 
+++/* Unicode ligature length */
+++int hnj_ligature(unsigned char c) {
+++    switch (c) {
+++        case 0x81:		/* ff */
+++        case 0x82: return 1;	/* fi */
+++        case 0x83:		/* ffi */
+++        case 0x84: return 2;	/* ffl */
+++        case 0x85:		/* long st */
+++        case 0x86: return 1;	/* st */
+++    }
+++    return 0;
+++}
+++
++ /* character length of the first n byte of the input word */
++ int hnj_hyphen_strnlen(const char * word, int n, int utf8)
++ {
++@@ -606,6 +619,10 @@
++     int j = 0;
++     while (j < n && word[j] != '\0') {
++       i++;
+++      // Unicode ligature support
+++      if (utf8 && ((unsigned char) word[j] == 0xEF) && ((unsigned char) word[j + 1] == 0xAC))  {
+++        i += hnj_ligature(word[j + 2]);
+++      }
++       for (j++; utf8 && (word[j] & 0xc0) == 0x80; j++);
++     }
++     return i;
++@@ -614,8 +631,14 @@
++ int hnj_hyphen_lhmin(int utf8, const char *word, int word_size, char * hyphens,
++ 	char *** rep, int ** pos, int ** cut, int lhmin)
++ {
++-    int i, j;
++-    for (i = 1, j = 0; i < lhmin && word[j] != '\0'; i++) do {
+++    int i = 1, j = 0;
+++
+++    // Unicode ligature support
+++    if (utf8 && ((unsigned char) word[j] == 0xEF) && ((unsigned char) word[j + 1] == 0xAC))  {
+++      i += hnj_ligature(word[j + 2]);
+++    }
+++
+++    for (j = 0; i < lhmin && word[j] != '\0'; i++) do {
++       // check length of the non-standard part
++       if (*rep && *pos && *cut && (*rep)[j]) {
++         char * rh = strchr((*rep)[j], '=');
++@@ -629,7 +652,12 @@
++          hyphens[j] = '0';
++        }
++        j++;
++-    } while (utf8 && (word[j + 1] & 0xc0) == 0xc0);
+++
+++       // Unicode ligature support
+++       if (utf8 && ((unsigned char) word[j] == 0xEF) && ((unsigned char) word[j + 1] == 0xAC))  {
+++         i += hnj_ligature(word[j + 2]);
+++       }
+++    } while (utf8 && (word[j] & 0xc0) == 0x80);
++     return 0;
++ }
++ 
++@@ -702,7 +730,7 @@
+    prep_word[j++] = '.';
+    prep_word[j] = '\0';
+  
+@@ -54,7 +115,7 @@
+      hyphens[i] = '0';    
+  
+  #ifdef VERBOSE
+-@@ -941,13 +941,13 @@
++@@ -941,13 +969,13 @@
+  int hnj_hyphen_norm(const char *word, int word_size, char * hyphens,
+  	char *** rep, int ** pos, int ** cut)
+  {
+@@ -69,9 +130,9 @@
+    for (i = 0, j = -1; i < word_size; i++) {
+      /* beginning of an UTF-8 character (not '10' start bits) */
+      if ((((unsigned char) word[i]) >> 6) != 2) j++;
+-diff -u misc/hyphen-2.4/Makefile.am misc/build/hyphen-2.4/Makefile.am
++diff -r -u misc/hyphen-2.4/Makefile.am misc/build/hyphen-2.4/Makefile.am
+ --- misc/hyphen-2.4/Makefile.am	2008-04-30 12:33:44.000000000 +0200
+-+++ misc/build/hyphen-2.4/Makefile.am	2008-06-04 11:33:23.000000000 +0200
+++++ misc/build/hyphen-2.4/Makefile.am	2010-02-12 04:35:45.000000000 +0100
+ @@ -24,12 +24,12 @@
+  
+  hyphen.us3:
+@@ -88,9 +149,9 @@
+  
+  clean-local:
+  	rm -rf hyphen.us* hyph_en_US.dic
+-diff -u misc/hyphen-2.4/Makefile.in misc/build/hyphen-2.4/Makefile.in
++diff -r -u misc/hyphen-2.4/Makefile.in misc/build/hyphen-2.4/Makefile.in
+ --- misc/hyphen-2.4/Makefile.in	2008-04-30 14:29:57.000000000 +0200
+-+++ misc/build/hyphen-2.4/Makefile.in	2008-06-04 11:33:44.000000000 +0200
+++++ misc/build/hyphen-2.4/Makefile.in	2010-02-12 04:35:45.000000000 +0100
+ @@ -795,12 +795,12 @@
+  
+  hyphen.us3:
+@@ -107,9 +168,9 @@
+  
+  clean-local:
+  	rm -rf hyphen.us* hyph_en_US.dic
+-diff -u misc/hyphen-2.4/makefile.mk misc/build/hyphen-2.4/makefile.mk
+---- misc/hyphen-2.4/makefile.mk	2008-06-04 10:43:21.000000000 +0200
+-+++ misc/build/hyphen-2.4/makefile.mk	2008-06-04 12:40:46.000000000 +0200
++diff -r -u misc/hyphen-2.4/makefile.mk misc/build/hyphen-2.4/makefile.mk
++--- misc/hyphen-2.4/makefile.mk	2010-02-12 04:34:27.000000000 +0100
+++++ misc/build/hyphen-2.4/makefile.mk	2010-02-12 04:35:45.000000000 +0100
+ @@ -1 +1,57 @@
+ -dummy
+ +#*************************************************************************
+@@ -169,4 +230,3 @@
+ +ALL: ALLTAR
+ +
+ +.INCLUDE : target.mk
+-Common subdirectories: misc/hyphen-2.4/tests and misc/build/hyphen-2.4/tests
