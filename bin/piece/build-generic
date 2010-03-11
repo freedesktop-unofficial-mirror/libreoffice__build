@@ -11,6 +11,40 @@ if test -f $custom_env; then
    echo "merged custom environment: $custom_env"
 fi
 
+# number of CPUs for the parallel build
+if test -n "$PIECE_BUILD_NCPUS_AUTO" ; then
+    PIECE_BUILD_NCPUS=`grep ^processor /proc/cpuinfo | wc -l`
+fi
+# fallback to 1
+test -z "$PIECE_BUILD_NCPUS" && PIECE_BUILD_NCPUS=1
+test $PIECE_BUILD_NCPUS -lt 0 && PIECE_BUILD_NCPUS=1
+
+# reduce the number of jobs according to the available memory
+# caused problem in the openSUSE Build Service
+if test -n "$PIECE_USE_JOBS" && test "$PIECE_USE_JOBS" -gt 1 ; then
+    # define the expected maximal memory usage per process in MB
+    if test `uname -i` = "x86_64" ; then
+	mem_per_process=250
+    else
+	mem_per_process=150
+    fi
+    max_mem=`LANG=C free -t -m | sed -n "s|^Total: *\([0-9]*\).*$|\1|p"`
+    max_jobs="$(($max_mem / $mem_per_process / $PIECE_BUILD_NCPUS))"
+    test $PIECE_USE_JOBS -gt $max_jobs && PIECE_USE_JOBS=$max_jobs && echo "Warning: Reducing number of parallel jobs to $max_jobs because of memory limits"
+    test $PIECE_USE_JOBS -le 0 && PIECE_USE_JOBS= && echo "Warning: Do not use the parallel build at all because of memory limits"
+fi
+
+# finally, set the build flags for the selected parallelism
+if test "$PIECE_BUILD_NCPUS" -gt 1 ; then
+    echo "Parallel build: using $PIECE_BUILD_NCPUS CPUs"
+    EXTRA_BUILD_FLAGS="-P$PIECE_BUILD_NCPUS $EXTRA_BUILD_FLAGS"
+fi
+if test -n "$PIECE_USE_JOBS" ; then
+    echo "Parallel build: using $PIECE_USE_JOBS jobs"
+    EXTRA_BUILD_FLAGS="$EXTRA_BUILD_FLAGS -- -P$PIECE_USE_JOBS"
+fi
+
+# unpack extra sources when needed
 custom_unpack="$OO_TOOLSDIR/piece/unpack-$piece"
 export GNUCP=cp
 if test -f $custom_unpack; then
