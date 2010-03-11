@@ -1,0 +1,362 @@
+Support new embedded media also for PPT import
+
+From: Thorsten Behrens <tbehrens@novell.com>
+
+
+---
+
+ sd/source/filter/ppt/pptin.cxx           |  101 +++++++++---------------------
+ sd/source/filter/ppt/pptin.hxx           |    5 +
+ sd/source/filter/ppt/pptinanimations.cxx |    6 +-
+ svx/inc/svx/sdr/media/mediamanager.hxx   |    2 +
+ svx/source/sdr/media/mediamanager.cxx    |   84 +++++++++++++++++++++++++
+ 5 files changed, 122 insertions(+), 76 deletions(-)
+
+
+diff --git sd/source/filter/ppt/pptin.cxx sd/source/filter/ppt/pptin.cxx
+index 6f2cae3..344681f 100644
+--- sd/source/filter/ppt/pptin.cxx
++++ sd/source/filter/ppt/pptin.cxx
+@@ -59,6 +59,7 @@
+ #include <svx/lrspitem.hxx>
+ #include <svx/lspcitem.hxx>
+ #include <svx/tstpitem.hxx>
++#include <svx/sdr/media/mediamanager.hxx>
+ 
+ #include <sfx2/docinf.hxx>
+ 
+@@ -1831,8 +1832,8 @@ void ImplSdPPTImport::ImportPageEffect( SdPage* pPage, const sal_Bool bNewAnimat
+                                 if ( nBuildFlags & 16 )
+                                 {	// Dia mit Soundeffekt
+                                     pPage->SetSound( TRUE );
+-                                    String aSoundFile( ReadSound( nSoundRef ) );
+-                                    pPage->SetSoundFile( aSoundFile );
++                                    sdr::media::MediaLinkRef aSoundFile( ReadSound( nSoundRef ) );
++                                    pPage->SetSoundFile( aSoundFile->getMediaURL() );
+                                 }
+                                 if ( nBuildFlags & ( 1 << 6 ) ) 	// Loop until next sound
+                                     pPage->SetLoopSound( sal_True );
+@@ -1915,9 +1916,13 @@ void ImplSdPPTImport::ImportPageEffect( SdPage* pPage, const sal_Bool bNewAnimat
+ //
+ ///////////////////////////////////////////////////////////////////////////
+ 
+-String ImplSdPPTImport::ReadSound(UINT32 nSoundRef) const
++sdr::media::MediaLinkRef ImplSdPPTImport::ReadSound(UINT32 nSoundRef) const
+ {
+-    String aRetval;
++	::rtl::Reference< sdr::media::MediaManager > xMediaManager( 
++        GetModel()->GetMediaManager() );
++
++    String aURL;
++    sdr::media::MediaLinkRef aRetval;
+     UINT32 nPosMerk = rStCtrl.Tell();
+     DffRecordHeader aDocHd;
+     if ( SeekToDocument( &aDocHd ) )
+@@ -1948,70 +1953,19 @@ String ImplSdPPTImport::ReadSound(UINT32 nSoundRef) const
+                         rStCtrl.Seek( nPosMerk2 );
+                         if ( SeekToRec( rStCtrl, PPT_PST_CString, nStrLen, NULL, 0 ) )
+                         {
+-                            ReadString( aRetval );
++                            ReadString( aURL );
+                             bDone = TRUE;
+                         }
+                     }
+                 }
+                 if ( bDone )
+                 {
+-                    // ueberpruefen, ob diese Sound-Datei schon
+-                    // existiert. Wenn nicht, exportiere diese
+-                    // in unser lokales Sound-Verzeichnis.
+-                    BOOL	bSoundExists = FALSE;
+-                    List*	pSoundList = new List();
+-
+-                    GalleryExplorer::FillObjList( GALLERY_THEME_SOUNDS, *pSoundList );
+-                    GalleryExplorer::FillObjList( GALLERY_THEME_USERSOUNDS, *pSoundList );
+-
+-                    for( ULONG n = 0; ( n < pSoundList->Count() ) && !bSoundExists; n++ )
++                    rStCtrl.Seek( nPosMerk2 );
++                    DffRecordHeader aSoundDataRecHd;
++                    if ( SeekToRec( rStCtrl, PPT_PST_SoundData, nStrLen, &aSoundDataRecHd, 0 ) )
+                     {
+-                        INetURLObject	aURL( *(String*)pSoundList->GetObject( n ) );
+-                        String			aSoundName( aURL.GetName() );
+-
+-                        if( aSoundName == aRetval )
+-                        {
+-                            aRetval = *(String*)pSoundList->GetObject( n );
+-                            bSoundExists = TRUE;
+-                        }
+-                    }
+-
+-                    for ( void* pPtr = pSoundList->First(); pPtr; pPtr = pSoundList->Next() )
+-                        delete (String*)pPtr;
+-
+-                    delete pSoundList;
+-
+-                    if ( !bSoundExists )
+-                    {
+-                        rStCtrl.Seek( nPosMerk2 );
+-                        DffRecordHeader aSoundDataRecHd;
+-                        if ( SeekToRec( rStCtrl, PPT_PST_SoundData, nStrLen, &aSoundDataRecHd, 0 ) )
+-                        {
+-                            String			aGalleryDir( SvtPathOptions().GetGalleryPath() );
+-                            INetURLObject	aGalleryUserSound( aGalleryDir.GetToken( aGalleryDir.GetTokenCount( ';' ) - 1 ) );
+-
+-                            aGalleryUserSound.Append( aRetval );
+-                            UINT32 nSoundDataLen = aSoundDataRecHd.nRecLen;
+-                            UINT8* pBuf = new UINT8[ nSoundDataLen ];
+-
+-                            rStCtrl.Read( pBuf, nSoundDataLen );
+-                            SvStream* pOStm = ::utl::UcbStreamHelper::CreateStream( aGalleryUserSound.GetMainURL( INetURLObject::NO_DECODE ), STREAM_WRITE | STREAM_TRUNC );
+-
+-                            if( pOStm )
+-                            {
+-                                pOStm->Write( pBuf, nSoundDataLen );
+-
+-                                if( pOStm->GetError() == ERRCODE_NONE )
+-                                {
+-                                    GalleryExplorer::InsertURL( GALLERY_THEME_USERSOUNDS, aGalleryUserSound.GetMainURL( INetURLObject::NO_DECODE ) );
+-                                    aRetval = aGalleryUserSound.GetMainURL( INetURLObject::NO_DECODE );
+-                                }
+-
+-                                delete pOStm;
+-                            }
+-
+-                            delete[] pBuf;
+-                        }
++                        // shove bytes over to media manager
++                        aRetval = xMediaManager->insertMediaStream(aURL, rStCtrl, aSoundDataRecHd.nRecLen);
+                     }
+                 }
+                 if ( !bDone )
+@@ -2029,9 +1983,12 @@ String ImplSdPPTImport::ReadSound(UINT32 nSoundRef) const
+ //
+ //////////////////////////////////////////////////////////////////////////
+ 
+-String ImplSdPPTImport::ReadMedia( sal_uInt32 nMediaRef, bool& o_bLoop ) const
++sdr::media::MediaLinkRef ImplSdPPTImport::ReadMedia( sal_uInt32 nMediaRef, bool& o_bLoop ) const
+ {
+     String aRetVal;
++	::rtl::Reference< sdr::media::MediaManager > xMediaManager( 
++        GetModel()->GetMediaManager() );
++
+     DffRecordHeader* pHd( const_cast<ImplSdPPTImport*>(this)->aDocRecManager.GetRecordHeader( PPT_PST_ExObjList, SEEK_FROM_BEGINNING ) );
+     if ( pHd )
+     {
+@@ -2110,7 +2067,7 @@ String ImplSdPPTImport::ReadMedia( sal_uInt32 nMediaRef, bool& o_bLoop ) const
+             aHdMovie.SeekToEndOfRecord( rStCtrl );
+         }
+     }
+-    return aRetVal;
++    return xMediaManager->insertMediaStream(aRetVal);
+ }
+ 
+ //////////////////////////////////////////////////////////////////////////
+@@ -2124,7 +2081,8 @@ void ImplSdPPTImport::FillSdAnimationInfo( SdAnimationInfo* pInfo, PptInteractiv
+     // Lokale Informationen in pInfo eintragen
+     if( pIAtom->nSoundRef )
+     {
+-        pInfo->SetBookmark( ReadSound( pIAtom->nSoundRef ) );	// Pfad zum Soundfile in MSDOS-Notation
++        sdr::media::MediaLinkRef aSoundFile( ReadSound( pIAtom->nSoundRef ) );
++        pInfo->SetBookmark( aSoundFile->getMediaURL() );	// Pfad zum Soundfile in MSDOS-Notation
+         pInfo->meClickAction = ::com::sun::star::presentation::ClickAction_SOUND;			// RunProgramAction
+     }
+ //	if ( nFlags & 0x01 )	// koennen wir nicht ( beim Anklicken markieren )
+@@ -2669,7 +2627,10 @@ SdrObject* ImplSdPPTImport::ProcessObj( SvStream& rSt, DffObjData& rObjData, voi
+                                     pAnimation->SetDimColor( MSO_CLR_ToColor(pAnimation->GetDimColor()).GetColor() );
+                                     // translate sound bits to file url
+                                     if( pAnimation->HasSoundEffect() )
+-                                        pAnimation->SetSoundFileUrl( ReadSound( pAnimation->GetSoundRef() ) );
++                                    {
++                                        sdr::media::MediaLinkRef aSoundFile( ReadSound( pAnimation->GetSoundRef() ) );
++                                        pAnimation->SetSoundFileUrl( aSoundFile->getMediaURL() );
++                                    }
+ 
+                                     bool bDontAnimateInvisibleShape = false;
+                                     {
+@@ -2732,10 +2693,10 @@ SdrObject* ImplSdPPTImport::ProcessObj( SvStream& rSt, DffObjData& rObjData, voi
+                                         bool bLoop=false;
+                                         sal_uInt32 nRef;
+                                         rSt >> nRef;
+-										String aMediaURL( ReadMedia( nRef, bLoop ) );
+-                                        if ( !aMediaURL.Len() )
+-                                            aMediaURL = ReadSound( nRef );
+-                                        if ( aMediaURL.Len() )
++                                        sdr::media::MediaLinkRef aMediaLink( ReadMedia( nRef, bLoop ) );
++                                        if ( !aMediaLink.is() )
++                                            aMediaLink = ReadSound( nRef );
++                                        if ( aMediaLink.is() )
+                                         {
+                                             SdrMediaObj* pMediaObj = new SdrMediaObj( pObj->GetSnapRect() );
+ 											if( nSlideCount > 1 && pMediaObj )
+@@ -2758,7 +2719,7 @@ SdrObject* ImplSdPPTImport::ProcessObj( SvStream& rSt, DffObjData& rObjData, voi
+                                             //--
+ 
+                                             SdrObject::Free( pObj ), pObj = pMediaObj;	// SJ: hoping that pObj is not inserted in any list
+-                                            pMediaObj->setURL( aMediaURL );
++                                            pMediaObj->setMediaLink( aMediaLink );
+                                         }
+                                     }
+                                 }
+diff --git sd/source/filter/ppt/pptin.hxx sd/source/filter/ppt/pptin.hxx
+index cc131b0..2c2792d 100644
+--- sd/source/filter/ppt/pptin.hxx
++++ sd/source/filter/ppt/pptin.hxx
+@@ -33,6 +33,7 @@
+ 
+ #include <svx/svdfppt.hxx>
+ #include <svx/msdffdef.hxx>
++#include <svx/sdr/media/medialink.hxx>
+ #include <diadef.h>
+ #include <svx/svdtypes.hxx>
+ #include <svx/msfiltertracer.hxx>
+@@ -84,8 +85,8 @@ class ImplSdPPTImport : public SdrPowerPointImport
+ 
+ public:
+ 
+-    String	        ReadSound( sal_uInt32 nSoundRef ) const;
+-	String			ReadMedia( sal_uInt32 nMediaRef, bool& o_bLoop ) const;
++    sdr::media::MediaLinkRef ReadSound( sal_uInt32 nSoundRef ) const;
++	sdr::media::MediaLinkRef ReadMedia( sal_uInt32 nMediaRef, bool& o_bLoop ) const;
+  
+     ImplSdPPTImport( SdDrawDocument* pDoc, SvStorage& rStorage, SfxMedium& rMed, PowerPointImportParam& );
+     ~ImplSdPPTImport();
+diff --git sd/source/filter/ppt/pptinanimations.cxx sd/source/filter/ppt/pptinanimations.cxx
+index ebdf5ee..a6544ac 100644
+--- sd/source/filter/ppt/pptinanimations.cxx
++++ sd/source/filter/ppt/pptinanimations.cxx
+@@ -3165,9 +3165,9 @@ sal_Int32 AnimationImporter::importTargetElementContainer( const Atom* pAtom, An
+ 
+                 case 2: // sound
+                     {
+-                        OUString aSoundURL( ((ImplSdPPTImport*)mpPPTImport)->ReadSound( nRefId ) ); 
+-                        rTarget <<= aSoundURL;
+-                        dump( " srcRef=\"%s\"", aSoundURL );
++                        sdr::media::MediaLinkRef aSound( ((ImplSdPPTImport*)mpPPTImport)->ReadSound( nRefId ) ); 
++                        rTarget <<= aSound->getMediaURL();
++                        dump( " srcRef=\"%s\"", aSound->getMediaURL() );
+                     }
+                     break;
+                 case 3: // audio object
+diff --git svx/inc/svx/sdr/media/mediamanager.hxx svx/inc/svx/sdr/media/mediamanager.hxx
+index 1beee5d..918182a 100644
+--- svx/inc/svx/sdr/media/mediamanager.hxx
++++ svx/inc/svx/sdr/media/mediamanager.hxx
+@@ -38,6 +38,7 @@
+ #include <svx/sdr/media/medialink.hxx>
+ 
+ class SfxObjectShell;
++class SvStream;
+ 
+ //////////////////////////////////////////////////////////////////////////////
+ // predeclarations
+@@ -56,6 +57,7 @@ public:
+     void Dispose();
+     
+     MediaLinkRef    insertMediaStream( const rtl::OUString& rURL );
++    MediaLinkRef    insertMediaStream( const rtl::OUString& rURL, SvStream& rSrcStream, sal_uInt32 nBytes );
+     
+     MediaLinkRef    getMediaLink( const rtl::OUString& rURL );
+     
+diff --git svx/source/sdr/media/mediamanager.cxx svx/source/sdr/media/mediamanager.cxx
+index c9e4cae..5165b6a 100644
+--- svx/source/sdr/media/mediamanager.cxx
++++ svx/source/sdr/media/mediamanager.cxx
+@@ -183,7 +183,7 @@ MediaManager::~MediaManager()
+ {
+ }
+ 
+-void MediaManager::Notify( SfxBroadcaster& rBC, const SfxHint& rHint )
++void MediaManager::Notify( SfxBroadcaster& /*rBC*/, const SfxHint& rHint )
+ {
+ 	if (rHint.IsA(TYPE(SfxEventHint)))
+ 	{
+@@ -360,6 +360,88 @@ MediaLinkRef MediaManager::insertMediaStream( const rtl::OUString& rURL )
+     return getMediaLink( sURL );
+ }
+ 
++MediaLinkRef MediaManager::insertMediaStream( const rtl::OUString& rURL, SvStream& rSrcStream, sal_uInt32 nBytes )
++{
++    // TODO(Q3): duplicate code
++	OUString sURL( rURL );
++    try
++    {
++	    Reference< com::sun::star::embed::XStorage > xStorage( getMediaStorage(), UNO_QUERY_THROW );
++    
++		OUString sStreamName;
++
++		sal_Int32 nPos = rURL.lastIndexOf( '/' );
++		if( nPos == -1 )
++		{
++			sStreamName = rURL;
++		}
++		else
++		{
++			sStreamName = rURL.copy( nPos + 1 );
++		}
++
++		Reference< XNameAccess > xNameAccess( xStorage, UNO_QUERY_THROW );
++
++		bool bNeedsRename = false;
++		bool bAlreadyExists = false;
++		do
++		{		
++			if( xNameAccess->hasByName( sStreamName ) )
++			{
++				// todo sub element exists, if it is a stream check if it is identical
++/*				if( xStorage->isStreamElement( sStreamName ) )
++				{
++				}
++*/
++				undup( sStreamName );
++				bNeedsRename = true;
++			}
++			else
++			{
++				bNeedsRename = false;
++			}
++		}
++		while( bNeedsRename && !bAlreadyExists );
++       
++        Reference< XStream > xTargetStream( xStorage->openStreamElement( sStreamName, ElementModes::WRITE|ElementModes::TRUNCATE ), UNO_QUERY_THROW );
++
++		// todo: get mime type
++		Reference< XPropertySet >( xTargetStream, UNO_QUERY_THROW )->setPropertyValue( msMediaType, Any( msStorageMediaType ) );
++		{
++			std::auto_ptr< SvStream > pDstStream( ::utl::UcbStreamHelper::CreateStream( xTargetStream ) );
++			if( pDstStream.get() )
++			{
++                // TODO(P3): SRSLY
++                char aBuf;
++                while( nBytes-- )
++                {
++                    rSrcStream.Read(&aBuf,1);
++                    pDstStream->Write(&aBuf,1);
++                }
++			}
++		}
++
++		Reference< XTransactedObject > xTransaction( xStorage, UNO_QUERY );
++		if( xTransaction.is() )
++			xTransaction->commit();
++
++		sURL = msPackagePrefix;
++		sURL += msMedia;
++		sURL += OUString::createFromAscii( "/" );
++		sURL += sStreamName;    
++    }
++    catch( Exception& e )
++    {
++		(void)e;
++		DBG_ERROR(
++			rtl::OString("sdr::media::MediaManager::createTemporaryCopy(), exception caught: ") +
++			rtl::OUStringToOString( e.Message, RTL_TEXTENCODING_UTF8 ) );
++    
++    }		
++			
++    return getMediaLink( sURL );
++}
++
+ MediaLinkRef MediaManager::getMediaLink( const OUString& rURL )
+ {
+     MediaLinkRef xRet;
