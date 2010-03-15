@@ -1,0 +1,3096 @@
+diff --git drawinglayer/inc/drawinglayer/primitive2d/borderlineprimitive2d.hxx drawinglayer/inc/drawinglayer/primitive2d/borderlineprimitive2d.hxx
+index cf12676..564c877 100644
+--- drawinglayer/inc/drawinglayer/primitive2d/borderlineprimitive2d.hxx
++++ drawinglayer/inc/drawinglayer/primitive2d/borderlineprimitive2d.hxx
+@@ -39,6 +39,7 @@
+ #include <drawinglayer/primitive2d/baseprimitive2d.hxx>
+ #include <basegfx/color/bcolor.hxx>
+ #include <basegfx/matrix/b2dhommatrix.hxx>
++#include <basegfx/polygon/b2dpolypolygon.hxx>
+ 
+ //////////////////////////////////////////////////////////////////////////////
+ 
+@@ -54,17 +55,16 @@ namespace drawinglayer
+             double											mfLeftWidth;
+             double											mfDistance;
+             double											mfRightWidth;
+-            double											mfExtendInnerStart;
+-            double											mfExtendInnerEnd;
+-            double											mfExtendOuterStart;
+-            double											mfExtendOuterEnd;
+-            basegfx::BColor									maRGBColor;
++            double											mfExtendLeftStart;
++            double											mfExtendLeftEnd;
++            double											mfExtendRightStart;
++            double											mfExtendRightEnd;
++            basegfx::BColor									maRGBColorRight;
++            basegfx::BColor									maRGBColorLeft;
++            basegfx::BColor									maRGBColorGap;
++            bool                                            mbHasGapColor;
+             short                                           mnStyle;
+ 
+-            // bitfield
+-            unsigned										mbCreateInside : 1;
+-            unsigned										mbCreateOutside : 1;
+-
+             // helpers
+             double getCorrectedLeftWidth() const 
+             { 
+@@ -106,6 +106,8 @@ namespace drawinglayer
+                 return !basegfx::fTools::equalZero(mfRightWidth);
+             }
+ 
++            basegfx::B2DPolyPolygon getClipPolygon( ) const;
++
+         protected:
+             // create local decomposition
+             virtual Primitive2DSequence createLocalDecomposition(const geometry::ViewInformation2D& rViewInformation) const;
+@@ -117,13 +119,14 @@ namespace drawinglayer
+                 double fLeftWidth,
+                 double fDistance,
+                 double fRightWidth,
+-                double fExtendInnerStart,
+-                double fExtendInnerEnd,
+-                double fExtendOuterStart,
+-                double fExtendOuterEnd,
+-                bool bCreateInside,
+-                bool bCreateOutside,
+-                const basegfx::BColor& rRGBColor,
++                double fExtendLeftStart,
++                double fExtendLeftEnd,
++                double fExtendRightStart,
++                double fExtendRightEnd,
++                const basegfx::BColor& rRGBColorRight,
++                const basegfx::BColor& rRGBColorLeft,
++                const basegfx::BColor& rRGBColorGap,
++                bool bHasGapColor,
+                 const short nStyle );
+ 
+             // get data
+@@ -132,13 +135,14 @@ namespace drawinglayer
+             double getLeftWidth() const { return mfLeftWidth; }
+             double getDistance() const { return mfDistance; }
+             double getRightWidth() const { return mfRightWidth; }
+-            double getExtendInnerStart() const { return mfExtendInnerStart; }
+-            double getExtendInnerEnd() const { return mfExtendInnerEnd; }
+-            double getExtendOuterStart() const { return mfExtendOuterStart; }
+-            double getExtendOuterEnd() const { return mfExtendOuterEnd; }
+-            bool getCreateInside() const { return mbCreateInside; }
+-            bool getCreateOutside() const { return mbCreateOutside; }
+-            const basegfx::BColor& getRGBColor () const { return maRGBColor; }
++            double getExtendLeftStart() const { return mfExtendLeftStart; }
++            double getExtendLeftEnd() const { return mfExtendLeftEnd; }
++            double getExtendRightStart() const { return mfExtendRightStart; }
++            double getExtendRightEnd() const { return mfExtendRightEnd; }
++            const basegfx::BColor& getRGBColorRight () const { return maRGBColorRight; }
++            const basegfx::BColor& getRGBColorLeft () const { return maRGBColorLeft; }
++            const basegfx::BColor& getRGBColorGap () const { return maRGBColorGap; }
++            bool hasGapColor( ) const { return mbHasGapColor; }
+             short getStyle () const { return mnStyle; }
+ 
+             // compare operator
+diff --git drawinglayer/source/primitive2d/borderlineprimitive2d.cxx drawinglayer/source/primitive2d/borderlineprimitive2d.cxx
+index d605d68..023d236 100644
+--- drawinglayer/source/primitive2d/borderlineprimitive2d.cxx
++++ drawinglayer/source/primitive2d/borderlineprimitive2d.cxx
+@@ -39,10 +39,12 @@
+ #include <drawinglayer/primitive2d/borderlineprimitive2d.hxx>
+ #include <drawinglayer/primitive2d/drawinglayer_primitivetypes2d.hxx>
+ #include <basegfx/polygon/b2dpolygon.hxx>
++#include <basegfx/polygon/b2dpolygonclipper.hxx>
+ #include <drawinglayer/primitive2d/polygonprimitive2d.hxx>
+ #include <drawinglayer/primitive2d/polypolygonprimitive2d.hxx>
+ #include <svtools/borderhelper.hxx>
+ #include <numeric>
++#include <algorithm>
+ 
+ //////////////////////////////////////////////////////////////////////////////
+ 
+@@ -50,146 +52,220 @@ namespace drawinglayer
+ {
+     namespace primitive2d
+     {
++        basegfx::B2DPolyPolygon BorderLinePrimitive2D::getClipPolygon( ) const
++        {
++            basegfx::B2DPolygon clipPolygon;
++            
++            // Get the vectors
++            basegfx::B2DVector aVector( getEnd() - getStart() );
++            aVector.normalize();
++            const basegfx::B2DVector aPerpendicular(basegfx::getPerpendicular(aVector));
++
++            // Get the points
++            const basegfx::B2DVector aLeftOff(aPerpendicular * (-0.5 * (getWidth())));
++            const basegfx::B2DVector aRightOff(aPerpendicular * (0.5 * (getWidth())));
++            clipPolygon.append( basegfx::B2DPoint(getStart() + aLeftOff - (getExtendLeftStart() * aVector)) );
++            clipPolygon.append( getStart( ) );
++            clipPolygon.append( basegfx::B2DPoint(getStart() + aRightOff - (getExtendRightStart() * aVector)) );
++            clipPolygon.append( basegfx::B2DPoint(getEnd() + aRightOff + (getExtendRightEnd() * aVector)) );
++            clipPolygon.append( getEnd( ) );
++            clipPolygon.append( basegfx::B2DPoint(getEnd() + aLeftOff + (getExtendLeftEnd() * aVector)) );
++
++            clipPolygon.setClosed( true );
++
++            return basegfx::B2DPolyPolygon( clipPolygon );
++        }
++
+         Primitive2DSequence BorderLinePrimitive2D::createLocalDecomposition(const geometry::ViewInformation2D& /*rViewInformation*/) const
+         {
+             Primitive2DSequence xRetval;
+ 
+-            if(!getStart().equal(getEnd()) && (getCreateInside() || getCreateOutside()))
++            if(!getStart().equal(getEnd()) && getWidth() > 0)
+             {
+-                if(isInsideUsed())
++                // get data and vectors
++                const double fWidth(getWidth());
++                basegfx::B2DVector aVector(getEnd() - getStart());
++                aVector.normalize();
++                const basegfx::B2DVector aPerpendicular(basegfx::getPerpendicular(aVector));
++
++                const basegfx::B2DPolyPolygon& aClipRegion = getClipPolygon( );
++
++                if(isOutsideUsed() && isInsideUsed())
+                 {
+-                    // get data and vectors
+-                    const double fWidth(getWidth());
+-                    basegfx::B2DVector aVector(getEnd() - getStart());
+-                    aVector.normalize();
+-                    const basegfx::B2DVector aPerpendicular(basegfx::getPerpendicular(aVector));
++                    double startMax = std::max( getExtendLeftStart(), std::max( getExtendRightStart(), 0.0 ) );
++                    double endMax = std::max( getExtendLeftEnd(), std::max( getExtendRightEnd(), 0.0 ) );
++
++                    // both used, double line definition. Create left and right offset
++                    xRetval.realloc(2);
++                    sal_uInt32 nInsert(0);
++
++                    basegfx::B2DPolygon aGap;
+ 
+-                    if(isOutsideUsed())
+                     {
+-                        // both used, double line definition. Create left and right offset
+-                        xRetval.realloc(getCreateInside() && getCreateOutside() ? 2 : 1);
+-                        sal_uInt32 nInsert(0);
++                        // create geometry for left
++                        const basegfx::B2DVector aLeftOff(aPerpendicular * (0.5 * (getCorrectedLeftWidth() - fWidth + 1)));
++                        const basegfx::B2DPoint aTmpStart(getStart() + aLeftOff - ( startMax * aVector));
++                        const basegfx::B2DPoint aTmpEnd(getEnd() + aLeftOff + ( endMax * aVector));
++                        basegfx::B2DPolygon aLeft;
+ 
+-                        if(getCreateInside())
++                        if(leftIsHairline())
+                         {
+-                            // create geometry for left
+-                            const basegfx::B2DVector aLeftOff(aPerpendicular * (0.5 * (getCorrectedLeftWidth() - fWidth)));
+-                            const basegfx::B2DPoint aTmpStart(getStart() + aLeftOff - (getExtendInnerStart() * aVector));
+-                            const basegfx::B2DPoint aTmpEnd(getEnd() + aLeftOff + (getExtendInnerEnd() * aVector));
+-                            basegfx::B2DPolygon aLeft;
+-
+-                            if(leftIsHairline())
+-                            {
+-                                // create hairline primitive
+-                                aLeft.append(aTmpStart);
+-                                aLeft.append(aTmpEnd);
+-
+-                                xRetval[nInsert++] = Primitive2DReference(new PolygonHairlinePrimitive2D(
+-                                    aLeft, 
+-                                    getRGBColor()));
+-                            }
+-                            else
+-                            {
+-                                // create filled polygon primitive. Already tried to create thick lines
+-                                // with the correct LineWidth, but this leads to problems when no AA
+-                                // is available and fat line special case reductions between 0.5 < x < 2.5 line widths
+-                                // are executed due to the FilledPolygon-do-not-paint-their-bottom-and-right-lines.
+-                                const basegfx::B2DVector aLineWidthOffset((getCorrectedLeftWidth() * 0.5) * aPerpendicular);
+-                                
+-                                aLeft.append(aTmpStart + aLineWidthOffset);
+-                                aLeft.append(aTmpEnd + aLineWidthOffset);
+-                                aLeft.append(aTmpEnd - aLineWidthOffset);
+-                                aLeft.append(aTmpStart - aLineWidthOffset);
+-                                aLeft.setClosed(true);
+-
+-                                xRetval[nInsert++] = Primitive2DReference(new PolyPolygonColorPrimitive2D(
+-                                    basegfx::B2DPolyPolygon(aLeft), getRGBColor()));
+-                            }
+-                        }
++                            // create hairline primitive
++                            aLeft.append(aTmpStart);
++                            aLeft.append(aTmpEnd);
+ 
+-                        if(getCreateOutside())
++                            xRetval[nInsert++] = Primitive2DReference(new PolygonHairlinePrimitive2D(
++                                aLeft, 
++                                getRGBColorLeft()));
++
++                            aGap.append( aTmpStart );
++                            aGap.append( aTmpEnd );
++                        }
++                        else
+                         {
+-                            // create geometry for right
+-                            const basegfx::B2DVector aRightOff(aPerpendicular * (0.5 * (fWidth - getCorrectedRightWidth())));
+-                            const basegfx::B2DPoint aTmpStart(getStart() + aRightOff - (getExtendOuterStart() * aVector));
+-                            const basegfx::B2DPoint aTmpEnd(getEnd() + aRightOff + (getExtendOuterEnd() * aVector));
+-                            basegfx::B2DPolygon aRight;
+-
+-                            if(rightIsHairline())
+-                            {
+-                                // create hairline primitive
+-                                aRight.append(aTmpStart);
+-                                aRight.append(aTmpEnd);
+-                                
+-                                xRetval[nInsert++] = Primitive2DReference(new PolygonHairlinePrimitive2D(
+-                                    aRight, 
+-                                    getRGBColor()));
+-                            }
+-                            else
+-                            {
+-                                // create filled polygon primitive
+-                                const basegfx::B2DVector aLineWidthOffset((getCorrectedRightWidth() * 0.5) * aPerpendicular);
+-
+-                                aRight.append(aTmpStart + aLineWidthOffset);
+-                                aRight.append(aTmpEnd + aLineWidthOffset);
+-                                aRight.append(aTmpEnd - aLineWidthOffset);
+-                                aRight.append(aTmpStart - aLineWidthOffset);
+-                                aRight.setClosed(true);
+-
+-                                xRetval[nInsert++] = Primitive2DReference(new PolyPolygonColorPrimitive2D(
+-                                    basegfx::B2DPolyPolygon(aRight), getRGBColor()));
+-                            }
++                            // create filled polygon primitive. Already tried to create thick lines
++                            // with the correct LineWidth, but this leads to problems when no AA
++                            // is available and fat line special case reductions between 0.5 < x < 2.5 line widths
++                            // are executed due to the FilledPolygon-do-not-paint-their-bottom-and-right-lines.
++                            const basegfx::B2DVector aLineWidthOffset((getCorrectedLeftWidth() * 0.5) * aPerpendicular);
++                            
++                            aLeft.append(aTmpStart + aLineWidthOffset);
++                            aLeft.append(aTmpEnd + aLineWidthOffset);
++                            aLeft.append(aTmpEnd - aLineWidthOffset);
++                            aLeft.append(aTmpStart - aLineWidthOffset);
++                            aLeft.setClosed(true);
++
++                            basegfx::B2DPolyPolygon aClipped = basegfx::tools::clipPolygonOnPolyPolygon( 
++                                    aLeft, aClipRegion, true, false );
++
++                            aGap.append( aTmpStart + aLineWidthOffset );
++                            aGap.append( aTmpEnd + aLineWidthOffset );
++
++                            xRetval[nInsert++] = Primitive2DReference(new PolyPolygonColorPrimitive2D(
++                                aClipped, getRGBColorLeft()));
+                         }
+                     }
+-                    else
++
+                     {
+-                        // single line, create geometry
+-                        basegfx::B2DPolygon aPolygon;
+-                        const double fMaxExtStart(::std::max(getExtendInnerStart(), getExtendOuterStart()));
+-                        const double fMaxExtEnd(::std::max(getExtendInnerEnd(), getExtendOuterEnd()));
+-                        const basegfx::B2DPoint aTmpStart(getStart() - (fMaxExtStart * aVector));
+-                        const basegfx::B2DPoint aTmpEnd(getEnd() + (fMaxExtEnd * aVector));
+-                        xRetval.realloc(1);
++                        // create geometry for right
++                        const basegfx::B2DVector aRightOff(aPerpendicular * (0.5 * (fWidth - getCorrectedRightWidth() + 1)));
++                        const basegfx::B2DPoint aTmpStart(getStart() + aRightOff - ( startMax * aVector));
++                        const basegfx::B2DPoint aTmpEnd(getEnd() + aRightOff + ( endMax * aVector));
++                        basegfx::B2DPolygon aRight;
+ 
+-                        if(leftIsHairline())
++                        if(rightIsHairline())
+                         {
+                             // create hairline primitive
+-                            aPolygon.append(aTmpStart);
+-                            aPolygon.append(aTmpEnd);
++                            aRight.append(aTmpStart);
++                            aRight.append(aTmpEnd);
++                            
++                            xRetval[nInsert++] = Primitive2DReference(new PolygonHairlinePrimitive2D(
++                                aRight, 
++                                getRGBColorRight()));
+ 
+-                            xRetval[0] = Primitive2DReference(new PolygonHairlinePrimitive2D(
+-                                aPolygon, 
+-                                getRGBColor()));
++                            aGap.append( aTmpEnd );
++                            aGap.append( aTmpStart );
+                         }
+                         else
+                         {
+                             // create filled polygon primitive
+-                            const basegfx::B2DVector aLineWidthOffset((getCorrectedLeftWidth() * 0.5) * aPerpendicular);
++                            const basegfx::B2DVector aLineWidthOffset((getCorrectedRightWidth() * 0.5) * aPerpendicular);
++
++                            aRight.append(aTmpStart + aLineWidthOffset);
++                            aRight.append(aTmpEnd + aLineWidthOffset);
++                            aRight.append(aTmpEnd - aLineWidthOffset);
++                            aRight.append(aTmpStart - aLineWidthOffset);
++                            aRight.setClosed(true);
++
++                            basegfx::B2DPolyPolygon aClipped = basegfx::tools::clipPolygonOnPolyPolygon( 
++                                    aRight, aClipRegion, true, false );
++
++                            xRetval[nInsert++] = Primitive2DReference(new PolyPolygonColorPrimitive2D(
++                                aClipped, getRGBColorRight()));
++
++                            aGap.append( aTmpEnd - aLineWidthOffset );
++                            aGap.append( aTmpStart - aLineWidthOffset );
++                        }
++                    }
++                    
++                    if (hasGapColor() && aGap.count() == 4)
++                    {
++                        xRetval.realloc( xRetval.getLength() + 1 );
++                        // create geometry for filled gap
++                        aGap.setClosed( true );
++                        
++                        basegfx::B2DPolyPolygon aClipped = basegfx::tools::clipPolygonOnPolyPolygon( 
++                                aGap, aClipRegion, true, false );
++
++                        xRetval[nInsert++] = Primitive2DReference( new PolyPolygonColorPrimitive2D(
++                              aClipped, getRGBColorGap() ) );
++                    }
++                }
++                else
++                {
++                    // single line, create geometry
++                    basegfx::B2DPolygon aPolygon;
++                    const double fMaxExtStart = std::max( getExtendLeftStart(), 
++                            std::max( getExtendRightStart(), 0.0 ) );
++                    const double fMaxExtEnd = std::max( getExtendLeftEnd(), 
++                            std::max( getExtendRightEnd(), 0.0 ) );
++                    const basegfx::B2DPoint aTmpStart(getStart() - (fMaxExtStart * aVector));
++                    const basegfx::B2DPoint aTmpEnd(getEnd() + (fMaxExtEnd * aVector));
++                    xRetval.realloc(1);
++
++                    // Get which is the line to show
++                    bool bIsHairline = leftIsHairline();
++                    double nWidth = getCorrectedLeftWidth();
++                    basegfx::BColor aColor = getRGBColorLeft();
++                    if ( basegfx::fTools::equal( 0.0, mfLeftWidth ) )
++                    {
++                        bIsHairline = rightIsHairline();
++                        nWidth = getCorrectedRightWidth();
++                        aColor = getRGBColorRight();
++                    }
++
++                    if(bIsHairline)
++                    {
++                        // create hairline primitive
++                        aPolygon.append(aTmpStart);
++                        aPolygon.append(aTmpEnd);
++
++                        xRetval[0] = Primitive2DReference(new PolygonHairlinePrimitive2D(
++                            aPolygon, 
++                            aColor));
++                    }
++                    else
++                    {
++                        // create filled polygon primitive
++                        const basegfx::B2DVector aLineWidthOffset(((nWidth + 1) * 0.5) * aPerpendicular);
++                        
++                        aPolygon.append( aTmpStart );
++                        aPolygon.append( aTmpEnd );
++
++                        basegfx::B2DPolyPolygon aDashed = svtools::ApplyLineDashing( 
++                               aPolygon, getStyle(), MAP_100TH_MM );
++                        for (sal_uInt32 i = 0; i < aDashed.count(); i++ )
++                        {
++                            basegfx::B2DPolygon aDash = aDashed.getB2DPolygon( i );
++                            basegfx::B2DPoint aDashStart = aDash.getB2DPoint( 0 );
++                            basegfx::B2DPoint aDashEnd = aDash.getB2DPoint( aDash.count() - 1 );
++
++                            basegfx::B2DPolygon aDashPolygon;
++                            aDashPolygon.append( aDashStart + aLineWidthOffset );
++                            aDashPolygon.append( aDashEnd + aLineWidthOffset );
++                            aDashPolygon.append( aDashEnd - aLineWidthOffset );
++                            aDashPolygon.append( aDashStart - aLineWidthOffset );
++                            aDashPolygon.setClosed( true );
++                        
++                            basegfx::B2DPolyPolygon aClipped = basegfx::tools::clipPolygonOnPolyPolygon(
++                                aDashPolygon, aClipRegion, true, false );
+                             
+-                            aPolygon.append( aTmpStart );
+-                            aPolygon.append( aTmpEnd );
+-
+-                            basegfx::B2DPolyPolygon aDashed = svtools::ApplyLineDashing( 
+-                                   aPolygon, getStyle(), MAP_100TH_MM );
+-                            for (sal_uInt32 i = 0; i < aDashed.count(); i++ )
+-                            {
+-                                basegfx::B2DPolygon aDash = aDashed.getB2DPolygon( i );
+-                                basegfx::B2DPoint aDashStart = aDash.getB2DPoint( 0 );
+-                                basegfx::B2DPoint aDashEnd = aDash.getB2DPoint( aDash.count() - 1 );
+-
+-                                basegfx::B2DPolygon aDashPolygon;
+-                                aDashPolygon.append( aDashStart + aLineWidthOffset );
+-                                aDashPolygon.append( aDashEnd + aLineWidthOffset );
+-                                aDashPolygon.append( aDashEnd - aLineWidthOffset );
+-                                aDashPolygon.append( aDashStart - aLineWidthOffset );
+-                                aDashPolygon.setClosed( true );
+-
+-                                aDashed.setB2DPolygon( i, aDashPolygon );
+-                            }
+-                                
+-                            xRetval[0] = Primitive2DReference(new PolyPolygonColorPrimitive2D(
+-                                    basegfx::B2DPolyPolygon( aDashed ), getRGBColor()));
++                            if ( aClipped.count() )
++                                aDashed.setB2DPolygon( i, aClipped.getB2DPolygon( 0 ) );
+                         }
++                           
++                        xRetval[0] = Primitive2DReference(new PolyPolygonColorPrimitive2D(
++                                basegfx::B2DPolyPolygon( aDashed ), aColor));
+                     }
+                 }
+             }
+@@ -203,13 +279,14 @@ namespace drawinglayer
+             double fLeftWidth,
+             double fDistance,
+             double fRightWidth,
+-            double fExtendInnerStart,
+-            double fExtendInnerEnd,
+-            double fExtendOuterStart,
+-            double fExtendOuterEnd,
+-            bool bCreateInside,
+-            bool bCreateOutside,
+-            const basegfx::BColor& rRGBColor,
++            double fExtendLeftStart,
++            double fExtendLeftEnd,
++            double fExtendRightStart,
++            double fExtendRightEnd,
++            const basegfx::BColor& rRGBColorRight,
++            const basegfx::BColor& rRGBColorLeft,
++            const basegfx::BColor& rRGBColorGap,
++            bool bHasGapColor,
+             short nStyle)
+         :	BasePrimitive2D(),
+             maStart(rStart),
+@@ -217,14 +294,15 @@ namespace drawinglayer
+             mfLeftWidth(fLeftWidth),
+             mfDistance(fDistance),
+             mfRightWidth(fRightWidth),
+-            mfExtendInnerStart(fExtendInnerStart),
+-            mfExtendInnerEnd(fExtendInnerEnd),
+-            mfExtendOuterStart(fExtendOuterStart),
+-            mfExtendOuterEnd(fExtendOuterEnd),
+-            maRGBColor(rRGBColor),
+-            mnStyle(nStyle),
+-            mbCreateInside(bCreateInside),
+-            mbCreateOutside(bCreateOutside)
++            mfExtendLeftStart(fExtendLeftStart),
++            mfExtendLeftEnd(fExtendLeftEnd),
++            mfExtendRightStart(fExtendRightStart),
++            mfExtendRightEnd(fExtendRightEnd),
++            maRGBColorRight(rRGBColorRight),
++            maRGBColorLeft(rRGBColorLeft),
++            maRGBColorGap(rRGBColorGap),
++            mbHasGapColor(bHasGapColor),
++            mnStyle(nStyle)
+         {
+         }
+ 
+@@ -239,13 +317,14 @@ namespace drawinglayer
+                     && getLeftWidth() == rCompare.getLeftWidth()
+                     && getDistance() == rCompare.getDistance()
+                     && getRightWidth() == rCompare.getRightWidth()
+-                    && getExtendInnerStart() == rCompare.getExtendInnerStart()
+-                    && getExtendInnerEnd() == rCompare.getExtendInnerEnd()
+-                    && getExtendOuterStart() == rCompare.getExtendOuterStart()
+-                    && getExtendOuterEnd() == rCompare.getExtendOuterEnd()
+-                    && getCreateInside() == rCompare.getCreateInside()
+-                    && getCreateOutside() == rCompare.getCreateOutside()
+-                    && getRGBColor() == rCompare.getRGBColor()
++                    && getExtendLeftStart() == rCompare.getExtendLeftStart()
++                    && getExtendLeftEnd() == rCompare.getExtendLeftEnd()
++                    && getExtendRightStart() == rCompare.getExtendRightStart()
++                    && getExtendRightEnd() == rCompare.getExtendRightEnd()
++                    && getRGBColorRight() == rCompare.getRGBColorRight()
++                    && getRGBColorLeft() == rCompare.getRGBColorLeft()
++                    && getRGBColorGap() == rCompare.getRGBColorGap()
++                    && hasGapColor() == rCompare.hasGapColor()
+                     && getStyle() == rCompare.getStyle());
+             }
+ 
+diff --git sc/source/ui/view/output.cxx sc/source/ui/view/output.cxx
+index 989ea07..969e29f 100644
+--- sc/source/ui/view/output.cxx
++++ sc/source/ui/view/output.cxx
+@@ -1395,16 +1395,26 @@ void lcl_VertLine( OutputDevice& rDev, const Point& rTop, const Point& rBottom,
+         svx::frame::Style aScaled( rLine );
+         aScaled.ScaleSelf( 1.0 / cos( svx::frame::GetVerDiagAngle( rTop, rBottom ) ) );
+         if( pForceColor )
+-            aScaled.SetColor( *pForceColor );
++        {
++            aScaled.SetColorPrim( *pForceColor );
++            aScaled.SetColorSecn( *pForceColor );
++        }
+ 
+         long nXOffs = (aScaled.GetWidth() - 1) / -2L;
+ 
+-        lcl_VertLineEnds( rDev, rTop, rBottom, aScaled.GetColor(),
++        lcl_VertLineEnds( rDev, rTop, rBottom, aScaled.GetColorPrim(),
+             nXOffs, aScaled.Prim(), rTopLine, rBottomLine );
+ 
+         if( aScaled.Secn() )
+-            lcl_VertLineEnds( rDev, rTop, rBottom, aScaled.GetColor(),
++        {
++            if ( aScaled.UseGapColor() )
++            {
++                lcl_VertLineEnds( rDev, rTop, rBottom, aScaled.GetColorGap(),
++                    nXOffs + aScaled.Prim(), aScaled.Dist(), rTopLine, rBottomLine );
++            }
++            lcl_VertLineEnds( rDev, rTop, rBottom, aScaled.GetColorSecn(),
+                 nXOffs + aScaled.Prim() + aScaled.Dist(), aScaled.Secn(), rTopLine, rBottomLine );
++        }
+     }
+ }
+ 
+diff --git svtools/inc/borderhelper.hxx svtools/inc/borderhelper.hxx
+index a3c5cb0..5d6e984 100644
+--- svtools/inc/borderhelper.hxx
++++ svtools/inc/borderhelper.hxx
+@@ -35,13 +35,18 @@
+ 
+ #include <basegfx/polygon/b2dpolypolygon.hxx>
+ #include <basegfx/polygon/b2dpolygon.hxx>
++#include <basegfx/point/b2dpoint.hxx>
+ #include <vcl/outdev.hxx>
++#include <vector>
+ 
+ namespace svtools
+ {
+     SVT_DLLPUBLIC basegfx::B2DPolyPolygon ApplyLineDashing( const basegfx::B2DPolygon& rPolygon, 
+             USHORT nDashing, MapUnit eUnit );
+ 
++    SVT_DLLPUBLIC void DrawLine( OutputDevice& rDev, const basegfx::B2DPoint& rBeg, 
++            const basegfx::B2DPoint& rEnd, sal_uInt32 nWidth, USHORT nDashing );
++    
+     SVT_DLLPUBLIC void DrawLine( OutputDevice& rDev, const Point& rBeg, 
+             const Point& rEnd, sal_uInt32 nWidth, USHORT nDashing );
+ }
+diff --git svtools/inc/ctrlbox.hxx svtools/inc/ctrlbox.hxx
+index a4d7dc8..ba9b480 100644
+--- svtools/inc/ctrlbox.hxx
++++ svtools/inc/ctrlbox.hxx
+@@ -55,11 +55,17 @@
+ class ImplFontList;
+ class ImpColorList;
+ class ImpLineList;
++class ImpLineStyleList;
+ class FontList;
+ 
+-#define STYLE_SOLID     ( ( USHORT ) 0 )
+-#define STYLE_DOTTED    ( ( USHORT ) 1 )
+-#define STYLE_DASHED    ( ( USHORT ) 2 )
++#define STYLE_SOLID                ( ( USHORT ) 0 )
++#define STYLE_DOTTED               ( ( USHORT ) 1 )
++#define STYLE_DASHED               ( ( USHORT ) 2 )
++
++#define CHANGE_LINE1               ( ( USHORT ) 1 )
++#define CHANGE_LINE2               ( ( USHORT ) 2 )
++#define CHANGE_DIST                ( ( USHORT ) 4 )
++#define ADAPT_DIST                 ( ( USHORT ) 8 )
+ 
+ /*************************************************************************
+ 
+@@ -262,13 +268,13 @@ class SVT_DLLPUBLIC LineListBox : public ListBox
+     FieldUnit		eUnit;
+     FieldUnit		eSourceUnit;
+ 
+-    SVT_DLLPRIVATE void			ImpGetLine( long nLine1, long nLine2, long nDistance, 
++    SVT_DLLPRIVATE void			ImpGetLine( long nLine1, long nLine2, long nDistance,
++                                    Color nColor1, Color nColor2, Color nColorDist, 
+                                     USHORT nStyle, Bitmap& rBmp, XubString& rStr );
+     using Window::ImplInit;
+     SVT_DLLPRIVATE void			ImplInit();
+     void			UpdateLineColors( void );
+     BOOL			UpdatePaintLineColor( void );		// returns TRUE if maPaintCol has changed
+-    inline const Color&	GetPaintColor( void ) const;
+     virtual void	DataChanged( const DataChangedEvent& rDCEvt );
+ 
+ public:
+@@ -285,14 +291,14 @@ public:
+     virtual void	Clear();
+ 
+     using ListBox::GetEntryPos;
+-    USHORT			GetEntryPos( long nLine1, long nLine2 = 0, long nDistance = 0, 
++    virtual USHORT	GetEntryPos( long nLine1, long nLine2 = 0, long nDistance = 0, 
+                                  USHORT nStyle = STYLE_SOLID ) const;
+     long			GetEntryLine1( USHORT nPos ) const;
+     long			GetEntryLine2( USHORT nPos ) const;
+     long			GetEntryDistance( USHORT nPos ) const;
+     USHORT          GetEntryStyle( USHORT nPos ) const;
+ 
+-    inline void		SelectEntry( const XubString& rStr, BOOL bSelect = TRUE ) { ListBox::SelectEntry( rStr, bSelect ); }
++    void		SelectEntry( const XubString& rStr, BOOL bSelect = TRUE ) { ListBox::SelectEntry( rStr, bSelect ); }
+     void			SelectEntry( long nLine1, long nLine2 = 0, long nDistance = 0, 
+                                  USHORT nStyle = STYLE_SOLID, BOOL bSelect = TRUE );
+     long			GetSelectEntryLine1( USHORT nSelIndex = 0 ) const;
+@@ -311,6 +317,13 @@ public:
+     void			SetColor( const Color& rColor );
+     inline Color	GetColor( void ) const;
+ 
++protected:
++
++    inline const Color&	   GetPaintColor( void ) const;
++    virtual Color   GetColorLine1( USHORT nPos = 0 );
++    virtual Color   GetColorLine2( USHORT nPos = 0 );
++    virtual Color   GetColorDist( USHORT nPos = 0 );
++
+ private:
+     // declared as private because some compilers would generate the default methods
+                     LineListBox( const LineListBox& );
+@@ -319,13 +332,6 @@ private:
+     void*			GetEntryData( USHORT nPos ) const;
+ };
+ 
+-inline void LineListBox::SelectEntry( long nLine1, long nLine2, long nDistance, USHORT nStyle, BOOL bSelect )
+-{
+-    USHORT nPos = GetEntryPos( nLine1, nLine2, nDistance, nStyle );
+-    if ( nPos != LISTBOX_ENTRY_NOTFOUND )
+-        ListBox::SelectEntryPos( nPos, bSelect );
+-}
+-
+ inline long LineListBox::GetSelectEntryLine1( USHORT nSelIndex ) const
+ {
+     USHORT nPos = GetSelectEntryPos( nSelIndex );
+@@ -384,6 +390,73 @@ inline Color LineListBox::GetColor( void ) const
+     return aColor;
+ }
+ 
++const Color& LineListBox::GetPaintColor( void ) const
++{
++    return maPaintCol;
++}
++
++SVT_DLLPUBLIC inline Color sameColor( Color rMain )
++{
++    return rMain;
++}
++
++SVT_DLLPUBLIC inline Color sameDistColor( Color /*rMain*/, Color rDefault )
++{
++    return rDefault;
++}
++
++class SVT_DLLPUBLIC LineStyleListBox : public LineListBox
++{
++private:
++   ImpLineStyleList *     m_pStyleList;
++   long                   m_nWidth;
++   XubString              m_sNone;
++
++public:
++                    LineStyleListBox( Window* pParent, WinBits nWinStyle = WB_BORDER );
++                    LineStyleListBox( Window* pParent, const ResId& rResId );
++    virtual 		~LineStyleListBox();
++
++    /** Set the width in pt.
++      */
++    void            SetWidth( long nWidth );
++    void            SetNone( const XubString& sNone );
++
++    using LineListBox::InsertEntry;
++    void            InsertEntry( double nLine1, double nLine2, double nDist, 
++                        USHORT nChangeFlags, USHORT nStyle, long nMinWidth = 0,
++                        Color (*pColor1Fn)(Color) = &sameColor, 
++                        Color (*pColor2Fn)( Color ) = &sameColor, 
++                        Color (*pColorDistFn)( Color, Color ) = &sameDistColor );
++
++    ULONG           GetSelectedStyle( );
++    long            GetWidthFromStyle( long nLine1, long nLine2, long nDistance, ULONG nStyle );
++    
++    virtual USHORT	GetEntryPos( long nLine1, long nLine2 = 0, long nDistance = 0, 
++                                 USHORT nStyle = STYLE_SOLID ) const;
++
++protected:
++
++    virtual Color   GetColorLine1( USHORT nPos = 0);
++    virtual Color   GetColorLine2( USHORT nPos = 0 );
++    virtual Color   GetColorDist( USHORT nPos = 0 );
++
++private:
++    void            UpdateEntries( long nOldWidth );
++    ULONG           GetStylePos( USHORT nListPos, long nWidth );
++};
++
++inline void LineStyleListBox::SetWidth( long nWidth )
++{
++    long nOldWidth = m_nWidth;
++    m_nWidth = nWidth;
++    UpdateEntries( nOldWidth );
++}
++
++inline void LineStyleListBox::SetNone( const XubString& sNone )
++{
++    m_sNone = sNone;
++}
+ 
+ // ---------------
+ // - FontNameBox -
+diff --git svtools/source/control/ctrlbox.cxx svtools/source/control/ctrlbox.cxx
+index 951c296..2be86bf 100644
+--- svtools/source/control/ctrlbox.cxx
++++ svtools/source/control/ctrlbox.cxx
+@@ -265,22 +265,12 @@ DECLARE_LIST( ImpLineList, ImpLineListData* )
+ 
+ // -----------------------------------------------------------------------
+ 
+-inline const Color& LineListBox::GetPaintColor( void ) const
+-{
+-    return maPaintCol;
+-}
+-
+-// -----------------------------------------------------------------------
+-
+ 
+-inline void lclDrawPolygon( OutputDevice& rDev, const basegfx::B2DPolygon& rPolygon, long nWidth, USHORT nDashing )
++void lclDrawPolygon( OutputDevice& rDev, const basegfx::B2DPolygon& rPolygon, long nWidth, USHORT nDashing )
+ {
+     USHORT nOldAA = rDev.GetAntialiasing();
+     rDev.SetAntialiasing( nOldAA & !ANTIALIASING_ENABLE_B2DDRAW );
+ 
+-    Color aOldColor = rDev.GetFillColor( );
+-    rDev.SetFillColor( rDev.GetLineColor( ) );
+-
+     basegfx::B2DPolyPolygon aPolygons = svtools::ApplyLineDashing( rPolygon, nDashing, rDev.GetMapMode().GetMapUnit() );
+     for ( sal_uInt32 i = 0; i < aPolygons.count( ); i++ )
+     {
+@@ -292,7 +282,12 @@ inline void lclDrawPolygon( OutputDevice& rDev, const basegfx::B2DPolygon& rPoly
+         aVector.normalize( );
+         const basegfx::B2DVector aPerpendicular(basegfx::getPerpendicular(aVector));
+ 
+-        const basegfx::B2DVector aWidthOffset( nWidth / 2 * aPerpendicular);
++        // Handle problems of width 1px in Pixel mode: 0.5px gives a 1px line
++        long nPix = rDev.PixelToLogic( Size( 0, 1 ) ).Height();
++        if ( rDev.GetMapMode().GetMapUnit() == MAP_PIXEL && nWidth == nPix )
++            nWidth = 0;
++
++        const basegfx::B2DVector aWidthOffset( double( nWidth ) / 2 * aPerpendicular);
+         basegfx::B2DPolygon aDashPolygon;
+         aDashPolygon.append( aStart + aWidthOffset );
+         aDashPolygon.append( aEnd + aWidthOffset );
+@@ -303,13 +298,12 @@ inline void lclDrawPolygon( OutputDevice& rDev, const basegfx::B2DPolygon& rPoly
+         rDev.DrawPolygon( aDashPolygon );
+     }
+         
+-    rDev.SetFillColor( aOldColor );
+     rDev.SetAntialiasing( nOldAA );
+ }
+ 
+ namespace svtools
+ {
+-    basegfx::B2DPolyPolygon ApplyLineDashing( const basegfx::B2DPolygon& rPolygon, USHORT nDashing, MapUnit eUnit )
++    std::vector < double > GetDashing( USHORT nDashing, MapUnit eUnit )
+     {
+         ::std::vector < double >aPattern;
+         switch ( nDashing )
+@@ -351,7 +345,13 @@ namespace svtools
+             default:
+                 break;
+         }
+-    
++
++        return aPattern;
++    }
++
++    basegfx::B2DPolyPolygon ApplyLineDashing( const basegfx::B2DPolygon& rPolygon, USHORT nDashing, MapUnit eUnit )
++    {
++        std::vector< double > aPattern = GetDashing( nDashing, eUnit );
+         basegfx::B2DPolyPolygon aPolygons;
+         if ( ! aPattern.empty() )
+             basegfx::tools::applyLineDashing( rPolygon, aPattern, &aPolygons );
+@@ -364,14 +364,22 @@ namespace svtools
+     void DrawLine( OutputDevice& rDev, const Point& rP1, const Point& rP2, 
+         sal_uInt32 nWidth, USHORT nDashing )
+     {
++        DrawLine( rDev, basegfx::B2DPoint( rP1.X(), rP1.Y() ), 
++                basegfx::B2DPoint( rP2.X(), rP2.Y( ) ), nWidth, nDashing );
++    }
++
++    void DrawLine( OutputDevice& rDev, const basegfx::B2DPoint& rP1, const basegfx::B2DPoint& rP2, 
++        sal_uInt32 nWidth, USHORT nDashing )
++    {
+         basegfx::B2DPolygon aPolygon;
+-        aPolygon.append( basegfx::B2DPoint( rP1.X(), rP1.Y() ) );
+-        aPolygon.append( basegfx::B2DPoint( rP2.X(), rP2.Y() ) );
++        aPolygon.append( rP1 );
++        aPolygon.append( rP2 );
+         lclDrawPolygon( rDev, aPolygon, nWidth, nDashing );
+     }
+ }
+ 
+ void LineListBox::ImpGetLine( long nLine1, long nLine2, long nDistance,
++                            Color aColor1, Color aColor2, Color aColorDist,
+                             USHORT nStyle, Bitmap& rBmp, XubString& rStr )
+ {
+     Size aSize = GetOutputSizePixel();
+@@ -420,23 +428,23 @@ void LineListBox::ImpGetLine( long nLine1, long nLine2, long nDistance,
+         Size aVirSize = aVirDev.LogicToPixel( aSize );
+         if ( aVirDev.GetOutputSizePixel() != aVirSize )
+             aVirDev.SetOutputSizePixel( aVirSize );
+-        aVirDev.SetFillColor( GetSettings().GetStyleSettings().GetFieldColor() );
++        aVirDev.SetFillColor( aColorDist );
+         aVirDev.DrawRect( Rectangle( Point(), aSize ) );
++        
++        aVirDev.SetFillColor( aColor1 );
+ 
+-        Color oldColor = aVirDev.GetLineColor( );
+-        aVirDev.SetLineColor( GetPaintColor( ) );
+-
+-        double y1 = n1 / 2;
+-        svtools::DrawLine( aVirDev, Point( 0, y1 ), Point( aSize.Width( ), y1 ), n1, nStyle );
++        double y1 = double( n1 ) / 2;
++        svtools::DrawLine( aVirDev, basegfx::B2DPoint( 0, y1 ), basegfx::B2DPoint( aSize.Width( ), y1 ), n1, nStyle );
+ 
+         if ( n2 )
+         {
+-            double y2 =  n1 + nDist + n2 / 2;
+-            svtools::DrawLine( aVirDev, Point( 0, y2 ), Point( aSize.Width(), y2 ), n2, STYLE_SOLID );
++            double y2 =  n1 + nDist + double( n2 ) / 2;
++            aVirDev.SetFillColor( aColor2 );
++            svtools::DrawLine( aVirDev, basegfx::B2DPoint( 0, y2 ), basegfx::B2DPoint( aSize.Width(), y2 ), n2, STYLE_SOLID );
+         }
+-        aVirDev.SetLineColor( oldColor );
+         rBmp = aVirDev.GetBitmap( Point(), Size( aSize.Width(), n1+nDist+n2 ) );
+     }
++    
+     // Twips nach Unit
+     if ( eUnit == FUNIT_POINT )
+     {
+@@ -512,6 +520,13 @@ LineListBox::~LineListBox()
+     delete pLineList;
+ }
+ 
++void LineListBox::SelectEntry( long nLine1, long nLine2, long nDistance, USHORT nStyle, BOOL bSelect )
++{
++    USHORT nPos = GetEntryPos( nLine1, nLine2, nDistance, nStyle );
++    if ( nPos != LISTBOX_ENTRY_NOTFOUND )
++        ListBox::SelectEntryPos( nPos, bSelect );
++}
++
+ // -----------------------------------------------------------------------
+ 
+ USHORT LineListBox::InsertEntry( const XubString& rStr, USHORT nPos )
+@@ -529,7 +544,11 @@ USHORT LineListBox::InsertEntry( long nLine1, long nLine2, long nDistance,
+ {
+     XubString   aStr;
+     Bitmap      aBmp;
+-    ImpGetLine( nLine1, nLine2, nDistance, nStyle, aBmp, aStr );
++    ImpGetLine( nLine1, nLine2, nDistance, 
++            GetColorLine1( GetEntryCount( ) ), 
++            GetColorLine2( GetEntryCount( ) ), 
++            GetColorDist( GetEntryCount( ) ),
++            nStyle, aBmp, aStr );
+     nPos = ListBox::InsertEntry( aStr, aBmp, nPos );
+     if ( nPos != LISTBOX_ERROR )
+     {
+@@ -666,7 +685,8 @@ void LineListBox::UpdateLineColors( void )
+             {
+                 // exchange listbox data
+                 ListBox::RemoveEntry( USHORT( n ) );
+-                ImpGetLine( pData->nLine1, pData->nLine2, pData->nDistance, 
++                ImpGetLine( pData->nLine1, pData->nLine2, pData->nDistance,
++                        GetColorLine1( n ), GetColorLine2( n ), GetColorDist( n ),
+                         pData->nStyle, aBmp, aStr );
+                 ListBox::InsertEntry( aStr, aBmp, USHORT( n ) );
+             }
+@@ -696,6 +716,21 @@ BOOL LineListBox::UpdatePaintLineColor( void )
+     return bRet;
+ }
+ 
++Color LineListBox::GetColorLine1( USHORT )
++{
++    return GetPaintColor( );
++}
++
++Color LineListBox::GetColorLine2( USHORT )
++{
++    return GetPaintColor( );
++}
++
++Color LineListBox::GetColorDist( USHORT )
++{
++    return GetSettings().GetStyleSettings().GetFieldColor();
++}
++
+ // -----------------------------------------------------------------------
+ 
+ void LineListBox::DataChanged( const DataChangedEvent& rDCEvt )
+@@ -707,6 +742,323 @@ void LineListBox::DataChanged( const DataChangedEvent& rDCEvt )
+ }
+ 
+ // ===================================================================
++// LineStyleNameBox
++// ===================================================================
++
++class ImpLineStyleListData
++{
++private:
++    double m_nLine1;
++    double m_nLine2;
++    double m_nDist;
++    USHORT m_nFlags;
++
++    Color  ( *m_pColor1Fn )( Color );
++    Color  ( *m_pColor2Fn )( Color );
++    Color  ( *m_pColorDistFn )( Color, Color );
++
++    long   m_nMinWidth;
++    USHORT m_nStyle;
++
++public:
++    ImpLineStyleListData( double nLine1, double nLine2, double nDist, USHORT nFlags, USHORT nStyle, 
++            long nMinWidth=0, Color ( *pColor1Fn ) ( Color ) = &sameColor, 
++            Color ( *pColor2Fn ) ( Color ) = &sameColor, Color ( *pColorDistFn ) ( Color, Color ) = &sameDistColor );
++
++    double GetLine1ForWidth( double nWidth );
++    double GetLine2ForWidth( double nWidth );
++    double GetDistForWidth( double nWidth );
++
++    long   GetTotalWidth( double nWidth );
++
++    Color  GetColorLine1( const Color& aMain );
++    Color  GetColorLine2( const Color& aMain );
++    Color  GetColorDist( const Color& aMain, const Color& rDefault );
++
++    long   GetMinWidth( );
++    USHORT GetStyle( );
++
++    long GuessWidth( long nLine1, long nLine2, long nDist );
++};
++
++ImpLineStyleListData::ImpLineStyleListData( double nLine1, double nLine2, double nDist, USHORT nFlags,
++       USHORT nStyle, long nMinWidth, Color ( *pColor1Fn )( Color ),
++       Color ( *pColor2Fn )( Color ), Color ( *pColorDistFn )( Color, Color ) ) :
++    m_nLine1( nLine1 ),
++    m_nLine2( nLine2 ),
++    m_nDist( nDist ),
++    m_nFlags( nFlags ),
++    m_pColor1Fn( pColor1Fn ),
++    m_pColor2Fn( pColor2Fn ),
++    m_pColorDistFn( pColorDistFn ),
++    m_nMinWidth( nMinWidth ),
++    m_nStyle( nStyle )
++{
++}
++
++long ImpLineStyleListData::GetMinWidth( )
++{
++    return m_nMinWidth;
++}
++
++double ImpLineStyleListData::GetLine1ForWidth( double nWidth )
++{
++    double result = m_nLine1;
++    if ( ( m_nFlags & CHANGE_LINE1 ) > 0 )
++        result = m_nLine1 * nWidth;
++    return result;
++}
++
++double ImpLineStyleListData::GetLine2ForWidth( double nWidth )
++{
++    double result = m_nLine2;
++    if ( ( m_nFlags & CHANGE_LINE2 ) > 0 )
++        result = m_nLine2 * nWidth;
++    return result;
++}
++
++double ImpLineStyleListData::GetDistForWidth( double nWidth )
++{
++    double result = m_nDist;
++    if ( ( m_nFlags & CHANGE_DIST ) > 0 )
++        result = m_nDist * nWidth;
++
++    // Avoid having too small distances
++    if ( result < 100 && m_nLine1 > 0 && m_nLine2 > 0 )
++        result = 100;
++
++    return result;
++}
++ 
++Color ImpLineStyleListData::GetColorLine1( const Color& rMain )
++{
++    return ( *m_pColor1Fn )( rMain );
++}
++
++Color ImpLineStyleListData::GetColorLine2( const Color& rMain )
++{
++    return ( *m_pColor2Fn )( rMain );
++}
++
++Color ImpLineStyleListData::GetColorDist( const Color& rMain, const Color& rDefault )
++{
++    return ( *m_pColorDistFn )( rMain, rDefault );
++}
++
++USHORT ImpLineStyleListData::GetStyle( )
++{
++    return m_nStyle;
++}
++
++long ImpLineStyleListData::GuessWidth( long nLine1, long nLine2, long nDist )
++{
++    double nWidth = 0;
++    if ( ( m_nFlags & CHANGE_LINE1 ) > 0 )
++        nWidth = double( nLine1 ) / m_nLine1;
++
++    if ( ( m_nFlags & CHANGE_LINE2 ) > 0 )
++    {
++        double nLine2Width = double( nLine2 ) / m_nLine2;
++        if ( nWidth > 0 && nWidth != nLine2Width )
++            nWidth = 0;
++        else
++            nWidth = nLine2Width;
++    }
++
++    if ( ( m_nFlags & CHANGE_DIST ) > 0 )
++    {
++        double nDistWidth = double( nDist ) / m_nDist;
++        if ( nWidth > 0 && nWidth != nDistWidth )
++            nWidth = 0;
++        else
++            nWidth = nDistWidth;
++    }
++
++    return nWidth;
++} 
++
++DECLARE_LIST( ImpLineStyleList, ImpLineStyleListData* )
++
++LineStyleListBox::LineStyleListBox( Window* pParent, WinBits nWinStyle ) :
++    LineListBox( pParent, nWinStyle ),
++    m_nWidth( 5 ),
++    m_sNone( )
++{
++    m_pStyleList = new ImpLineStyleList;
++}
++
++LineStyleListBox::LineStyleListBox( Window* pParent, const ResId& rResId ) :
++    LineListBox( pParent, rResId ),
++    m_nWidth( 0 ),
++    m_sNone( )
++{
++    m_pStyleList = new ImpLineStyleList;
++}
++
++LineStyleListBox::~LineStyleListBox( )
++{
++    ULONG n = 0;
++    ULONG nCount = m_pStyleList->Count( );
++    while ( n < nCount )
++    {
++        ImpLineStyleListData* pData = m_pStyleList->GetObject( n );
++        if ( pData )
++            delete pData;
++        n++;
++    }
++    delete m_pStyleList;
++}
++
++void LineStyleListBox::InsertEntry( double nLine1, double nLine2, double nDist, 
++        USHORT nChangeFlags, USHORT nStyle, long nMinWidth,
++        Color ( *pColor1Fn )( Color ), Color ( *pColor2Fn )( Color ),
++        Color ( *pColorDistFn )( Color, Color ) )
++{
++    ImpLineStyleListData* pData = new ImpLineStyleListData( nLine1, nLine2, nDist,
++           nChangeFlags, nStyle, nMinWidth, 
++           pColor1Fn, pColor2Fn, pColorDistFn );
++    m_pStyleList->Insert( pData, m_pStyleList->Count( ) );
++}
++
++Color LineStyleListBox::GetColorLine1( USHORT nPos )
++{
++    Color rResult = LineListBox::GetColorLine1( );
++
++    ULONG nStyle = GetStylePos( nPos, m_nWidth );
++    ImpLineStyleListData* pData = m_pStyleList->GetObject( nStyle );
++    if ( pData )
++        rResult = pData->GetColorLine1( GetColor( ) );
++
++    return rResult;
++}
++
++Color LineStyleListBox::GetColorLine2( USHORT nPos )
++{
++    Color rResult = LineListBox::GetColorLine2( );
++
++    ULONG nStyle = GetStylePos( nPos, m_nWidth );
++    ImpLineStyleListData* pData = m_pStyleList->GetObject( nStyle );
++    if ( pData )
++        rResult = pData->GetColorLine2( GetColor( ) );
++
++    return rResult;
++}
++
++Color LineStyleListBox::GetColorDist( USHORT nPos )
++{
++    Color rResult = LineListBox::GetColorDist( );
++
++    ULONG nStyle = GetStylePos( nPos, m_nWidth );
++    ImpLineStyleListData* pData = m_pStyleList->GetObject( nStyle );
++    if ( pData )
++        rResult = pData->GetColorDist( GetColor( ), rResult );
++    
++    return rResult;
++}
++
++ULONG LineStyleListBox::GetSelectedStyle( )
++{
++    USHORT nSelEntry = GetSelectEntryPos();
++    if ( m_sNone.Len( ) > 0 )
++        nSelEntry--;
++    return GetStylePos( nSelEntry, m_nWidth );
++}
++
++long LineStyleListBox::GetWidthFromStyle( long nLine1, long nLine2, long nDistance, ULONG nStyle )
++{
++    long nResult = 0;
++//    ULONG nStyle = GetSelectedStyle();
++    ImpLineStyleListData* pData = m_pStyleList->GetObject( nStyle );
++    if ( pData )
++    {
++        nResult = pData->GuessWidth( nLine1, nLine2, nDistance );
++    }
++    return nResult;
++}
++
++USHORT LineStyleListBox::GetEntryPos( long /*nLine1*/, long /*nLine2*/,
++                                long /*nDistance*/, USHORT nStyle ) const
++{
++    USHORT nPos = LISTBOX_ENTRY_NOTFOUND;
++    ULONG n = 0;
++    USHORT nCount = this->GetEntryCount( );
++    while ( n < nCount )
++    {
++        if ( GetEntryStyle( n ) == nStyle )
++            nPos = (USHORT)n;
++
++        n++;
++    }
++
++    return nPos;
++}
++
++ULONG LineStyleListBox::GetStylePos( USHORT nListPos, long nWidth )
++{
++    ULONG nPos = LISTBOX_ENTRY_NOTFOUND;
++    if ( m_sNone.Len( ) > 0 )
++        nListPos--;
++
++    ULONG i = 0;
++    ULONG n = 0;
++    ULONG nCount = m_pStyleList->Count( );
++    while ( nPos == LISTBOX_ENTRY_NOTFOUND && i < nCount )
++    {
++        ImpLineStyleListData* pData = m_pStyleList->GetObject( i );
++        if ( pData && pData->GetMinWidth() <= nWidth )
++        {
++            if ( nListPos == n )
++                nPos = i;
++            n++;
++        }
++        i++;
++    }
++
++    return nPos;
++}
++
++void LineStyleListBox::UpdateEntries( long nOldWidth )
++{    
++    SetUpdateMode( FALSE );
++
++    USHORT		nSelEntry = GetSelectEntryPos();
++    ULONG       nTypePos = GetStylePos( nSelEntry, nOldWidth );
++
++    // Remove the old entries
++    while ( GetEntryCount( ) > 0 )
++        RemoveEntry( 0 );
++
++    // Add the new entries based on the defined width
++    if ( m_sNone.Len( ) > 0 )
++        InsertEntry( m_sNone );
++
++    ULONG n = 0;
++    ULONG nCount = m_pStyleList->Count( );
++    while ( n < nCount )
++    {
++        ImpLineStyleListData* pData = m_pStyleList->GetObject( n );
++        if ( pData && pData->GetMinWidth() <= m_nWidth )
++        {
++            InsertEntry( 
++                   pData->GetLine1ForWidth( m_nWidth ),
++                   pData->GetLine2ForWidth( m_nWidth ),
++                   pData->GetDistForWidth( m_nWidth ),
++                   pData->GetStyle( ) );
++            if ( n == nTypePos )
++                SelectEntryPos( GetEntryCount() - 1 );
++        }
++        else if ( n == nTypePos )
++            SetNoSelection();
++        n++;
++    }
++
++    SetColor( GetColor( ) );
++
++    SetUpdateMode( TRUE );
++    Invalidate();
++}
++
++// ===================================================================
+ // FontNameBox
+ // ===================================================================
+ 
+diff --git svx/inc/svx/borderline.hxx svx/inc/svx/borderline.hxx
+index 5e4be3b..962acbf 100644
+--- svx/inc/svx/borderline.hxx
++++ svx/inc/svx/borderline.hxx
+@@ -97,7 +97,18 @@ enum SvxBorderStyle
+ {
+     SOLID,
+     DOTTED,
+-    DASHED
++    DASHED,
++    DOUBLE,
++    THINTHICK_SMALLGAP,
++    THINTHICK_MEDIUMGAP,
++    THINTHICK_LARGEGAP,
++    THICKTHIN_SMALLGAP,
++    THICKTHIN_MEDIUMGAP,
++    THICKTHIN_LARGEGAP,
++    EMBOSSED,
++    ENGRAVED,
++    OUTSET,
++    INSET
+ };
+ 
+ class SVX_DLLPUBLIC SvxBorderLine
+@@ -109,14 +120,25 @@ protected:
+     USHORT nDistance;
+     SvxBorderStyle   m_nStyle;
+ 
++    bool             m_bUseLeftTop;
++    Color            (*m_pColorOutFn)( Color );
++    Color            (*m_pColorInFn)( Color );
++    Color            (*m_pColorGapFn)( Color );
++
+ public:
+     SvxBorderLine( const Color *pCol = 0, USHORT nOut = 0, USHORT nIn = 0, USHORT nDist = 0, 
+-            SvxBorderStyle nStyle = SOLID );
++            SvxBorderStyle nStyle = SOLID, bool bUseLeftTop = false,
++            Color (*pColorOutFn)( Color ) = &darkColor, Color (*pColorInFn)( Color ) = &darkColor,
++            Color (*pColorGapFn)( Color ) = NULL );
+     SvxBorderLine( const SvxBorderLine& r );
+ 
+     SvxBorderLine& operator=( const SvxBorderLine& r );
+ 
+-    const Color&	GetColor() const { return aColor; }
++    const Color&    GetColor() const { return aColor; }
++    Color           GetColorOut( bool bLeftOrTop = true ) const;
++    Color           GetColorIn( bool bLeftOrTop = true ) const;
++    BOOL            HasGapColor() const { return m_pColorGapFn != NULL; }
++    Color           GetColorGap() const;
+     USHORT 			GetOutWidth() const { return nOutWidth; }
+     USHORT 			GetInWidth() const { return nInWidth; }
+     USHORT 			GetDistance() const { return nDistance; }
+@@ -124,10 +146,14 @@ public:
+     SvxBorderStyle  GetStyle() const { return m_nStyle; }
+ 
+     void 			SetColor( const Color &rColor ) { aColor = rColor; }
++    void            SetColorOutFn( Color (*pColorOutFn)( Color ) ) { m_pColorOutFn = pColorOutFn; }
++    void            SetColorInFn( Color (*pColorInFn)( Color ) ) { m_pColorInFn = pColorInFn; }
++    void            SetColorGapFn( Color (*pColorGapFn)( Color ) ) { m_pColorGapFn = pColorGapFn; }
++    void            SetUseLeftTop( bool bUseLeftTop ) { m_bUseLeftTop = bUseLeftTop; }
+     void			SetOutWidth( USHORT nNew ) { nOutWidth = nNew; }
+     void			SetInWidth( USHORT nNew ) { nInWidth = nNew;  }
+     void			SetDistance( USHORT nNew ) { nDistance = nNew; }
+-    void            SetStyle( SvxBorderStyle nNew ) { m_nStyle = nNew; }
++    void            SetStyle( SvxBorderStyle nNew );
+     void			ScaleMetrics( long nMult, long nDiv );
+ 
+     BOOL			operator==( const SvxBorderLine &rCmp ) const;
+@@ -141,6 +167,14 @@ public:
+     bool isEmpty() const { return (0 == nOutWidth && 0 == nInWidth && 0 == nDistance); }
+     bool isDouble() const { return (0 != nOutWidth && 0 != nInWidth); }
+     sal_uInt16 getWidth() const { return nOutWidth + nInWidth + nDistance; }
++
++    static Color darkColor( Color aMain );
++    static Color lightColor( Color aMain );
++
++    static Color threeDLightColor( Color aMain );
++    static Color threeDMediumColor( Color aMain );
++    static Color threeDDarkColor( Color aMain );
++
+ };
+ 
+ // ============================================================================
+diff --git svx/inc/svx/framelink.hxx svx/inc/svx/framelink.hxx
+index 8309326..92ffc8d 100644
+--- svx/inc/svx/framelink.hxx
++++ svx/inc/svx/framelink.hxx
+@@ -116,15 +116,16 @@ class SVX_DLLPUBLIC Style
+ {
+ public:
+     /** Constructs an invisible frame style. */
+-    inline explicit     Style() : meRefMode( REFMODE_CENTERED ), mnPrim( 0 ), mnDist( 0 ), mnSecn( 0 ), mnDashing( SOLID ) {}
++    inline explicit     Style() : meRefMode( REFMODE_CENTERED ), mnPrim( 0 ), mnDist( 0 ), mnSecn( 0 ), mnType( SOLID ) {}
+     /** Constructs a frame style with passed line widths. */
+-    inline explicit     Style( sal_uInt16 nP, sal_uInt16 nD, sal_uInt16 nS ) :
+-                            meRefMode( REFMODE_CENTERED ), mnDashing( SOLID )
++    inline explicit     Style( sal_uInt16 nP, sal_uInt16 nD, sal_uInt16 nS, SvxBorderStyle nType ) :
++                            meRefMode( REFMODE_CENTERED ), mnType( nType )
+                             { Set( nP, nD, nS ); }
+     /** Constructs a frame style with passed color and line widths. */
+-    inline explicit     Style( const Color& rColor, sal_uInt16 nP, sal_uInt16 nD, sal_uInt16 nS, SvxBorderStyle nDashing = SOLID ) :
+-                            meRefMode( REFMODE_CENTERED ), mnDashing( nDashing )
+-                            { Set( rColor, nP, nD, nS ); }
++    inline explicit     Style( const Color& rColorPrim, const Color& rColorSecn, const Color& rColorGap, bool bUseGapColor,
++                            sal_uInt16 nP, sal_uInt16 nD, sal_uInt16 nS, SvxBorderStyle nType ) :
++                            meRefMode( REFMODE_CENTERED ), mnType( nType )
++                            { Set( rColorPrim, rColorSecn, rColorGap, bUseGapColor, nP, nD, nS ); }
+     /** Constructs a frame style from the passed SvxBorderLine struct. */
+     inline explicit     Style( const SvxBorderLine& rBorder, double fScale = 1.0, sal_uInt16 nMaxWidth = SAL_MAX_UINT16 ) :
+                             meRefMode( REFMODE_CENTERED ) { Set( rBorder, fScale, nMaxWidth ); }
+@@ -133,11 +134,14 @@ public:
+                             meRefMode( REFMODE_CENTERED ) { Set( pBorder, fScale, nMaxWidth ); }
+ 
+     inline RefMode      GetRefMode() const { return meRefMode; }
+-    inline const Color& GetColor() const { return maColor; }
++    inline const Color& GetColorPrim() const { return maColorPrim; }
++    inline const Color& GetColorSecn() const { return maColorSecn; }
++    inline const Color& GetColorGap() const { return maColorGap; }
++    inline bool         UseGapColor() const { return mbUseGapColor; }
+     inline sal_uInt16   Prim() const { return mnPrim; }
+     inline sal_uInt16   Dist() const { return mnDist; }
+     inline sal_uInt16   Secn() const { return mnSecn; }
+-    inline SvxBorderStyle Dashing() const { return mnDashing; }
++    inline SvxBorderStyle Type() const { return mnType; }
+ 
+     /** Returns the total width of this frame style. */
+     inline sal_uInt16   GetWidth() const { return mnPrim + mnDist + mnSecn; }
+@@ -148,7 +152,8 @@ public:
+     /** Sets the frame style to the passed line widths. */
+     void                Set( sal_uInt16 nP, sal_uInt16 nD, sal_uInt16 nS );
+     /** Sets the frame style to the passed line widths. */
+-    void                Set( const Color& rColor, sal_uInt16 nP, sal_uInt16 nD, sal_uInt16 nS );
++    void                Set( const Color& rColorPrim, const Color& rColorSecn, const Color& rColorGap, bool bUseGapColor, 
++                            sal_uInt16 nP, sal_uInt16 nD, sal_uInt16 nS );
+     /** Sets the frame style to the passed SvxBorderLine struct. */
+     void                Set( const SvxBorderLine& rBorder, double fScale = 1.0, sal_uInt16 nMaxWidth = SAL_MAX_UINT16 );
+     /** Sets the frame style to the passed SvxBorderLine struct. Clears the style, if pBorder is 0. */
+@@ -157,9 +162,11 @@ public:
+     /** Sets a new reference point handling mode, does not modify other settings. */
+     inline void         SetRefMode( RefMode eRefMode ) { meRefMode = eRefMode; }
+     /** Sets a new color, does not modify other settings. */
+-    inline void         SetColor( const Color& rColor ) { maColor = rColor; }
++    inline void         SetColorPrim( const Color& rColor ) { maColorPrim = rColor; }
++    inline void         SetColorSecn( const Color& rColor ) { maColorSecn = rColor; }
++    inline void         SetColorGap( bool bUseIt, const Color& rColor ) { maColorGap = rColor; mbUseGapColor = bUseIt; }
+     /** Sets whether to use dotted style for single hair lines. */
+-    inline void         SetDashing( SvxBorderStyle nDashing ) { mnDashing = nDashing; }
++    inline void         SetType( SvxBorderStyle nType ) { mnType = nType; }
+ 
+     /** Scales the style by the specified scaling factor. Ensures that visible lines keep visible. */
+     Style&              ScaleSelf( double fScale, sal_uInt16 nMaxWidth = SAL_MAX_UINT16 );
+@@ -172,12 +179,15 @@ public:
+     Style               Mirror() const;
+ 
+ private:
+-    Color               maColor;    /// The color of the line(s) of this frame border.
++    Color               maColorPrim;
++    Color               maColorSecn;
++    Color               maColorGap;
++    bool                mbUseGapColor;
+     RefMode             meRefMode;  /// Reference point handling for this frame border.
+     sal_uInt16          mnPrim;     /// Width of primary (single, left, or top) line.
+     sal_uInt16          mnDist;     /// Distance between primary and secondary line.
+     sal_uInt16          mnSecn;     /// Width of secondary (right or bottom) line.
+-    SvxBorderStyle      mnDashing;
++    SvxBorderStyle      mnType;
+ };
+ 
+ bool operator==( const Style& rL, const Style& rR );
+diff --git svx/inc/svx/frmsel.hxx svx/inc/svx/frmsel.hxx
+index bed814d..0755332 100644
+--- svx/inc/svx/frmsel.hxx
++++ svx/inc/svx/frmsel.hxx
+@@ -164,7 +164,7 @@ public:
+     void                SelectAllVisibleBorders( bool bSelect = true );
+ 
+     /** Sets the passed line widths to all selected frame borders (in twips). */
+-    void                SetStyleToSelection( USHORT nPrim, USHORT nDist, USHORT nSec, 
++    void                SetStyleToSelection( USHORT nPrim, USHORT nDist, USHORT nSec,
+                                              SvxBorderStyle nStyle );
+     /** Sets the passed color to all selected frame borders. */
+     void                SetColorToSelection( const Color& rColor );
+diff --git svx/inc/svx/sdr/contact/objectcontacttools.hxx svx/inc/svx/sdr/contact/objectcontacttools.hxx
+index dadf99d..9180bb7 100644
+--- svx/inc/svx/sdr/contact/objectcontacttools.hxx
++++ svx/inc/svx/sdr/contact/objectcontacttools.hxx
+@@ -33,6 +33,7 @@
+ #define _SDR_CONTACT_OBJECTCONTACTTOOLS_HXX
+ 
+ #include <drawinglayer/geometry/viewinformation2d.hxx>
++#include "svx/svxdllapi.h"
+ 
+ //////////////////////////////////////////////////////////////////////////////
+ // predeclarations
+@@ -52,7 +53,7 @@ namespace sdr
+         // create a mating VCL-Provessor for given OutputDevice. This includes
+         // looking for MetaFile-recording. The returned renderer changes owner,
+         // deletion is duty of the caller
+-        drawinglayer::processor2d::BaseProcessor2D* createBaseProcessor2DFromOutputDevice(
++        SVX_DLLPUBLIC drawinglayer::processor2d::BaseProcessor2D* createBaseProcessor2DFromOutputDevice(
+             OutputDevice& rTargetOutDev, 
+             const drawinglayer::geometry::ViewInformation2D& rViewInformation2D);
+ 
+diff --git svx/source/cui/border.cxx svx/source/cui/border.cxx
+index 0284cdd..93f13d8 100644
+--- svx/source/cui/border.cxx
++++ svx/source/cui/border.cxx
+@@ -198,6 +198,8 @@ SvxBorderTabPage::SvxBorderTabPage( Window* pParent,
+         aLbLineStyle    ( this, SVX_RES( LB_LINESTYLE ) ),
+         aColorFT        ( this, SVX_RES( FT_COLOR ) ),
+         aLbLineColor    ( this, SVX_RES( LB_LINECOLOR ) ),
++        aWidthFT        ( this, SVX_RES( FT_WIDTH ) ),
++        aLineWidthMF    ( this, SVX_RES( MF_LINEWIDTH ) ),
+ 
+         aFlSep2         ( this, SVX_RES( FL_SEPARATOR2 ) ),
+         aDistanceFL     ( this, SVX_RES( FL_DISTANCE ) ),
+@@ -350,6 +352,7 @@ SvxBorderTabPage::SvxBorderTabPage( Window* pParent,
+     aFrameSel.SetSelectHdl(LINK(this, SvxBorderTabPage, LinesChanged_Impl));
+     aLbLineStyle.SetSelectHdl( LINK( this, SvxBorderTabPage, SelStyleHdl_Impl ) );
+     aLbLineColor.SetSelectHdl( LINK( this, SvxBorderTabPage, SelColHdl_Impl ) );
++    aLineWidthMF.SetModifyHdl( LINK( this, SvxBorderTabPage, ModifyWidthHdl_Impl ) );
+     aLbShadowColor.SetSelectHdl( LINK( this, SvxBorderTabPage, SelColHdl_Impl ) );
+     aWndPresets.SetSelectHdl( LINK( this, SvxBorderTabPage, SelPreHdl_Impl ) );
+     aWndShadows.SetSelectHdl( LINK( this, SvxBorderTabPage, SelSdwHdl_Impl ) );
+@@ -575,7 +578,15 @@ void SvxBorderTabPage::Reset( const SfxItemSet& rSet )
+         SvxBorderStyle nStyle;
+         bool bWidthEq = aFrameSel.GetVisibleWidth( nPrim, nDist, nSecn, nStyle );
+         if( bWidthEq )
+-            aLbLineStyle.SelectEntry( nPrim * 100, nSecn * 100, nDist * 100, nStyle );
++        {
++            // Determine the width first as some styles can be missing depending on it
++            long nWidth = aLbLineStyle.GetWidthFromStyle( nPrim * 5, nSecn * 5, nDist * 5, nStyle );
++            aLineWidthMF.SetValue( sal_Int64( nWidth ) );
++            aLbLineStyle.SetWidth( aLineWidthMF.GetValue( ) );
++
++            // then set the style
++            aLbLineStyle.SelectEntry( nPrim * 5, nSecn * 5, nDist * 5, nStyle );
++        }
+         else
+             aLbLineStyle.SelectEntryPos( 1 );
+ 
+@@ -938,33 +949,30 @@ IMPL_LINK( SvxBorderTabPage, SelColHdl_Impl, ListBox *, pLb )
+     return 0;
+ }
+ 
+-// -----------------------------------------------------------------------
+-
+-SvxBorderStyle lcl_getBorderStyle( USHORT nStyle )
++IMPL_LINK( SvxBorderTabPage, ModifyWidthHdl_Impl, void *, EMPTYARG )
+ {
+-    SvxBorderStyle nResult = SOLID;
+-    switch ( nStyle )
+-    {
+-        case STYLE_DOTTED:
+-            nResult = DOTTED;
+-            break;
+-        case STYLE_DASHED:
+-            nResult = DASHED;
+-            break;
+-        default:
+-            nResult = SOLID;
+-    }
+-    return nResult;
++    sal_Int64 nVal = aLineWidthMF.GetValue( );
++    aLbLineStyle.SetWidth( nVal );
++    
++    aFrameSel.SetStyleToSelection(
++        static_cast< USHORT >( aLbLineStyle.GetSelectEntryLine1() / 5 ),
++        static_cast< USHORT >( aLbLineStyle.GetSelectEntryDistance() / 5 ),
++        static_cast< USHORT >( aLbLineStyle.GetSelectEntryLine2() / 5 ),
++        SvxBorderStyle( aLbLineStyle.GetSelectEntryStyle() ) );
++
++    return 0;
+ }
+ 
++// -----------------------------------------------------------------------
++
+ IMPL_LINK( SvxBorderTabPage, SelStyleHdl_Impl, ListBox *, pLb )
+ {
+     if ( pLb == &aLbLineStyle )
+-        aFrameSel.SetStyleToSelection(
+-            static_cast< USHORT >( aLbLineStyle.GetSelectEntryLine1() / 100 ),
+-            static_cast< USHORT >( aLbLineStyle.GetSelectEntryDistance() / 100 ),
+-            static_cast< USHORT >( aLbLineStyle.GetSelectEntryLine2() / 100 ),
+-            lcl_getBorderStyle( aLbLineStyle.GetSelectEntryStyle() ) );
++        aFrameSel.SetStyleToSelection (
++            static_cast< USHORT >( aLbLineStyle.GetSelectEntryLine1() / 5 ),
++            static_cast< USHORT >( aLbLineStyle.GetSelectEntryDistance() / 5 ),
++            static_cast< USHORT >( aLbLineStyle.GetSelectEntryLine2() / 5 ),
++            SvxBorderStyle( aLbLineStyle.GetSelectEntryStyle() ) );
+ 
+     return 0;
+ }
+@@ -1117,38 +1125,52 @@ void SvxBorderTabPage::FillValueSets()
+ }
+ 
+ // ============================================================================
++Color lcl_mediumColor( Color aMain, Color /*aDefault*/ )
++{
++    return SvxBorderLine::threeDMediumColor( aMain ); 
++}
+ 
+ void SvxBorderTabPage::FillLineListBox_Impl()
+ {
+-    aLbLineStyle.SetUnit( FUNIT_POINT );
+-    aLbLineStyle.SetSourceUnit( FUNIT_TWIP );
+-
+-    // Writer 2.0 Defaults:
+-    aLbLineStyle.InsertEntry( SVX_RESSTR( STR_NONE ) );
+-
+-    aLbLineStyle.InsertEntry( LINE_WIDTH0 );
+-    aLbLineStyle.InsertEntry( LINE_WIDTH5 );
+-    aLbLineStyle.InsertEntry( LINE_WIDTH5, 0, 0, STYLE_DOTTED );
+-    aLbLineStyle.InsertEntry( LINE_WIDTH5, 0, 0, STYLE_DASHED );
+-    aLbLineStyle.InsertEntry( LINE_WIDTH1 );
+-    aLbLineStyle.InsertEntry( LINE_WIDTH2 );
+-    aLbLineStyle.InsertEntry( LINE_WIDTH3 );
+-    aLbLineStyle.InsertEntry( LINE_WIDTH4 );
+-
+-    // OS: wenn hier neue Linienstaerken zugfuegt werden, dann
+-    // LINESTYLE_HTML_MAX anpassen
+-
+-    aLbLineStyle.InsertEntry( DLINE0_OUT, DLINE0_IN, DLINE0_DIST );
+-    aLbLineStyle.InsertEntry( DLINE7_OUT, DLINE7_IN, DLINE7_DIST );
+-    aLbLineStyle.InsertEntry( DLINE1_OUT, DLINE1_IN, DLINE1_DIST );
+-    aLbLineStyle.InsertEntry( DLINE2_OUT, DLINE2_IN, DLINE2_DIST );
+-    aLbLineStyle.InsertEntry( DLINE8_OUT, DLINE8_IN, DLINE8_DIST );
+-    aLbLineStyle.InsertEntry( DLINE9_OUT, DLINE9_IN, DLINE9_DIST );
+-    aLbLineStyle.InsertEntry( DLINE10_OUT,DLINE10_IN,DLINE10_DIST);
+-    aLbLineStyle.InsertEntry( DLINE3_OUT, DLINE3_IN, DLINE3_DIST );
+-    aLbLineStyle.InsertEntry( DLINE4_OUT, DLINE4_IN, DLINE4_DIST );
+-    aLbLineStyle.InsertEntry( DLINE5_OUT, DLINE5_IN, DLINE5_DIST );
+-    aLbLineStyle.InsertEntry( DLINE6_OUT, DLINE6_IN, DLINE6_DIST );
++    aLbLineStyle.SetNone( SVX_RESSTR( STR_NONE ) );
++
++    // Simple lines
++    aLbLineStyle.InsertEntry( 1.0, 0.0, 0.0, CHANGE_LINE1, SOLID );
++    aLbLineStyle.InsertEntry( 1.0, 0.0, 0.0, CHANGE_LINE1, DOTTED );
++    aLbLineStyle.InsertEntry( 1.0, 0.0, 0.0, CHANGE_LINE1, DASHED );
++
++    // Double lines
++    aLbLineStyle.InsertEntry( 1.0, 1.0, 1.0, CHANGE_LINE1 | CHANGE_LINE2 | CHANGE_DIST, DOUBLE );
++    aLbLineStyle.InsertEntry( 1.0, 75.0, 75.0, CHANGE_LINE1, THINTHICK_SMALLGAP, 100 );
++    aLbLineStyle.InsertEntry( 1.0, 0.5, 0.5, CHANGE_LINE1 | CHANGE_LINE2 | CHANGE_DIST, THINTHICK_MEDIUMGAP );
++    aLbLineStyle.InsertEntry( 75.0, 150.0, 1.0, CHANGE_DIST, THINTHICK_LARGEGAP );
++    aLbLineStyle.InsertEntry( 75.0, 1.0, 75.0, CHANGE_LINE2, THICKTHIN_SMALLGAP, 100 );
++    aLbLineStyle.InsertEntry( 0.5, 1.0, 0.5, CHANGE_LINE1 | CHANGE_LINE2 | CHANGE_DIST, THICKTHIN_MEDIUMGAP );
++    aLbLineStyle.InsertEntry( 150.0, 75.0, 1.0, CHANGE_DIST, THICKTHIN_LARGEGAP );
++
++    // Engraved / Embossed
++    /*
++     *  Word compat: the lines widths are exactly following this rule, shouldbe:
++     *      0.75pt up to 3pt and then 3pt
++     */
++    aLbLineStyle.InsertEntry( 0.5, 0.5, 1, CHANGE_LINE1 | CHANGE_LINE2 | CHANGE_DIST, EMBOSSED, 75, 
++            &SvxBorderLine::threeDLightColor, &SvxBorderLine::threeDDarkColor,
++            &lcl_mediumColor );
++    aLbLineStyle.InsertEntry( 0.5, 0.5, 1, CHANGE_LINE1 | CHANGE_LINE2 | CHANGE_DIST, ENGRAVED, 75,
++            &SvxBorderLine::threeDDarkColor, &SvxBorderLine::threeDLightColor,
++            &lcl_mediumColor );
++
++    // Inset / Outset
++    /*
++     * Word compat: the gap width should be measured relatively to the biggest width for the
++     *      row or column.
++     */
++    aLbLineStyle.InsertEntry( 75.0, 1.0, 1.0, CHANGE_LINE2 | CHANGE_DIST, OUTSET, 0.5, 
++           &SvxBorderLine::lightColor, &SvxBorderLine::darkColor );
++    aLbLineStyle.InsertEntry( 1.0, 75.0, 1.0, CHANGE_LINE1 | CHANGE_DIST, INSET, 0.5, 
++           &SvxBorderLine::darkColor, &SvxBorderLine::lightColor );
++
++    aLbLineStyle.SetWidth( aLineWidthMF.GetValue( ) );
+ }
+ 
+ // -----------------------------------------------------------------------
+diff --git svx/source/cui/border.hrc svx/source/cui/border.hrc
+index b0c7e8a..1e7c68b 100644
+--- svx/source/cui/border.hrc
++++ svx/source/cui/border.hrc
+@@ -40,6 +40,7 @@
+ #define FL_LINE                 20
+ #define LB_LINESTYLE            21
+ #define LB_LINECOLOR            22
++#define MF_LINEWIDTH            23
+ 
+ #define FL_SEPARATOR2           29
+ #define FL_SHADOW               30
+@@ -70,6 +71,7 @@
+ #define FL_PROPERTIES           64
+ #define CB_MERGEWITHNEXT        65
+ #define CB_MERGEADJACENTBORDERS 66
++#define FT_WIDTH                67
+ 
+ // ImageListe fuer ValueSets:
+ #define IL_PRE_BITMAPS			1400
+diff --git svx/source/cui/border.hxx svx/source/cui/border.hxx
+index 3ac6446..ad3a86f 100644
+--- svx/source/cui/border.hxx
++++ svx/source/cui/border.hxx
+@@ -100,9 +100,11 @@ private:
+     FixedLine           aFlSep1;
+     FixedLine			aFlLine;
+     FixedText           aStyleFT;
+-    LineListBox         aLbLineStyle;
++    LineStyleListBox    aLbLineStyle;
+     FixedText           aColorFT;
+     ColorListBox		aLbLineColor;
++    FixedText           aWidthFT;
++    MetricField 		aLineWidthMF;
+ 
+     FixedLine           aFlSep2;
+     FixedLine			aDistanceFL;
+@@ -155,6 +157,7 @@ private:
+     DECL_LINK( SelSdwHdl_Impl, void* );
+     DECL_LINK( LinesChanged_Impl, void* );
+     DECL_LINK( ModifyDistanceHdl_Impl, MetricField*);
++    DECL_LINK( ModifyWidthHdl_Impl, void*);
+     DECL_LINK( SyncHdl_Impl, CheckBox*);
+ 
+     USHORT              GetPresetImageId( USHORT nValueSetIdx ) const;
+diff --git svx/source/cui/border.src svx/source/cui/border.src
+index dbbb81b..6230cf5 100644
+--- svx/source/cui/border.src
++++ svx/source/cui/border.src
+@@ -99,17 +99,39 @@ TabPage RID_SVXPAGE_BORDER
+         Border = TRUE ;
+         Pos = MAP_APPFONT ( 88 , 25 ) ;
+         Size = MAP_APPFONT ( 74 , 66 ) ;
++        DropDown = TRUE ;
++    };
++    FixedText FT_WIDTH
++    {
++        Pos = MAP_APPFONT ( 88, 39 ) ;
++        Size = MAP_APPFONT ( 77, 8 ) ;
++        Text [ en-US ] = "~Width";
++    };
++    MetricField MF_LINEWIDTH
++    {
++        Border = TRUE ;
++        Pos = MAP_APPFONT ( 88 , 50 ) ;
++        Size = MAP_APPFONT ( 74 , 12 ) ;
++        Spin = TRUE ;
++        Repeat = TRUE ;
++        SpinSize = 25 ;
++        First = 25 ;
++        Last = 900 ;
++        Maximum = 900 ;
++        Minimum = 25 ;
++        DecimalDigits = 2 ;
++        Unit = FUNIT_POINT ;
+     };
+     FixedText FT_COLOR
+     {
+-        Pos = MAP_APPFONT ( 88, 95 ) ;
++        Pos = MAP_APPFONT ( 88, 64 ) ;
+         Size = MAP_APPFONT ( 77, 8 ) ;
+         Text [ en-US ] = "~Color";
+     };
+     ListBox LB_LINECOLOR
+     {
+         Border = TRUE ;
+-        Pos = MAP_APPFONT ( 88 , 106 ) ;
++        Pos = MAP_APPFONT ( 88 , 75 ) ;
+         Size = MAP_APPFONT ( 74 , 68 ) ;
+         DropDown = TRUE ;
+         DDExtraWidth = TRUE ;
+diff --git svx/source/dialog/framelink.cxx svx/source/dialog/framelink.cxx
+index e504aa4..4791ba9 100644
+--- svx/source/dialog/framelink.cxx
++++ svx/source/dialog/framelink.cxx
+@@ -135,8 +135,9 @@ struct BorderEndResult
+ {
+     LineEndResult       maPrim;     /// Result for primary line.
+     LineEndResult       maSecn;     /// Result for secondary line.
++    LineEndResult       maGap;      /// Result for gap line.
+ 
+-    inline void         Negate() { maPrim.Negate(); maSecn.Negate(); }
++    inline void         Negate() { maPrim.Negate(); maSecn.Negate(); maGap.Negate(); }
+ };
+ 
+ /** Result struct used by the horizontal/vertical frame link functions.
+@@ -512,6 +513,23 @@ void lclLinkLeftEnd_Secn(
+     rResult.Swap();
+ }
+ 
++void lclLinkLeftEnd_Gap(
++        LineEndResult& rResult, const Style& rBorder,
++        const DiagStyle& rLFromTR, const Style& rLFromT, const Style& rLFromL, const Style& rLFromB, const DiagStyle& rLFromBR )
++
++{
++    if ( rLFromT.Secn() )
++        rResult.mnOffs1 = lclGetDistBeg( rLFromT );
++    else if ( rLFromL.Secn( ) )
++        rResult.mnOffs1 = ( rLFromL.GetWidth() == rBorder.GetWidth() )?
++            0 : lclGetBehindEnd( rLFromT );
++    else if ( rLFromB.Secn( ) )
++        rResult.mnOffs1 = lclGetDistBeg( rLFromB );
++    else
++        rResult.mnOffs1 = std::max( lclGetBehindEnd( rLFromT ), lclGetBehindEnd( rLFromB ) );
++
++    rResult.mnOffs2 = rResult.mnOffs1;
++}
+ // ----------------------------------------------------------------------------
+ // Linking of horizontal frame border ends.
+ 
+@@ -533,6 +551,7 @@ void lclLinkLeftEnd(
+         // current frame border is double
+         lclLinkLeftEnd_Prim( rResult.maPrim, rBorder, rLFromTR, rLFromT, rLFromL, rLFromB, rLFromBR );
+         lclLinkLeftEnd_Secn( rResult.maSecn, rBorder, rLFromTR, rLFromT, rLFromL, rLFromB, rLFromBR );
++        lclLinkLeftEnd_Gap( rResult.maGap, rBorder, rLFromTR, rLFromT, rLFromL, rLFromB, rLFromBR );
+     }
+     else if( rBorder.Prim() )
+     {
+@@ -796,11 +815,11 @@ Polygon lclCreatePolygon( const Point& rP1, const Point& rP2, const Point& rP3,
+     @param rStyle
+         The border style that contains the line color to be set to the device.
+  */
+-void lclSetColorToOutDev( OutputDevice& rDev, const Style& rStyle, const Color* pForceColor )
++void lclSetColorToOutDev( OutputDevice& rDev, const Color& rColor, const Color* pForceColor )
+ {
+     rDev.Push( PUSH_LINECOLOR | PUSH_FILLCOLOR );
+-    rDev.SetLineColor( pForceColor ? *pForceColor : rStyle.GetColor() );
+-    rDev.SetFillColor( pForceColor ? *pForceColor : rStyle.GetColor() );
++    rDev.SetLineColor( pForceColor ? *pForceColor : rColor );
++    rDev.SetFillColor( pForceColor ? *pForceColor : rColor );
+ }
+ 
+ // ----------------------------------------------------------------------------
+@@ -851,13 +870,26 @@ void lclDrawHorFrameBorder(
+     DBG_ASSERT( rLPos.Y() == rRPos.Y(), "svx::frame::lclDrawHorFrameBorder - line not horizontal" );
+     if( rLPos.X() <= rRPos.X() )
+     {
+-        lclSetColorToOutDev( rDev, rBorder, pForceColor );
++        if ( rBorder.UseGapColor( ) )
++        {
++            lclSetColorToOutDev( rDev, rBorder.GetColorGap(), pForceColor );
++            lclDrawHorLine( rDev, rLPos, rResult.maBeg.maGap, rRPos, rResult.maEnd.maGap,
++                   lclGetPrimEnd( rBorder ), lclGetSecnBeg( rBorder ), rBorder.Type() );
++            rDev.Pop(); // Gap color
++        }
++
++        lclSetColorToOutDev( rDev, rBorder.GetColorPrim(), pForceColor );
+         lclDrawHorLine( rDev, rLPos, rResult.maBeg.maPrim, rRPos, rResult.maEnd.maPrim,
+-            lclGetBeg( rBorder ), lclGetPrimEnd( rBorder ), rBorder.Dashing() );
++            lclGetBeg( rBorder ), lclGetPrimEnd( rBorder ), rBorder.Type() );
++        rDev.Pop(); // colors
++
+         if( rBorder.Secn() )
++        {
++            lclSetColorToOutDev( rDev, rBorder.GetColorSecn(), pForceColor );
+             lclDrawHorLine( rDev, rLPos, rResult.maBeg.maSecn, rRPos, rResult.maEnd.maSecn,
+-                lclGetSecnBeg( rBorder ), lclGetEnd( rBorder ), rBorder.Dashing() );
+-        rDev.Pop(); // colors
++                lclGetSecnBeg( rBorder ), lclGetEnd( rBorder ), rBorder.Type() );
++            rDev.Pop(); // colors
++        }
+     }
+ }
+ 
+@@ -908,13 +940,25 @@ void lclDrawVerFrameBorder(
+     DBG_ASSERT( rTPos.X() == rBPos.X(), "svx::frame::lclDrawVerFrameBorder - line not vertical" );
+     if( rTPos.Y() <= rBPos.Y() )
+     {
+-        lclSetColorToOutDev( rDev, rBorder, pForceColor );
++        if ( rBorder.UseGapColor( ) )
++        {
++            lclSetColorToOutDev( rDev, rBorder.GetColorGap(), pForceColor );
++            lclDrawVerLine( rDev, rTPos, rResult.maBeg.maGap, rBPos, rResult.maEnd.maGap,
++                   lclGetPrimEnd( rBorder ), lclGetSecnBeg( rBorder ), rBorder.Type() );
++            rDev.Pop(); // Gap color
++        }
++
++        lclSetColorToOutDev( rDev, rBorder.GetColorPrim(), pForceColor );
+         lclDrawVerLine( rDev, rTPos, rResult.maBeg.maPrim, rBPos, rResult.maEnd.maPrim,
+-            lclGetBeg( rBorder ), lclGetPrimEnd( rBorder ), rBorder.Dashing() );
++            lclGetBeg( rBorder ), lclGetPrimEnd( rBorder ), rBorder.Type() );
++        rDev.Pop(); // colors
+         if( rBorder.Secn() )
++        {
++            lclSetColorToOutDev( rDev, rBorder.GetColorSecn(), pForceColor );
+             lclDrawVerLine( rDev, rTPos, rResult.maBeg.maSecn, rBPos, rResult.maEnd.maSecn,
+-                lclGetSecnBeg( rBorder ), lclGetEnd( rBorder ), rBorder.Dashing() );
+-        rDev.Pop(); // colors
++                lclGetSecnBeg( rBorder ), lclGetEnd( rBorder ), rBorder.Type() );
++            rDev.Pop(); // colors
++        }
+     }
+ }
+ 
+@@ -1089,11 +1133,22 @@ void lclDrawDiagFrameBorder(
+     if( bClip )
+         lclPushCrossingClipRegion( rDev, rRect, bTLBR, rCrossStyle );
+ 
+-    lclSetColorToOutDev( rDev, rBorder, pForceColor );
+-    lclDrawDiagLine( rDev, rRect, bTLBR, rResult.maPrim, lclGetBeg( rBorder ), lclGetPrimEnd( rBorder ), rBorder.Dashing() );
+-    if( rBorder.Secn() )
+-        lclDrawDiagLine( rDev, rRect, bTLBR, rResult.maSecn, lclGetSecnBeg( rBorder ), lclGetEnd( rBorder ), rBorder.Dashing() );
++    lclSetColorToOutDev( rDev, rBorder.GetColorPrim(), pForceColor );
++    lclDrawDiagLine( rDev, rRect, bTLBR, rResult.maPrim, lclGetBeg( rBorder ), lclGetPrimEnd( rBorder ), rBorder.Type() );
+     rDev.Pop(); // colors
++    if( rBorder.Secn() )
++    {
++        if ( rBorder.UseGapColor( ) )
++        {
++            lclSetColorToOutDev( rDev, rBorder.GetColorGap(), pForceColor );
++            lclDrawDiagLine( rDev, rRect, bTLBR, rResult.maSecn, lclGetDistBeg( rBorder ), lclGetDistEnd( rBorder ), rBorder.Type() );
++            rDev.Pop(); // colors
++        }
++
++        lclSetColorToOutDev( rDev, rBorder.GetColorSecn(), pForceColor );
++        lclDrawDiagLine( rDev, rRect, bTLBR, rResult.maSecn, lclGetSecnBeg( rBorder ), lclGetEnd( rBorder ), rBorder.Type() );
++        rDev.Pop(); // colors
++    }
+ 
+     if( bClip )
+         rDev.Pop(); // clipping region
+@@ -1146,7 +1201,7 @@ void lclDrawDiagFrameBorders(
+ 
+ void Style::Clear()
+ {
+-    Set( Color(), 0, 0, 0 );
++    Set( Color(), Color(), Color(), false, 0, 0, 0 );
+ }
+ 
+ void Style::Set( sal_uInt16 nP, sal_uInt16 nD, sal_uInt16 nS )
+@@ -1163,29 +1218,34 @@ void Style::Set( sal_uInt16 nP, sal_uInt16 nD, sal_uInt16 nS )
+     mnSecn = (nP && nD) ? nS : 0;
+ }
+ 
+-void Style::Set( const Color& rColor, sal_uInt16 nP, sal_uInt16 nD, sal_uInt16 nS )
++void Style::Set( const Color& rColorPrim, const Color& rColorSecn, const Color& rColorGap, bool bUseGapColor, sal_uInt16 nP, sal_uInt16 nD, sal_uInt16 nS )
+ {
+-    maColor = rColor;
++    maColorPrim = rColorPrim;
++    maColorSecn = rColorSecn;
++    maColorGap = rColorGap;
++    mbUseGapColor = bUseGapColor;
+     Set( nP, nD, nS );
+ }
+ 
+ void Style::Set( const SvxBorderLine& rBorder, double fScale, sal_uInt16 nMaxWidth )
+ {
+-    maColor = rBorder.GetColor();
++    maColorPrim = rBorder.GetColorOut();
++    maColorSecn = rBorder.GetColorIn();
++    maColorGap = rBorder.GetColorGap();
++    mbUseGapColor = rBorder.HasGapColor();
+ 
+     USHORT nPrim = rBorder.GetOutWidth();
+     USHORT nDist = rBorder.GetDistance();
+     USHORT nSecn = rBorder.GetInWidth();
+ 
++    mnType = rBorder.GetStyle();
+     if( !nSecn )    // no or single frame border
+     {
+         Set( SCALEVALUE( nPrim ), 0, 0 );
+-        mnDashing = rBorder.GetStyle();
+     }
+     else
+     {
+         Set( SCALEVALUE( nPrim ), SCALEVALUE( nDist ), SCALEVALUE( nSecn ) );
+-        mnDashing = SOLID;
+         // Enlarge the style if distance is too small due to rounding losses.
+         sal_uInt16 nPixWidth = SCALEVALUE( nPrim + nDist + nSecn );
+         if( nPixWidth > GetWidth() )
+@@ -1225,7 +1285,7 @@ void Style::Set( const SvxBorderLine* pBorder, double fScale, sal_uInt16 nMaxWid
+     else
+     {
+         Clear();
+-        mnDashing = SOLID;
++        mnType = SOLID;
+     }
+ }
+ 
+@@ -1257,8 +1317,9 @@ Style Style::Mirror() const
+ bool operator==( const Style& rL, const Style& rR )
+ {
+     return (rL.Prim() == rR.Prim()) && (rL.Dist() == rR.Dist()) && (rL.Secn() == rR.Secn()) &&
+-        (rL.GetColor() == rR.GetColor()) && (rL.GetRefMode() == rR.GetRefMode()) && 
+-        (rL.Dashing() == rR.Dashing());
++        (rL.GetColorPrim() == rR.GetColorPrim()) && (rL.GetColorSecn() == rR.GetColorSecn()) &&
++        (rL.GetColorGap() == rR.GetColorGap()) && (rL.GetRefMode() == rR.GetRefMode()) &&
++        (rL.UseGapColor() == rR.UseGapColor() ) && (rL.Type() == rR.Type());
+ }
+ 
+ bool operator<( const Style& rL, const Style& rR )
+@@ -1275,7 +1336,7 @@ bool operator<( const Style& rL, const Style& rR )
+     if( (rL.Secn() && rR.Secn()) && (rL.Dist() != rR.Dist()) ) return rL.Dist() > rR.Dist();
+ 
+     // both lines single and 1 unit thick, only one is dotted -> rL<rR, if rL is dotted
+-    if( (nLW == 1) && (rL.Dashing() != rR.Dashing()) ) return rL.Dashing();
++    if( (nLW == 1) && (rL.Type() != rR.Type()) ) return rL.Type();
+ 
+     // seem to be equal
+     return false;
+@@ -1440,13 +1501,25 @@ void DrawVerFrameBorderSlanted( OutputDevice& rDev,
+             Style aScaled( rBorder );
+             aScaled.ScaleSelf( 1.0 / cos( GetVerDiagAngle( rTPos, rBPos ) ) );
+ 
+-            lclSetColorToOutDev( rDev, aScaled, pForceColor );
++            lclSetColorToOutDev( rDev, aScaled.GetColorPrim(), pForceColor );
+             lclDrawVerLine( rDev, rTPos, aRes, rBPos, aRes,
+-                lclGetBeg( aScaled ), lclGetPrimEnd( aScaled ), aScaled.Dashing() );
++                lclGetBeg( aScaled ), lclGetPrimEnd( aScaled ), aScaled.Type() );
++            rDev.Pop(); // colors
+             if( aScaled.Secn() )
++            {
++                if ( aScaled.UseGapColor( ) )
++                {
++                    lclSetColorToOutDev( rDev, aScaled.GetColorGap(), pForceColor );
++                    lclDrawVerLine( rDev, rTPos, aRes, rBPos, aRes,
++                        lclGetDistBeg( aScaled ), lclGetDistEnd( aScaled ), aScaled.Type() );
++                    rDev.Pop(); // colors
++                }
++
++                lclSetColorToOutDev( rDev, aScaled.GetColorSecn(), pForceColor );
+                 lclDrawVerLine( rDev, rTPos, aRes, rBPos, aRes,
+-                    lclGetSecnBeg( aScaled ), lclGetEnd( aScaled ), aScaled.Dashing() );
+-            rDev.Pop(); // colors
++                    lclGetSecnBeg( aScaled ), lclGetEnd( aScaled ), aScaled.Type() );
++                rDev.Pop(); // colors
++            }
+         }
+     }
+ }
+diff --git svx/source/dialog/frmsel.cxx svx/source/dialog/frmsel.cxx
+index 84b978a..c6f1d4e 100644
+--- svx/source/dialog/frmsel.cxx
++++ svx/source/dialog/frmsel.cxx
+@@ -90,7 +90,7 @@ const long FRAMESEL_GEOM_ADD_CLICK_INNER = 2;
+ 
+ // ----------------------------------------------------------------------------
+ 
+-static const frame::Style   OBJ_FRAMESTYLE_DONTCARE( 3, 0, 0 );
++static const frame::Style   OBJ_FRAMESTYLE_DONTCARE( 3, 0, 0, SOLID );
+ static const FrameBorder    OBJ_FRAMEBORDER_NONE( FRAMEBORDER_NONE );
+ 
+ // ----------------------------------------------------------------------------
+@@ -633,8 +633,10 @@ void FrameSelectorImpl::DrawAllFrameBorders()
+     // Translate core colors to current UI colors (regards current background and HC mode).
+     for( FrameBorderIter aIt( maEnabBorders ); aIt.Is(); ++aIt )
+     {
+-        Color aCoreColor = ((*aIt)->GetState() == FRAMESTATE_DONTCARE) ? maMarkCol : (*aIt)->GetCoreStyle().GetColor();
+-        (*aIt)->SetUIColor( GetDrawLineColor( aCoreColor ) );
++        Color aCoreColorPrim = ((*aIt)->GetState() == FRAMESTATE_DONTCARE) ? maMarkCol : (*aIt)->GetCoreStyle().GetColorOut();
++        Color aCoreColorSecn = ((*aIt)->GetState() == FRAMESTATE_DONTCARE) ? maMarkCol : (*aIt)->GetCoreStyle().GetColorIn();
++        (*aIt)->SetUIColorPrim( GetDrawLineColor( aCoreColorPrim ) );
++        (*aIt)->SetUIColorSecn( GetDrawLineColor( aCoreColorSecn ) );
+     }
+ 
+     // Copy all frame border styles to the helper array
+@@ -643,9 +645,11 @@ void FrameSelectorImpl::DrawAllFrameBorders()
+     
+     // Invert the style for the right line
+     const frame::Style rRightStyle = maRight.GetUIStyle( );
+-    frame::Style rInvertedRight( rRightStyle.GetColor(),
++    frame::Style rInvertedRight( rRightStyle.GetColorPrim(), 
++            rRightStyle.GetColorSecn(), rRightStyle.GetColorGap(),
++            rRightStyle.UseGapColor(),
+             rRightStyle.Secn(), rRightStyle.Dist(), rRightStyle.Prim( ),
+-            rRightStyle.Dashing( ) );
++            rRightStyle.Type( ) );
+     maArray.SetColumnStyleRight( mbVer ? 1 : 0, rInvertedRight );
+ 
+     maArray.SetRowStyleTop( 0, maTop.GetUIStyle() );
+@@ -653,17 +657,21 @@ void FrameSelectorImpl::DrawAllFrameBorders()
+     {
+         // Invert the style for the hor line to match the real borders
+         const frame::Style rHorStyle = maHor.GetUIStyle();
+-        frame::Style rInvertedHor( rHorStyle.GetColor(),
++        frame::Style rInvertedHor( rHorStyle.GetColorPrim(),
++            rHorStyle.GetColorSecn(), rHorStyle.GetColorGap(),
++            rHorStyle.UseGapColor(),
+             rHorStyle.Secn(), rHorStyle.Dist(), rHorStyle.Prim( ),
+-            rHorStyle.Dashing() );
++            rHorStyle.Type() );
+         maArray.SetRowStyleTop( 1, rInvertedHor );
+     }
+ 
+     // Invert the style for the bottom line
+     const frame::Style rBottomStyle = maBottom.GetUIStyle( );
+-    frame::Style rInvertedBottom( rBottomStyle.GetColor(),
++    frame::Style rInvertedBottom( rBottomStyle.GetColorPrim(),
++            rBottomStyle.GetColorSecn(), rBottomStyle.GetColorGap(),
++            rBottomStyle.UseGapColor(),
+             rBottomStyle.Secn(), rBottomStyle.Dist(), rBottomStyle.Prim( ),
+-            rBottomStyle.Dashing() );
++            rBottomStyle.Type() );
+     maArray.SetRowStyleBottom( mbHor ? 1 : 0, rInvertedBottom );
+ 
+     for( size_t nCol = 0; nCol < maArray.GetColCount(); ++nCol )
+@@ -967,8 +975,8 @@ void FrameSelector::SelectAllVisibleBorders( bool bSelect )
+         mxImpl->SelectBorder( **aIt, bSelect );
+ }
+ 
+-void FrameSelector::SetStyleToSelection( USHORT nPrim, USHORT nDist, USHORT nSecn, 
+-        SvxBorderStyle nStyle )
++void FrameSelector::SetStyleToSelection( USHORT nPrim, USHORT nDist, USHORT nSecn,
++       SvxBorderStyle nStyle )
+ {
+     mxImpl->maCurrStyle.SetOutWidth( nPrim );
+     mxImpl->maCurrStyle.SetDistance( nDist );
+diff --git svx/source/inc/frmselimpl.hxx svx/source/inc/frmselimpl.hxx
+index fd14d1c..eaed698 100644
+--- svx/source/inc/frmselimpl.hxx
++++ svx/source/inc/frmselimpl.hxx
+@@ -62,7 +62,9 @@ public:
+     const SvxBorderLine& GetCoreStyle() const { return maCoreStyle; }
+     void                SetCoreStyle( const SvxBorderLine* pStyle );
+ 
+-    inline void         SetUIColor( const Color& rColor ) {maUIStyle.SetColor( rColor ); }
++    inline void         SetUIColorPrim( const Color& rColor ) {maUIStyle.SetColorPrim( rColor ); }
++    inline void         SetUIColorSecn( const Color& rColor ) {maUIStyle.SetColorSecn( rColor ); }
++    inline void         SetUIColorGap( bool bUseIt, const Color& rColor ) {maUIStyle.SetColorGap(bUseIt, rColor);}
+     inline const frame::Style& GetUIStyle() const { return maUIStyle; }
+ 
+     inline void         ClearFocusArea() { maFocusArea.Clear(); }
+diff --git svx/source/items/frmitems.cxx svx/source/items/frmitems.cxx
+index dee0b6e..1a3d8c5 100644
+--- svx/source/items/frmitems.cxx
++++ svx/source/items/frmitems.cxx
+@@ -55,6 +55,7 @@
+ #include <svtools/memberid.hrc>
+ #include <svtools/wallitem.hxx>
+ #include <svtools/cntwall.hxx>
++#include <svtools/borderhelper.hxx>
+ 
+ #include <rtl/ustring.hxx>
+ #include <rtl/ustrbuf.hxx>
+@@ -107,6 +108,9 @@
+ #include <comphelper/types.hxx>
+ #include <svx/unomid.hxx>
+ 
++#include <basegfx/color/bcolor.hxx>
++#include <basegfx/color/bcolortools.hxx>
++
+ using namespace ::rtl;
+ using namespace ::com::sun::star;
+ 
+@@ -1583,12 +1587,74 @@ void SvxShadowItem::SetEnumValue( sal_uInt16 nVal )
+ 
+ // class SvxBorderLine  --------------------------------------------------
+ 
++Color SvxBorderLine::darkColor( Color aMain )
++{
++    return aMain;
++}
++
++Color SvxBorderLine::lightColor( Color aMain )
++{
++    
++    // Divide Luminance by 2
++    basegfx::BColor color = aMain.getBColor( );
++    basegfx::BColor hsl = basegfx::tools::rgb2hsl( color ); 
++    hsl.setZ( hsl.getZ() * 0.5 );
++    color = basegfx::tools::hsl2rgb( hsl );
++
++    return Color( color );
++}
++
++Color lcl_compute3DColor( Color aMain, int nLight, int nMedium, int nDark )
++{
++    basegfx::BColor color = aMain.getBColor( );
++    basegfx::BColor hsl = basegfx::tools::rgb2hsl( color ); 
++
++    int nCoef = 0;
++    if ( hsl.getZ( ) >= 0.5 )
++        nCoef = nLight;
++    else if ( 0.5 > hsl.getZ() && hsl.getZ() >= 0.25 )
++        nCoef = nMedium;
++    else
++        nCoef = nDark;
++
++    double L = hsl.getZ() * 255.0 + nCoef;
++    hsl.setZ( L / 255.0 );
++    color = basegfx::tools::hsl2rgb( hsl );
++
++    return Color( color );
++}
++
++Color SvxBorderLine::threeDLightColor( Color aMain )
++{
++    // These values have been defined in an empirical way
++    return lcl_compute3DColor( aMain, 3, 40, 83 );
++}
++
++Color SvxBorderLine::threeDDarkColor( Color aMain )
++{
++    // These values have been defined in an empirical way
++    return lcl_compute3DColor( aMain, -85, -43, -1 );
++}
++
++Color SvxBorderLine::threeDMediumColor( Color aMain )
++{
++    // These values have been defined in an empirical way
++    return lcl_compute3DColor( aMain, -42, -0, 42 );
++}
++
++
+ SvxBorderLine::SvxBorderLine( const Color *pCol, sal_uInt16 nOut, sal_uInt16 nIn, sal_uInt16 nDist,
+-       SvxBorderStyle nStyle )
++       SvxBorderStyle nStyle, bool bUseLeftTop, 
++       Color (*pColorOutFn)( Color ), Color (*pColorInFn)( Color ),
++       Color (*pColorGapFn)( Color ) )
+ : nOutWidth( nOut )
+ , nInWidth ( nIn )
+ , nDistance( nDist )
+ , m_nStyle( nStyle )
++, m_bUseLeftTop( bUseLeftTop )
++, m_pColorOutFn( pColorOutFn )
++, m_pColorInFn( pColorInFn )
++, m_pColorGapFn( pColorGapFn )
+ {
+     if ( pCol )
+         aColor = *pCol;
+@@ -1610,6 +1676,10 @@ SvxBorderLine& SvxBorderLine::operator=( const SvxBorderLine& r )
+     nInWidth = r.nInWidth;
+     nDistance = r.nDistance;
+     m_nStyle = r.m_nStyle;
++    m_bUseLeftTop = r.m_bUseLeftTop;
++    m_pColorOutFn = r.m_pColorOutFn;
++    m_pColorInFn = r.m_pColorInFn;
++    m_pColorGapFn = r.m_pColorGapFn;
+     return *this;
+ }
+ 
+@@ -1626,11 +1696,95 @@ void SvxBorderLine::ScaleMetrics( long nMult, long nDiv )
+ 
+ sal_Bool SvxBorderLine::operator==( const SvxBorderLine& rCmp ) const
+ {
+-    return ( ( aColor    == rCmp.GetColor() ) 	 &&
+-             ( nInWidth  == rCmp.GetInWidth() )  &&
+-             ( nOutWidth == rCmp.GetOutWidth() ) &&
+-             ( nDistance == rCmp.GetDistance() ) &&
+-             ( m_nStyle == rCmp.GetStyle() ) );
++    return ( ( aColor    == rCmp.aColor )            &&
++             ( nInWidth  == rCmp.GetInWidth() )      &&
++             ( nOutWidth == rCmp.GetOutWidth() )     &&
++             ( nDistance == rCmp.GetDistance() )     &&
++             ( m_nStyle == rCmp.GetStyle() )         &&
++             ( m_bUseLeftTop == rCmp.m_bUseLeftTop ) &&
++             ( m_pColorOutFn == rCmp.m_pColorOutFn ) &&
++             ( m_pColorInFn == rCmp.m_pColorInFn )   &&
++             ( m_pColorGapFn == rCmp.m_pColorGapFn ) );
++}
++
++void SvxBorderLine::SetStyle( SvxBorderStyle nNew )
++{
++    m_nStyle = nNew;
++    switch ( nNew )
++    {
++        case EMBOSSED:
++            m_pColorOutFn = threeDLightColor;
++            m_pColorInFn  = threeDDarkColor;
++            m_pColorGapFn = threeDMediumColor;
++            m_bUseLeftTop = true;
++            break;
++        case ENGRAVED:
++            m_pColorOutFn = threeDDarkColor;
++            m_pColorInFn  = threeDLightColor;
++            m_pColorGapFn = threeDMediumColor;
++            m_bUseLeftTop = true;
++            break;
++        case OUTSET:
++            m_pColorOutFn = lightColor;
++            m_pColorInFn  = darkColor;
++            m_bUseLeftTop = true;
++            m_pColorGapFn = NULL;
++            break;
++        case INSET:
++            m_pColorOutFn = darkColor;
++            m_pColorInFn  = lightColor;
++            m_bUseLeftTop = true;
++            m_pColorGapFn = NULL;
++            break;
++        default:
++            m_pColorOutFn = darkColor;
++            m_pColorInFn = darkColor;
++            m_bUseLeftTop = false;
++            m_pColorGapFn = NULL;
++            break;
++    }
++}
++
++Color SvxBorderLine::GetColorOut( bool bLeftOrTop ) const
++{
++    Color aResult = aColor;
++
++    if ( nInWidth > 0 && nOutWidth > 0 && m_pColorOutFn != NULL )
++    {
++        if ( !bLeftOrTop && m_bUseLeftTop )
++            aResult = (*m_pColorInFn)( aColor );
++        else
++            aResult = (*m_pColorOutFn)( aColor );
++    }
++
++    return aResult;
++}
++
++Color SvxBorderLine::GetColorIn( bool bLeftOrTop ) const
++{
++    Color aResult = aColor;
++
++    if ( nInWidth > 0 && nOutWidth > 0 && m_pColorInFn != NULL )
++    {
++        if ( !bLeftOrTop && m_bUseLeftTop )
++            aResult = (*m_pColorOutFn)( aColor );
++        else
++            aResult = (*m_pColorInFn)( aColor );
++    }
++
++    return aResult;
++}
++
++Color SvxBorderLine::GetColorGap( ) const
++{
++    Color aResult = aColor;
++
++    if ( nInWidth > 0 && nOutWidth > 0 && m_pColorGapFn != NULL )
++    {
++        aResult = (*m_pColorGapFn)( aColor );
++    }
++
++    return aResult;
+ }
+ 
+ // -----------------------------------------------------------------------
+diff --git svx/source/table/svdotable.cxx svx/source/table/svdotable.cxx
+index 947ecc2..77a14cb 100644
+--- svx/source/table/svdotable.cxx
++++ svx/source/table/svdotable.cxx
+@@ -1915,15 +1915,15 @@ void lcl_VertLine( OutputDevice& rDev, const Point& rTop, const Point& rBottom,
+         svx::frame::Style aScaled( rLine );
+         aScaled.ScaleSelf( 1.0 / cos( svx::frame::GetVerDiagAngle( rTop, rBottom ) ) );
+         if( pForceColor )
+-            aScaled.SetColor( *pForceColor );
++            aScaled.SetColorPrim( *pForceColor );
+ 
+         long nXOffs = (aScaled.GetWidth() - 1) / -2L;
+ 
+-        lcl_VertLineEnds( rDev, rTop, rBottom, aScaled.GetColor(),
++        lcl_VertLineEnds( rDev, rTop, rBottom, aScaled.GetColorPrim(),
+             nXOffs, aScaled.Prim(), rTopLine, rBottomLine );
+ 
+         if( aScaled.Secn() )
+-            lcl_VertLineEnds( rDev, rTop, rBottom, aScaled.GetColor(),
++            lcl_VertLineEnds( rDev, rTop, rBottom, aScaled.GetColorPrim(),
+                 nXOffs + aScaled.Prim() + aScaled.Dist(), aScaled.Secn(), rTopLine, rBottomLine );
+     }
+ }
+diff --git svx/source/table/viewcontactoftableobj.cxx svx/source/table/viewcontactoftableobj.cxx
+index 94249a6..52493de 100644
+--- svx/source/table/viewcontactoftableobj.cxx
++++ svx/source/table/viewcontactoftableobj.cxx
+@@ -163,6 +163,16 @@ namespace drawinglayer
+             SvxBorderLine								maBottomLine;
+             SvxBorderLine								maRightLine;
+             SvxBorderLine								maTopLine;
++            
++            // Neighbor cells' borders
++            SvxBorderLine								maLeftFromTLine;
++            SvxBorderLine								maLeftFromBLine;
++            SvxBorderLine								maRightFromTLine;
++            SvxBorderLine								maRightFromBLine;
++            SvxBorderLine								maTopFromLLine;
++            SvxBorderLine								maTopFromRLine;
++            SvxBorderLine								maBottomFromLLine;
++            SvxBorderLine								maBottomFromRLine;
+ 
+             // bitfield
+             unsigned									mbLeftIsOutside : 1;
+@@ -182,6 +192,14 @@ namespace drawinglayer
+                 const SvxBorderLine& rBottomLine,
+                 const SvxBorderLine& rRightLine,
+                 const SvxBorderLine& rTopLine,
++                const SvxBorderLine& rLeftFromTLine,
++                const SvxBorderLine& rLeftFromBLine,
++                const SvxBorderLine& rRightFromTLine,
++                const SvxBorderLine& rRightFromBLine,
++                const SvxBorderLine& rTopFromLLine,
++                const SvxBorderLine& rTopFromRLine,
++                const SvxBorderLine& rBottomFromLLine,
++                const SvxBorderLine& rBottomFromRLine,
+                 bool bLeftIsOutside,
+                 bool bBottomIsOutside,
+                 bool bRightIsOutside,
+@@ -193,6 +211,14 @@ namespace drawinglayer
+                 maBottomLine(rBottomLine),
+                 maRightLine(rRightLine),
+                 maTopLine(rTopLine),
++                maLeftFromTLine(rLeftFromTLine),
++                maLeftFromBLine(rLeftFromBLine),
++                maRightFromTLine(rRightFromTLine),
++                maRightFromBLine(rRightFromBLine),
++                maTopFromLLine(rTopFromLLine),
++                maTopFromRLine(rTopFromRLine),
++                maBottomFromLLine(rBottomFromLLine),
++                maBottomFromRLine(rBottomFromRLine),
+                 mbLeftIsOutside(bLeftIsOutside),
+                 mbBottomIsOutside(bBottomIsOutside),
+                 mbRightIsOutside(bRightIsOutside),
+@@ -241,34 +267,20 @@ namespace drawinglayer
+             return getBorderLineOutWidth(rLineA) + getBorderLineDistance(rLineA) + getBorderLineInWidth(rLineA);
+         }
+ 
+-        double getInnerExtend(const SvxBorderLine& rLineA, bool bSideToUse)
++        double getExtend(const SvxBorderLine& rLineSide, const SvxBorderLine& rLineOpposite)
+         {
+-            if(!rLineA.isEmpty())
++            double nExtend = 0.0;
++            if(!rLineSide.isEmpty())
+             {
+-                if(rLineA.isDouble())
+-                {
+-                    // reduce to inner edge of associated matching line
+-                    return -((getBorderLineWidth(rLineA) / 2.0) - (bSideToUse ? getBorderLineOutWidth(rLineA) : getBorderLineInWidth(rLineA)));
+-                }
+-                else
+-                {
+-                    // extend to overlap with single line
+-                    return getBorderLineWidth(rLineA) / 2.0;
+-                }
++                // reduce to inner edge of associated matching line
++                nExtend = -((getBorderLineWidth(rLineSide) / 2.0));
+             }
+-
+-            return 0.0;
+-        }
+-
+-        double getOuterExtend(const SvxBorderLine& rLineA)
+-        {
+-            if(!rLineA.isEmpty())
++            else
+             {
+-                // extend to overlap with single line
+-                return getBorderLineWidth(rLineA) / 2.0;
++                nExtend = ((getBorderLineWidth(rLineOpposite) / 2.0));
+             }
+ 
+-            return 0.0;
++            return nExtend;
+         }
+ 
+         double getChangedValue(sal_uInt16 nValue, bool bChangeToMM)
+@@ -296,23 +308,10 @@ namespace drawinglayer
+ 
+                 if(!aStart.equal(aEnd))
+                 {
+-                    const double fExtendIS(getInnerExtend(getTopLine(), false));
+-                    const double fExtendIE(getInnerExtend(getBottomLine(), true));
+-                    double fExtendOS(0.0);
+-                    double fExtendOE(0.0);
+-
+-                    if(getLeftIsOutside())
+-                    {
+-                        if(getTopIsOutside())
+-                        {
+-                            fExtendOS = getOuterExtend(getTopLine());
+-                        }
+-
+-                        if(getBottomIsOutside())
+-                        {
+-                            fExtendOE = getOuterExtend(getBottomLine());
+-                        }
+-                    }
++                    const double fExtendIS(getExtend(getTopLine(), maTopFromLLine));
++                    const double fExtendIE(getExtend(getBottomLine(), maBottomFromLLine));
++                    const double fExtendOS(getExtend(maTopFromLLine, getTopLine()));
++                    const double fExtendOE(getExtend(maBottomFromLLine, getBottomLine()));
+ 
+                     xRetval[nInsert++] = Primitive2DReference(new BorderLinePrimitive2D(
+                         aStart,
+@@ -324,14 +323,15 @@ namespace drawinglayer
+                         fExtendIE * fTwipsToMM,
+                         fExtendOS * fTwipsToMM,
+                         fExtendOE * fTwipsToMM,
+-                        true,
+-                        getLeftIsOutside(),
+-                        getLeftLine().GetColor().getBColor(),
++                        getLeftLine().GetColorOut(true).getBColor(),
++                        getLeftLine().GetColorIn(true).getBColor(),
++                        getLeftLine().GetColorGap().getBColor(),
++                        getLeftLine().HasGapColor(),
+                         getLeftLine().GetStyle()));
+                 }
+             }
+ 
+-            if(!getBottomLine().isEmpty())
++            if(!getBottomLine().isEmpty() && getBottomIsOutside())
+             {
+                 // create bottom line from left to right
+                 const basegfx::B2DPoint aStart(getTransform() * basegfx::B2DPoint(0.0, 1.0));
+@@ -339,23 +339,10 @@ namespace drawinglayer
+ 
+                 if(!aStart.equal(aEnd))
+                 {
+-                    const double fExtendIS(getInnerExtend(getLeftLine(), true));
+-                    const double fExtendIE(getInnerExtend(getRightLine(), false));
+-                    double fExtendOS(0.0);
+-                    double fExtendOE(0.0);
+-
+-                    if(getBottomIsOutside())
+-                    {
+-                        if(getLeftIsOutside())
+-                        {
+-                            fExtendOS = getOuterExtend(getLeftLine());
+-                        }
+-
+-                        if(getRightIsOutside())
+-                        {
+-                            fExtendOE = getOuterExtend(getRightLine());
+-                        }
+-                    }
++                    const double fExtendIS(getExtend(getLeftLine(), maLeftFromBLine ));
++                    const double fExtendIE(getExtend(getRightLine(), maRightFromBLine));
++                    const double fExtendOS(getExtend(maLeftFromBLine, getLeftLine()));
++                    const double fExtendOE(getExtend(maRightFromBLine, getRightLine()));
+ 
+                     xRetval[nInsert++] = Primitive2DReference(new BorderLinePrimitive2D(
+                         aStart,
+@@ -367,14 +354,15 @@ namespace drawinglayer
+                         fExtendIE * fTwipsToMM,
+                         fExtendOS * fTwipsToMM,
+                         fExtendOE * fTwipsToMM,
+-                        true,
+-                        getBottomIsOutside(),
+-                        getBottomLine().GetColor().getBColor(),
++                        getBottomLine().GetColorOut(false).getBColor(),
++                        getBottomLine().GetColorIn(false).getBColor(),
++                        getBottomLine().GetColorGap().getBColor(),
++                        getBottomLine().HasGapColor(),
+                         getBottomLine().GetStyle()));
+                 }
+             }
+ 
+-            if(!getRightLine().isEmpty())
++            if(!getRightLine().isEmpty() && getRightIsOutside())
+             {
+                 // create right line from top to bottom
+                 const basegfx::B2DPoint aStart(getTransform() * basegfx::B2DPoint(1.0, 0.0));
+@@ -382,23 +370,10 @@ namespace drawinglayer
+ 
+                 if(!aStart.equal(aEnd))
+                 {
+-                    const double fExtendIS(getInnerExtend(getTopLine(), false));
+-                    const double fExtendIE(getInnerExtend(getBottomLine(), true));
+-                    double fExtendOS(0.0);
+-                    double fExtendOE(0.0);
+-
+-                    if(getRightIsOutside())
+-                    {
+-                        if(getTopIsOutside())
+-                        {
+-                            fExtendOS = getOuterExtend(getTopLine());
+-                        }
+-
+-                        if(getBottomIsOutside())
+-                        {
+-                            fExtendOE = getOuterExtend(getBottomLine());
+-                        }
+-                    }
++                    const double fExtendIS(getExtend(getTopLine(), maTopFromRLine));
++                    const double fExtendIE(getExtend(getBottomLine(), maBottomFromRLine));
++                    const double fExtendOS(getExtend(maTopFromRLine, getTopLine()));
++                    const double fExtendOE(getExtend(maBottomFromRLine, getBottomLine()));
+ 
+                     xRetval[nInsert++] = Primitive2DReference(new BorderLinePrimitive2D(
+                         aStart,
+@@ -410,9 +385,10 @@ namespace drawinglayer
+                         fExtendOE * fTwipsToMM,
+                         fExtendIS * fTwipsToMM,
+                         fExtendIE * fTwipsToMM,
+-                        getRightIsOutside(),
+-                        true,
+-                        getRightLine().GetColor().getBColor(),
++                        getRightLine().GetColorOut(true).getBColor(),
++                        getRightLine().GetColorIn(true).getBColor(),
++                        getRightLine().GetColorGap().getBColor(),
++                        getRightLine().HasGapColor(),
+                         getRightLine().GetStyle()));
+                 }
+             }
+@@ -425,23 +401,10 @@ namespace drawinglayer
+ 
+                 if(!aStart.equal(aEnd))
+                 {
+-                    const double fExtendIS(getInnerExtend(getLeftLine(), true));
+-                    const double fExtendIE(getInnerExtend(getRightLine(), false));
+-                    double fExtendOS(0.0);
+-                    double fExtendOE(0.0);
+-
+-                    if(getTopIsOutside())
+-                    {
+-                        if(getLeftIsOutside())
+-                        {
+-                            fExtendOS = getOuterExtend(getLeftLine());
+-                        }
+-
+-                        if(getRightIsOutside())
+-                        {
+-                            fExtendOE = getOuterExtend(getRightLine());
+-                        }
+-                    }
++                    const double fExtendIS(getExtend(getLeftLine(), maLeftFromTLine));
++                    const double fExtendIE(getExtend(getRightLine(), maRightFromTLine));
++                    const double fExtendOS(getExtend(maLeftFromTLine, getLeftLine()));
++                    const double fExtendOE(getExtend(maRightFromTLine, getRightLine()));
+ 
+                     xRetval[nInsert++] = Primitive2DReference(new BorderLinePrimitive2D(
+                         aStart,
+@@ -453,9 +416,10 @@ namespace drawinglayer
+                         fExtendOE * fTwipsToMM,
+                         fExtendIS * fTwipsToMM,
+                         fExtendIE * fTwipsToMM,
+-                        getTopIsOutside(),
+-                        true,
+-                        getTopLine().GetColor().getBColor(),
++                        getTopLine().GetColorOut(false).getBColor(),
++                        getTopLine().GetColorIn(false).getBColor(),
++                        getTopLine().GetColorGap().getBColor(),
++                        getTopLine().HasGapColor(),
+                         getTopLine().GetStyle()));
+                 }
+             }
+@@ -475,6 +439,14 @@ namespace drawinglayer
+                     && getBottomLine() == rCompare.getBottomLine()
+                     && getRightLine() == rCompare.getRightLine()
+                     && getTopLine() == rCompare.getTopLine()
++                    && maLeftFromTLine == rCompare.maLeftFromTLine
++                    && maLeftFromBLine == rCompare.maLeftFromBLine
++                    && maRightFromTLine == rCompare.maRightFromTLine
++                    && maRightFromBLine == rCompare.maRightFromBLine
++                    && maTopFromLLine == rCompare.maTopFromLLine
++                    && maTopFromRLine == rCompare.maTopFromRLine
++                    && maBottomFromLLine == rCompare.maBottomFromLLine
++                    && maBottomFromRLine == rCompare.maBottomFromRLine
+                     && getLeftIsOutside() == rCompare.getLeftIsOutside()
+                     && getBottomIsOutside() == rCompare.getBottomIsOutside()
+                     && getRightIsOutside() == rCompare.getRightIsOutside()
+@@ -581,6 +553,15 @@ namespace sdr
+                     SvxBorderLine aRightLine;
+                     SvxBorderLine aTopLine;
+                     
++                    SvxBorderLine aLeftFromTLine;
++                    SvxBorderLine aLeftFromBLine;
++                    SvxBorderLine aRightFromTLine;
++                    SvxBorderLine aRightFromBLine;
++                    SvxBorderLine aTopFromLLine;
++                    SvxBorderLine aTopFromRLine;
++                    SvxBorderLine aBottomFromLLine;
++                    SvxBorderLine aBottomFromRLine;
++                    
+                     // create single primitives per cell
+                     for(aCellPos.mnRow = 0; aCellPos.mnRow < nRowCount; aCellPos.mnRow++)
+                     {
+@@ -655,7 +636,18 @@ namespace sdr
+                                     impGetLine(aBottomLine, rTableLayouter, nX, nYBottom, true, nColCount, nRowCount, bIsRTL);
+                                     impGetLine(aRightLine, rTableLayouter, nXRight, nY, false, nColCount, nRowCount, bIsRTL);
+                                     impGetLine(aTopLine, rTableLayouter, nX, nY, true, nColCount, nRowCount, bIsRTL);
+-                                    
++                                   
++
++                                    // get the neighbor cells' borders
++                                    impGetLine(aLeftFromTLine, rTableLayouter, nX, nY - 1, false, nColCount, nRowCount, bIsRTL);
++                                    impGetLine(aLeftFromBLine, rTableLayouter, nX, nYBottom + 1, false, nColCount, nRowCount, bIsRTL);
++                                    impGetLine(aRightFromTLine, rTableLayouter, nXRight, nY - 1, false, nColCount, nRowCount, bIsRTL);
++                                    impGetLine(aRightFromBLine, rTableLayouter, nXRight, nYBottom + 1, false, nColCount, nRowCount, bIsRTL);
++                                    impGetLine(aTopFromLLine, rTableLayouter, nX - 1, nY, true, nColCount, nRowCount, bIsRTL);
++                                    impGetLine(aTopFromRLine, rTableLayouter, nXRight + 1, nY, true, nColCount, nRowCount, bIsRTL);
++                                    impGetLine(aBottomFromLLine, rTableLayouter, nX - 1, nYBottom, true, nColCount, nRowCount, bIsRTL);
++                                    impGetLine(aBottomFromRLine, rTableLayouter, nXRight + 1, nYBottom, true, nColCount, nRowCount, bIsRTL);
++
+                                     // create the primtive containing all data for one cell with borders
+                                     xBorderSequence[nBorderInsert++] = drawinglayer::primitive2d::Primitive2DReference(
+                                         new drawinglayer::primitive2d::SdrBorderlinePrimitive2D(
+@@ -664,6 +656,14 @@ namespace sdr
+                                             aBottomLine, 
+                                             aRightLine, 
+                                             aTopLine,
++                                            aLeftFromTLine,
++                                            aLeftFromBLine,
++                                            aRightFromTLine,
++                                            aRightFromBLine,
++                                            aTopFromLLine,
++                                            aTopFromRLine,
++                                            aBottomFromLLine,
++                                            aBottomFromRLine,
+                                             bIsRTL ? nX == nColCount : 0 == nX,
+                                             nRowCount == nYBottom,
+                                             bIsRTL ? 0 == nXRight : nXRight == nColCount,
+diff --git sw/source/core/inc/frame.hxx sw/source/core/inc/frame.hxx
+index 489cff0..be1731c 100644
+--- sw/source/core/inc/frame.hxx
++++ sw/source/core/inc/frame.hxx
+@@ -29,6 +29,8 @@
+  ************************************************************************/
+ #ifndef _FRAME_HXX
+ #define _FRAME_HXX
++#include <vector>
++#include <drawinglayer/primitive2d/baseprimitive2d.hxx>
+ #include <svtools/svarray.hxx>
+ #include <svx/borderline.hxx>
+ #include "swtypes.hxx"	// fuer SwTwips
+@@ -385,6 +387,8 @@ protected:
+     BOOL bValidLineNum:		1;
+     BOOL bFixSize:          1;
+     BOOL bUnUsed1:          1;
++    
++    
+     BOOL bCompletePaint:	1;	//Frame wird ganz gepaintet wenn TRUE, auch
+                                 //wenn der Inhalt nur teilw. veraendert ist;
+                                 //Bei CntntFrms wird ausschliesslich wenn TRUE
+@@ -531,6 +535,8 @@ public:
+     void PaintBorderLine( const SwRect&, const SwRect&, const SwPageFrm*,
+                           const Color *pColor, const SvxBorderStyle = SOLID ) const;
+ 
++    void ProcessPrimitives( const drawinglayer::primitive2d::Primitive2DSequence& rSequence ) const;
++
+     //Retouche, nicht im Bereich des uebergebenen Rect!
+     void Retouche( const SwPageFrm *pPage, const SwRect &rRect ) const;
+ 
+diff --git sw/source/core/layout/paintfrm.cxx sw/source/core/layout/paintfrm.cxx
+index 77f5b0f..3439187 100644
+--- sw/source/core/layout/paintfrm.cxx
++++ sw/source/core/layout/paintfrm.cxx
+@@ -124,6 +124,13 @@
+ 
+ #include <svtools/borderhelper.hxx>
+ 
++#include <drawinglayer/geometry/viewinformation2d.hxx>
++#include <drawinglayer/processor2d/baseprocessor2d.hxx>
++#include <drawinglayer/primitive2d/polygonprimitive2d.hxx>
++#include <drawinglayer/primitive2d/borderlineprimitive2d.hxx>
++#include <svx/sdr/contact/objectcontacttools.hxx>
++#include <svx/unoapi.hxx>
++#include <basegfx/matrix/b2dhommatrix.hxx>
+ 
+ using namespace ::com::sun::star;
+ 
+@@ -165,7 +172,7 @@ using namespace ::com::sun::star;
+ //----- Klassen zum Sammeln von Umrandungen und Hilfslinien ---
+ class SwLineRect : public SwRect
+ {
+-    const Color	   *pColor;
++    Color aColor;
+     SvxBorderStyle  nStyle;
+     const SwTabFrm *pTab;
+           BYTE		nSubColor;  //Hilfslinien einfaerben
+@@ -175,7 +182,7 @@ public:
+     SwLineRect( const SwRect &rRect, const Color *pCol, const SvxBorderStyle nStyle,
+                 const SwTabFrm *pT , const BYTE nSCol );
+ 
+-    const Color			*GetColor() const { return pColor;}
++    const Color			*GetColor() const { return &aColor;}
+     SvxBorderStyle       GetStyle() const { return nStyle; }
+     const SwTabFrm		*GetTab()	const { return pTab;  }
+     void  SetPainted()					  { bPainted = TRUE; }
+@@ -432,13 +439,14 @@ SV_IMPL_VARARR( SwLRects, SwLineRect );
+ SwLineRect::SwLineRect( const SwRect &rRect, const Color *pCol, const SvxBorderStyle nStyl,
+                         const SwTabFrm *pT, const BYTE nSCol ) :
+     SwRect( rRect ),
+-    pColor( pCol ),
+     nStyle( nStyl ),
+     pTab( pT ),
+     nSubColor( nSCol ),
+     bPainted( FALSE ),
+     nLock( 0 )
+ {
++    if ( pCol != NULL )
++        aColor = *pCol;
+ }
+ 
+ BOOL SwLineRect::MakeUnion( const SwRect &rRect )
+@@ -895,6 +903,7 @@ void SwLineRects::PaintLines( OutputDevice *pOut )
+                         pOut->SetDrawMode( 0 );
+ 
+                     pOut->SetLineColor( *pLast );
++                    pOut->SetFillColor( *pLast );
+                     pOut->SetDrawMode( nOldDrawMode );
+                 }
+ 
+@@ -2391,7 +2400,7 @@ void SwTabFrmPainter::PaintLines( OutputDevice& rDev, const SwRect& rRect ) cons
+                 if ( 0 == aStyles[ 0 ].GetWidth() )
+                 {
+                     if ( IS_SUBS_TABLE && pGlobalShell->GetWin() )
+-                        aStyles[ 0 ].Set( rCol, 1, 0, 0 );
++                        aStyles[ 0 ].Set( rCol, rCol, rCol, false, 1, 0, 0 );
+                 }
+                 else
+                     pTmpColor = pHCColor;
+@@ -3649,12 +3658,6 @@ void SwFlyFrm::Paint( const SwRect& rRect ) const
+             SwBorderAttrAccess aAccess( SwFrm::GetCache(), (SwFrm*)this );
+             const SwBorderAttrs &rAttrs = *aAccess.Get();
+ 
+-            // OD 06.08.2002 #99657# - paint border before painting background
+-            // paint border
+-            {
+-                SwRect aTmp( rRect );
+-                PaintBorder( aTmp, pPage, rAttrs );
+-            }
+ 
+             // paint background
+             {
+@@ -3695,6 +3698,13 @@ void SwFlyFrm::Paint( const SwRect& rRect ) const
+                     for ( USHORT i = 0; i < aRegion.Count(); ++i )
+                         PaintBackground( aRegion[i], pPage, rAttrs, FALSE, TRUE );
+             }
++            
++            // OD 06.08.2002 #99657# - paint border before painting background
++            // paint border
++            {
++                SwRect aTmp( rRect );
++                PaintBorder( aTmp, pPage, rAttrs );
++            }
+ 
+             pOut->Pop();
+         }
+@@ -4218,6 +4228,23 @@ void MA_FASTCALL lcl_SubLeftRight( SwRect&           rRect,
+     }
+ }
+ 
++sal_uInt16 lcl_GetLineWidth( const SvxBorderLine* pLine )
++{
++    return pLine->GetInWidth() + pLine->GetOutWidth() + pLine->GetDistance();
++}
++
++double lcl_GetExtent( const SvxBorderLine* pSideLine, const SvxBorderLine* pOppositeLine )
++{
++    double nExtent = 0.0;
++
++    if ( pSideLine && !pSideLine->isEmpty() )
++        nExtent = -lcl_GetLineWidth( pSideLine ) / 2.0;
++    else if ( pOppositeLine )
++        nExtent = lcl_GetLineWidth( pOppositeLine ) / 2.0;
++
++    return nExtent;
++}
++
+ // OD 19.05.2003 #109667# - merge <lcl_PaintLeftLine> and <lcl_PaintRightLine>
+ // into new method <lcl_PaintLeftRightLine(..)>
+ void lcl_PaintLeftRightLine( const sal_Bool         _bLeft,
+@@ -4231,6 +4258,8 @@ void lcl_PaintLeftRightLine( const sal_Bool         _bLeft,
+     const SvxBoxItem& rBox = _rAttrs.GetBox();
+     const sal_Bool bR2L = _rFrm.IsCellFrm() && _rFrm.IsRightToLeft();
+     const SvxBorderLine* pLeftRightBorder = 0;
++    const SvxBorderLine* pTopBorder = rBox.GetTop();
++    const SvxBorderLine* pBottomBorder = rBox.GetBottom();
+     if ( _bLeft )
+     {
+         pLeftRightBorder = bR2L ? rBox.GetRight() : rBox.GetLeft();
+@@ -4251,12 +4280,12 @@ void lcl_PaintLeftRightLine( const sal_Bool         _bLeft,
+     SwRect aRect( _rOutRect );
+     if ( _bLeft )
+     {
+-        (aRect.*_rRectFn->fnAddRight)( ::lcl_AlignWidth( pLeftRightBorder->GetOutWidth() ) -
++        (aRect.*_rRectFn->fnAddRight)( ::lcl_AlignWidth( lcl_GetLineWidth( pLeftRightBorder ) ) -
+                                        (aRect.*_rRectFn->fnGetWidth)() );
+     }
+     else
+     {
+-        (aRect.*_rRectFn->fnSubLeft)( ::lcl_AlignWidth( pLeftRightBorder->GetOutWidth() ) -
++        (aRect.*_rRectFn->fnSubLeft)( ::lcl_AlignWidth( lcl_GetLineWidth( pLeftRightBorder ) ) -
+                                       (aRect.*_rRectFn->fnGetWidth)() );
+     }
+ 
+@@ -4340,71 +4369,40 @@ void lcl_PaintLeftRightLine( const sal_Bool         _bLeft,
+         ::lcl_SubTopBottom( aRect, rBox, _rAttrs, _rFrm, _rRectFn, bPrtOutputDev );
+     }
+ 
+-    // OD 29.04.2003 #107169# - paint SwAligned-rectangle
++    // TODO Postpone the processing of the primitives
++    if ( lcl_GetLineWidth( pLeftRightBorder ) > 0 )
+     {
+-        SwRect aPaintRect( aRect );
+-        ::SwAlignRect( aPaintRect, _rFrm.GetShell() );
+-        // if <SwAlignRect> reveals rectangle with no width, adjust rectangle
+-        // to the prior left postion with width of one twip.
+-        if ( (aPaintRect.*_rRectFn->fnGetWidth)() == 0 )
+-        {
+-            if ( _bLeft )
+-            {
+-                (aPaintRect.*_rRectFn->fnSetLeft)( (aRect.*_rRectFn->fnGetLeft)() );
+-                (aPaintRect.*_rRectFn->fnSetRight)( (aRect.*_rRectFn->fnGetLeft)() );
+-                (aPaintRect.*_rRectFn->fnAddRight)( 1 );
+-            }
+-            else
+-            {
+-                (aPaintRect.*_rRectFn->fnSetLeft)( (aRect.*_rRectFn->fnGetRight)() - 1 );
+-                (aPaintRect.*_rRectFn->fnSetRight)( (aRect.*_rRectFn->fnGetRight)() - 1 );
+-                (aPaintRect.*_rRectFn->fnAddRight)( 1 );
+-            }
+-        }
+-        _rFrm.PaintBorderLine( _rRect, aPaintRect, &_rPage, &pLeftRightBorder->GetColor(), 
+-                pLeftRightBorder->GetStyle( ) );
+-    }
++        drawinglayer::primitive2d::Primitive2DSequence aSequence( 1 );
++        
++        double nExtentIS = lcl_GetExtent( pTopBorder, NULL );
++        double nExtentIE = lcl_GetExtent( pBottomBorder, NULL );
++        double nExtentOS = lcl_GetExtent( NULL, pTopBorder );
++        double nExtentOE = lcl_GetExtent( NULL, pBottomBorder );
+ 
+-    if ( pLeftRightBorder->GetInWidth() )
+-    {
+-        const long nDist = ::lcl_MinWidthDist( pLeftRightBorder->GetDistance() );
+-        long nWidth = ::lcl_AlignWidth( pLeftRightBorder->GetInWidth() );
+-        if ( _bLeft )
+-        {
+-            (aRect.*_rRectFn->fnAddRight)( nDist + nWidth );
+-            (aRect.*_rRectFn->fnSubLeft)( nWidth - (aRect.*_rRectFn->fnGetWidth)() );
+-        }
+-        else
++        if ( !_bLeft )
+         {
+-            (aRect.*_rRectFn->fnSubLeft)( nDist + nWidth );
+-            (aRect.*_rRectFn->fnAddRight)( nWidth - (aRect.*_rRectFn->fnGetWidth)() );
+-        }
+-        // OD 06.05.2003 #107169# - add 6th parameter
+-        ::lcl_SubTopBottom( aRect, rBox, _rAttrs, _rFrm, _rRectFn, bPrtOutputDev );
+-        // OD 29.04.2003 #107169# - paint SwAligned-rectangle
+-        {
+-            SwRect aPaintRect( aRect );
+-            ::SwAlignRect( aPaintRect, _rFrm.GetShell() );
+-            // if <SwAlignRect> reveals rectangle with no width, adjust
+-            // rectangle to the prior left postion with width of one twip.
+-            if ( (aPaintRect.*_rRectFn->fnGetWidth)() == 0 )
+-            {
+-                if ( _bLeft )
+-                {
+-                    (aPaintRect.*_rRectFn->fnSetLeft)( (aRect.*_rRectFn->fnGetLeft)() );
+-                    (aPaintRect.*_rRectFn->fnSetRight)( (aRect.*_rRectFn->fnGetLeft)() );
+-                    (aPaintRect.*_rRectFn->fnAddRight)( 1 );
+-                }
+-                else
+-                {
+-                    (aPaintRect.*_rRectFn->fnSetLeft)( (aRect.*_rRectFn->fnGetRight)() - 1 );
+-                    (aPaintRect.*_rRectFn->fnSetRight)( (aRect.*_rRectFn->fnGetRight)() - 1 );
+-                    (aPaintRect.*_rRectFn->fnAddRight)( 1 );
+-                }
+-            }
+-            _rFrm.PaintBorderLine( _rRect, aPaintRect, &_rPage, &pLeftRightBorder->GetColor(),
+-                   SOLID );
++            nExtentIS = lcl_GetExtent( NULL, pTopBorder );
++            nExtentIE = lcl_GetExtent( NULL, pBottomBorder );
++            nExtentOS = lcl_GetExtent( pTopBorder, NULL );
++            nExtentOE = lcl_GetExtent( pBottomBorder, NULL );
+         }
++
++        basegfx::B2DPoint aStart( aRect.Left() + aRect.Width() / 2.0, aRect.Top() + lcl_GetLineWidth( pTopBorder ) / 2.0 );
++        basegfx::B2DPoint aEnd( aRect.Left() + aRect.Width() / 2.0, aRect.Bottom() - lcl_GetLineWidth( pBottomBorder ) / 2.0 );
++
++        double nLeftWidth = !_bLeft ? pLeftRightBorder->GetOutWidth() : pLeftRightBorder->GetInWidth( );
++        double nRightWidth = !_bLeft ? pLeftRightBorder->GetInWidth() : pLeftRightBorder->GetOutWidth( );
++        Color aLeftColor = _bLeft ? pLeftRightBorder->GetColorOut( _bLeft ) : pLeftRightBorder->GetColorIn( _bLeft );
++        Color aRightColor = _bLeft ? pLeftRightBorder->GetColorIn( _bLeft ) : pLeftRightBorder->GetColorOut( _bLeft );
++
++        aSequence[0] = new drawinglayer::primitive2d::BorderLinePrimitive2D(
++                aStart, aEnd, nLeftWidth, pLeftRightBorder->GetDistance(), nRightWidth,
++                nExtentIS, nExtentIE, nExtentOS, nExtentOE,
++                aLeftColor.getBColor(), aRightColor.getBColor(), 
++                pLeftRightBorder->GetColorGap().getBColor(),
++                pLeftRightBorder->HasGapColor(), pLeftRightBorder->GetStyle( ) );
++
++        _rFrm.ProcessPrimitives( aSequence );
+     }
+ }
+ 
+@@ -4420,6 +4418,8 @@ void lcl_PaintTopBottomLine( const sal_Bool         _bTop,
+ {
+     const SvxBoxItem& rBox = _rAttrs.GetBox();
+     const SvxBorderLine* pTopBottomBorder = 0;
++    const SvxBorderLine* pLeftBorder = rBox.GetLeft();
++    const SvxBorderLine* pRightBorder = rBox.GetRight();
+     if ( _bTop )
+     {
+         pTopBottomBorder = rBox.GetTop();
+@@ -4437,79 +4437,49 @@ void lcl_PaintTopBottomLine( const sal_Bool         _bTop,
+     SwRect aRect( _rOutRect );
+     if ( _bTop )
+     {
+-        (aRect.*_rRectFn->fnAddBottom)( ::lcl_AlignHeight( pTopBottomBorder->GetOutWidth() ) -
++        (aRect.*_rRectFn->fnAddBottom)( ::lcl_AlignHeight( lcl_GetLineWidth( pTopBottomBorder ) ) -
+                                         (aRect.*_rRectFn->fnGetHeight)() );
+     }
+     else
+     {
+-        (aRect.*_rRectFn->fnSubTop)( ::lcl_AlignHeight( pTopBottomBorder->GetOutWidth() ) -
++        (aRect.*_rRectFn->fnSubTop)( ::lcl_AlignHeight( lcl_GetLineWidth( pTopBottomBorder ) ) -
+                                      (aRect.*_rRectFn->fnGetHeight)() );
+     }
+-
+-    // OD 29.04.2003 #107169# - paint SwAligned-rectangle
++    
++    // TODO Postpone the processing of the primitives
++    if ( lcl_GetLineWidth( pTopBottomBorder ) > 0 )
+     {
+-        SwRect aPaintRect( aRect );
+-        ::SwAlignRect( aPaintRect, _rFrm.GetShell() );
+-        // if <SwAlignRect> reveals rectangle with no width, adjust rectangle
+-        // to the prior top postion with width of one twip.
+-        if ( (aPaintRect.*_rRectFn->fnGetHeight)() == 0 )
+-        {
+-            if ( _bTop )
+-            {
+-                (aPaintRect.*_rRectFn->fnSetTop)( (aRect.*_rRectFn->fnGetTop)() );
+-                (aPaintRect.*_rRectFn->fnSetBottom)( (aRect.*_rRectFn->fnGetTop)() );
+-                (aPaintRect.*_rRectFn->fnAddBottom)( 1 );
+-            }
+-            else
+-            {
+-                (aPaintRect.*_rRectFn->fnSetTop)( (aRect.*_rRectFn->fnGetBottom)() - 1 );
+-                (aPaintRect.*_rRectFn->fnSetBottom)( (aRect.*_rRectFn->fnGetBottom)() - 1 );
+-                (aPaintRect.*_rRectFn->fnAddBottom)( 1 );
+-            }
+-        }
+-        _rFrm.PaintBorderLine( _rRect, aPaintRect, &_rPage, &pTopBottomBorder->GetColor(),
+-               pTopBottomBorder->GetStyle( ) );
+-    }
++        drawinglayer::primitive2d::Primitive2DSequence aSequence( 1 );
++        
++        double nExtentIS = lcl_GetExtent( pRightBorder, NULL );
++        double nExtentIE = lcl_GetExtent( pLeftBorder, NULL );
++        double nExtentOS = lcl_GetExtent( NULL, pRightBorder );
++        double nExtentOE = lcl_GetExtent( NULL, pLeftBorder );
+ 
+-    if ( pTopBottomBorder->GetInWidth() )
+-    {
+-        const long nDist = ::lcl_MinHeightDist( pTopBottomBorder->GetDistance() );
+-        const long nHeight = ::lcl_AlignHeight( pTopBottomBorder->GetInWidth() );
+-        if ( _bTop )
++        if ( !_bTop )
+         {
+-            (aRect.*_rRectFn->fnAddBottom)( nDist + nHeight );
+-            (aRect.*_rRectFn->fnSubTop)( nHeight - (aRect.*_rRectFn->fnGetHeight)() );
+-        }
+-        else
+-        {
+-            (aRect.*_rRectFn->fnSubTop)( nDist + nHeight );
+-            (aRect.*_rRectFn->fnAddBottom)( nHeight -(aRect.*_rRectFn->fnGetHeight)() );
+-        }
+-        ::lcl_SubLeftRight( aRect, rBox, _rRectFn );
+-        // OD 29.04.2003 #107169# - paint SwAligned-rectangle
+-        {
+-            SwRect aPaintRect( aRect );
+-            ::SwAlignRect( aPaintRect, _rFrm.GetShell() );
+-            // if <SwAlignRect> reveals rectangle with no width, adjust
+-            // rectangle to the prior top postion with width of one twip.
+-            if ( (aPaintRect.*_rRectFn->fnGetHeight)() == 0 )
+-            {
+-                if ( _bTop )
+-                {
+-                    (aPaintRect.*_rRectFn->fnSetTop)( (aRect.*_rRectFn->fnGetTop)() );
+-                    (aPaintRect.*_rRectFn->fnSetBottom)( (aRect.*_rRectFn->fnGetTop)() );
+-                    (aPaintRect.*_rRectFn->fnAddBottom)( 1 );
+-                }
+-                else
+-                {
+-                    (aPaintRect.*_rRectFn->fnSetTop)( (aRect.*_rRectFn->fnGetBottom)() - 1 );
+-                    (aPaintRect.*_rRectFn->fnSetBottom)( (aRect.*_rRectFn->fnGetBottom)() - 1 );
+-                    (aPaintRect.*_rRectFn->fnAddBottom)( 1 );
+-                }
+-            }
+-            _rFrm.PaintBorderLine( _rRect, aPaintRect, &_rPage, &pTopBottomBorder->GetColor(),
+-                   SOLID );
++            nExtentIS = lcl_GetExtent( NULL, pRightBorder );
++            nExtentIE = lcl_GetExtent( NULL, pLeftBorder );
++            nExtentOS = lcl_GetExtent( pRightBorder, NULL );
++            nExtentOE = lcl_GetExtent( pLeftBorder, NULL );
+         }
++
++        basegfx::B2DPoint aStart( aRect.Right() - lcl_GetLineWidth( pRightBorder ) / 2.0, aRect.Top() + aRect.Height() / 2.0 );
++        basegfx::B2DPoint aEnd( aRect.Left() + lcl_GetLineWidth( pLeftBorder ) / 2.0, aRect.Top() + aRect.Height() / 2.0 );
++
++        double nLeftWidth = !_bTop ? pTopBottomBorder->GetOutWidth() : pTopBottomBorder->GetInWidth( );
++        double nRightWidth = !_bTop ? pTopBottomBorder->GetInWidth() : pTopBottomBorder->GetOutWidth( );
++        Color aLeftColor = _bTop ? pTopBottomBorder->GetColorOut( _bTop ) : pTopBottomBorder->GetColorIn( _bTop );
++        Color aRightColor = _bTop ? pTopBottomBorder->GetColorIn( _bTop ) : pTopBottomBorder->GetColorOut( _bTop );
++
++        aSequence[0] = new drawinglayer::primitive2d::BorderLinePrimitive2D(
++                aStart, aEnd, nLeftWidth, pTopBottomBorder->GetDistance(), nRightWidth,
++                nExtentIS, nExtentIE, nExtentOS, nExtentOE,
++                aLeftColor.getBColor(), aRightColor.getBColor(), 
++                pTopBottomBorder->GetColorGap().getBColor(),
++                pTopBottomBorder->HasGapColor(), pTopBottomBorder->GetStyle( ) );
++
++        _rFrm.ProcessPrimitives( aSequence );
+     }
+ }
+ 
+@@ -4714,6 +4684,31 @@ const SwFrm* lcl_GetCellFrmForBorderAttrs( const SwFrm*         _pCellFrm,
+     return pRet;
+ }
+ 
++void SwFrm::ProcessPrimitives( const drawinglayer::primitive2d::Primitive2DSequence& rSequence ) const
++{
++    basegfx::B2DRange aViewRange;
++
++    SdrPage *pDrawPage = GetShell(  )->Imp(  )->GetPageView(  )->GetPage(  );
++    const drawinglayer::geometry::ViewInformation2D aNewViewInfos( 
++            basegfx::B2DHomMatrix(  ),
++            GetShell(  )->GetOut(  )->GetViewTransformation(  ),
++            aViewRange,
++            GetXDrawPageForSdrPage( pDrawPage ),
++            0.0, 
++            0 );
++
++    drawinglayer::processor2d::BaseProcessor2D * pProcessor2D =
++            sdr::contact::createBaseProcessor2DFromOutputDevice( 
++                    *GetShell(  )->GetOut(  ),
++                    aNewViewInfos );
++
++    if ( pProcessor2D )
++    {
++        pProcessor2D->process( rSequence );
++        delete pProcessor2D;
++    }
++}
++
+ void SwFrm::PaintBorder( const SwRect& rRect, const SwPageFrm *pPage,
+                          const SwBorderAttrs &rAttrs ) const
+ {
+@@ -4813,6 +4808,7 @@ void SwFrm::PaintBorder( const SwRect& rRect, const SwPageFrm *pPage,
+             // OD 19.05.2003 #109667# - use new method <lcl_PaintLeftRightLine(..)>
+             //::lcl_PaintLeftLine  ( this, pPage, aRect, rRect, rAttrs, fnRect );
+             //::lcl_PaintRightLine ( this, pPage, aRect, rRect, rAttrs, fnRect );
++           
+             ::lcl_PaintLeftRightLine ( sal_True, *(this), *(pPage), aRect, rRect, rAttrs, fnRect );
+             ::lcl_PaintLeftRightLine ( sal_False, *(this), *(pPage), aRect, rRect, rAttrs, fnRect );
+             if ( !IsCntntFrm() || rAttrs.GetTopLine( *(this) ) )
+@@ -5690,6 +5686,12 @@ void SwFrm::PaintBaBo( const SwRect& rRect, const SwPageFrm *pPage,
+         static_cast<const SwPageFrm*>(this)->PaintMarginArea( rRect, pGlobalShell );
+     }
+ 
++
++    // paint background
++    {
++        PaintBackground( rRect, pPage, rAttrs, FALSE, bLowerBorder );
++    }
++    
+     // OD 06.08.2002 #99657# - paint border before painting background
+     // paint grid for page frame and paint border
+     {
+@@ -5699,11 +5701,6 @@ void SwFrm::PaintBaBo( const SwRect& rRect, const SwPageFrm *pPage,
+         PaintBorder( aRect, pPage, rAttrs );
+     }
+ 
+-    // paint background
+-    {
+-        PaintBackground( rRect, pPage, rAttrs, FALSE, bLowerBorder );
+-    }
+-
+     pOut->Pop();
+ }
+ 
