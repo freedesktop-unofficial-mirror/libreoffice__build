@@ -1,0 +1,175 @@
+diff --git svx/inc/svx/svxacorr.hxx svx/inc/svx/svxacorr.hxx
+index 63c8d7c..d4b455c 100644
+--- svx/inc/svx/svxacorr.hxx
++++ svx/inc/svx/svxacorr.hxx
+@@ -214,6 +214,8 @@ class SVX_DLLPUBLIC SvxAutoCorrect
+     SvxAutoCorrLastFileAskTable_Impl* pLastFileTable;
+     CharClass* pCharClass;
+ 
++    bool bRunNext;
++
+     LanguageType eCharClassLang;
+ 
+     long nFlags;
+@@ -383,6 +385,8 @@ public:
+                             xub_StrLen nSttPos, xub_StrLen nEndPos,
+                             LanguageType eLang  = LANGUAGE_SYSTEM );
+ 
++    bool                HasRunNext() { return bRunNext; }
++
+     static long			GetDefaultFlags();
+ 
+ // returns TRUE for charcters where the function
+diff --git svx/source/editeng/editeng.cxx svx/source/editeng/editeng.cxx
+index e485c33..f9d726b 100644
+--- svx/source/editeng/editeng.cxx
++++ svx/source/editeng/editeng.cxx
+@@ -49,6 +49,7 @@
+ #include <eerdll2.hxx>
+ #include <eerdll.hxx>
+ #include <editeng.hrc>
++#include <acorrcfg.hxx>
+ #include <svx/flditem.hxx>
+ #include <txtrange.hxx>
+ #include <vcl/graph.hxx>
+@@ -1145,8 +1146,10 @@ sal_Bool EditEngine::PostKeyEvent( const KeyEvent& rKeyEvent, EditView* pEditVie
+                     xub_Unicode nCharCode = rKeyEvent.GetCharCode();
+                     pEditView->pImpEditView->DrawSelection();
+                     // Autokorrektur ?
++                    SvxAutoCorrect*	pAutoCorrect = SvxAutoCorrCfg::Get()->GetAutoCorrect();
+                     if ( ( pImpEditEngine->GetStatus().DoAutoCorrect() ) &&
+-                        SvxAutoCorrect::IsAutoCorrectChar( nCharCode ) )
++                        ( SvxAutoCorrect::IsAutoCorrectChar( nCharCode ) ||
++                          pAutoCorrect->HasRunNext() ) )
+                     {
+ 						aCurSel = pImpEditEngine->AutoCorrect( 
+                             aCurSel, nCharCode, !pEditView->IsInsertMode(), pFrameWin );
+diff --git svx/source/editeng/svxacorr.cxx svx/source/editeng/svxacorr.cxx
+index 8db1d87..f93d363 100644
+--- svx/source/editeng/svxacorr.cxx
++++ svx/source/editeng/svxacorr.cxx
+@@ -128,7 +128,7 @@ static const sal_Char
+ 
+ // diese Zeichen sind in Worten erlaubt: (fuer FnCptlSttSntnc)
+ static const sal_Char sImplWordChars[] = "-'";
+-
++    
+ void EncryptBlockName_Imp( String& rName );
+ void DecryptBlockName_Imp( String& rName );
+ 
+@@ -389,7 +389,7 @@ SvxAutoCorrect::SvxAutoCorrect( const String& rShareAutocorrFile,
+     sUserAutoCorrFile( rUserAutocorrFile ),
+     pLangTable( new SvxAutoCorrLanguageTable_Impl ),
+     pLastFileTable( new SvxAutoCorrLastFileAskTable_Impl ),
+-    pCharClass( 0 ),
++    pCharClass( 0 ), bRunNext( false ),
+     cStartDQuote( 0 ), cEndDQuote( 0 ), cStartSQuote( 0 ), cEndSQuote( 0 )
+ {
+     nFlags = SvxAutoCorrect::GetDefaultFlags();
+@@ -406,7 +406,7 @@ SvxAutoCorrect::SvxAutoCorrect( const SvxAutoCorrect& rCpy )
+ 
+     pLangTable( new SvxAutoCorrLanguageTable_Impl ),
+     pLastFileTable( new SvxAutoCorrLastFileAskTable_Impl ),
+-    pCharClass( 0 ),
++    pCharClass( 0 ), bRunNext( false ),
+ 
+     nFlags( rCpy.nFlags & ~(ChgWordLstLoad|CplSttLstLoad|WrdSttLstLoad)),
+     cStartDQuote( rCpy.cStartDQuote ), cEndDQuote( rCpy.cEndDQuote ),
+@@ -719,9 +719,12 @@ BOOL SvxAutoCorrect::FnAddNonBrkSpace(
+                         // Add the non-breaking space at the end pos
+                         if ( bHasSpace )
+                             rDoc.Insert( nPos, CHAR_HARDBLANK );
++                        bRunNext = true;
+                         bRet = true;
+                     }
+-                }
++                } 
++                else if ( chars.indexOf( sal_Unicode( cPrevChar ) ) != -1 )
++                    bRunNext = true;
+             }
+         }
+         else if ( cChar == '/' )
+@@ -1258,6 +1261,9 @@ ULONG SvxAutoCorrect::AutoCorrect( SvxAutoCorrDoc& rDoc, const String& rTxt,
+ 									BOOL bInsert, Window* pFrameWin )
+ {
+     ULONG nRet = 0;
++    bool bIsNextRun = bRunNext;
++    bRunNext = false;  // if it was set, then it has to be turned off
++     
+     do{		                            // only for middle check loop !!
+         if( cChar )
+         {
+@@ -1296,10 +1302,38 @@ ULONG SvxAutoCorrect::AutoCorrect( SvxAutoCorrDoc& rDoc, const String& rTxt,
+                 rDoc.Replace( nInsPos, cChar );
+     
+             // Hardspaces autocorrection    
+-            if ( NeedsHardspaceAutocorr( cChar ) && IsAutoCorrFlag( AddNonBrkSpace ) &&
+-                FnAddNonBrkSpace( rDoc, rTxt, 0, nInsPos, rDoc.GetLanguage( nInsPos, FALSE ) ) )
++            if ( IsAutoCorrFlag( AddNonBrkSpace ) )
+             {
+-                nRet = AddNonBrkSpace;
++                if ( NeedsHardspaceAutocorr( cChar ) &&
++                    FnAddNonBrkSpace( rDoc, rTxt, 0, nInsPos, rDoc.GetLanguage( nInsPos, FALSE ) ) )
++                {
++                    nRet = AddNonBrkSpace;
++                }
++                else if ( bIsNextRun && !IsAutoCorrectChar( cChar ) )
++                {
++                    // Remove the NBSP if it wasn't an autocorrection
++                    if ( NeedsHardspaceAutocorr( rTxt.GetChar( nInsPos - 1 ) ) && isblank( (unsigned char) cChar) == 0 )
++                    {
++                        // Look for the last HARD_SPACE
++                        xub_StrLen nPos = nInsPos - 1;
++                        bool bFound = false;
++                        while ( nPos != STRING_NOTFOUND  && !bFound )
++                        {
++                            sal_Unicode cTmpChar = rTxt.GetChar( nPos );
++                            if ( cTmpChar == CHAR_HARDBLANK )
++                                bFound = true;
++                            else if ( !NeedsHardspaceAutocorr( cTmpChar ) )
++                                nPos = STRING_NOTFOUND;
++                            nPos--;
++                        }
++
++                        if ( bFound && nPos != STRING_NOTFOUND )
++                        {
++                            rDoc.Delete( nPos + 1, nPos + 2 );
++                            nRet = AddNonBrkSpace;
++                        }
++                    }
++                }
+             }
+         }
+ 
+diff --git sw/source/ui/docvw/edtwin.cxx sw/source/ui/docvw/edtwin.cxx
+index 3adca95..f64da7d 100644
+--- sw/source/ui/docvw/edtwin.cxx
++++ sw/source/ui/docvw/edtwin.cxx
+@@ -2284,7 +2284,8 @@ KEYINPUT_CHECKTABLE_INSDEL:
+ 
+ 
+                 BOOL bIsAutoCorrectChar =  SvxAutoCorrect::IsAutoCorrectChar( aCh );
+-                if( !aKeyEvent.GetRepeat() && pACorr && bIsAutoCorrectChar &&
++                BOOL bRunNext = pACorr->HasRunNext();
++                if( !aKeyEvent.GetRepeat() && pACorr && ( bIsAutoCorrectChar || bRunNext ) &&
+                         pACfg->IsAutoFmtByInput() &&
+                     (( pACorr->IsAutoCorrFlag( ChgWeightUnderl ) &&
+                         ( '*' == aCh || '_' == aCh ) ) ||
+@@ -2296,14 +2297,13 @@ KEYINPUT_CHECKTABLE_INSDEL:
+                     if( '\"' != aCh && '\'' != aCh )        // nur bei "*_" rufen!
+                         rSh.UpdateAttr();
+                 }
+-                else if( !aKeyEvent.GetRepeat() && pACorr && bIsAutoCorrectChar &&
++                else if( !aKeyEvent.GetRepeat() && pACorr && ( bIsAutoCorrectChar || bRunNext ) &&
+                         pACfg->IsAutoFmtByInput() &&
+                     pACorr->IsAutoCorrFlag( CptlSttSntnc | CptlSttWrd |
+-                                            ChgOrdinalNumber |
++                                            ChgOrdinalNumber | AddNonBrkSpace |
+                                             ChgToEnEmDash | SetINetAttr |
+                                             Autocorrect ) &&
+-                    '\"' != aCh && '\'' != aCh && '*' != aCh && '_' != aCh &&
+-                    !bIsNormalChar
++                    '\"' != aCh && '\'' != aCh && '*' != aCh && '_' != aCh
+                     )
+                 {
+                     FlushInBuffer();
