@@ -1,0 +1,442 @@
+diff --git sc/inc/document.hxx sc/inc/document.hxx
+index e6b98c0..f0e2932 100644
+--- sc/inc/document.hxx
++++ sc/inc/document.hxx
+@@ -914,6 +914,11 @@ public:
+ 
+     SC_DLLPUBLIC BOOL			GetDataStart( SCTAB nTab, SCCOL& rStartCol, SCROW& rStartRow ) const;
+ 
++    /** 
++     * Find the maximum column position that contains printable data for the 
++     * specified row range.  The final column position must be equal or less 
++     * than the initial value of rEndCol. 
++     */
+     void			ExtendPrintArea( OutputDevice* pDev, SCTAB nTab,
+                                     SCCOL nStartCol, SCROW nStartRow,
+                                     SCCOL& rEndCol, SCROW nEndRow );
+diff --git sc/inc/segmenttree.hxx sc/inc/segmenttree.hxx
+index 4b45d20..877d8d1 100644
+--- sc/inc/segmenttree.hxx
++++ sc/inc/segmenttree.hxx
+@@ -115,6 +115,9 @@ public:
+     void removeSegment(SCCOL nCol1, SCCOL nCol2);
+     void insertSegment(SCCOL nCol, SCCOL nSize, bool bSkipStartBoundary);
+ 
++    void enableTreeSearch(bool bEnable);
++    void setInsertFromBack(bool bInsertFromBack);
++
+ private:
+     ::std::auto_ptr<ScFlatBoolSegmentsImpl> mpImpl;
+ };
+diff --git sc/inc/table.hxx sc/inc/table.hxx
+index ebaf2c7..b4bdd7e 100644
+--- sc/inc/table.hxx
++++ sc/inc/table.hxx
+@@ -875,6 +875,55 @@ private:
+                                      BOOL bNumFormatChanged, BOOL bBroadcast );
+ 
+     void        SkipFilteredRows(SCROW& rRow, SCROW& rLastNonFilteredRow, bool bForward);
++
++    /** 
++     * In case the cell text goes beyond the column width, move the max column 
++     * position to the right.  This is called from ExtendPrintArea.
++     */
++    void        MaybeAddExtraColumn(SCCOL& rCol, SCROW nRow, OutputDevice* pDev, double nPPTX, double nPPTY);
++
++    /** 
++     * Use this to iterate through non-empty visible cells in a single column.
++     */
++    class VisibleDataCellIterator
++    {
++    public:
++        static SCROW ROW_NOT_FOUND;
++
++        explicit VisibleDataCellIterator(ScFlatBoolRowSegments& rRowSegs, ScColumn& rColumn);
++        ~VisibleDataCellIterator();
++
++        /** 
++         * Set the start row position.  In case there is not visible data cell
++         * at the specified row position, it will move to the position of the 
++         * first visible data cell below that point. 
++         *  
++         * @return First visible data cell if found, or NULL otherwise.
++         */ 
++        ScBaseCell* reset(SCROW nRow);
++
++        /** 
++         * Find the next visible data cell position. 
++         * 
++         * @return Next visible data cell if found, or NULL otherwise.
++         */
++        ScBaseCell* next();
++
++        /** 
++         * Get the current row position.
++         * 
++         * @return Current row position, or ROW_NOT_FOUND if the iterator 
++         *         doesn't point to a valid data cell position.
++         */
++        SCROW getRow() const;
++
++    private:
++        ScFlatBoolRowSegments& mrRowSegs;
++        ScColumn& mrColumn;
++        ScBaseCell* mpCell;
++        SCROW mnCurRow;
++        SCROW mnUBound;
++    };
+ };
+ 
+ 
+diff --git sc/source/core/data/column2.cxx sc/source/core/data/column2.cxx
+index 10a3dd5..2faf495 100644
+--- sc/source/core/data/column2.cxx
++++ sc/source/core/data/column2.cxx
+@@ -1437,11 +1437,11 @@ BOOL ScColumn::GetPrevDataPos(SCROW& rRow) const
+     return bFound;
+ }
+ 
+-BOOL ScColumn::GetNextDataPos(SCROW& rRow) const		// groesser als rRow
++BOOL ScColumn::GetNextDataPos(SCROW& rRow) const		// greater than rRow
+ {
+     SCSIZE nIndex;
+     if (Search( rRow, nIndex ))
+-        ++nIndex;					// naechste Zelle
++        ++nIndex;					// next cell
+ 
+     BOOL bMore = ( nIndex < nCount );
+     if ( bMore )
+diff --git sc/source/core/data/segmenttree.cxx sc/source/core/data/segmenttree.cxx
+index b0ac112..93c2b74 100644
+--- sc/source/core/data/segmenttree.cxx
++++ sc/source/core/data/segmenttree.cxx
+@@ -468,6 +468,16 @@ void ScFlatBoolColSegments::insertSegment(SCCOL nCol, SCCOL nSize, bool bSkipSta
+     mpImpl->insertSegment(static_cast<SCCOLROW>(nCol), static_cast<SCCOLROW>(nSize), bSkipStartBoundary);
+ }
+ 
++void ScFlatBoolColSegments::enableTreeSearch(bool bEnable)
++{
++    mpImpl->enableTreeSearch(bEnable);
++}
++
++void ScFlatBoolColSegments::setInsertFromBack(bool bInsertFromBack)
++{
++    mpImpl->setInsertFromBack(bInsertFromBack);
++}
++
+ // ============================================================================
+ 
+ 
+diff --git sc/source/core/data/table1.cxx sc/source/core/data/table1.cxx
+index e55582b..614a9b5 100644
+--- sc/source/core/data/table1.cxx
++++ sc/source/core/data/table1.cxx
+@@ -1369,88 +1369,131 @@ void ScTable::ExtendPrintArea( OutputDevice* pDev,
+     double nPPTX = aPix1000.X() / 1000.0;
+     double nPPTY = aPix1000.Y() / 1000.0;
+ 
+-    BOOL bEmpty[MAXCOLCOUNT];
+-    for (SCCOL i=0; i<=MAXCOL; i++)
+-        bEmpty[i] = ( aCol[i].GetCellCount() == 0 );
++    // First, mark those columns that we need to skip i.e. hidden and empty columns.
+ 
+-    SCSIZE nIndex;
+-    SCCOL nPrintCol = rEndCol;
+-    for (SCROW nRow = nStartRow; nRow<=nEndRow; nRow++)
++    ScFlatBoolColSegments aSkipCols;
++    aSkipCols.setInsertFromBack(true); // speed optimazation.
++    aSkipCols.setFalse(0, MAXCOL);
++    for (SCCOL i = 0; i <= MAXCOL; ++i)
+     {
+-		if (!RowHidden(nRow))
++        SCCOL nLastCol = i;
++        if (ColHidden(i, NULL, &nLastCol))
+         {
+-            SCCOL nDataCol = rEndCol;
+-            while (nDataCol > 0 && ( bEmpty[nDataCol] || !aCol[nDataCol].Search(nRow,nIndex) ) )
+-                --nDataCol;
+-            if (!ColHidden(nDataCol))
++            // Columns are hidden in this range.
++            aSkipCols.setTrue(i, nLastCol);
++        }
++        else
++        {
++            // These columns are visible.  Check for empty columns.
++            for (SCCOL j = i; j <= nLastCol; ++j)
+             {
+-                ScBaseCell* pCell = aCol[nDataCol].GetCell(nRow);
+-                if (pCell)
+-                {
+-                    CellType eType = pCell->GetCellType();
+-                    if (eType == CELLTYPE_STRING || eType == CELLTYPE_EDIT
+-                        || (eType == CELLTYPE_FORMULA && !((ScFormulaCell*)pCell)->IsValue()) )
+-                    {
+-                        BOOL bFormula = FALSE;	//! uebergeben
+-                        long nPixel = pCell->GetTextWidth();
+-
+-                        // Breite bereits im Idle-Handler berechnet?
+-                        if ( TEXTWIDTH_DIRTY == nPixel )
+-                        {
+-                            ScNeededSizeOptions aOptions;
+-                            aOptions.bTotalSize	 = TRUE;
+-                            aOptions.bFormula	 = bFormula;
+-                            aOptions.bSkipMerged = FALSE;
+-
+-                            Fraction aZoom(1,1);
+-                            nPixel = aCol[nDataCol].GetNeededSize( nRow,
+-                                                        pDev,nPPTX,nPPTY,aZoom,aZoom,
+-                                                        TRUE, aOptions );
+-                            pCell->SetTextWidth( (USHORT)nPixel );
+-                        }
++                if (aCol[j].GetCellCount() == 0)
++                    // empty
++                    aSkipCols.setTrue(j,j);
++            }
++        }
++        i = nLastCol;
++    }
+ 
+-                        long nTwips = (long) (nPixel / nPPTX);
+-                        long nDocW = GetColWidth( nDataCol );
++    ScFlatBoolColSegments::RangeData aColData;
++    for (SCCOL nCol = rEndCol; nCol >= 0; --nCol)
++    {
++        if (!aSkipCols.getRangeData(nCol, aColData))
++            // Failed to get the data.  This should never happen!
++            return;
+ 
+-                        long nMissing = nTwips - nDocW;
+-                        if ( nMissing > 0 )
+-                        {
+-                            //	look at alignment
+-
+-                            const ScPatternAttr* pPattern = GetPattern( nDataCol, nRow );
+-                            const SfxItemSet* pCondSet = NULL;
+-                            if ( ((const SfxUInt32Item&)pPattern->GetItem(ATTR_CONDITIONAL)).GetValue() )
+-                                pCondSet = pDocument->GetCondResult( nDataCol, nRow, nTab );
+-
+-                            SvxCellHorJustify eHorJust = (SvxCellHorJustify)((const SvxHorJustifyItem&)
+-                                            pPattern->GetItem( ATTR_HOR_JUSTIFY, pCondSet )).GetValue();
+-                            if ( eHorJust == SVX_HOR_JUSTIFY_CENTER )
+-                                nMissing /= 2;							// distributed into both directions
+-                            else
+-                            {
+-                                // STANDARD is LEFT (only text is handled here)
+-                                BOOL bRight = ( eHorJust == SVX_HOR_JUSTIFY_RIGHT );
+-                                if ( IsLayoutRTL() )
+-                                    bRight = !bRight;
+-                                if ( bRight )
+-                                    nMissing = 0;		// extended only to the left (logical)
+-                            }
+-                        }
++        if (aColData.mbValue)
++        {
++            // Skip these columns.
++            nCol = aColData.mnCol1; // move toward 0.
++            continue;
++        }
+ 
+-                        SCCOL nCol = nDataCol;
+-                        while (nMissing > 0 && nCol < MAXCOL)
+-                        {
+-                            ++nCol;
+-                            nMissing -= GetColWidth( nCol );
+-                        }
+-                        if (nCol>nPrintCol)
+-                            nPrintCol = nCol;
+-                    }
+-                }
++        // These are visible and non-empty columns.
++        for (SCCOL nDataCol = nCol; 0 <= nDataCol && nDataCol >= aColData.mnCol1; --nDataCol)
++        {
++            SCCOL nPrintCol = nDataCol;
++            VisibleDataCellIterator aIter(*mpHiddenRows, aCol[nDataCol]);
++            ScBaseCell* pCell = aIter.reset(nStartRow);
++            if (!pCell)
++                // No visible cells found in this column.  Skip it.
++                continue;
++
++            while (pCell)
++            {
++                SCCOL nNewCol = nDataCol;
++                SCROW nRow = aIter.getRow();
++                MaybeAddExtraColumn(nNewCol, nRow, pDev, nPPTX, nPPTY);
++                if (nNewCol > nPrintCol)
++                    nPrintCol = nNewCol;
++                pCell = aIter.next();
+             }
++
++            rEndCol = nPrintCol;
++            return;
+         }
++        nCol = aColData.mnCol1; // move toward 0.
+     }
+-    rEndCol = nPrintCol;
++}
++
++void ScTable::MaybeAddExtraColumn(SCCOL& rCol, SCROW nRow, OutputDevice* pDev, double nPPTX, double nPPTY)
++{
++    ScBaseCell* pCell = aCol[rCol].GetCell(nRow);
++    if (!pCell || !pCell->HasStringData())
++        return;
++
++    bool bFormula = false;  //! ueberge
++    long nPixel = pCell->GetTextWidth();
++
++    // Breite bereits im Idle-Handler berechnet?
++    if ( TEXTWIDTH_DIRTY == nPixel )
++    {
++        ScNeededSizeOptions aOptions;
++        aOptions.bTotalSize  = TRUE;
++        aOptions.bFormula    = bFormula;
++        aOptions.bSkipMerged = FALSE;
++
++        Fraction aZoom(1,1);
++        nPixel = aCol[rCol].GetNeededSize(
++            nRow, pDev, nPPTX, nPPTY, aZoom, aZoom, true, aOptions );
++        pCell->SetTextWidth( (USHORT)nPixel );
++    }
++
++    long nTwips = (long) (nPixel / nPPTX);
++    long nDocW = GetColWidth( rCol );
++
++    long nMissing = nTwips - nDocW;
++    if ( nMissing > 0 )
++    {
++        //  look at alignment
++
++        const ScPatternAttr* pPattern = GetPattern( rCol, nRow );
++        const SfxItemSet* pCondSet = NULL;
++        if ( ((const SfxUInt32Item&)pPattern->GetItem(ATTR_CONDITIONAL)).GetValue() )
++            pCondSet = pDocument->GetCondResult( rCol, nRow, nTab );
++
++        SvxCellHorJustify eHorJust = (SvxCellHorJustify)((const SvxHorJustifyItem&)
++                        pPattern->GetItem( ATTR_HOR_JUSTIFY, pCondSet )).GetValue();
++        if ( eHorJust == SVX_HOR_JUSTIFY_CENTER )
++            nMissing /= 2;                          // distributed into both directions
++        else
++        {
++            // STANDARD is LEFT (only text is handled here)
++            bool bRight = ( eHorJust == SVX_HOR_JUSTIFY_RIGHT );
++            if ( IsLayoutRTL() )
++                bRight = !bRight;
++            if ( bRight )
++                nMissing = 0;       // extended only to the left (logical)
++        }
++    }
++
++    SCCOL nNewCol = rCol;
++    while (nMissing > 0 && nNewCol < MAXCOL)
++    {
++        ++nNewCol;
++        nMissing -= GetColWidth(nNewCol);
++    }
++    rCol = nNewCol;
+ }
+ 
+ void ScTable::DoColResize( SCCOL nCol1, SCCOL nCol2, SCSIZE nAdd )
+@@ -1541,7 +1584,104 @@ void ScTable::RestorePrintRanges( const ScPrintSaverTab& rSaveTab )
+     UpdatePageBreaks(NULL);
+ }
+ 
++SCROW ScTable::VisibleDataCellIterator::ROW_NOT_FOUND = -1;
++
++ScTable::VisibleDataCellIterator::VisibleDataCellIterator(ScFlatBoolRowSegments& rRowSegs, ScColumn& rColumn) :
++    mrRowSegs(rRowSegs),
++    mrColumn(rColumn),
++    mpCell(NULL),
++    mnCurRow(ROW_NOT_FOUND), 
++    mnUBound(ROW_NOT_FOUND)
++{
++}
++
++ScTable::VisibleDataCellIterator::~VisibleDataCellIterator()
++{
++}
++
++ScBaseCell* ScTable::VisibleDataCellIterator::reset(SCROW nRow)
++{
++    if (nRow > MAXROW)
++    {    
++        mnCurRow = ROW_NOT_FOUND;
++        return NULL;
++    }
++
++    ScFlatBoolRowSegments::RangeData aData;
++    if (!mrRowSegs.getRangeData(nRow, aData))
++    {    
++        mnCurRow = ROW_NOT_FOUND;
++        return NULL;
++    }
+ 
++    if (!aData.mbValue)
++    {    
++        // specified row is visible.  Take it.
++        mnCurRow = nRow;
++        mnUBound = aData.mnRow2;
++    }
++    else
++    {
++        // specified row is not-visible.  The first visible row is the start of
++        // the next segment.
++        mnCurRow = aData.mnRow2 + 1;
++        mnUBound = mnCurRow; // get range data on the next iteration.
++        if (mnCurRow > MAXROW)
++        {    
++            // Make sure the row doesn't exceed our current limit.
++            mnCurRow = ROW_NOT_FOUND;
++            return NULL;
++        }
++    }
+ 
++    mpCell = mrColumn.GetCell(mnCurRow);
++    if (mpCell)
++        // First visible cell found.
++        return mpCell;
+ 
++    // Find a first visible cell below this row (if any).
++    return next();
++}
++
++ScBaseCell* ScTable::VisibleDataCellIterator::next()
++{
++    if (mnCurRow == ROW_NOT_FOUND)
++        return NULL;
++
++    while (mrColumn.GetNextDataPos(mnCurRow))
++    {
++        if (mnCurRow > mnUBound)
++        {
++            // We don't know the visibility of this row range.  Query it.
++            ScFlatBoolRowSegments::RangeData aData;
++            if (!mrRowSegs.getRangeData(mnCurRow, aData))
++            {
++                mnCurRow = ROW_NOT_FOUND;
++                return NULL;
++            }
++
++            if (aData.mbValue)
++            {
++                // This row is invisible.  Skip to the last invisible row and
++                // try again.
++                mnCurRow = mnUBound = aData.mnRow2;
++                continue;
++            }
++
++            // This row is visible.
++            mnUBound = aData.mnRow2;
++        }
++
++        mpCell = mrColumn.GetCell(mnCurRow);
++        if (mpCell)
++            return mpCell;
++    }
++    mnCurRow = ROW_NOT_FOUND;
++    return NULL;    
++}
++
++SCROW ScTable::VisibleDataCellIterator::getRow() const
++{
++    return mnCurRow;
++}
+ 
