@@ -1,0 +1,186 @@
+diff --git sc/inc/dociter.hxx sc/inc/dociter.hxx
+index 22cc806..bf8cde3 100644
+--- sc/inc/dociter.hxx
++++ sc/inc/dociter.hxx
+@@ -39,6 +39,7 @@
+ 
+ #include <memory>
+ #include <vector>
++#include <set>
+ #include <boost/shared_ptr.hpp>
+ 
+ class ScDocument;
+@@ -549,6 +550,22 @@ private:
+     const ::std::vector<TabRanges>* mpTabRangesArray;
+ };
+ 
++// ============================================================================
++
++class ScRowBreakIterator
++{
++public:
++    static SCROW NOT_FOUND;
++
++    explicit ScRowBreakIterator(::std::set<SCROW>& rBreaks);
++    SCROW first();
++    SCROW next();
++ 
++private:
++    ::std::set<SCROW>& mrBreaks;
++    ::std::set<SCROW>::const_iterator maItr;
++    ::std::set<SCROW>::const_iterator maEnd;
++};
+ 
+ #endif
+ 
+diff --git sc/inc/document.hxx sc/inc/document.hxx
+index f0e2932..7f94337 100644
+--- sc/inc/document.hxx
++++ sc/inc/document.hxx
+@@ -144,6 +144,7 @@ struct ScClipRangeNameData;
+ struct ScSetStringParam;
+ class ScDocRowHeightUpdater;
+ struct ScColWidthParam;
++class ScRowBreakIterator;
+ 
+ namespace com { namespace sun { namespace star {
+     namespace lang {
+@@ -1802,6 +1803,8 @@ public:
+     void RemoveSubTotalCell(ScFormulaCell* pCell);
+     void SetSubTotalCellsDirty(const ScRange& rDirtyRange);
+ 
++    ScRowBreakIterator* GetRowBreakIterator(SCTAB nTab) const;
++
+ private: // CLOOK-Impl-Methoden
+ 
+     /** 
+diff --git sc/source/core/data/dociter.cxx sc/source/core/data/dociter.cxx
+index d92187e..28bb61b 100644
+--- sc/source/core/data/dociter.cxx
++++ sc/source/core/data/dociter.cxx
+@@ -55,6 +55,7 @@
+ 
+ using ::rtl::math::approxEqual;
+ using ::std::vector;
++using ::std::set;
+ using ::rtl::OUString;
+ 
+ // STATIC DATA -----------------------------------------------------------
+@@ -2207,3 +2208,25 @@ void ScDocRowHeightUpdater::updateAll()
+         nProgressStart += mrDoc.pTab[nTab]->GetWeightedCount();
+     }
+ }
++
++// ============================================================================
++
++SCROW ScRowBreakIterator::NOT_FOUND = -1;
++
++ScRowBreakIterator::ScRowBreakIterator(set<SCROW>& rBreaks) : 
++    mrBreaks(rBreaks),
++    maItr(rBreaks.begin()), maEnd(rBreaks.end())
++{
++}
++
++SCROW ScRowBreakIterator::first()
++{
++    maItr = mrBreaks.begin();
++    return maItr == maEnd ? NOT_FOUND : *maItr;
++}
++
++SCROW ScRowBreakIterator::next()
++{
++    ++maItr;
++    return maItr == maEnd ? NOT_FOUND : *maItr;
++}
+diff --git sc/source/core/data/document.cxx sc/source/core/data/document.cxx
+index 1c38e57..4ea49f9 100644
+--- sc/source/core/data/document.cxx
++++ sc/source/core/data/document.cxx
+@@ -5300,6 +5300,13 @@ void ScDocument::SetSubTotalCellsDirty(const ScRange& rDirtyRange)
+     maSubTotalCells.swap(aNewSet); // update the list.
+ }
+ 
++ScRowBreakIterator* ScDocument::GetRowBreakIterator(SCTAB nTab) const
++{
++    if (ValidTab(nTab) && pTab[nTab])
++        return new ScRowBreakIterator(pTab[nTab]->maRowPageBreaks);
++    return NULL;
++}
++
+ void ScDocument::EnableUndo( bool bVal )
+ {
+     GetUndoManager()->EnableUndo(bVal);
+diff --git sc/source/ui/view/printfun.cxx sc/source/ui/view/printfun.cxx
+index 982c02e..6ac4caf 100644
+--- sc/source/ui/view/printfun.cxx
++++ sc/source/ui/view/printfun.cxx
+@@ -88,6 +88,8 @@
+ #include <vcl/lineinfo.hxx>
+ #include <tools/pstm.hxx>
+ 
++#include <boost/scoped_ptr.hpp>
++
+ #define ZOOM_MIN	10
+ 
+ #define GET_BOOL(set,which)   ((const SfxBoolItem&)(set)->Get((which))).GetValue()
+@@ -3093,11 +3095,22 @@ void ScPrintFunc::CalcPages()				// berechnet aPageRect und Seiten aus nZoom
+         ++nPagesX;
+     }
+ 
+-    BOOL bVisRow = FALSE;
++    bool bVisRow = false;
+     SCROW nPageStartRow = nStartRow;
++    SCROW nLastVisibleRow = -1;
++
++    ::boost::scoped_ptr<ScRowBreakIterator> pRowBreakIter(pDoc->GetRowBreakIterator(nPrintTab));
++    SCROW nNextPageBreak = pRowBreakIter->first();
++    while (nNextPageBreak != ScRowBreakIterator::NOT_FOUND && nNextPageBreak < nStartRow)
++        // Skip until the page break position is at the start row or greater.
++        nNextPageBreak = pRowBreakIter->next();
++
+ 	for (SCROW nRow = nStartRow; nRow <= nEndRow; ++nRow)
+ 	{
+-		bool bPageBreak = (pDoc->HasRowBreak(nRow, nPrintTab) & BREAK_PAGE);
++        bool bPageBreak = (nNextPageBreak == nRow);
++        if (bPageBreak)
++            nNextPageBreak = pRowBreakIter->next();
++
+ 		if (nRow > nStartRow && bVisRow && bPageBreak )
+ 		{
+ 			pPageEndY[nTotalY] = nRow-1;
+@@ -3115,15 +3128,27 @@ void ScPrintFunc::CalcPages()				// berechnet aPageRect und Seiten aus nZoom
+ 			}
+ 
+ 			nPageStartRow = nRow;
+-			bVisRow = FALSE;
++            bVisRow = false;
+ 		}
+-		SCROW nLastRow = -1;
+-		if (!pDoc->RowHidden(nRow, nPrintTab, nLastRow))
+-			bVisRow = TRUE;
+-		else
+-			// skip all hidden rows.
+-			nRow = nLastRow;
+-	}
++
++        if (nRow <= nLastVisibleRow)
++        {
++            // This row is still visible.  Don't bother calling RowHidden() to
++            // find out, for speed optimization.
++            bVisRow = true;
++            continue;
++        }
++
++        SCROW nLastRow = -1;
++        if (!pDoc->RowHidden(nRow, nPrintTab, NULL, &nLastRow))
++        {    
++            bVisRow = true;
++            nLastVisibleRow = nLastRow;
++        }
++        else
++            // skip all hidden rows.
++            nRow = nLastRow;
++    }
+ 
+     if (bVisRow)
+     {
