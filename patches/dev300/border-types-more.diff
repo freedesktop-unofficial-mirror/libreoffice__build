@@ -1324,10 +1324,19 @@ index 5e4be3b..962acbf 100644
  
  // ============================================================================
 diff --git svx/inc/svx/framelink.hxx svx/inc/svx/framelink.hxx
-index 8309326..92ffc8d 100644
+index 8309326..9ace364 100644
 --- svx/inc/svx/framelink.hxx
 +++ svx/inc/svx/framelink.hxx
-@@ -116,15 +116,16 @@ class SVX_DLLPUBLIC Style
+@@ -39,6 +39,8 @@
+ #include "svx/borderline.hxx"
+ #include <vcl/outdev.hxx>
+ 
++#include <drawinglayer/primitive2d/baseprimitive2d.hxx>
++
+ class OutputDevice;
+ 
+ namespace svx {
+@@ -116,15 +118,16 @@ class SVX_DLLPUBLIC Style
  {
  public:
      /** Constructs an invisible frame style. */
@@ -1350,7 +1359,7 @@ index 8309326..92ffc8d 100644
      /** Constructs a frame style from the passed SvxBorderLine struct. */
      inline explicit     Style( const SvxBorderLine& rBorder, double fScale = 1.0, sal_uInt16 nMaxWidth = SAL_MAX_UINT16 ) :
                              meRefMode( REFMODE_CENTERED ) { Set( rBorder, fScale, nMaxWidth ); }
-@@ -133,11 +134,14 @@ public:
+@@ -133,11 +136,14 @@ public:
                              meRefMode( REFMODE_CENTERED ) { Set( pBorder, fScale, nMaxWidth ); }
  
      inline RefMode      GetRefMode() const { return meRefMode; }
@@ -1367,7 +1376,7 @@ index 8309326..92ffc8d 100644
  
      /** Returns the total width of this frame style. */
      inline sal_uInt16   GetWidth() const { return mnPrim + mnDist + mnSecn; }
-@@ -148,7 +152,8 @@ public:
+@@ -148,7 +154,8 @@ public:
      /** Sets the frame style to the passed line widths. */
      void                Set( sal_uInt16 nP, sal_uInt16 nD, sal_uInt16 nS );
      /** Sets the frame style to the passed line widths. */
@@ -1377,7 +1386,7 @@ index 8309326..92ffc8d 100644
      /** Sets the frame style to the passed SvxBorderLine struct. */
      void                Set( const SvxBorderLine& rBorder, double fScale = 1.0, sal_uInt16 nMaxWidth = SAL_MAX_UINT16 );
      /** Sets the frame style to the passed SvxBorderLine struct. Clears the style, if pBorder is 0. */
-@@ -157,9 +162,11 @@ public:
+@@ -157,9 +164,11 @@ public:
      /** Sets a new reference point handling mode, does not modify other settings. */
      inline void         SetRefMode( RefMode eRefMode ) { meRefMode = eRefMode; }
      /** Sets a new color, does not modify other settings. */
@@ -1391,7 +1400,7 @@ index 8309326..92ffc8d 100644
  
      /** Scales the style by the specified scaling factor. Ensures that visible lines keep visible. */
      Style&              ScaleSelf( double fScale, sal_uInt16 nMaxWidth = SAL_MAX_UINT16 );
-@@ -172,12 +179,15 @@ public:
+@@ -172,12 +181,15 @@ public:
      Style               Mirror() const;
  
  private:
@@ -1409,6 +1418,29 @@ index 8309326..92ffc8d 100644
  };
  
  bool operator==( const Style& rL, const Style& rR );
+@@ -452,6 +464,22 @@ SVX_DLLPUBLIC bool CheckFrameBorderConnectable(
+ // Drawing functions
+ // ============================================================================
+ 
++SVX_DLLPUBLIC drawinglayer::primitive2d::Primitive2DSequence CreateBorderPrimitives(
++    const Point&        rLPos,          /// Reference point for left end of the processed frame border.
++    const Point&        rRPos,          /// Reference point for right end of the processed frame border.
++    const Style&        rBorder,        /// Style of the processed frame border.
++
++    const Style&        rLFromT,        /// Vertical frame border from top to left end of rBorder.
++    const Style&        rLFromL,        /// Horizontal frame border from left to left end of rBorder.
++    const Style&        rLFromB,        /// Vertical frame border from bottom to left end of rBorder.
++
++    const Style&        rRFromT,        /// Vertical frame border from top to right end of rBorder.
++    const Style&        rRFromR,        /// Horizontal frame border from right to right end of rBorder.
++    const Style&        rRFromB,        /// Vertical frame border from bottom to right end of rBorder.
++
++    const Color*        pForceColor = 0 /// If specified, overrides frame border color.
++);
++
+ /** Draws a horizontal frame border, regards all connected frame styles.
+ 
+     The frame style to draw is passed as parameter rBorder. The function
 diff --git svx/inc/svx/frmsel.hxx svx/inc/svx/frmsel.hxx
 index bed814d..0755332 100644
 --- svx/inc/svx/frmsel.hxx
@@ -1707,10 +1739,19 @@ index dbbb81b..6230cf5 100644
          DropDown = TRUE ;
          DDExtraWidth = TRUE ;
 diff --git svx/source/dialog/framelink.cxx svx/source/dialog/framelink.cxx
-index e504aa4..4791ba9 100644
+index e504aa4..e4359cf 100644
 --- svx/source/dialog/framelink.cxx
 +++ svx/source/dialog/framelink.cxx
-@@ -135,8 +135,9 @@ struct BorderEndResult
+@@ -57,6 +57,8 @@
+ #include <basegfx/polygon/b2dpolygontools.hxx>
+ #endif
+ 
++#include <drawinglayer/primitive2d/borderlineprimitive2d.hxx>
++
+ namespace svx {
+ namespace frame {
+ 
+@@ -135,8 +137,9 @@ struct BorderEndResult
  {
      LineEndResult       maPrim;     /// Result for primary line.
      LineEndResult       maSecn;     /// Result for secondary line.
@@ -1721,13 +1762,13 @@ index e504aa4..4791ba9 100644
  };
  
  /** Result struct used by the horizontal/vertical frame link functions.
-@@ -512,6 +513,23 @@ void lclLinkLeftEnd_Secn(
+@@ -512,6 +515,23 @@ void lclLinkLeftEnd_Secn(
      rResult.Swap();
  }
  
 +void lclLinkLeftEnd_Gap(
 +        LineEndResult& rResult, const Style& rBorder,
-+        const DiagStyle& rLFromTR, const Style& rLFromT, const Style& rLFromL, const Style& rLFromB, const DiagStyle& rLFromBR )
++        const DiagStyle& /*rLFromTR*/, const Style& rLFromT, const Style& rLFromL, const Style& rLFromB, const DiagStyle& /*rLFromBR*/ )
 +
 +{
 +    if ( rLFromT.Secn() )
@@ -1745,7 +1786,7 @@ index e504aa4..4791ba9 100644
  // ----------------------------------------------------------------------------
  // Linking of horizontal frame border ends.
  
-@@ -533,6 +551,7 @@ void lclLinkLeftEnd(
+@@ -533,6 +553,7 @@ void lclLinkLeftEnd(
          // current frame border is double
          lclLinkLeftEnd_Prim( rResult.maPrim, rBorder, rLFromTR, rLFromT, rLFromL, rLFromB, rLFromBR );
          lclLinkLeftEnd_Secn( rResult.maSecn, rBorder, rLFromTR, rLFromT, rLFromL, rLFromB, rLFromBR );
@@ -1753,7 +1794,7 @@ index e504aa4..4791ba9 100644
      }
      else if( rBorder.Prim() )
      {
-@@ -796,11 +815,11 @@ Polygon lclCreatePolygon( const Point& rP1, const Point& rP2, const Point& rP3,
+@@ -796,11 +817,11 @@ Polygon lclCreatePolygon( const Point& rP1, const Point& rP2, const Point& rP3,
      @param rStyle
          The border style that contains the line color to be set to the device.
   */
@@ -1768,7 +1809,7 @@ index e504aa4..4791ba9 100644
  }
  
  // ----------------------------------------------------------------------------
-@@ -851,13 +870,26 @@ void lclDrawHorFrameBorder(
+@@ -851,13 +872,26 @@ void lclDrawHorFrameBorder(
      DBG_ASSERT( rLPos.Y() == rRPos.Y(), "svx::frame::lclDrawHorFrameBorder - line not horizontal" );
      if( rLPos.X() <= rRPos.X() )
      {
@@ -1799,7 +1840,7 @@ index e504aa4..4791ba9 100644
      }
  }
  
-@@ -908,13 +940,25 @@ void lclDrawVerFrameBorder(
+@@ -908,13 +942,25 @@ void lclDrawVerFrameBorder(
      DBG_ASSERT( rTPos.X() == rBPos.X(), "svx::frame::lclDrawVerFrameBorder - line not vertical" );
      if( rTPos.Y() <= rBPos.Y() )
      {
@@ -1829,7 +1870,7 @@ index e504aa4..4791ba9 100644
      }
  }
  
-@@ -1089,11 +1133,22 @@ void lclDrawDiagFrameBorder(
+@@ -1089,11 +1135,22 @@ void lclDrawDiagFrameBorder(
      if( bClip )
          lclPushCrossingClipRegion( rDev, rRect, bTLBR, rCrossStyle );
  
@@ -1856,7 +1897,7 @@ index e504aa4..4791ba9 100644
  
      if( bClip )
          rDev.Pop(); // clipping region
-@@ -1146,7 +1201,7 @@ void lclDrawDiagFrameBorders(
+@@ -1146,7 +1203,7 @@ void lclDrawDiagFrameBorders(
  
  void Style::Clear()
  {
@@ -1865,7 +1906,7 @@ index e504aa4..4791ba9 100644
  }
  
  void Style::Set( sal_uInt16 nP, sal_uInt16 nD, sal_uInt16 nS )
-@@ -1163,29 +1218,34 @@ void Style::Set( sal_uInt16 nP, sal_uInt16 nD, sal_uInt16 nS )
+@@ -1163,29 +1220,34 @@ void Style::Set( sal_uInt16 nP, sal_uInt16 nD, sal_uInt16 nS )
      mnSecn = (nP && nD) ? nS : 0;
  }
  
@@ -1905,7 +1946,7 @@ index e504aa4..4791ba9 100644
          // Enlarge the style if distance is too small due to rounding losses.
          sal_uInt16 nPixWidth = SCALEVALUE( nPrim + nDist + nSecn );
          if( nPixWidth > GetWidth() )
-@@ -1225,7 +1285,7 @@ void Style::Set( const SvxBorderLine* pBorder, double fScale, sal_uInt16 nMaxWid
+@@ -1225,7 +1287,7 @@ void Style::Set( const SvxBorderLine* pBorder, double fScale, sal_uInt16 nMaxWid
      else
      {
          Clear();
@@ -1914,7 +1955,7 @@ index e504aa4..4791ba9 100644
      }
  }
  
-@@ -1257,8 +1317,9 @@ Style Style::Mirror() const
+@@ -1257,8 +1319,9 @@ Style Style::Mirror() const
  bool operator==( const Style& rL, const Style& rR )
  {
      return (rL.Prim() == rR.Prim()) && (rL.Dist() == rR.Dist()) && (rL.Secn() == rR.Secn()) &&
@@ -1926,7 +1967,7 @@ index e504aa4..4791ba9 100644
  }
  
  bool operator<( const Style& rL, const Style& rR )
-@@ -1275,7 +1336,7 @@ bool operator<( const Style& rL, const Style& rR )
+@@ -1275,7 +1338,7 @@ bool operator<( const Style& rL, const Style& rR )
      if( (rL.Secn() && rR.Secn()) && (rL.Dist() != rR.Dist()) ) return rL.Dist() > rR.Dist();
  
      // both lines single and 1 unit thick, only one is dotted -> rL<rR, if rL is dotted
@@ -1935,7 +1976,76 @@ index e504aa4..4791ba9 100644
  
      // seem to be equal
      return false;
-@@ -1440,13 +1501,25 @@ void DrawVerFrameBorderSlanted( OutputDevice& rDev,
+@@ -1343,6 +1406,68 @@ bool CheckFrameBorderConnectable( const Style& rLBorder, const Style& rRBorder,
+ // Drawing functions
+ // ============================================================================
+ 
++double lcl_GetExtent( const Style& rSide, const Style& rOpposite )
++{
++    double nExtent = 0.0;
++
++    if ( rSide.Prim() + rSide.Secn() > 0 )
++        nExtent = - rSide.GetWidth( ) / 2.0;
++    else
++        nExtent = rOpposite.GetWidth() / 2.0;
++
++    return nExtent;
++}
++
++drawinglayer::primitive2d::Primitive2DSequence CreateBorderPrimitives(
++        const Point& rLPos, const Point& rRPos, const Style& rBorder,
++        const Style& rLFromT, const Style& rLFromL, const Style& rLFromB,
++        const Style& rRFromT, const Style& rRFromR, const Style& rRFromB,
++        const Color* pForceColor )
++{
++    const DiagStyle aNoStyle;
++    drawinglayer::primitive2d::Primitive2DSequence aSequence( 1 );
++    
++    basegfx::B2DPoint aStart( rLPos.getX(), rLPos.getY() );
++    basegfx::B2DPoint aEnd( rRPos.getX(), rRPos.getY() );
++
++    // Compute the offset for the start and end points
++    basegfx::B2DVector aVector( aStart - aEnd );
++    aVector.normalize();
++    double nOffStart = rBorder.GetWidth() / 2.0;
++    double nOffEnd = rBorder.GetWidth() / 2.0;
++    if ( aVector.getY( ) == 1.0 && aVector.getX() == 0.0 )
++    {
++        // Deal with vertical lines
++        sal_uInt16 nWS1 = ( rLFromT.GetWidth() == 0 ) ? -1 : rLFromT.GetWidth( );
++        sal_uInt16 nWS2 = ( rLFromB.GetWidth() == 0 ) ? -1 : rLFromB.GetWidth( );
++        nOffStart = std::min( nWS1, nWS2 ) / 2.0;
++        
++        sal_uInt16 nWE1 = ( rRFromT.GetWidth() == 0 ) ? -1 : rRFromT.GetWidth( );
++        sal_uInt16 nWE2 = ( rRFromB.GetWidth() == 0 ) ? -1 : rRFromB.GetWidth( );
++        nOffEnd = std::min( nWE1, nWE2 ) / 2.0;
++    }
++
++    basegfx::B2DVector aOffsetV( 0.0, 1.0 );
++    aStart = aStart + aOffsetV * nOffStart;
++    aEnd = aEnd + aOffsetV * nOffEnd;
++
++    aSequence[0] = new drawinglayer::primitive2d::BorderLinePrimitive2D(
++        aStart, aEnd, 
++        rBorder.Prim() + 1,
++        rBorder.Dist() + 1,
++        rBorder.Secn() + 1,
++        lcl_GetExtent( rLFromT, rLFromB ),
++        lcl_GetExtent( rRFromT, rRFromB ),
++        lcl_GetExtent( rLFromB, rLFromT ),
++        lcl_GetExtent( rRFromB, rRFromT ),
++        rBorder.GetColorSecn().getBColor(),
++        rBorder.GetColorPrim().getBColor(), 
++        rBorder.GetColorGap().getBColor(),
++        rBorder.UseGapColor(), rBorder.Type() );
++
++    return aSequence;
++}
++
+ void DrawHorFrameBorder( OutputDevice& rDev,
+         const Point& rLPos, const Point& rRPos, const Style& rBorder,
+         const DiagStyle& rLFromTR, const Style& rLFromT, const Style& rLFromL, const Style& rLFromB, const DiagStyle& rLFromBR,
+@@ -1440,13 +1565,25 @@ void DrawVerFrameBorderSlanted( OutputDevice& rDev,
              Style aScaled( rBorder );
              aScaled.ScaleSelf( 1.0 / cos( GetVerDiagAngle( rTPos, rBPos ) ) );
  
@@ -2662,7 +2772,7 @@ index 489cff0..be1731c 100644
      void Retouche( const SwPageFrm *pPage, const SwRect &rRect ) const;
  
 diff --git sw/source/core/layout/paintfrm.cxx sw/source/core/layout/paintfrm.cxx
-index 77f5b0f..3439187 100644
+index 77f5b0f..48caf2b 100644
 --- sw/source/core/layout/paintfrm.cxx
 +++ sw/source/core/layout/paintfrm.cxx
 @@ -124,6 +124,13 @@
@@ -2730,7 +2840,54 @@ index 77f5b0f..3439187 100644
                  }
                  else
                      pTmpColor = pHCColor;
-@@ -3649,12 +3658,6 @@ void SwFlyFrm::Paint( const SwRect& rRect ) const
+@@ -2458,11 +2467,9 @@ void SwTabFrmPainter::PaintLines( OutputDevice& rDev, const SwRect& rRect ) cons
+                 // Here comes the painting stuff: Thank you, DR, great job!!!
+                 if ( bHori )
+                 {
+-                    svx::frame::DrawHorFrameBorder
+-                    (
+-                        rDev,
+-                        aPaintStart,
+-                        aPaintEnd,
++                    mrTabFrm.ProcessPrimitives( svx::frame::CreateBorderPrimitives( 
++                        aPaintStart, 
++                        aPaintEnd, 
+                         aStyles[ 0 ],   // current style
+                         aStyles[ 1 ],   // aLFromT
+                         aStyles[ 2 ],   // aLFromL
+@@ -2471,23 +2478,23 @@ void SwTabFrmPainter::PaintLines( OutputDevice& rDev, const SwRect& rRect ) cons
+                         aStyles[ 5 ],   // aRFromR
+                         aStyles[ 6 ],   // aRFromB
+                         pTmpColor
++                        )
+                     );
+                 }
+                 else
+                 {
+-                    svx::frame::DrawVerFrameBorder
+-                    (
+-                        rDev,
+-                        aPaintStart,
+-                        aPaintEnd,
++                    mrTabFrm.ProcessPrimitives( svx::frame::CreateBorderPrimitives( 
++                        aPaintEnd, 
++                        aPaintStart, 
+                         aStyles[ 0 ],   // current style
+-                        aStyles[ 1 ],   // aTFromL
+-                        aStyles[ 2 ],   // aTFromT
+-                        aStyles[ 3 ],   // aTFromR
+                         aStyles[ 4 ],   // aBFromL
+                         aStyles[ 5 ],   // aBFromB
+                         aStyles[ 6 ],   // aBFromR
++                        aStyles[ 1 ],   // aTFromL
++                        aStyles[ 2 ],   // aTFromT
++                        aStyles[ 3 ],   // aTFromR
+                         pTmpColor
++                        )
+                     );
+                 }
+             }
+@@ -3649,12 +3656,6 @@ void SwFlyFrm::Paint( const SwRect& rRect ) const
              SwBorderAttrAccess aAccess( SwFrm::GetCache(), (SwFrm*)this );
              const SwBorderAttrs &rAttrs = *aAccess.Get();
  
@@ -2743,7 +2900,7 @@ index 77f5b0f..3439187 100644
  
              // paint background
              {
-@@ -3695,6 +3698,13 @@ void SwFlyFrm::Paint( const SwRect& rRect ) const
+@@ -3695,6 +3696,13 @@ void SwFlyFrm::Paint( const SwRect& rRect ) const
                      for ( USHORT i = 0; i < aRegion.Count(); ++i )
                          PaintBackground( aRegion[i], pPage, rAttrs, FALSE, TRUE );
              }
@@ -2757,13 +2914,18 @@ index 77f5b0f..3439187 100644
  
              pOut->Pop();
          }
-@@ -4218,6 +4228,23 @@ void MA_FASTCALL lcl_SubLeftRight( SwRect&           rRect,
+@@ -4218,6 +4226,28 @@ void MA_FASTCALL lcl_SubLeftRight( SwRect&           rRect,
      }
  }
  
 +sal_uInt16 lcl_GetLineWidth( const SvxBorderLine* pLine )
 +{
-+    return pLine->GetInWidth() + pLine->GetOutWidth() + pLine->GetDistance();
++    sal_uInt16 result = 0;
++
++    if ( pLine != NULL )
++        result = pLine->GetInWidth() + pLine->GetOutWidth() + pLine->GetDistance();
++
++    return result;
 +}
 +
 +double lcl_GetExtent( const SvxBorderLine* pSideLine, const SvxBorderLine* pOppositeLine )
@@ -2781,7 +2943,7 @@ index 77f5b0f..3439187 100644
  // OD 19.05.2003 #109667# - merge <lcl_PaintLeftLine> and <lcl_PaintRightLine>
  // into new method <lcl_PaintLeftRightLine(..)>
  void lcl_PaintLeftRightLine( const sal_Bool         _bLeft,
-@@ -4231,6 +4258,8 @@ void lcl_PaintLeftRightLine( const sal_Bool         _bLeft,
+@@ -4231,6 +4261,8 @@ void lcl_PaintLeftRightLine( const sal_Bool         _bLeft,
      const SvxBoxItem& rBox = _rAttrs.GetBox();
      const sal_Bool bR2L = _rFrm.IsCellFrm() && _rFrm.IsRightToLeft();
      const SvxBorderLine* pLeftRightBorder = 0;
@@ -2790,7 +2952,7 @@ index 77f5b0f..3439187 100644
      if ( _bLeft )
      {
          pLeftRightBorder = bR2L ? rBox.GetRight() : rBox.GetLeft();
-@@ -4251,12 +4280,12 @@ void lcl_PaintLeftRightLine( const sal_Bool         _bLeft,
+@@ -4251,12 +4283,12 @@ void lcl_PaintLeftRightLine( const sal_Bool         _bLeft,
      SwRect aRect( _rOutRect );
      if ( _bLeft )
      {
@@ -2805,7 +2967,7 @@ index 77f5b0f..3439187 100644
                                        (aRect.*_rRectFn->fnGetWidth)() );
      }
  
-@@ -4340,71 +4369,40 @@ void lcl_PaintLeftRightLine( const sal_Bool         _bLeft,
+@@ -4340,71 +4372,40 @@ void lcl_PaintLeftRightLine( const sal_Bool         _bLeft,
          ::lcl_SubTopBottom( aRect, rBox, _rAttrs, _rFrm, _rRectFn, bPrtOutputDev );
      }
  
@@ -2847,13 +3009,13 @@ index 77f5b0f..3439187 100644
 -        const long nDist = ::lcl_MinWidthDist( pLeftRightBorder->GetDistance() );
 -        long nWidth = ::lcl_AlignWidth( pLeftRightBorder->GetInWidth() );
 -        if ( _bLeft )
--        {
++        if ( !_bLeft )
+         {
 -            (aRect.*_rRectFn->fnAddRight)( nDist + nWidth );
 -            (aRect.*_rRectFn->fnSubLeft)( nWidth - (aRect.*_rRectFn->fnGetWidth)() );
 -        }
 -        else
-+        if ( !_bLeft )
-         {
+-        {
 -            (aRect.*_rRectFn->fnSubLeft)( nDist + nWidth );
 -            (aRect.*_rRectFn->fnAddRight)( nWidth - (aRect.*_rRectFn->fnGetWidth)() );
 -        }
@@ -2907,7 +3069,7 @@ index 77f5b0f..3439187 100644
      }
  }
  
-@@ -4420,6 +4418,8 @@ void lcl_PaintTopBottomLine( const sal_Bool         _bTop,
+@@ -4420,6 +4421,8 @@ void lcl_PaintTopBottomLine( const sal_Bool         _bTop,
  {
      const SvxBoxItem& rBox = _rAttrs.GetBox();
      const SvxBorderLine* pTopBottomBorder = 0;
@@ -2916,7 +3078,7 @@ index 77f5b0f..3439187 100644
      if ( _bTop )
      {
          pTopBottomBorder = rBox.GetTop();
-@@ -4437,79 +4437,49 @@ void lcl_PaintTopBottomLine( const sal_Bool         _bTop,
+@@ -4437,79 +4440,49 @@ void lcl_PaintTopBottomLine( const sal_Bool         _bTop,
      SwRect aRect( _rOutRect );
      if ( _bTop )
      {
@@ -2970,13 +3132,13 @@ index 77f5b0f..3439187 100644
 -        const long nDist = ::lcl_MinHeightDist( pTopBottomBorder->GetDistance() );
 -        const long nHeight = ::lcl_AlignHeight( pTopBottomBorder->GetInWidth() );
 -        if ( _bTop )
-+        if ( !_bTop )
-         {
+-        {
 -            (aRect.*_rRectFn->fnAddBottom)( nDist + nHeight );
 -            (aRect.*_rRectFn->fnSubTop)( nHeight - (aRect.*_rRectFn->fnGetHeight)() );
 -        }
 -        else
--        {
++        if ( !_bTop )
+         {
 -            (aRect.*_rRectFn->fnSubTop)( nDist + nHeight );
 -            (aRect.*_rRectFn->fnAddBottom)( nHeight -(aRect.*_rRectFn->fnGetHeight)() );
 -        }
@@ -3029,7 +3191,7 @@ index 77f5b0f..3439187 100644
      }
  }
  
-@@ -4714,6 +4684,31 @@ const SwFrm* lcl_GetCellFrmForBorderAttrs( const SwFrm*         _pCellFrm,
+@@ -4714,6 +4687,31 @@ const SwFrm* lcl_GetCellFrmForBorderAttrs( const SwFrm*         _pCellFrm,
      return pRet;
  }
  
@@ -3061,7 +3223,7 @@ index 77f5b0f..3439187 100644
  void SwFrm::PaintBorder( const SwRect& rRect, const SwPageFrm *pPage,
                           const SwBorderAttrs &rAttrs ) const
  {
-@@ -4813,6 +4808,7 @@ void SwFrm::PaintBorder( const SwRect& rRect, const SwPageFrm *pPage,
+@@ -4813,6 +4811,7 @@ void SwFrm::PaintBorder( const SwRect& rRect, const SwPageFrm *pPage,
              // OD 19.05.2003 #109667# - use new method <lcl_PaintLeftRightLine(..)>
              //::lcl_PaintLeftLine  ( this, pPage, aRect, rRect, rAttrs, fnRect );
              //::lcl_PaintRightLine ( this, pPage, aRect, rRect, rAttrs, fnRect );
@@ -3069,7 +3231,7 @@ index 77f5b0f..3439187 100644
              ::lcl_PaintLeftRightLine ( sal_True, *(this), *(pPage), aRect, rRect, rAttrs, fnRect );
              ::lcl_PaintLeftRightLine ( sal_False, *(this), *(pPage), aRect, rRect, rAttrs, fnRect );
              if ( !IsCntntFrm() || rAttrs.GetTopLine( *(this) ) )
-@@ -5690,6 +5686,12 @@ void SwFrm::PaintBaBo( const SwRect& rRect, const SwPageFrm *pPage,
+@@ -5690,6 +5689,12 @@ void SwFrm::PaintBaBo( const SwRect& rRect, const SwPageFrm *pPage,
          static_cast<const SwPageFrm*>(this)->PaintMarginArea( rRect, pGlobalShell );
      }
  
@@ -3082,7 +3244,7 @@ index 77f5b0f..3439187 100644
      // OD 06.08.2002 #99657# - paint border before painting background
      // paint grid for page frame and paint border
      {
-@@ -5699,11 +5701,6 @@ void SwFrm::PaintBaBo( const SwRect& rRect, const SwPageFrm *pPage,
+@@ -5699,11 +5704,6 @@ void SwFrm::PaintBaBo( const SwRect& rRect, const SwPageFrm *pPage,
          PaintBorder( aRect, pPage, rAttrs );
      }
  
