@@ -74,11 +74,11 @@ index e0a5566..214ba1b 100644
      LinkTarget.idl\
      LinkTargets.idl\
      LockFileIgnoreRequest.idl\
-diff --git offapi/com/sun/star/sheet/XSheetCodeName.idl offapi/com/sun/star/sheet/XSheetCodeName.idl
+diff --git offapi/com/sun/star/sheet/XCodeName.idl offapi/com/sun/star/sheet/XCodeName.idl
 new file mode 100644
-index 0000000..aee34d5
+index 0000000..249b97b
 --- /dev/null
-+++ offapi/com/sun/star/sheet/XSheetCodeName.idl
++++ offapi/com/sun/star/sheet/XCodeName.idl
 @@ -0,0 +1,63 @@
 +/*************************************************************************
 + *
@@ -110,8 +110,8 @@ index 0000000..aee34d5
 + *
 + ************************************************************************/
 +
-+#ifndef __com_sun_star_sheet_XSheetCodeName_idl__
-+#define __com_sun_star_sheet_XSheetCodeName_idl__
++#ifndef __com_sun_star_sheet_XCodeName_idl__
++#define __com_sun_star_sheet_XCodeName_idl__
 +
 +#ifndef __com_sun_star_uno_XInterface_idl__
 +#include <com/sun/star/uno/XInterface.idl>
@@ -129,7 +129,7 @@ index 0000000..aee34d5
 +
 +/** provides a method to set the code name of a sheet
 + */
-+interface XSheetCodeName: com::sun::star::uno::XInterface
++interface XCodeName: com::sun::star::uno::XInterface
 +{
 +    //-------------------------------------------------------------------------
 +
@@ -144,14 +144,14 @@ index 0000000..aee34d5
 +#endif
 +
 diff --git offapi/com/sun/star/sheet/makefile.mk offapi/com/sun/star/sheet/makefile.mk
-index 6d245e7..e948c03 100644
+index 6d245e7..c2cbed0 100644
 --- offapi/com/sun/star/sheet/makefile.mk
 +++ offapi/com/sun/star/sheet/makefile.mk
 @@ -344,6 +344,7 @@ IDLFILES=\
      XViewPanesSupplier.idl\
      XViewSplitable.idl\
      XVolatileResult.idl\
-+    XSheetCodeName.idl\
++    XCodeName.idl\
      _NamedRange.idl
  
  # ------------------------------------------------------------------
@@ -175,20 +175,21 @@ index 7aaad16..c822f34 100644
  
      // document model ---------------------------------------------------------
  
-diff --git oox/source/xls/excelfilter.cxx oox/source/xls/excelfilter.cxx
-index 61bdef3..ddb2db8 100644
---- oox/source/xls/excelfilter.cxx
-+++ oox/source/xls/excelfilter.cxx
-@@ -133,6 +133,7 @@ bool ExcelFilter::importDocument() throw()
-         {
-             setWorkbookHelper( aHelper );   // needed for callbacks
-             bRet = importFragment( new OoxWorkbookFragment( aHelper, aWorkbookPath ) );
-+
-             clearWorkbookHelper();
-         }
-     }
+diff --git oox/inc/oox/xls/worksheetsettings.hxx oox/inc/oox/xls/worksheetsettings.hxx
+index 717ea9d..03ccd0a 100644
+--- oox/inc/oox/xls/worksheetsettings.hxx
++++ oox/inc/oox/xls/worksheetsettings.hxx
+@@ -129,6 +129,8 @@ public:
+     /** Converts the imported worksheet settings. */
+     void                finalizeImport();
+ 
++    /** Applies the codeName. */
++    void                applyImportedCodeName();
+ private:
+     PhoneticSettings    maPhoneticSett;
+     SheetSettingsModel  maSheetSettings;
 diff --git oox/source/xls/workbookfragment.cxx oox/source/xls/workbookfragment.cxx
-index a372ef7..41500c8 100644
+index a372ef7..aae3834 100644
 --- oox/source/xls/workbookfragment.cxx
 +++ oox/source/xls/workbookfragment.cxx
 @@ -56,6 +56,7 @@ using ::com::sun::star::uno::Reference;
@@ -199,10 +200,11 @@ index a372ef7..41500c8 100644
  using ::com::sun::star::table::CellAddress;
  using ::oox::core::ContextHandlerRef;
  using ::oox::core::FragmentHandlerRef;
-@@ -294,6 +295,14 @@ void OoxWorkbookFragment::finalizeImport()
-         aIt->clear();
-     }
+@@ -296,6 +297,14 @@ void OoxWorkbookFragment::finalizeImport()
  
+     // final conversions, e.g. calculation settings and view settings
+     finalizeWorkbookImport();
++
 +    OUString aProjectFragmentPath = getFragmentPathFromFirstType( CREATE_MSOFFICE_RELATIONSTYPE( "vbaProject" ) );
 +    if ( aProjectFragmentPath.getLength() > 0 )
 +    {
@@ -210,10 +212,9 @@ index a372ef7..41500c8 100644
 +            Reference< XInputStream > xInStrm = getFilter().openInputStream( aProjectFragmentPath );
 +            importVBA( xInStrm );
 +    }
-+
-     // final conversions, e.g. calculation settings and view settings
-     finalizeWorkbookImport();
  }
+ 
+ // private --------------------------------------------------------------------
 diff --git oox/source/xls/workbookhelper.cxx oox/source/xls/workbookhelper.cxx
 index 1d4641d..88e82c8 100644
 --- oox/source/xls/workbookhelper.cxx
@@ -260,28 +261,57 @@ index 1d4641d..88e82c8 100644
  // document model -------------------------------------------------------------
  
  Reference< XSpreadsheetDocument > WorkbookHelper::getDocument() const
+diff --git oox/source/xls/workbooksettings.cxx oox/source/xls/workbooksettings.cxx
+index 3473dbc..c02afd0 100644
+--- oox/source/xls/workbooksettings.cxx
++++ oox/source/xls/workbooksettings.cxx
+@@ -43,6 +43,7 @@
+ 
+ using ::rtl::OUString;
+ using ::com::sun::star::uno::Reference;
++using ::com::sun::star::uno::makeAny;
+ using ::com::sun::star::uno::UNO_QUERY;
+ using ::com::sun::star::util::Date;
+ using ::com::sun::star::util::XNumberFormatsSupplier;
+@@ -288,8 +289,14 @@ void WorkbookSettings::finalizeImport()
+     {
+         case FILTER_OOX:
+         case FILTER_BIFF:
++        {
+             aPropSet.setProperty( PROP_IgnoreCase,          true );     // always in Excel
+             aPropSet.setProperty( PROP_RegularExpressions,  false );    // not supported in Excel
++            rtl::OUString sCodeName = maBookSettings.maCodeName.getLength() ?  maBookSettings.maCodeName : CREATE_OUSTRING("ThisWorkbook");
++                                            
++            if ( aPropSet.getXPropertySet().is() )
++                aPropSet.getXPropertySet()->setPropertyValue( CREATE_OUSTRING("CodeName"),  makeAny( sCodeName ));
++        }
+         break;
+         case FILTER_UNKNOWN:
+         break;
 diff --git oox/source/xls/worksheethelper.cxx oox/source/xls/worksheethelper.cxx
-index ab2d5c1..4fa069b 100644
+index ab2d5c1..909b8da 100644
 --- oox/source/xls/worksheethelper.cxx
 +++ oox/source/xls/worksheethelper.cxx
-@@ -1007,6 +1007,8 @@ void WorksheetData::finalizeWorksheetImport()
+@@ -1007,6 +1007,10 @@ void WorksheetData::finalizeWorksheetImport()
      finalizeDrawing();
      finalizeVmlDrawing();
      maComments.finalizeImport();    // after VML drawing
-+   
-+    getWorksheetSettings().finalizeImport(); 
++  
++    // Really I think we should be calling  getWorksheetSettings::finalizeImport
++    // but as this is a late patch, I don't want to risk that
++    getWorksheetSettings().applyImportedCodeName(); 
      lclUpdateProgressBar( mxFinalProgress, 1.0 );
  
      // reset current sheet index in global data
 diff --git oox/source/xls/worksheetsettings.cxx oox/source/xls/worksheetsettings.cxx
-index c05e471..c485a45 100644
+index c05e471..9eaf195 100644
 --- oox/source/xls/worksheetsettings.cxx
 +++ oox/source/xls/worksheetsettings.cxx
 @@ -30,6 +30,8 @@
  
  #include "oox/xls/worksheetsettings.hxx"
  #include <com/sun/star/util/XProtectable.hpp>
-+#include <com/sun/star/sheet/XSheetCodeName.hpp>
++#include <com/sun/star/sheet/XCodeName.hpp>
 +
  #include "oox/helper/attributelist.hxx"
  #include "oox/helper/recordinputstream.hxx"
@@ -290,34 +320,42 @@ index c05e471..c485a45 100644
  using ::com::sun::star::uno::Reference;
  using ::com::sun::star::uno::UNO_QUERY_THROW;
  using ::com::sun::star::util::XProtectable;
-+using ::com::sun::star::sheet::XSheetCodeName;
++using ::com::sun::star::sheet::XCodeName;
  using ::oox::core::CodecHelper;
  
  namespace oox {
-@@ -311,6 +314,14 @@ void WorksheetSettings::finalizeImport()
-     catch( Exception& )
-     {
+@@ -313,6 +316,22 @@ void WorksheetSettings::finalizeImport()
      }
+ }
+ 
++// for some reason currently finalizeImport is not called by WorksheetDataImport
++// as this patch is a late commit I don' want to risk changing the import too  
++// much ( so really this method should be called by 
++// WorsheetSettings::finalizeImport() which in turn should be called by 
++// WorksheetDataImport::finalizeWorksheetImport() )
++void WorksheetSettings::applyImportedCodeName()
++{
 +    try 
 +    {
-+        Reference< XSheetCodeName > xCodeNameSetter( getSheet(), UNO_QUERY_THROW );
++        Reference< XCodeName > xCodeNameSetter( getSheet(), UNO_QUERY_THROW );
 +        xCodeNameSetter->setCodeName( maSheetSettings.maCodeName );
 +    }
 +    catch( Exception& )
 +    {
 +    }
- }
- 
++}
  // ============================================================================
+ 
+ } // namespace xls
 diff --git sc/inc/cellsuno.hxx sc/inc/cellsuno.hxx
-index 08962c4..6c15992 100644
+index 08962c4..82b1e5c 100644
 --- sc/inc/cellsuno.hxx
 +++ sc/inc/cellsuno.hxx
 @@ -54,6 +54,7 @@
  #include <com/sun/star/sheet/XSpreadsheet.hpp>
  #include <com/sun/star/sheet/XSheetPageBreak.hpp>
  #include <com/sun/star/sheet/XCellRangeMovement.hpp>
-+#include <com/sun/star/sheet/XSheetCodeName.hpp>
++#include <com/sun/star/sheet/XCodeName.hpp>
  #include <com/sun/star/text/XText.hpp>
  #include <com/sun/star/sheet/XPrintAreas.hpp>
  #include <com/sun/star/sheet/XSheetLinkable.hpp>
@@ -327,7 +365,7 @@ index 08962c4..6c15992 100644
                          public com::sun::star::sheet::XScenarioEnhanced,
 -                        public com::sun::star::sheet::XExternalSheetName
 +                        public com::sun::star::sheet::XExternalSheetName,
-+                        public com::sun::star::sheet::XSheetCodeName
++                        public com::sun::star::sheet::XCodeName
  {
      friend class ScTableSheetsObj;		// fuer insertByName()
  
@@ -335,7 +373,7 @@ index 08962c4..6c15992 100644
                                  throw(::com::sun::star::uno::RuntimeException);
      virtual ::com::sun::star::uno::Sequence< sal_Int8 > SAL_CALL getImplementationId()
                                  throw(::com::sun::star::uno::RuntimeException);
-+    // XSheetCodeName
++    // XCodeName
 +    virtual void SAL_CALL setCodeName( const ::rtl::OUString& aSheetName ) throw (::com::sun::star::uno::RuntimeException);
 +    virtual ::rtl::OUString SAL_CALL getCodeName(  ) throw (::com::sun::star::uno::RuntimeException);
 +
@@ -343,10 +381,10 @@ index 08962c4..6c15992 100644
  
  
 diff --git sc/inc/document.hxx sc/inc/document.hxx
-index e6b98c0..c39a605 100644
+index 7f94337..4a8c368 100644
 --- sc/inc/document.hxx
 +++ sc/inc/document.hxx
-@@ -1783,7 +1783,7 @@ public:
+@@ -1789,7 +1789,7 @@ public:
      void GetSortParam( ScSortParam& rParam, SCTAB nTab );
      void SetSortParam( ScSortParam& rParam, SCTAB nTab );
  
@@ -369,8 +407,20 @@ index bf0515d..9c07719 100644
  #define SC_SERVICE_INVALID		USHRT_MAX
  
  
+diff --git sc/inc/unonames.hxx sc/inc/unonames.hxx
+index 9ecc0b2..591887f 100644
+--- sc/inc/unonames.hxx
++++ sc/inc/unonames.hxx
+@@ -492,6 +492,7 @@
+ #define SC_UNO_ISEXECUTELINKENABLED     "IsExecuteLinkEnabled"
+ #define SC_UNO_ISCHANGEREADONLYENABLED  "IsChangeReadOnlyEnabled"
+ #define SC_UNO_REFERENCEDEVICE          "ReferenceDevice"
++#define SC_UNO_CODENAME                 "CodeName"
+ 
+ //	document properties from FormModel
+ #define SC_UNO_APPLYFMDES			"ApplyFormDesignMode"
 diff --git sc/source/core/data/document.cxx sc/source/core/data/document.cxx
-index 1c38e57..bb655e1 100644
+index 4ea49f9..096d5b1 100644
 --- sc/source/core/data/document.cxx
 +++ sc/source/core/data/document.cxx
 @@ -166,6 +166,17 @@ BOOL ScDocument::SetCodeName( SCTAB nTab, String& rName )
@@ -416,14 +466,14 @@ index 5c629fd..0d5bea0 100644
          }
      }
 diff --git sc/source/ui/unoobj/cellsuno.cxx sc/source/ui/unoobj/cellsuno.cxx
-index 1b1c8a0..1ea5bf2 100644
+index 1b1c8a0..75b0f36 100644
 --- sc/source/ui/unoobj/cellsuno.cxx
 +++ sc/source/ui/unoobj/cellsuno.cxx
 @@ -6863,6 +6863,7 @@ uno::Any SAL_CALL ScTableSheetObj::queryInterface( const uno::Type& rType ) thro
      SC_QUERYINTERFACE( sheet::XScenarioEnhanced )
      SC_QUERYINTERFACE( sheet::XSheetLinkable )
      SC_QUERYINTERFACE( sheet::XExternalSheetName )
-+    SC_QUERYINTERFACE( sheet::XSheetCodeName )
++    SC_QUERYINTERFACE( sheet::XCodeName )
  
      return ScCellRangeObj::queryInterface( rType );
  }
@@ -461,8 +511,46 @@ index 1b1c8a0..1ea5bf2 100644
  ScTableColumnObj::ScTableColumnObj( ScDocShell* pDocSh, SCCOL nCol, SCTAB nTab ) :
      ScCellRangeObj( pDocSh, ScRange(nCol,0,nTab, nCol,MAXROW,nTab) ),
      pColPropSet(lcl_GetColumnPropertySet())
+diff --git sc/source/ui/unoobj/docuno.cxx sc/source/ui/unoobj/docuno.cxx
+index bd7a775..49a8cd8 100644
+--- sc/source/ui/unoobj/docuno.cxx
++++ sc/source/ui/unoobj/docuno.cxx
+@@ -158,6 +158,7 @@ const SfxItemPropertyMapEntry* lcl_GetDocOptPropertyMap()
+         {MAP_CHAR_LEN(SC_UNO_ISCHANGEREADONLYENABLED), 0, &getBooleanCppuType(),                              0, 0},
+         {MAP_CHAR_LEN(SC_UNO_REFERENCEDEVICE),   0, &getCppuType((uno::Reference<awt::XDevice>*)0),           beans::PropertyAttribute::READONLY, 0},
+         {MAP_CHAR_LEN("BuildId"),                0, &::getCppuType(static_cast< const rtl::OUString * >(0)), 0, 0},
++        {MAP_CHAR_LEN(SC_UNO_CODENAME),        0, &getCppuType(static_cast< const rtl::OUString * >(0)),    0, 0},
+ 
+         {0,0,0,0,0,0}
+     };
+@@ -1382,6 +1383,12 @@ void SAL_CALL ScModelObj::setPropertyValue(
+                 pDoc->SetLanguage( eLatin, eCjk, eCtl );
+             }
+         }
++        else if ( aString.EqualsAscii( SC_UNO_CODENAME ) )
++        {
++            rtl::OUString sCodeName;
++            if ( aValue >>= sCodeName )
++                pDoc->SetCodeName( sCodeName );
++        } 
+         else if ( aString.EqualsAscii( SC_UNO_CJK_CLOCAL ) )
+         {
+             lang::Locale aLocale;
+@@ -1514,6 +1521,12 @@ uno::Any SAL_CALL ScModelObj::getPropertyValue( const rtl::OUString& aPropertyNa
+             ScUnoConversion::FillLocale( aLocale, eLatin );
+             aRet <<= aLocale;
+         }
++        else if ( aString.EqualsAscii( SC_UNO_CODENAME ) )
++        {
++            rtl::OUString sCodeName = pDoc->GetCodeName();
++            aRet <<= sCodeName;
++        } 
++
+         else if ( aString.EqualsAscii( SC_UNO_CJK_CLOCAL ) )
+         {
+             LanguageType eLatin, eCjk, eCtl;
 diff --git sc/source/ui/unoobj/servuno.cxx sc/source/ui/unoobj/servuno.cxx
-index d4c5cd4..9db5fe6 100644
+index d4c5cd4..ae68f79 100644
 --- sc/source/ui/unoobj/servuno.cxx
 +++ sc/source/ui/unoobj/servuno.cxx
 @@ -39,6 +39,8 @@
@@ -520,7 +608,7 @@ index d4c5cd4..9db5fe6 100644
 +                        pAppMgr->SetGlobalUNOConstant( "ThisExcelDoc", aArgs[ 0 ] );
 +                }
 +                // need to set the load as comment etc. from options
-+                aBasicImport.Import( String(), String::CreateFromAscii("VBA"), FALSE, bAsComment );
++                aBasicImport.Import( String(), String::CreateFromAscii("VBA"), bAsComment, TRUE );
 +                if ( !bAsComment )
 +                {
 +                    // enable VBA events ( now that code is imported )
@@ -633,10 +721,10 @@ index 5c281b7..7948129 100644
          return false;
  
 diff --git sw/source/filter/ww8/ww8par.cxx sw/source/filter/ww8/ww8par.cxx
-index a46a293..15a0c6d 100644
+index 09a35ae..6d62fef 100644
 --- sw/source/filter/ww8/ww8par.cxx
 +++ sw/source/filter/ww8/ww8par.cxx
-@@ -4310,6 +4310,13 @@ ULONG SwWW8ImplReader::CoreLoad(WW8Glossary *pGloss, const SwPosition &rPos)
+@@ -4314,6 +4314,13 @@ ULONG SwWW8ImplReader::CoreLoad(WW8Glossary *pGloss, const SwPosition &rPos)
              WW8Customizations aCustomisations( pTableStream, *pWwFib ); 
              aCustomisations.Import( mpDocShell );
  #endif 
