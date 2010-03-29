@@ -1,318 +1,23 @@
-
-# HG changeset patch
-# User Vladimir Glazunov <vg@openoffice.org>
-# Date 1266244079 -3600
-# Node ID e88d214fb62a9dd59e094f6db27f4f027b042798
-# Parent  66620d8e16231948374cae82f1660cc0beac11a3# Parent  5c14cf8d990e3d10a9797a9ed93d284c7a5a375a
-CWS-TOOLING: integrate CWS mysqlconnector
-
-diff -r 66620d8e1623 -r e88d214fb62a configure.in
---- configure.in	Mon Feb 15 15:07:47 2010 +0100
-+++ configure.in	Mon Feb 15 15:27:59 2010 +0100
-@@ -368,6 +368,23 @@
- [  --with-lucene-analyzers-jar=JARFILE   Specify path to jarfile manually ],
- [ LUCENE_ANALYZERS_JAR="$withval"
- ])
-+AC_ARG_ENABLE(mysql-connector,
-+[  --enable-mysql-connector     enables the build of the MySQL Connector/OOo extension.
-+                                This requires access to the MySQL Connector/C (aka libmysql) to be given, too, with
-+                                either the --with-system-mysql or --with-libmysql-path option.
-+],,)
-+AC_ARG_WITH(system-mysql,
-+[  --with-system-mysql          Use MySQL libraries already on system, for building the MySQL Connector/OOo extension.
-+                                Requires MYSQLCONFIG to point to the mysql_config executable.
-+],,with_system_mysql="no")
-+AC_ARG_WITH(libmysql-path,
-+[  --with-libmysql-path         Use Connector/C (libmysql) installation for building the MySQL Connector/OOo extension.
-+
-+                                Usage: --with-libmysql-path=<absolute path to your Connector/C installation>
-+],,)
-+AC_ARG_WITH(system-mysql-cppconn,
-+[  --with-system-mysql-cppconn  Use MySQL C++ Connector libraries already on system
-+],,)
- AC_ARG_WITH(system-hsqldb,
- [  --with-system-hsqldb    Use hsqldb already on system
- ],,)
-@@ -3835,6 +3852,128 @@
- AC_SUBST(LUCENE_CORE_JAR)
- AC_SUBST(LUCENE_ANALYZERS_JAR)
- 
-+AC_MSG_CHECKING([whether to build the MySQL Connector extension])
-+if test -n "$enable_mysql_connector" -a "$enable_mysql_connector" != "no"; then
-+  AC_MSG_RESULT([yes])
-+  ENABLE_MYSQLC=YES
-+  AC_MSG_CHECKING([for mysqlc module])
-+  if test -d mysqlc; then
-+   AC_MSG_RESULT([OK])
-+  else
-+   AC_MSG_ERROR([not existing. get it (did you get the -extensions tarball?)])
-+  fi
-+  BUILD_TYPE="$BUILD_TYPE MYSQLC"
-+else
-+  AC_MSG_RESULT([no])
-+  ENABLE_MYSQLC=NO
-+fi
-+AC_SUBST(ENABLE_MYSQLC)
-+
-+if test "$ENABLE_MYSQLC" = "YES"; then
-+dnl ===================================================================
-+dnl Check for system MySQL
-+dnl ===================================================================
-+AC_MSG_CHECKING([for mysql pre-requisites])
-+if test -n "$with_system_mysql" -o -n "$with_system_libs" && \
-+       test "$with_system_mysql" != "no" && test "$with_system_libs" != "no"; then
-+	AC_MSG_RESULT([external MySQL])
-+	SYSTEM_MYSQL=YES
-+	AC_PATH_PROG( MYSQLCONFIG, mysql_config)
-+	AC_MSG_CHECKING([MySQL version])
-+	MYSQL_VERSION=`$MYSQLCONFIG --version` 
-+	MYSQL_MAJOR=`$MYSQLCONFIG --version | cut -d"." -f1`
-+	if test "$MYSQL_MAJOR" -ge "5"; then
-+		AC_MSG_RESULT([OK])
-+	else
-+		AC_MSG_ERROR([too old, use 5.0.x or 5.1.x])
-+	fi
-+	AC_MSG_CHECKING([for MySQL Client library])
-+	MYSQL_INC=`$MYSQLCONFIG --include` 
-+	MYSQL_LIB=`$MYSQLCONFIG --libs`
-+	MYSQL_DEFINES=`$MYSQLCONFIG --cflags | sed -e s,$MYSQL_INC,,`
-+	AC_MSG_RESULT([includes $MYSQL_INC, libraries $MYSQL_LIB])
-+else
-+    SYSTEM_MYSQL=NO
-+    if test -n "$with_libmysql_path"; then
-+        AC_MSG_RESULT([external Connector/C (libmysql)])
-+        LIBMYSQL=libmysql.so
-+        if test "$_os" = "Darwin"; then
-+            LIBMYSQL=libmysql.dylib
-+        elif test "$_os" = "WINNT"; then
-+            LIBMYSQL=libmysql.dll
-+        fi
-+        AC_MSG_CHECKING([for $LIBMYSQL])
-+        if test -e "$with_libmysql_path/li$LIBMYSQL"; then
-+            AC_MSG_RESULT([found.])
-+            LIBMYSQL_PATH=$with_libmysql_path
-+        else
-+            AC_MSG_ERROR([not found. Please specify proper path in --with-libmysql-path.])
-+        fi
-+    else
-+        AC_MSG_ERROR([not given. Please specify either --with-system-mysql or --with-libmysql-path])
-+    fi
-+fi
-+AC_SUBST(SYSTEM_MYSQL)
-+AC_SUBST(MYSQL_INC)
-+AC_SUBST(MYSQL_LIB)
-+AC_SUBST(MYSQL_DEFINES)
-+AC_SUBST(LIBMYSQL_PATH)
-+
-+AC_LANG_PUSH([C++])
-+dnl ===================================================================
-+dnl Check for system MySQL C++ Connector
-+dnl ===================================================================
-+# FIXME!
-+# who thought this too-generic cppconn dir was a good idea?
-+AC_MSG_CHECKING([MySQL Connector/C++])
-+if test -n "$with_system_mysql_cppconn" -o -n "$with_system_libs" && \
-+		test "$with_system_mysql_cppconn" != "no" && test "$with_system_libs" != "no"; then
-+	AC_MSG_RESULT([external])
-+	SYSTEM_MYSQL_CPPCONN=YES
-+        AC_LANG_PUSH([C++])
-+	AC_CHECK_HEADER(mysql_driver.h, [],
-+					[AC_MSG_ERROR(mysql_driver.h not found. install MySQL C++ Connectivity)], [])
-+	AC_CHECK_LIB(mysqlcppconn, main, [],
-+					[AC_MSG_ERROR(MySQL C++ Connectivity lib not found or functional)], [])
-+   AC_MSG_CHECKING([version])
-+      AC_TRY_RUN([
-+#include <mysql_driver.h>
-+
-+int main(int argc, char **argv) {
-+	sql::Driver *driver;
-+	driver = get_driver_instance();
-+	if (driver->getMajorVersion() > 1 || \
-+	   (driver->getMajorVersion() == 1 && driver->getMinorVersion() > 0) || \
-+	   (driver->getMajorVersion() == 1 && driver->getMinorVersion() == 0 && driver->getPatchVersion() >= 6)) 
-+        return 0;
-+      else
-+        return 1;
-+}
-+      ], [AC_MSG_RESULT(OK)], [AC_MSG_ERROR([not suitable, we need >= 1.0.6])])
-+        AC_LANG_POP([C++])
-+
-+	AC_MSG_CHECKING([STL compatibility])
-+	if test "$WITH_STLPORT" != "no"; then
-+		AC_MSG_ERROR([to use system mysqlcppconn you need to use --without-stlport])
-+	else
-+		AC_MSG_RESULT([OK])	
-+	fi
-+
-+else
-+	AC_MSG_RESULT([internal])
-+        AC_MSG_CHECKING([for mysqlcppconn module])
-+        if test -d mysqlcppconn; then
-+          AC_MSG_RESULT([OK])
-+        else
-+          AC_MSG_ERROR([not existing. get it (did you get the -extensions tarball?)])
-+        fi
-+	BUILD_TYPE="$BUILD_TYPE MYSQLCPPCONN"
-+	SYSTEM_MYSQL_CPPCONN=NO
-+fi
-+AC_LANG_POP([C++])
-+AC_SUBST(SYSTEM_MYSQL_CPPCONN)
-+fi
-+
- dnl ===================================================================
- dnl Check for system hsqldb
- dnl ===================================================================
-diff -r 66620d8e1623 -r e88d214fb62a dbaccess/source/ui/browser/brwctrlr.cxx
---- dbaccess/source/ui/browser/brwctrlr.cxx	Mon Feb 15 15:07:47 2010 +0100
-+++ dbaccess/source/ui/browser/brwctrlr.cxx	Mon Feb 15 15:27:59 2010 +0100
-@@ -624,6 +624,7 @@
- //------------------------------------------------------------------------------
- SbaXDataBrowserController::SbaXDataBrowserController(const Reference< ::com::sun::star::lang::XMultiServiceFactory >& _rM)
- 	:SbaXDataBrowserController_Base(_rM)
-+    ,m_nRowSetPrivileges(0)
-     ,m_pClipbordNotifier( NULL )
- 	,m_aAsyncGetCellFocus(LINK(this, SbaXDataBrowserController, OnAsyncGetCellFocus))
-     ,m_aAsyncDisplayError( LINK( this, SbaXDataBrowserController, OnAsyncDisplayError ) )
-@@ -1415,19 +1416,21 @@
- 			m_xRowSet			= NULL;
- 			m_xColumnsSupplier	= NULL;
- 			m_xLoadable 		= NULL;
-+
-+            m_nRowSetPrivileges = 0;
- 		}
--		catch(Exception&)
-+		catch(const Exception&)
- 		{
--			OSL_ENSURE(0,"Exception thrown by dispose");
-+            DBG_UNHANDLED_EXCEPTION();
- 		}
- 	}
- 	try
- 	{
- 		::comphelper::disposeComponent(m_xParser);
- 	}
--	catch(Exception&)
-+	catch(const Exception&)
- 	{
--		OSL_ENSURE(0,"Exception thrown by dispose");
-+        DBG_UNHANDLED_EXCEPTION();
- 	}
- }
- //------------------------------------------------------------------------------
-@@ -1656,21 +1659,39 @@
-             case ID_BROWSER_INSERT_ROW:
-                 {
-                     // check if it is available
--				    Reference< XPropertySet >  xDataSourceSet(getRowSet(), UNO_QUERY);
--				    if (!xDataSourceSet.is())
--					    break;	// no datasource -> no edit mode
--
--				    sal_Int32 nDataSourcePrivileges = ::comphelper::getINT32(xDataSourceSet->getPropertyValue(PROPERTY_PRIVILEGES));
--				    aReturn.bEnabled = ((nDataSourcePrivileges & ::com::sun::star::sdbcx::Privilege::INSERT) != 0) && ::comphelper::getBOOL(xDataSourceSet->getPropertyValue(::rtl::OUString::createFromAscii("AllowInserts")));
-+                    sal_Bool bInsertPrivilege = ( m_nRowSetPrivileges & Privilege::INSERT) != 0;
-+                    sal_Bool bAllowInsertions = sal_True;
-+                    try
-+                    {
-+				        Reference< XPropertySet > xRowSetProps( getRowSet(), UNO_QUERY_THROW );
-+                        OSL_VERIFY( xRowSetProps->getPropertyValue( ::rtl::OUString::createFromAscii( "AllowInserts" ) ) >>= bAllowInsertions );
-+                    }
-+                    catch( const Exception& )
-+                    {
-+                    	DBG_UNHANDLED_EXCEPTION();
-+                    }
-+				    aReturn.bEnabled = bInsertPrivilege && bAllowInsertions;
-                 }
-                 break;
-             case SID_FM_DELETEROWS:
-                 {
--				    Reference< XPropertySet >  xFormSet(getRowSet(), UNO_QUERY);
--				    sal_Int32 nCount = ::comphelper::getINT32(xFormSet->getPropertyValue(PROPERTY_ROWCOUNT));
--                    sal_Bool bNew = sal_False;
--                    xFormSet->getPropertyValue(PROPERTY_ISNEW) >>= bNew;
--				    aReturn.bEnabled = nCount != 0 && !bNew;
-+                    // check if it is available
-+                    sal_Bool bDeletePrivilege = ( m_nRowSetPrivileges & Privilege::INSERT) != 0;
-+                    sal_Bool bAllowDeletions = sal_True;
-+                    sal_Int32 nRowCount = 0;
-+                    sal_Bool bInsertionRow = sal_False;
-+                    try
-+                    {
-+				        Reference< XPropertySet > xRowSetProps( getRowSet(), UNO_QUERY_THROW );
-+                        OSL_VERIFY( xRowSetProps->getPropertyValue( ::rtl::OUString::createFromAscii( "AllowDeletes" ) ) >>= bAllowDeletions );
-+                        OSL_VERIFY( xRowSetProps->getPropertyValue( PROPERTY_ROWCOUNT ) >>= nRowCount );
-+                        OSL_VERIFY( xRowSetProps->getPropertyValue( PROPERTY_ISNEW ) >>= bInsertionRow );
-+                    }
-+                    catch( const Exception& )
-+                    {
-+                    	DBG_UNHANDLED_EXCEPTION();
-+                    }
-+                    aReturn.bEnabled = bDeletePrivilege && bAllowDeletions && ( nRowCount != 0 ) && !bInsertionRow;
- 			    }
-                 break;
- 
-@@ -2701,14 +2722,28 @@
- {
-     RTL_LOGFILE_CONTEXT_AUTHOR( aLogger, "dbaui", "Ocke.Janssen@sun.com", "SbaXDataBrowserController::criticalFail" );
- 	InvalidateAll();
-+    m_nRowSetPrivileges = 0;
- }
- 
- //------------------------------------------------------------------------------
- void SbaXDataBrowserController::LoadFinished(sal_Bool /*bWasSynch*/)
- {
-     RTL_LOGFILE_CONTEXT_AUTHOR( aLogger, "dbaui", "Ocke.Janssen@sun.com", "SbaXDataBrowserController::LoadFinished" );
-+    m_nRowSetPrivileges = 0;
-+
- 	if (isValid() && !loadingCancelled())
- 	{
-+        // obtain cached values
-+        try
-+        {
-+            Reference< XPropertySet > xFormProps( m_xLoadable, UNO_QUERY_THROW );
-+            OSL_VERIFY( xFormProps->getPropertyValue( PROPERTY_PRIVILEGES ) >>= m_nRowSetPrivileges );
-+        }
-+        catch( const Exception& )
-+        {
-+    	    DBG_UNHANDLED_EXCEPTION();
-+        }
-+ 
- 		// --------------------------------
- 		// switch the control to alive mode
- 		getBrowserView()->getGridControl()->setDesignMode(sal_False);
-diff -r 66620d8e1623 -r e88d214fb62a dbaccess/source/ui/inc/brwctrlr.hxx
---- dbaccess/source/ui/inc/brwctrlr.hxx	Mon Feb 15 15:07:47 2010 +0100
-+++ dbaccess/source/ui/inc/brwctrlr.hxx	Mon Feb 15 15:27:59 2010 +0100
-@@ -105,6 +105,8 @@
- 		mutable ::com::sun::star::uno::Reference< ::com::sun::star::sdb::XSingleSelectQueryComposer > 	
-                                                                                         m_xParser;		// for sorting 'n filtering
- 
-+        sal_Int32               m_nRowSetPrivileges;    // cached Privileges property of m_xRowSet
-+
- 		AutoTimer				m_aInvalidateClipboard;				// for testing the state of the CUT/COPY/PASTE-slots
- 
- 		TransferableDataHelper	m_aSystemClipboard;		// content of the clipboard
-diff -r 66620d8e1623 -r e88d214fb62a mysqlc/images/sun_extension.png
-Binary file mysqlc/images/sun_extension.png has changed
-diff -r 66620d8e1623 -r e88d214fb62a mysqlc/images/sun_extension_hc.png
-Binary file mysqlc/images/sun_extension_hc.png has changed
-diff -r 66620d8e1623 -r e88d214fb62a mysqlc/prj/build.lst
---- /dev/null	Thu Jan 01 00:00:00 1970 +0000
-+++ mysqlc/prj/build.lst	Mon Feb 15 15:27:59 2010 +0100
+Binary files foo/images/sun_extension_hc.png and mysqlc/images/sun_extension_hc.png differ
+Binary files foo/images/sun_extension.png and mysqlc/images/sun_extension.png differ
+diff -urN foo/prj/build.lst mysqlc/prj/build.lst
+--- foo/prj/build.lst	1970-01-01 01:00:00.000000000 +0100
++++ mysqlc/prj/build.lst	2010-03-26 23:00:32.000000000 +0100
 @@ -0,0 +1,3 @@
 +mc	mysqlc	:	solenv MYSQLCPPCONN:mysqlcppconn offuh cppu soltools cppuhelper readlicense_oo NULL
 +ch	mysqlc              usr1    -	all mc_mkout NULL
 +mc	mysqlc\source       nmake   -   all mc_source NULL
-diff -r 66620d8e1623 -r e88d214fb62a mysqlc/prj/d.lst
---- /dev/null	Thu Jan 01 00:00:00 1970 +0000
-+++ mysqlc/prj/d.lst	Mon Feb 15 15:27:59 2010 +0100
+diff -urN foo/prj/d.lst mysqlc/prj/d.lst
+--- foo/prj/d.lst	1970-01-01 01:00:00.000000000 +0100
++++ mysqlc/prj/d.lst	2010-03-26 23:00:32.000000000 +0100
 @@ -0,0 +1,4 @@
 +# Extensions
 +
 +..\%__SRC%\bin\*.oxt %_DEST%\bin%_EXT%\*.oxt
 +
-diff -r 66620d8e1623 -r e88d214fb62a mysqlc/source/DataAccess.xcu
---- /dev/null	Thu Jan 01 00:00:00 1970 +0000
-+++ mysqlc/source/DataAccess.xcu	Mon Feb 15 15:27:59 2010 +0100
+diff -urN foo/source/DataAccess.xcu mysqlc/source/DataAccess.xcu
+--- foo/source/DataAccess.xcu	1970-01-01 01:00:00.000000000 +0100
++++ mysqlc/source/DataAccess.xcu	2010-03-26 23:00:32.000000000 +0100
 @@ -0,0 +1,19 @@
 +<?xml version="1.0" encoding="UTF-8"?>
 +<oor:node xmlns:oor="http://openoffice.org/2001/registry" xmlns:xs="http://www.w3.org/2001/XMLSchema" oor:name="DataAccess" oor:package="org.openoffice.Office">
@@ -333,79 +38,104 @@ diff -r 66620d8e1623 -r e88d214fb62a mysqlc/source/DataAccess.xcu
 +  </node>
 + </node>
 +</oor:node>
-diff -r 66620d8e1623 -r e88d214fb62a mysqlc/source/README
---- /dev/null	Thu Jan 01 00:00:00 1970 +0000
-+++ mysqlc/source/README	Mon Feb 15 15:27:59 2010 +0100
-@@ -0,0 +1,65 @@
-+---------- Status -------------------------------------------------------------
-+
-+The code is on a PREVIEW level. PREVIEW means pre-alpha.
-+
-+---------- Requirements -------------------------------------------------------
-+
-+The MySQL driver for OpenOffice.org (MySQL Connector/OpenOffice.org - C/OOo)
-+requires two external libraries to be build:
-+
-+ 1) The MySQL Client Library (libmysql)
-+ 2) The MySQL Connector/C++ Library (libmysqlcppcon)
-+
-+At the time of writing neither of the two libraries are part of the CWS!
-+Before you can build the MySQL driver for OpenOffice.org you must install
-+the two required libraries on your system before you can compile the driver.
-+
-+You need the two libraries because the MySQL driver for OpenOffice.org
-+does not feature an implementation of the MySQL Client Server
-+communication protocol. The protocol implementation is part of the MySQL
-+Client Library. And the SDBC(X) style OpenOffice.org driver is implemented as a
-+wrapper of the MySQL Connector/C++ Library which implements a JDBC interface and
-+in turn uses the C based MySQL Client Library.
-+
-+1) MySQL Client Library (libmysql)
-+
-+The MySQL Client Library (libmysql) is part of the MySQL Server. You need to
-+download and install the MySQL Server. Use a binary distribution of
-+MySQL 5.0.x or MySQL 5.1.x. Check the MySQL manual for instructions, e.g.
-+for Unix:
-+
-+ http://dev.mysql.com/doc/refman/5.1/en/installing-binary.html
-+
-+The typical installation path of the libmysql.so on Unix is
-+/usr/local/mysql/limysql/ .
-+
-+2) MySQL Connector/C++ (libmysqlcppcon)
-+
-+Download and install the latest version of the MySQL Connector/C++, see
-+http://forge.mysql.com/wiki/Connector_C++ . Check out the source
-+from the bzr repository.
-+
-+3) Tweaking library paths
-+
-+At the time of writing you might have to *manually* tweak library paths and
-+library names by patching makefile.mk. This is a temporary hack. The makefile
-+will be improved later.
-+
-+However, for the moment check the makefile.mk if the compilation fails due to
-+"missing" libraries (= libraries not found). For example, check the following
-+settings:
-+
-+  MYSQL_INCDIR=/usr/local/include
-+  MYSQL_LIBDIR=/usr/local/lib
-+  [...]
-+  MYSQL_INCDIR=/usr/local/include
-+  MYSQL_LIBDIR=/usr/local/lib
-+  [...]
-+  MYSQL_INC=-I$(MYSQL_INCDIR)
-+  MYSQL_LIB=-L$(MYSQL_LIBDIR) -lmysqlclient -rdynamic -lz -lcrypt -lnsl -lm
-+  MYSQL_LIBFILE=$(MYSQL_LIBDIR)$/libmysqlclient.so.16
-+  MYSQL_CPPCONN_LIBFILE=$(MYSQL_LIBDIR)$/libmysqlcppconn.so
-+  [...]
-+
-+A common issue is libmysqlclient.so.15 vs. libmysqlclient.so.16 .
-+
-diff -r 66620d8e1623 -r e88d214fb62a mysqlc/source/description.xml
---- /dev/null	Thu Jan 01 00:00:00 1970 +0000
-+++ mysqlc/source/description.xml	Mon Feb 15 15:27:59 2010 +0100
-@@ -0,0 +1,20 @@
+diff -urN foo/source/description/description_de.txt mysqlc/source/description/description_de.txt
+--- foo/source/description/description_de.txt	1970-01-01 01:00:00.000000000 +0100
++++ mysqlc/source/description/description_de.txt	2010-03-26 23:00:32.000000000 +0100
+@@ -0,0 +1 @@
++Verbindet OpenOffice.org direkt mit MySQL-Servern
+\ Kein Zeilenumbruch am Dateiende.
+diff -urN foo/source/description/description_en-US.txt mysqlc/source/description/description_en-US.txt
+--- foo/source/description/description_en-US.txt	1970-01-01 01:00:00.000000000 +0100
++++ mysqlc/source/description/description_en-US.txt	2010-03-26 23:00:32.000000000 +0100
+@@ -0,0 +1 @@
++The MySQL Connector for Oracle Open Office (formerly StarOffice) and OpenOffice.org installs a native MySQL database driver. It is faster, seamless integrated, easier to administrate and there is no need to install and setup a JDBC or ODBC driver separately. It was never easier to use MySQL databases in OpenOffice.org Base.
+diff -urN foo/source/description/description_es.txt mysqlc/source/description/description_es.txt
+--- foo/source/description/description_es.txt	1970-01-01 01:00:00.000000000 +0100
++++ mysqlc/source/description/description_es.txt	2010-03-26 23:00:32.000000000 +0100
+@@ -0,0 +1 @@
++Conecta OpenOffice.org directamente con los servidores de MySQL
+\ Kein Zeilenumbruch am Dateiende.
+diff -urN foo/source/description/description_fr.txt mysqlc/source/description/description_fr.txt
+--- foo/source/description/description_fr.txt	1970-01-01 01:00:00.000000000 +0100
++++ mysqlc/source/description/description_fr.txt	2010-03-26 23:00:32.000000000 +0100
+@@ -0,0 +1 @@
++Connexion directe d'OpenOffice.org avec les serveurs MySQL.
+\ Kein Zeilenumbruch am Dateiende.
+diff -urN foo/source/description/description_hu.txt mysqlc/source/description/description_hu.txt
+--- foo/source/description/description_hu.txt	1970-01-01 01:00:00.000000000 +0100
++++ mysqlc/source/description/description_hu.txt	2010-03-26 23:00:32.000000000 +0100
+@@ -0,0 +1 @@
++Közvetlen kapcsolatot teremt az OpenOffice.org és a MySQL-kiszolgálók között.
+\ Kein Zeilenumbruch am Dateiende.
+diff -urN foo/source/description/description_it.txt mysqlc/source/description/description_it.txt
+--- foo/source/description/description_it.txt	1970-01-01 01:00:00.000000000 +0100
++++ mysqlc/source/description/description_it.txt	2010-03-26 23:00:32.000000000 +0100
+@@ -0,0 +1 @@
++Consente la connessione diretta tra OpenOffice.org e i server MySQL
+\ Kein Zeilenumbruch am Dateiende.
+diff -urN foo/source/description/description_ja.txt mysqlc/source/description/description_ja.txt
+--- foo/source/description/description_ja.txt	1970-01-01 01:00:00.000000000 +0100
++++ mysqlc/source/description/description_ja.txt	2010-03-26 23:00:32.000000000 +0100
+@@ -0,0 +1 @@
++OpenOffice.org を MySQL サーバーと直接に接続させる
+\ Kein Zeilenumbruch am Dateiende.
+diff -urN foo/source/description/description_ko.txt mysqlc/source/description/description_ko.txt
+--- foo/source/description/description_ko.txt	1970-01-01 01:00:00.000000000 +0100
++++ mysqlc/source/description/description_ko.txt	2010-03-26 23:00:32.000000000 +0100
+@@ -0,0 +1 @@
++MySQL 서버를 통해 OpenOffice.org에 직접 연결합니다.
+\ Kein Zeilenumbruch am Dateiende.
+diff -urN foo/source/description/description_nl.txt mysqlc/source/description/description_nl.txt
+--- foo/source/description/description_nl.txt	1970-01-01 01:00:00.000000000 +0100
++++ mysqlc/source/description/description_nl.txt	2010-03-26 23:00:32.000000000 +0100
+@@ -0,0 +1 @@
++Verbindt OpenOffice.org direct met MySQL Servers
+\ Kein Zeilenumbruch am Dateiende.
+diff -urN foo/source/description/description_pl.txt mysqlc/source/description/description_pl.txt
+--- foo/source/description/description_pl.txt	1970-01-01 01:00:00.000000000 +0100
++++ mysqlc/source/description/description_pl.txt	2010-03-26 23:00:32.000000000 +0100
+@@ -0,0 +1 @@
++Laczy witryne OpenOffice.org bezposrednio z systemem MySQL Servers
+\ Kein Zeilenumbruch am Dateiende.
+diff -urN foo/source/description/description_pt-BR.txt mysqlc/source/description/description_pt-BR.txt
+--- foo/source/description/description_pt-BR.txt	1970-01-01 01:00:00.000000000 +0100
++++ mysqlc/source/description/description_pt-BR.txt	2010-03-26 23:00:32.000000000 +0100
+@@ -0,0 +1 @@
++Conecta o OpenOffice.org diretamente aos servidores MySQL
+\ Kein Zeilenumbruch am Dateiende.
+diff -urN foo/source/description/description_pt.txt mysqlc/source/description/description_pt.txt
+--- foo/source/description/description_pt.txt	1970-01-01 01:00:00.000000000 +0100
++++ mysqlc/source/description/description_pt.txt	2010-03-26 23:00:32.000000000 +0100
+@@ -0,0 +1 @@
++Liga o OpenOffice.org directamente aos servidores MySQL
+\ Kein Zeilenumbruch am Dateiende.
+diff -urN foo/source/description/description_ru.txt mysqlc/source/description/description_ru.txt
+--- foo/source/description/description_ru.txt	1970-01-01 01:00:00.000000000 +0100
++++ mysqlc/source/description/description_ru.txt	2010-03-26 23:00:32.000000000 +0100
+@@ -0,0 +1 @@
++﻿Подключает OpenOffice.org напрямую к серверам MySQL
+diff -urN foo/source/description/description_sv.txt mysqlc/source/description/description_sv.txt
+--- foo/source/description/description_sv.txt	1970-01-01 01:00:00.000000000 +0100
++++ mysqlc/source/description/description_sv.txt	2010-03-26 23:00:32.000000000 +0100
+@@ -0,0 +1 @@
++Ansluter OpenOffice.org direkt till MySQL-servrarna
+\ Kein Zeilenumbruch am Dateiende.
+diff -urN foo/source/description/description_zh-CN.txt mysqlc/source/description/description_zh-CN.txt
+--- foo/source/description/description_zh-CN.txt	1970-01-01 01:00:00.000000000 +0100
++++ mysqlc/source/description/description_zh-CN.txt	2010-03-26 23:00:32.000000000 +0100
+@@ -0,0 +1 @@
++将 OpenOffice.org 与 MySQL 服务器直接相连
+\ Kein Zeilenumbruch am Dateiende.
+diff -urN foo/source/description/description_zh-TW.txt mysqlc/source/description/description_zh-TW.txt
+--- foo/source/description/description_zh-TW.txt	1970-01-01 01:00:00.000000000 +0100
++++ mysqlc/source/description/description_zh-TW.txt	2010-03-26 23:00:32.000000000 +0100
+@@ -0,0 +1 @@
++將 OpenOffice.org 直接連線至 MySQL 伺服器
+\ Kein Zeilenumbruch am Dateiende.
+diff -urN foo/source/description.xml mysqlc/source/description.xml
+--- foo/source/description.xml	1970-01-01 01:00:00.000000000 +0100
++++ mysqlc/source/description.xml	2010-03-26 23:00:32.000000000 +0100
+@@ -0,0 +1,29 @@
 +<?xml version="1.0" encoding="UTF-8"?>
 +<description xmlns="http://openoffice.org/extensions/description/2006" xmlns:d="http://openoffice.org/extensions/description/2006" 
 +    xmlns:xlink="http://www.w3.org/1999/xlink">
@@ -413,6 +143,11 @@ diff -r 66620d8e1623 -r e88d214fb62a mysqlc/source/description.xml
 +    <identifier value="UPDATED_IDENTIFIER"/>
 +    <version value="#VERSION#" />    
 +    <platform value="UPDATED_SUPPORTED_PLATFORM" />
++    <registration>
++        <simple-license accept-by="admin" default-license-id="lic-en-US" suppress-if-required="true" >
++            <license-text xlink:href="licensefile" lang="isocode" license-id="lic-isocode"/>
++        </simple-license>
++    </registration>
 +    <display-name>
 +        <name lang="en-US">#TITLE#</name>
 +    </display-name>
@@ -420,116 +155,31 @@ diff -r 66620d8e1623 -r e88d214fb62a mysqlc/source/description.xml
 +         <OpenOffice.org-minimal-version value="3.1" d:name="OpenOffice.org 3.1"/>
 +    </dependencies>
 +    <publisher>
-+        <name xlink:href="http://www.sun.com/software/star/staroffice/extensions.jsp?cid=925095" lang="en">Sun Microsystems</name>
++        <name xlink:href="http://www.sun.com/software/star/staroffice/extensions.jsp?cid=925095" lang="en">Oracle</name>
 +    </publisher>
++    <icon>
++        <default xlink:href="images/sun_extension.png" />
++        <high-contrast xlink:href="images/sun_extension_hc.png" />
++    </icon>
 +    <extension-description>
 +        <src lang="#LANG#" xlink:href="description/description_#LANG#.txt"/>
 +    </extension-description>
 +</description> 
-diff -r 66620d8e1623 -r e88d214fb62a mysqlc/source/description/description_de.txt
---- /dev/null	Thu Jan 01 00:00:00 1970 +0000
-+++ mysqlc/source/description/description_de.txt	Mon Feb 15 15:27:59 2010 +0100
-@@ -0,0 +1,1 @@
-+Verbindet OpenOffice.org direkt mit MySQL-Servern
-\ No newline at end of file
-diff -r 66620d8e1623 -r e88d214fb62a mysqlc/source/description/description_en-US.txt
---- /dev/null	Thu Jan 01 00:00:00 1970 +0000
-+++ mysqlc/source/description/description_en-US.txt	Mon Feb 15 15:27:59 2010 +0100
-@@ -0,0 +1,1 @@
-+Connects OpenOffice.org directly with MySQL Servers
-diff -r 66620d8e1623 -r e88d214fb62a mysqlc/source/description/description_es.txt
---- /dev/null	Thu Jan 01 00:00:00 1970 +0000
-+++ mysqlc/source/description/description_es.txt	Mon Feb 15 15:27:59 2010 +0100
-@@ -0,0 +1,1 @@
-+Conecta OpenOffice.org directamente con los servidores de MySQL
-\ No newline at end of file
-diff -r 66620d8e1623 -r e88d214fb62a mysqlc/source/description/description_fr.txt
---- /dev/null	Thu Jan 01 00:00:00 1970 +0000
-+++ mysqlc/source/description/description_fr.txt	Mon Feb 15 15:27:59 2010 +0100
-@@ -0,0 +1,1 @@
-+Connexion directe d'OpenOffice.org avec les serveurs MySQL.
-\ No newline at end of file
-diff -r 66620d8e1623 -r e88d214fb62a mysqlc/source/description/description_hu.txt
---- /dev/null	Thu Jan 01 00:00:00 1970 +0000
-+++ mysqlc/source/description/description_hu.txt	Mon Feb 15 15:27:59 2010 +0100
-@@ -0,0 +1,1 @@
-+Közvetlen kapcsolatot teremt az OpenOffice.org és a MySQL-kiszolgálók között.
-\ No newline at end of file
-diff -r 66620d8e1623 -r e88d214fb62a mysqlc/source/description/description_it.txt
---- /dev/null	Thu Jan 01 00:00:00 1970 +0000
-+++ mysqlc/source/description/description_it.txt	Mon Feb 15 15:27:59 2010 +0100
-@@ -0,0 +1,1 @@
-+Consente la connessione diretta tra OpenOffice.org e i server MySQL
-\ No newline at end of file
-diff -r 66620d8e1623 -r e88d214fb62a mysqlc/source/description/description_ja.txt
---- /dev/null	Thu Jan 01 00:00:00 1970 +0000
-+++ mysqlc/source/description/description_ja.txt	Mon Feb 15 15:27:59 2010 +0100
-@@ -0,0 +1,1 @@
-+OpenOffice.org を MySQL サーバーと直接に接続させる
-\ No newline at end of file
-diff -r 66620d8e1623 -r e88d214fb62a mysqlc/source/description/description_ko.txt
---- /dev/null	Thu Jan 01 00:00:00 1970 +0000
-+++ mysqlc/source/description/description_ko.txt	Mon Feb 15 15:27:59 2010 +0100
-@@ -0,0 +1,1 @@
-+MySQL 서버를 통해 OpenOffice.org에 직접 연결합니다.
-\ No newline at end of file
-diff -r 66620d8e1623 -r e88d214fb62a mysqlc/source/description/description_nl.txt
---- /dev/null	Thu Jan 01 00:00:00 1970 +0000
-+++ mysqlc/source/description/description_nl.txt	Mon Feb 15 15:27:59 2010 +0100
-@@ -0,0 +1,1 @@
-+Verbindt OpenOffice.org direct met MySQL Servers
-\ No newline at end of file
-diff -r 66620d8e1623 -r e88d214fb62a mysqlc/source/description/description_pl.txt
---- /dev/null	Thu Jan 01 00:00:00 1970 +0000
-+++ mysqlc/source/description/description_pl.txt	Mon Feb 15 15:27:59 2010 +0100
-@@ -0,0 +1,1 @@
-+Laczy witryne OpenOffice.org bezposrednio z systemem MySQL Servers
-\ No newline at end of file
-diff -r 66620d8e1623 -r e88d214fb62a mysqlc/source/description/description_pt-BR.txt
---- /dev/null	Thu Jan 01 00:00:00 1970 +0000
-+++ mysqlc/source/description/description_pt-BR.txt	Mon Feb 15 15:27:59 2010 +0100
-@@ -0,0 +1,1 @@
-+Conecta o OpenOffice.org diretamente aos servidores MySQL
-\ No newline at end of file
-diff -r 66620d8e1623 -r e88d214fb62a mysqlc/source/description/description_pt.txt
---- /dev/null	Thu Jan 01 00:00:00 1970 +0000
-+++ mysqlc/source/description/description_pt.txt	Mon Feb 15 15:27:59 2010 +0100
-@@ -0,0 +1,1 @@
-+Liga o OpenOffice.org directamente aos servidores MySQL
-\ No newline at end of file
-diff -r 66620d8e1623 -r e88d214fb62a mysqlc/source/description/description_ru.txt
---- /dev/null	Thu Jan 01 00:00:00 1970 +0000
-+++ mysqlc/source/description/description_ru.txt	Mon Feb 15 15:27:59 2010 +0100
-@@ -0,0 +1,1 @@
-+﻿Подключает OpenOffice.org напрямую к серверам MySQL
-diff -r 66620d8e1623 -r e88d214fb62a mysqlc/source/description/description_sv.txt
---- /dev/null	Thu Jan 01 00:00:00 1970 +0000
-+++ mysqlc/source/description/description_sv.txt	Mon Feb 15 15:27:59 2010 +0100
-@@ -0,0 +1,1 @@
-+Ansluter OpenOffice.org direkt till MySQL-servrarna
-\ No newline at end of file
-diff -r 66620d8e1623 -r e88d214fb62a mysqlc/source/description/description_zh-CN.txt
---- /dev/null	Thu Jan 01 00:00:00 1970 +0000
-+++ mysqlc/source/description/description_zh-CN.txt	Mon Feb 15 15:27:59 2010 +0100
-@@ -0,0 +1,1 @@
-+将 OpenOffice.org 与 MySQL 服务器直接相连
-\ No newline at end of file
-diff -r 66620d8e1623 -r e88d214fb62a mysqlc/source/description/description_zh-TW.txt
---- /dev/null	Thu Jan 01 00:00:00 1970 +0000
-+++ mysqlc/source/description/description_zh-TW.txt	Mon Feb 15 15:27:59 2010 +0100
-@@ -0,0 +1,1 @@
-+將 OpenOffice.org 直接連線至 MySQL 伺服器
-\ No newline at end of file
-diff -r 66620d8e1623 -r e88d214fb62a mysqlc/source/exports.dxp
---- /dev/null	Thu Jan 01 00:00:00 1970 +0000
-+++ mysqlc/source/exports.dxp	Mon Feb 15 15:27:59 2010 +0100
+diff -urN foo/source/exports.dxp mysqlc/source/exports.dxp
+--- foo/source/exports.dxp	1970-01-01 01:00:00.000000000 +0100
++++ mysqlc/source/exports.dxp	2010-03-26 23:00:32.000000000 +0100
 @@ -0,0 +1,3 @@
 +component_getImplementationEnvironment
 +component_writeInfo
 +component_getFactory
-diff -r 66620d8e1623 -r e88d214fb62a mysqlc/source/makefile.mk
---- /dev/null	Thu Jan 01 00:00:00 1970 +0000
-+++ mysqlc/source/makefile.mk	Mon Feb 15 15:27:59 2010 +0100
+diff -urN foo/source/delzip mysqlc/source/delzip
+--- foo/source/delzip	1970-01-01 01:00:00.000000000 +0100
++++ mysqlc/source/delzip	2010-03-29 10:44:02.000000000 +0200
+@@ -0,0 +1,328 @@
++
+diff -urN foo/source/makefile.mk mysqlc/source/makefile.mk
+--- foo/source/makefile.mk	1970-01-01 01:00:00.000000000 +0100
++++ mysqlc/source/makefile.mk	2010-03-29 10:44:02.000000000 +0200
 @@ -0,0 +1,328 @@
 +#*************************************************************************
 +#
@@ -589,10 +239,10 @@ diff -r 66620d8e1623 -r e88d214fb62a mysqlc/source/makefile.mk
 +#---- extension title package name
 +.IF "$(MYSQLC_STATUS)" == "final"
 +    EXTENSION_TITLE:=$(MYSQLC_TITLE)
-+    EXTENSION_ZIPNAME:=$(EXTENSIONNAME)-$(EXTENSION_VERSION_BASE)-$(RTL_OS:l)-$(RTL_ARCH:l)
++    EXTENSION_ZIPNAME:=$(EXTENSIONNAME)
 +.ELSE
 +    EXTENSION_TITLE:=$(MYSQLC_TITLE) ($(MYSQLC_STATUS))
-+    EXTENSION_ZIPNAME:=$(EXTENSIONNAME)-$(EXTENSION_VERSION_BASE)-$(MYSQLC_STATUS:s/ /-/:l)-$(RTL_OS:l)-$(RTL_ARCH:l)
++    EXTENSION_ZIPNAME:=$(EXTENSIONNAME)
 +.ENDIF
 +
 +#-------------------------------------------------------------------
@@ -648,7 +298,7 @@ diff -r 66620d8e1623 -r e88d214fb62a mysqlc/source/makefile.mk
 +.IF "$(SYSTEM_MYSQL_CPPCONN)" != "YES"
 +CDEFS += -DCPPCONN_LIB=\"$(DLLPRE)mysqlcppconn$(DLLPOST)\"
 +.ELSE
-+CDEFS += -DCPPCONN_LIB=\"$(shell readlink /usr/lib/libmysqlcppconn.so)\"
++CDEFS += -DCPPCONN_LIB=\"libmysqlcppconn.so.2\"
 +.ENDIF
 +
 +# --------------- MySQL settings ------------------
@@ -859,9 +509,9 @@ diff -r 66620d8e1623 -r e88d214fb62a mysqlc/source/makefile.mk
 +adjust_libmysql_path: $(EXTENSIONDIR)$/$(SHL1TARGET)$(DLLPOST)
 +    install_name_tool -change $(MYSQL_LIBFILE:f) @loader_path/$(MYSQL_LIBFILE:f) $(EXTENSIONDIR)$/$(SHL1TARGET)$(DLLPOST)
 +.ENDIF
-diff -r 66620d8e1623 -r e88d214fb62a mysqlc/source/manifest.xml
---- /dev/null	Thu Jan 01 00:00:00 1970 +0000
-+++ mysqlc/source/manifest.xml	Mon Feb 15 15:27:59 2010 +0100
+diff -urN foo/source/manifest.xml mysqlc/source/manifest.xml
+--- foo/source/manifest.xml	1970-01-01 01:00:00.000000000 +0100
++++ mysqlc/source/manifest.xml	2010-03-26 23:00:32.000000000 +0100
 @@ -0,0 +1,8 @@
 +<?xml version="1.0" encoding="UTF-8"?>
 +<!DOCTYPE manifest:manifest PUBLIC "-//OpenOffice.org//DTD Manifest 1.0//EN" "Manifest.dtd">
@@ -871,106 +521,9 @@ diff -r 66620d8e1623 -r e88d214fb62a mysqlc/source/manifest.xml
 +    <manifest:file-entry manifest:media-type="application/vnd.sun.star.configuration-data"
 +                 manifest:full-path="registry/data/org/openoffice/Office/DataAccess/Drivers.xcu"/>
 +</manifest:manifest>
-diff -r 66620d8e1623 -r e88d214fb62a mysqlc/source/mysqlc.map
---- /dev/null	Thu Jan 01 00:00:00 1970 +0000
-+++ mysqlc/source/mysqlc.map	Mon Feb 15 15:27:59 2010 +0100
-@@ -0,0 +1,8 @@
-+UDK_3_0_0 {
-+	global:
-+		component_getImplementationEnvironment;
-+		component_writeInfo;
-+		component_getFactory;
-+	local:
-+		*;
-+};
-diff -r 66620d8e1623 -r e88d214fb62a mysqlc/source/mysqlc.xml
---- /dev/null	Thu Jan 01 00:00:00 1970 +0000
-+++ mysqlc/source/mysqlc.xml	Mon Feb 15 15:27:59 2010 +0100
-@@ -0,0 +1,81 @@
-+<?xml version='1.0' encoding="UTF-8"?>
-+<!DOCTYPE COMPONENTDESCRIPTION PUBLIC "-//W3C//DTD HTML 3.2//EN" "module-description.dtd">
-+<module-description xmlns:xlink="http://www.w3.org/1999/xlink">
-+	<module-name>mysqlc</module-name>
-+	<component-description>
-+		<Author>Georg Richter</Author>
-+		<Name>com.sun.star.comp.sdbc.mysqlc</Name>
-+		<Description>
-+			This is the implementation of the MySQL Connector/OO.org.
-+		</Description>
-+		<loader-name>com.sun.star.loader.SharedLibrary</loader-name>
-+		<language>c++</language>
-+		<status value="final"/>
-+		<supported-service>	com.sun.star.sdbc.Driver	</supported-service>
-+		<service-dependency>	...	</service-dependency>
-+	</component-description>	  
-+	<project-build-dependency>	cppuhelper	</project-build-dependency>
-+	<project-build-dependency>	cppu		</project-build-dependency>
-+	<project-build-dependency>	sal			</project-build-dependency>
-+	<project-build-dependency>	vos			</project-build-dependency>
-+
-+	<runtime-module-dependency>	cppuhelper	</runtime-module-dependency>
-+	<runtime-module-dependency>	cppu1		</runtime-module-dependency>
-+	<runtime-module-dependency>	sal1		</runtime-module-dependency>
-+	<runtime-module-dependency>	vos			</runtime-module-dependency>
-+
-+	<type>	com.sun.star.registry.XRegistryKey			</type>
-+	<type>	com.sun.star.util.XCancellable				</type>
-+	<type>	com.sun.star.util.XNumberFormatter			</type>
-+	<type>	com.sun.star.uno.TypeClass					</type>
-+	<type>	com.sun.star.uno.XWeak						</type>
-+	<type>	com.sun.star.uno.XAggregation				</type>
-+	<type>	com.sun.star.uno.XComponentContext			</type>
-+	<type>	com.sun.star.beans.PropertyAttribute		</type>
-+	<type>	com.sun.star.beans.XPropertyState			</type>
-+	<type>	com.sun.star.beans.XPropertySet				</type>
-+	<type>	com.sun.star.beans.PropertyValue			</type>
-+	<type>	com.sun.star.beans.XMultiPropertySet		</type>
-+	<type>	com.sun.star.beans.XFastPropertySet			</type>
-+	<type>	com.sun.star.lang.XSingleServiceFactory		</type>
-+	<type>	com.sun.star.lang.XTypeProvider				</type>
-+	<type>	com.sun.star.lang.XSingleComponentFactory	</type>
-+	<type>	com.sun.star.lang.EventObject				</type>
-+	<type>	com.sun.star.lang.XComponent				</type>
-+	<type>	com.sun.star.lang.IllegalArgumentException	</type>
-+	<type>	com.sun.star.lang.DisposedException			</type>
-+	<type>	com.sun.star.lang.XMultiServiceFactory		</type>
-+	<type>	com.sun.star.lang.XServiceInfo				</type>
-+	<type>	com.sun.star.lang.XUnoTunnel				</type>
-+	<type>	com.sun.star.java.XJavaThreadRegister_11	</type>
-+	<type>	com.sun.star.java.XJavaVM					</type>	
-+	<type>	com.sun.star.sdbc.FetchDirection			</type>
-+	<type>	com.sun.star.sdbc.XConnection				</type>
-+	<type>	com.sun.star.sdbc.XStatement				</type>
-+	<type>	com.sun.star.sdbc.XResultSet				</type>
-+	<type>	com.sun.star.sdbc.XResultSetMetaDataSupplier</type>
-+	<type>	com.sun.star.sdbc.XColumnLocate				</type>
-+	<type>	com.sun.star.sdbc.XResultSetUpdate			</type>
-+	<type>	com.sun.star.sdbc.XWarningsSupplier			</type>
-+	<type>	com.sun.star.sdbc.XRowUpdate				</type>
-+	<type>	com.sun.star.sdbc.XMultipleResults			</type>
-+	<type>	com.sun.star.sdbc.XBatchExecution			</type>
-+	<type>	com.sun.star.sdbc.XPreparedBatchExecution	</type>
-+	<type>	com.sun.star.sdbc.XParameters				</type>
-+	<type>	com.sun.star.sdbc.XOutParameters			</type>
-+	<type>	com.sun.star.sdbc.DriverPropertyInfo		</type>
-+	<type>	com.sun.star.sdbc.SQLWarning				</type>
-+	<type>	com.sun.star.sdbc.XRow						</type>
-+	<type>	com.sun.star.sdbc.ColumnSearch				</type>
-+	<type>	com.sun.star.sdbc.ColumnValue				</type>
-+	<type>	com.sun.star.sdbc.DataType					</type>
-+	<type>	com.sun.star.sdbc.XDriver					</type>
-+	<type>	com.sun.star.sdbc.TransactionIsolation		</type>
-+	<type>	com.sun.star.sdbc.ResultSetType				</type>
-+	<type>	com.sun.star.sdbc.ResultSetConcurrency		</type>
-+	<type>	com.sun.star.sdbcx.XRowLocate				</type>
-+	<type>	com.sun.star.sdbcx.XDeleteRows				</type>
-+	<type>	com.sun.star.sdbcx.CompareBookmark			</type>
-+	<type>	com.sun.star.sdb.XColumnUpdate				</type>
-+	<type>	com.sun.star.sdb.XColumn					</type>
-+</module-description>
-diff -r 66620d8e1623 -r e88d214fb62a mysqlc/source/mysqlc_connection.cxx
---- /dev/null	Thu Jan 01 00:00:00 1970 +0000
-+++ mysqlc/source/mysqlc_connection.cxx	Mon Feb 15 15:27:59 2010 +0100
+diff -urN foo/source/mysqlc_connection.cxx mysqlc/source/mysqlc_connection.cxx
+--- foo/source/mysqlc_connection.cxx	1970-01-01 01:00:00.000000000 +0100
++++ mysqlc/source/mysqlc_connection.cxx	2010-03-26 23:00:32.000000000 +0100
 @@ -0,0 +1,791 @@
 +/*************************************************************************
 +* DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
@@ -1763,9 +1316,9 @@ diff -r 66620d8e1623 -r e88d214fb62a mysqlc/source/mysqlc_connection.cxx
 + * vim600: noet sw=4 ts=4 fdm=marker
 + * vim<600: noet sw=4 ts=4
 + */
-diff -r 66620d8e1623 -r e88d214fb62a mysqlc/source/mysqlc_connection.hxx
---- /dev/null	Thu Jan 01 00:00:00 1970 +0000
-+++ mysqlc/source/mysqlc_connection.hxx	Mon Feb 15 15:27:59 2010 +0100
+diff -urN foo/source/mysqlc_connection.hxx mysqlc/source/mysqlc_connection.hxx
+--- foo/source/mysqlc_connection.hxx	1970-01-01 01:00:00.000000000 +0100
++++ mysqlc/source/mysqlc_connection.hxx	2010-03-26 23:00:32.000000000 +0100
 @@ -0,0 +1,250 @@
 +/*************************************************************************
 +* DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
@@ -2017,9 +1570,9 @@ diff -r 66620d8e1623 -r e88d214fb62a mysqlc/source/mysqlc_connection.hxx
 + * vim<600: noet sw=4 ts=4
 + */
 +
-diff -r 66620d8e1623 -r e88d214fb62a mysqlc/source/mysqlc_databasemetadata.cxx
---- /dev/null	Thu Jan 01 00:00:00 1970 +0000
-+++ mysqlc/source/mysqlc_databasemetadata.cxx	Mon Feb 15 15:27:59 2010 +0100
+diff -urN foo/source/mysqlc_databasemetadata.cxx mysqlc/source/mysqlc_databasemetadata.cxx
+--- foo/source/mysqlc_databasemetadata.cxx	1970-01-01 01:00:00.000000000 +0100
++++ mysqlc/source/mysqlc_databasemetadata.cxx	2010-03-26 23:00:32.000000000 +0100
 @@ -0,0 +1,2215 @@
 +/*************************************************************************
 +* DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
@@ -4236,9 +3789,9 @@ diff -r 66620d8e1623 -r e88d214fb62a mysqlc/source/mysqlc_databasemetadata.cxx
 + * vim<600: noet sw=4 ts=4
 + */
 +
-diff -r 66620d8e1623 -r e88d214fb62a mysqlc/source/mysqlc_databasemetadata.hxx
---- /dev/null	Thu Jan 01 00:00:00 1970 +0000
-+++ mysqlc/source/mysqlc_databasemetadata.hxx	Mon Feb 15 15:27:59 2010 +0100
+diff -urN foo/source/mysqlc_databasemetadata.hxx mysqlc/source/mysqlc_databasemetadata.hxx
+--- foo/source/mysqlc_databasemetadata.hxx	1970-01-01 01:00:00.000000000 +0100
++++ mysqlc/source/mysqlc_databasemetadata.hxx	2010-03-26 23:00:33.000000000 +0100
 @@ -0,0 +1,243 @@
 +/*************************************************************************
 +* DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
@@ -4483,9 +4036,9 @@ diff -r 66620d8e1623 -r e88d214fb62a mysqlc/source/mysqlc_databasemetadata.hxx
 +}
 +
 +#endif // CONNECTIVITY_SDATABASEMETADATA_HXX
-diff -r 66620d8e1623 -r e88d214fb62a mysqlc/source/mysqlc_driver.cxx
---- /dev/null	Thu Jan 01 00:00:00 1970 +0000
-+++ mysqlc/source/mysqlc_driver.cxx	Mon Feb 15 15:27:59 2010 +0100
+diff -urN foo/source/mysqlc_driver.cxx mysqlc/source/mysqlc_driver.cxx
+--- foo/source/mysqlc_driver.cxx	1970-01-01 01:00:00.000000000 +0100
++++ mysqlc/source/mysqlc_driver.cxx	2010-03-26 23:00:33.000000000 +0100
 @@ -0,0 +1,368 @@
 +/*************************************************************************
 +* DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
@@ -4855,9 +4408,9 @@ diff -r 66620d8e1623 -r e88d214fb62a mysqlc/source/mysqlc_driver.cxx
 + * vim600: noet sw=4 ts=4 fdm=marker
 + * vim<600: noet sw=4 ts=4
 + */
-diff -r 66620d8e1623 -r e88d214fb62a mysqlc/source/mysqlc_driver.hxx
---- /dev/null	Thu Jan 01 00:00:00 1970 +0000
-+++ mysqlc/source/mysqlc_driver.hxx	Mon Feb 15 15:27:59 2010 +0100
+diff -urN foo/source/mysqlc_driver.hxx mysqlc/source/mysqlc_driver.hxx
+--- foo/source/mysqlc_driver.hxx	1970-01-01 01:00:00.000000000 +0100
++++ mysqlc/source/mysqlc_driver.hxx	2010-03-26 23:00:33.000000000 +0100
 @@ -0,0 +1,118 @@
 +/*************************************************************************
 +* DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
@@ -4977,9 +4530,9 @@ diff -r 66620d8e1623 -r e88d214fb62a mysqlc/source/mysqlc_driver.hxx
 + * vim600: noet sw=4 ts=4 fdm=marker
 + * vim<600: noet sw=4 ts=4
 + */
-diff -r 66620d8e1623 -r e88d214fb62a mysqlc/source/mysqlc_general.cxx
---- /dev/null	Thu Jan 01 00:00:00 1970 +0000
-+++ mysqlc/source/mysqlc_general.cxx	Mon Feb 15 15:27:59 2010 +0100
+diff -urN foo/source/mysqlc_general.cxx mysqlc/source/mysqlc_general.cxx
+--- foo/source/mysqlc_general.cxx	1970-01-01 01:00:00.000000000 +0100
++++ mysqlc/source/mysqlc_general.cxx	2010-03-26 23:00:33.000000000 +0100
 @@ -0,0 +1,176 @@
 +/*************************************************************************
 +* DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
@@ -5157,9 +4710,9 @@ diff -r 66620d8e1623 -r e88d214fb62a mysqlc/source/mysqlc_general.cxx
 +
 +
 +} /* namespace */
-diff -r 66620d8e1623 -r e88d214fb62a mysqlc/source/mysqlc_general.hxx
---- /dev/null	Thu Jan 01 00:00:00 1970 +0000
-+++ mysqlc/source/mysqlc_general.hxx	Mon Feb 15 15:27:59 2010 +0100
+diff -urN foo/source/mysqlc_general.hxx mysqlc/source/mysqlc_general.hxx
+--- foo/source/mysqlc_general.hxx	1970-01-01 01:00:00.000000000 +0100
++++ mysqlc/source/mysqlc_general.hxx	2010-03-26 23:00:33.000000000 +0100
 @@ -0,0 +1,66 @@
 +/*************************************************************************
 +* DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
@@ -5227,9 +4780,21 @@ diff -r 66620d8e1623 -r e88d214fb62a mysqlc/source/mysqlc_general.hxx
 +}
 +
 +#endif
-diff -r 66620d8e1623 -r e88d214fb62a mysqlc/source/mysqlc_preparedstatement.cxx
---- /dev/null	Thu Jan 01 00:00:00 1970 +0000
-+++ mysqlc/source/mysqlc_preparedstatement.cxx	Mon Feb 15 15:27:59 2010 +0100
+diff -urN foo/source/mysqlc.map mysqlc/source/mysqlc.map
+--- foo/source/mysqlc.map	1970-01-01 01:00:00.000000000 +0100
++++ mysqlc/source/mysqlc.map	2010-03-26 23:00:32.000000000 +0100
+@@ -0,0 +1,8 @@
++UDK_3_0_0 {
++	global:
++		component_getImplementationEnvironment;
++		component_writeInfo;
++		component_getFactory;
++	local:
++		*;
++};
+diff -urN foo/source/mysqlc_preparedstatement.cxx mysqlc/source/mysqlc_preparedstatement.cxx
+--- foo/source/mysqlc_preparedstatement.cxx	1970-01-01 01:00:00.000000000 +0100
++++ mysqlc/source/mysqlc_preparedstatement.cxx	2010-03-26 23:00:33.000000000 +0100
 @@ -0,0 +1,944 @@
 +/*************************************************************************
 +* DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
@@ -6175,9 +5740,9 @@ diff -r 66620d8e1623 -r e88d214fb62a mysqlc/source/mysqlc_preparedstatement.cxx
 + * vim600: noet sw=4 ts=4 fdm=marker
 + * vim<600: noet sw=4 ts=4
 + */
-diff -r 66620d8e1623 -r e88d214fb62a mysqlc/source/mysqlc_preparedstatement.hxx
---- /dev/null	Thu Jan 01 00:00:00 1970 +0000
-+++ mysqlc/source/mysqlc_preparedstatement.hxx	Mon Feb 15 15:27:59 2010 +0100
+diff -urN foo/source/mysqlc_preparedstatement.hxx mysqlc/source/mysqlc_preparedstatement.hxx
+--- foo/source/mysqlc_preparedstatement.hxx	1970-01-01 01:00:00.000000000 +0100
++++ mysqlc/source/mysqlc_preparedstatement.hxx	2010-03-26 23:00:33.000000000 +0100
 @@ -0,0 +1,194 @@
 +/*************************************************************************
 +* DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
@@ -6373,9 +5938,9 @@ diff -r 66620d8e1623 -r e88d214fb62a mysqlc/source/mysqlc_preparedstatement.hxx
 + * vim<600: noet sw=4 ts=4
 + */
 + 
-diff -r 66620d8e1623 -r e88d214fb62a mysqlc/source/mysqlc_propertyids.cxx
---- /dev/null	Thu Jan 01 00:00:00 1970 +0000
-+++ mysqlc/source/mysqlc_propertyids.cxx	Mon Feb 15 15:27:59 2010 +0100
+diff -urN foo/source/mysqlc_propertyids.cxx mysqlc/source/mysqlc_propertyids.cxx
+--- foo/source/mysqlc_propertyids.cxx	1970-01-01 01:00:00.000000000 +0100
++++ mysqlc/source/mysqlc_propertyids.cxx	2010-03-26 23:00:33.000000000 +0100
 @@ -0,0 +1,210 @@
 +/*************************************************************************
 +* DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
@@ -6587,9 +6152,9 @@ diff -r 66620d8e1623 -r e88d214fb62a mysqlc/source/mysqlc_propertyids.cxx
 + * vim600: noet sw=4 ts=4 fdm=marker
 + * vim<600: noet sw=4 ts=4
 + */
-diff -r 66620d8e1623 -r e88d214fb62a mysqlc/source/mysqlc_propertyids.hxx
---- /dev/null	Thu Jan 01 00:00:00 1970 +0000
-+++ mysqlc/source/mysqlc_propertyids.hxx	Mon Feb 15 15:27:59 2010 +0100
+diff -urN foo/source/mysqlc_propertyids.hxx mysqlc/source/mysqlc_propertyids.hxx
+--- foo/source/mysqlc_propertyids.hxx	1970-01-01 01:00:00.000000000 +0100
++++ mysqlc/source/mysqlc_propertyids.hxx	2010-03-26 23:00:33.000000000 +0100
 @@ -0,0 +1,136 @@
 +
 +#ifndef _CONNECTIVITY_PROPERTYIDS_HXX_
@@ -6727,9 +6292,9 @@ diff -r 66620d8e1623 -r e88d214fb62a mysqlc/source/mysqlc_propertyids.hxx
 +#endif // _CONNECTIVITY_PROPERTYIDS_HXX_
 +
 +
-diff -r 66620d8e1623 -r e88d214fb62a mysqlc/source/mysqlc_resultset.cxx
---- /dev/null	Thu Jan 01 00:00:00 1970 +0000
-+++ mysqlc/source/mysqlc_resultset.cxx	Mon Feb 15 15:27:59 2010 +0100
+diff -urN foo/source/mysqlc_resultset.cxx mysqlc/source/mysqlc_resultset.cxx
+--- foo/source/mysqlc_resultset.cxx	1970-01-01 01:00:00.000000000 +0100
++++ mysqlc/source/mysqlc_resultset.cxx	2010-03-26 23:00:33.000000000 +0100
 @@ -0,0 +1,1509 @@
 +/*************************************************************************
 +* DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
@@ -8240,9 +7805,9 @@ diff -r 66620d8e1623 -r e88d214fb62a mysqlc/source/mysqlc_resultset.cxx
 + * vim600: noet sw=4 ts=4 fdm=marker
 + * vim<600: noet sw=4 ts=4
 + */
-diff -r 66620d8e1623 -r e88d214fb62a mysqlc/source/mysqlc_resultset.hxx
---- /dev/null	Thu Jan 01 00:00:00 1970 +0000
-+++ mysqlc/source/mysqlc_resultset.hxx	Mon Feb 15 15:27:59 2010 +0100
+diff -urN foo/source/mysqlc_resultset.hxx mysqlc/source/mysqlc_resultset.hxx
+--- foo/source/mysqlc_resultset.hxx	1970-01-01 01:00:00.000000000 +0100
++++ mysqlc/source/mysqlc_resultset.hxx	2010-03-26 23:00:33.000000000 +0100
 @@ -0,0 +1,337 @@
 +/*************************************************************************
 +* DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
@@ -8581,9 +8146,9 @@ diff -r 66620d8e1623 -r e88d214fb62a mysqlc/source/mysqlc_resultset.hxx
 + * vim600: noet sw=4 ts=4 fdm=marker
 + * vim<600: noet sw=4 ts=4
 + */
-diff -r 66620d8e1623 -r e88d214fb62a mysqlc/source/mysqlc_resultsetmetadata.cxx
---- /dev/null	Thu Jan 01 00:00:00 1970 +0000
-+++ mysqlc/source/mysqlc_resultsetmetadata.cxx	Mon Feb 15 15:27:59 2010 +0100
+diff -urN foo/source/mysqlc_resultsetmetadata.cxx mysqlc/source/mysqlc_resultsetmetadata.cxx
+--- foo/source/mysqlc_resultsetmetadata.cxx	1970-01-01 01:00:00.000000000 +0100
++++ mysqlc/source/mysqlc_resultsetmetadata.cxx	2010-03-26 23:00:33.000000000 +0100
 @@ -0,0 +1,468 @@
 +/*************************************************************************
 +* DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
@@ -9053,9 +8618,9 @@ diff -r 66620d8e1623 -r e88d214fb62a mysqlc/source/mysqlc_resultsetmetadata.cxx
 + * vim<600: noet sw=4 ts=4
 + */
 +
-diff -r 66620d8e1623 -r e88d214fb62a mysqlc/source/mysqlc_resultsetmetadata.hxx
---- /dev/null	Thu Jan 01 00:00:00 1970 +0000
-+++ mysqlc/source/mysqlc_resultsetmetadata.hxx	Mon Feb 15 15:27:59 2010 +0100
+diff -urN foo/source/mysqlc_resultsetmetadata.hxx mysqlc/source/mysqlc_resultsetmetadata.hxx
+--- foo/source/mysqlc_resultsetmetadata.hxx	1970-01-01 01:00:00.000000000 +0100
++++ mysqlc/source/mysqlc_resultsetmetadata.hxx	2010-03-26 23:00:33.000000000 +0100
 @@ -0,0 +1,121 @@
 +/*************************************************************************
 +* DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
@@ -9178,9 +8743,9 @@ diff -r 66620d8e1623 -r e88d214fb62a mysqlc/source/mysqlc_resultsetmetadata.hxx
 +}
 +
 +#endif // CONNECTIVITY_SRESULSETMETADATA_HXX
-diff -r 66620d8e1623 -r e88d214fb62a mysqlc/source/mysqlc_services.cxx
---- /dev/null	Thu Jan 01 00:00:00 1970 +0000
-+++ mysqlc/source/mysqlc_services.cxx	Mon Feb 15 15:27:59 2010 +0100
+diff -urN foo/source/mysqlc_services.cxx mysqlc/source/mysqlc_services.cxx
+--- foo/source/mysqlc_services.cxx	1970-01-01 01:00:00.000000000 +0100
++++ mysqlc/source/mysqlc_services.cxx	2010-03-26 23:00:33.000000000 +0100
 @@ -0,0 +1,183 @@
 +/*************************************************************************
 +* DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
@@ -9365,9 +8930,9 @@ diff -r 66620d8e1623 -r e88d214fb62a mysqlc/source/mysqlc_services.cxx
 + * vim600: noet sw=4 ts=4 fdm=marker
 + * vim<600: noet sw=4 ts=4
 + */
-diff -r 66620d8e1623 -r e88d214fb62a mysqlc/source/mysqlc_statement.cxx
---- /dev/null	Thu Jan 01 00:00:00 1970 +0000
-+++ mysqlc/source/mysqlc_statement.cxx	Mon Feb 15 15:27:59 2010 +0100
+diff -urN foo/source/mysqlc_statement.cxx mysqlc/source/mysqlc_statement.cxx
+--- foo/source/mysqlc_statement.cxx	1970-01-01 01:00:00.000000000 +0100
++++ mysqlc/source/mysqlc_statement.cxx	2010-03-26 23:00:33.000000000 +0100
 @@ -0,0 +1,531 @@
 +/*************************************************************************
 +* DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
@@ -9900,9 +9465,9 @@ diff -r 66620d8e1623 -r e88d214fb62a mysqlc/source/mysqlc_statement.cxx
 + * vim600: noet sw=4 ts=4 fdm=marker
 + * vim<600: noet sw=4 ts=4
 + */
-diff -r 66620d8e1623 -r e88d214fb62a mysqlc/source/mysqlc_statement.hxx
---- /dev/null	Thu Jan 01 00:00:00 1970 +0000
-+++ mysqlc/source/mysqlc_statement.hxx	Mon Feb 15 15:27:59 2010 +0100
+diff -urN foo/source/mysqlc_statement.hxx mysqlc/source/mysqlc_statement.hxx
+--- foo/source/mysqlc_statement.hxx	1970-01-01 01:00:00.000000000 +0100
++++ mysqlc/source/mysqlc_statement.hxx	2010-03-26 23:00:33.000000000 +0100
 @@ -0,0 +1,187 @@
 +#ifndef MYSQLC_STATEMENT_HXX
 +#define MYSQLC_STATEMENT_HXX
@@ -10091,9 +9656,9 @@ diff -r 66620d8e1623 -r e88d214fb62a mysqlc/source/mysqlc_statement.hxx
 + * vim600: noet sw=4 ts=4 fdm=marker
 + * vim<600: noet sw=4 ts=4
 + */
-diff -r 66620d8e1623 -r e88d214fb62a mysqlc/source/mysqlc_subcomponent.hxx
---- /dev/null	Thu Jan 01 00:00:00 1970 +0000
-+++ mysqlc/source/mysqlc_subcomponent.hxx	Mon Feb 15 15:27:59 2010 +0100
+diff -urN foo/source/mysqlc_subcomponent.hxx mysqlc/source/mysqlc_subcomponent.hxx
+--- foo/source/mysqlc_subcomponent.hxx	1970-01-01 01:00:00.000000000 +0100
++++ mysqlc/source/mysqlc_subcomponent.hxx	2010-03-26 23:00:33.000000000 +0100
 @@ -0,0 +1,255 @@
 +/*************************************************************************
 +* DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
@@ -10350,9 +9915,9 @@ diff -r 66620d8e1623 -r e88d214fb62a mysqlc/source/mysqlc_subcomponent.hxx
 +}
 +#endif // _CONNECTIVITY_OSUBCOMPONENT_HXX_
 +
-diff -r 66620d8e1623 -r e88d214fb62a mysqlc/source/mysqlc_types.cxx
---- /dev/null	Thu Jan 01 00:00:00 1970 +0000
-+++ mysqlc/source/mysqlc_types.cxx	Mon Feb 15 15:27:59 2010 +0100
+diff -urN foo/source/mysqlc_types.cxx mysqlc/source/mysqlc_types.cxx
+--- foo/source/mysqlc_types.cxx	1970-01-01 01:00:00.000000000 +0100
++++ mysqlc/source/mysqlc_types.cxx	2010-03-26 23:00:33.000000000 +0100
 @@ -0,0 +1,792 @@
 +/*************************************************************************
 +* DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
@@ -11146,9 +10711,9 @@ diff -r 66620d8e1623 -r e88d214fb62a mysqlc/source/mysqlc_types.cxx
 +        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
 +    }
 +};
-diff -r 66620d8e1623 -r e88d214fb62a mysqlc/source/mysqlc_types.hxx
---- /dev/null	Thu Jan 01 00:00:00 1970 +0000
-+++ mysqlc/source/mysqlc_types.hxx	Mon Feb 15 15:27:59 2010 +0100
+diff -urN foo/source/mysqlc_types.hxx mysqlc/source/mysqlc_types.hxx
+--- foo/source/mysqlc_types.hxx	1970-01-01 01:00:00.000000000 +0100
++++ mysqlc/source/mysqlc_types.hxx	2010-03-26 23:00:33.000000000 +0100
 @@ -0,0 +1,56 @@
 +/*************************************************************************
 +* DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
@@ -11206,10 +10771,164 @@ diff -r 66620d8e1623 -r e88d214fb62a mysqlc/source/mysqlc_types.hxx
 +extern TypeInfoDef mysqlc_types[];
 +
 +#endif /* MYSQLC_TYPES_HXX */
-diff -r 66620d8e1623 -r e88d214fb62a mysqlc/source/registry/data/org/openoffice/Office/DataAccess/Drivers.xcu
---- /dev/null	Thu Jan 01 00:00:00 1970 +0000
-+++ mysqlc/source/registry/data/org/openoffice/Office/DataAccess/Drivers.xcu	Mon Feb 15 15:27:59 2010 +0100
-@@ -0,0 +1,103 @@
+diff -urN foo/source/mysqlc.xml mysqlc/source/mysqlc.xml
+--- foo/source/mysqlc.xml	1970-01-01 01:00:00.000000000 +0100
++++ mysqlc/source/mysqlc.xml	2010-03-26 23:00:32.000000000 +0100
+@@ -0,0 +1,81 @@
++<?xml version='1.0' encoding="UTF-8"?>
++<!DOCTYPE COMPONENTDESCRIPTION PUBLIC "-//W3C//DTD HTML 3.2//EN" "module-description.dtd">
++<module-description xmlns:xlink="http://www.w3.org/1999/xlink">
++	<module-name>mysqlc</module-name>
++	<component-description>
++		<Author>Georg Richter</Author>
++		<Name>com.sun.star.comp.sdbc.mysqlc</Name>
++		<Description>
++			This is the implementation of the MySQL Connector/OO.org.
++		</Description>
++		<loader-name>com.sun.star.loader.SharedLibrary</loader-name>
++		<language>c++</language>
++		<status value="final"/>
++		<supported-service>	com.sun.star.sdbc.Driver	</supported-service>
++		<service-dependency>	...	</service-dependency>
++	</component-description>	  
++	<project-build-dependency>	cppuhelper	</project-build-dependency>
++	<project-build-dependency>	cppu		</project-build-dependency>
++	<project-build-dependency>	sal			</project-build-dependency>
++	<project-build-dependency>	vos			</project-build-dependency>
++
++	<runtime-module-dependency>	cppuhelper	</runtime-module-dependency>
++	<runtime-module-dependency>	cppu1		</runtime-module-dependency>
++	<runtime-module-dependency>	sal1		</runtime-module-dependency>
++	<runtime-module-dependency>	vos			</runtime-module-dependency>
++
++	<type>	com.sun.star.registry.XRegistryKey			</type>
++	<type>	com.sun.star.util.XCancellable				</type>
++	<type>	com.sun.star.util.XNumberFormatter			</type>
++	<type>	com.sun.star.uno.TypeClass					</type>
++	<type>	com.sun.star.uno.XWeak						</type>
++	<type>	com.sun.star.uno.XAggregation				</type>
++	<type>	com.sun.star.uno.XComponentContext			</type>
++	<type>	com.sun.star.beans.PropertyAttribute		</type>
++	<type>	com.sun.star.beans.XPropertyState			</type>
++	<type>	com.sun.star.beans.XPropertySet				</type>
++	<type>	com.sun.star.beans.PropertyValue			</type>
++	<type>	com.sun.star.beans.XMultiPropertySet		</type>
++	<type>	com.sun.star.beans.XFastPropertySet			</type>
++	<type>	com.sun.star.lang.XSingleServiceFactory		</type>
++	<type>	com.sun.star.lang.XTypeProvider				</type>
++	<type>	com.sun.star.lang.XSingleComponentFactory	</type>
++	<type>	com.sun.star.lang.EventObject				</type>
++	<type>	com.sun.star.lang.XComponent				</type>
++	<type>	com.sun.star.lang.IllegalArgumentException	</type>
++	<type>	com.sun.star.lang.DisposedException			</type>
++	<type>	com.sun.star.lang.XMultiServiceFactory		</type>
++	<type>	com.sun.star.lang.XServiceInfo				</type>
++	<type>	com.sun.star.lang.XUnoTunnel				</type>
++	<type>	com.sun.star.java.XJavaThreadRegister_11	</type>
++	<type>	com.sun.star.java.XJavaVM					</type>	
++	<type>	com.sun.star.sdbc.FetchDirection			</type>
++	<type>	com.sun.star.sdbc.XConnection				</type>
++	<type>	com.sun.star.sdbc.XStatement				</type>
++	<type>	com.sun.star.sdbc.XResultSet				</type>
++	<type>	com.sun.star.sdbc.XResultSetMetaDataSupplier</type>
++	<type>	com.sun.star.sdbc.XColumnLocate				</type>
++	<type>	com.sun.star.sdbc.XResultSetUpdate			</type>
++	<type>	com.sun.star.sdbc.XWarningsSupplier			</type>
++	<type>	com.sun.star.sdbc.XRowUpdate				</type>
++	<type>	com.sun.star.sdbc.XMultipleResults			</type>
++	<type>	com.sun.star.sdbc.XBatchExecution			</type>
++	<type>	com.sun.star.sdbc.XPreparedBatchExecution	</type>
++	<type>	com.sun.star.sdbc.XParameters				</type>
++	<type>	com.sun.star.sdbc.XOutParameters			</type>
++	<type>	com.sun.star.sdbc.DriverPropertyInfo		</type>
++	<type>	com.sun.star.sdbc.SQLWarning				</type>
++	<type>	com.sun.star.sdbc.XRow						</type>
++	<type>	com.sun.star.sdbc.ColumnSearch				</type>
++	<type>	com.sun.star.sdbc.ColumnValue				</type>
++	<type>	com.sun.star.sdbc.DataType					</type>
++	<type>	com.sun.star.sdbc.XDriver					</type>
++	<type>	com.sun.star.sdbc.TransactionIsolation		</type>
++	<type>	com.sun.star.sdbc.ResultSetType				</type>
++	<type>	com.sun.star.sdbc.ResultSetConcurrency		</type>
++	<type>	com.sun.star.sdbcx.XRowLocate				</type>
++	<type>	com.sun.star.sdbcx.XDeleteRows				</type>
++	<type>	com.sun.star.sdbcx.CompareBookmark			</type>
++	<type>	com.sun.star.sdb.XColumnUpdate				</type>
++	<type>	com.sun.star.sdb.XColumn					</type>
++</module-description>
+diff -urN foo/source/README mysqlc/source/README
+--- foo/source/README	1970-01-01 01:00:00.000000000 +0100
++++ mysqlc/source/README	2010-03-26 23:00:32.000000000 +0100
+@@ -0,0 +1,65 @@
++---------- Status -------------------------------------------------------------
++
++The code is on a PREVIEW level. PREVIEW means pre-alpha.
++
++---------- Requirements -------------------------------------------------------
++
++The MySQL driver for OpenOffice.org (MySQL Connector/OpenOffice.org - C/OOo)
++requires two external libraries to be build:
++
++ 1) The MySQL Client Library (libmysql)
++ 2) The MySQL Connector/C++ Library (libmysqlcppcon)
++
++At the time of writing neither of the two libraries are part of the CWS!
++Before you can build the MySQL driver for OpenOffice.org you must install
++the two required libraries on your system before you can compile the driver.
++
++You need the two libraries because the MySQL driver for OpenOffice.org
++does not feature an implementation of the MySQL Client Server
++communication protocol. The protocol implementation is part of the MySQL
++Client Library. And the SDBC(X) style OpenOffice.org driver is implemented as a
++wrapper of the MySQL Connector/C++ Library which implements a JDBC interface and
++in turn uses the C based MySQL Client Library.
++
++1) MySQL Client Library (libmysql)
++
++The MySQL Client Library (libmysql) is part of the MySQL Server. You need to
++download and install the MySQL Server. Use a binary distribution of
++MySQL 5.0.x or MySQL 5.1.x. Check the MySQL manual for instructions, e.g.
++for Unix:
++
++ http://dev.mysql.com/doc/refman/5.1/en/installing-binary.html
++
++The typical installation path of the libmysql.so on Unix is
++/usr/local/mysql/lib/mysql/ .
++
++2) MySQL Connector/C++ (libmysqlcppcon)
++
++Download and install the latest version of the MySQL Connector/C++, see
++http://forge.mysql.com/wiki/Connector_C++ . Check out the source
++from the bzr repository.
++
++3) Tweaking library paths
++
++At the time of writing you might have to *manually* tweak library paths and
++library names by patching makefile.mk. This is a temporary hack. The makefile
++will be improved later.
++
++However, for the moment check the makefile.mk if the compilation fails due to
++"missing" libraries (= libraries not found). For example, check the following
++settings:
++
++  MYSQL_INCDIR=/usr/local/include
++  MYSQL_LIBDIR=/usr/local/lib
++  [...]
++  MYSQL_INCDIR=/usr/local/include
++  MYSQL_LIBDIR=/usr/local/lib
++  [...]
++  MYSQL_INC=-I$(MYSQL_INCDIR)
++  MYSQL_LIB=-L$(MYSQL_LIBDIR) -lmysqlclient -rdynamic -lz -lcrypt -lnsl -lm
++  MYSQL_LIBFILE=$(MYSQL_LIBDIR)$/libmysqlclient.so.16
++  MYSQL_CPPCONN_LIBFILE=$(MYSQL_LIBDIR)$/libmysqlcppconn.so
++  [...]
++
++A common issue is libmysqlclient.so.15 vs. libmysqlclient.so.16 .
++
+diff -urN foo/source/registry/data/org/openoffice/Office/DataAccess/Drivers.xcu mysqlc/source/registry/data/org/openoffice/Office/DataAccess/Drivers.xcu
+--- foo/source/registry/data/org/openoffice/Office/DataAccess/Drivers.xcu	1970-01-01 01:00:00.000000000 +0100
++++ mysqlc/source/registry/data/org/openoffice/Office/DataAccess/Drivers.xcu	2010-03-26 23:00:33.000000000 +0100
+@@ -0,0 +1,93 @@
 +<?xml version="1.0" encoding="UTF-8"?>
 +<!--***********************************************************************
 + *
@@ -11251,16 +10970,6 @@ diff -r 66620d8e1623 -r e88d214fb62a mysqlc/source/registry/data/org/openoffice/
 +      </prop>
 +      <node oor:name="Properties">
 +        <node oor:name="CharSet" oor:op="replace">
-+          <prop oor:name="Value" oor:type="xs:string">
-+            <value></value>
-+          </prop>
-+        </node>
-+        <node oor:name="LocalSocket" oor:op="replace">
-+          <prop oor:name="Value" oor:type="xs:string">
-+            <value></value>
-+          </prop>
-+        </node>
-+        <node oor:name="NamedPipe" oor:op="replace">
 +          <prop oor:name="Value" oor:type="xs:string">
 +            <value></value>
 +          </prop>
@@ -11313,9 +11022,9 @@ diff -r 66620d8e1623 -r e88d214fb62a mysqlc/source/registry/data/org/openoffice/
 +    </node>
 +  </node>
 +</oor:component-data>
-diff -r 66620d8e1623 -r e88d214fb62a mysqlc/version.mk
---- /dev/null	Thu Jan 01 00:00:00 1970 +0000
-+++ mysqlc/version.mk	Mon Feb 15 15:27:59 2010 +0100
+diff -urN foo/version.mk mysqlc/version.mk
+--- foo/version.mk	1970-01-01 01:00:00.000000000 +0100
++++ mysqlc/version.mk	2010-03-26 23:00:33.000000000 +0100
 @@ -0,0 +1,38 @@
 +#*************************************************************************
 +#
@@ -11349,19 +11058,15 @@ diff -r 66620d8e1623 -r e88d214fb62a mysqlc/version.mk
 +MYSQLC_VERSION_MICRO=1
 +
 +# the title, as displayed in the Extension Manager
-+MYSQLC_TITLE=MySQL Connector for OpenOffice.org
++MYSQLC_TITLE=MySQL Connector
 +
 +# the status of the extension
 +# if this is different from "final", it will be appended to the title displayed in the Extension Manager
 +# and also added to the file name of the resulting .oxt file
-+MYSQLC_STATUS=Alpha
---- /dev/null
-+++ mysqlc/source/delzip
-@@ -0,0 +1 @@
-+
-diff -r 66620d8e1623 -r e88d214fb62a mysqlcppconn/cppconn_config.pmk
---- /dev/null	Thu Jan 01 00:00:00 1970 +0000
-+++ mysqlcppconn/cppconn_config.pmk	Mon Feb 15 15:27:59 2010 +0100
++MYSQLC_STATUS=final
+diff -urN foo/cppconn_config.pmk mysqlcppconn/cppconn_config.pmk
+--- foo/cppconn_config.pmk	1970-01-01 01:00:00.000000000 +0100
++++ mysqlcppconn/cppconn_config.pmk	2010-03-26 23:00:33.000000000 +0100
 @@ -0,0 +1,33 @@
 +#*************************************************************************
 +#
@@ -11396,12 +11101,11 @@ diff -r 66620d8e1623 -r e88d214fb62a mysqlcppconn/cppconn_config.pmk
 +EXTERNAL_WARNINGS_NOT_ERRORS = TRUE
 +
 +CPPCONN_NATIVEAPI = cppconn_nativeapi
-diff -r 66620d8e1623 -r e88d214fb62a mysqlcppconn/download/mysql-connector-cpp.zip
-Binary file mysqlcppconn/download/mysql-connector-cpp.zip has changed
-diff -r 66620d8e1623 -r e88d214fb62a mysqlcppconn/makefile.mk
---- /dev/null	Thu Jan 01 00:00:00 1970 +0000
-+++ mysqlcppconn/makefile.mk	Mon Feb 15 15:27:59 2010 +0100
-@@ -0,0 +1,90 @@
+Binary files foo/download/mysql-connector-cpp.zip and mysqlcppconn/download/mysql-connector-cpp.zip differ
+diff -urN foo/makefile.mk mysqlcppconn/makefile.mk
+--- foo/makefile.mk	1970-01-01 01:00:00.000000000 +0100
++++ mysqlcppconn/makefile.mk	2010-03-26 23:00:34.000000000 +0100
+@@ -0,0 +1,88 @@
 +#*************************************************************************
 +#
 +# DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
@@ -11456,9 +11160,7 @@ diff -r 66620d8e1623 -r e88d214fb62a mysqlcppconn/makefile.mk
 +CONVERTFILES=\
 +				cppconn$/build_config.h
 +
-+PATCH_FILES=\
-+    $(TARFILE_NAME).patch \
-+    patches/default_to_protocol_tcp.patch
++PATCH_FILES=$(TARFILE_NAME).patch
 +
 +BUILD_DIR=driver
 +BUILD_ACTION = \
@@ -11492,83 +11194,157 @@ diff -r 66620d8e1623 -r e88d214fb62a mysqlcppconn/makefile.mk
 +normalize: $(PACKAGE_DIR)$/$(NORMALIZE_FLAG_FILE)
 +
 +$(PACKAGE_DIR)$/$(PREDELIVER_FLAG_FILE) : normalize
-diff -r 66620d8e1623 -r e88d214fb62a mysqlcppconn/mysql-connector-cpp.patch
---- /dev/null	Thu Jan 01 00:00:00 1970 +0000
-+++ mysqlcppconn/mysql-connector-cpp.patch	Mon Feb 15 15:27:59 2010 +0100
-@@ -0,0 +1,385 @@
+diff -urN foo/mysql_config.pmk mysqlcppconn/mysql_config.pmk
+--- foo/mysql_config.pmk	1970-01-01 01:00:00.000000000 +0100
++++ mysqlcppconn/mysql_config.pmk	2010-03-29 10:44:10.000000000 +0200
+@@ -0,0 +1,55 @@
++#*************************************************************************
++#
++# DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
++# 
++# Copyright 2008 by Sun Microsystems, Inc.
++#
++#   OpenOffice.org - a multi-platform office productivity suite
++#
++# This file is part of OpenOffice.org.
++#
++# OpenOffice.org is free software: you can redistribute it and/or modify
++# it under the terms of the GNU Lesser General Public License version 3
++# only, as published by the Free Software Foundation.
++#
++# OpenOffice.org is distributed in the hope that it will be useful,
++#     but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU Lesser General Public License version 3 for more details
++# (a copy is included in the LICENSE file that accompanied this code).
++#
++# You should have received a copy of the GNU Lesser General Public License
++# version 3 along with OpenOffice.org.  If not, see
++# <http://www.openoffice.org/license.html>
++# for a copy of the LGPLv3 License.
++#
++#*************************************************************************
++
++.IF "$(SYSTEM_MYSQL)" == "YES"
++  CFLAGS+=-DSYSTEM_MYSQL
++.ELSE
++  .IF "$(LIBMYSQL_PATH)" == ""
++    alltar:
++      @echo "need to have LIBMYSQL_PATH set to the location where libmysql (also known as 'MySQL Connector/C') is installed"
++      @force_dmake_to_error
++  .ENDIF
++.ENDIF
++
++.IF "$(GUI)"!="WNT"
++
++.IF "$(SYSTEM_MYSQL)" == "YES"
++    MYSQL_LIB+=-lmysqlcppconn
++.ENDIF
++
++.ELSE   # "$(GUI)"!="WNT"
++
++CFLAGS+=-DCPPDBC_WIN32 -D_CRT_SECURE_NO_WARNINGS -D_SCL_SECURE_NO_WARNINGS
++
++.ENDIF  # "$(GUI)"!="WNT"
++
++.IF "$(SYSTEM_MYSQL)" != "YES"
++    MYSQL_INC+=-I$(LIBMYSQL_PATH)$/include
++.ENDIF
++
++CFLAGS+=-I$(PRJINC) -I$(PRJINC)$/cppconn $(MYSQL_INC) -DCPPCONN_LIB_BUILD
++
+diff -urN foo/mysql_config.pmk.orig mysqlcppconn/mysql_config.pmk.orig
+--- foo/mysql_config.pmk.orig	1970-01-01 01:00:00.000000000 +0100
++++ mysqlcppconn/mysql_config.pmk.orig	2010-03-26 23:36:09.000000000 +0100
+@@ -0,0 +1,49 @@
++#*************************************************************************
++#
++# DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
++# 
++# Copyright 2008 by Sun Microsystems, Inc.
++#
++#   OpenOffice.org - a multi-platform office productivity suite
++#
++# This file is part of OpenOffice.org.
++#
++# OpenOffice.org is free software: you can redistribute it and/or modify
++# it under the terms of the GNU Lesser General Public License version 3
++# only, as published by the Free Software Foundation.
++#
++# OpenOffice.org is distributed in the hope that it will be useful,
++#     but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU Lesser General Public License version 3 for more details
++# (a copy is included in the LICENSE file that accompanied this code).
++#
++# You should have received a copy of the GNU Lesser General Public License
++# version 3 along with OpenOffice.org.  If not, see
++# <http://www.openoffice.org/license.html>
++# for a copy of the LGPLv3 License.
++#
++#*************************************************************************
++
++.IF "$(SYSTEM_MYSQL)" == "YES"
++  CFLAGS+=-DSYSTEM_MYSQL
++.ELSE
++  .IF "$(LIBMYSQL_PATH)" == ""
++    alltar:
++      @echo "need to have LIBMYSQL_PATH set to the location where libmysql (also known as 'MySQL Connector/C') is installed"
++      @force_dmake_to_error
++  .ENDIF
++.ENDIF
++
++.IF "$(GUI)"=="WNT"
++
++CFLAGS+=-DCPPDBC_WIN32 -D_CRT_SECURE_NO_WARNINGS -D_SCL_SECURE_NO_WARNINGS
++
++.ENDIF  # "$(GUI)"!="WNT"
++
++.IF "$(SYSTEM_MYSQL)" != "YES"
++    MYSQL_INC+=-I$(LIBMYSQL_PATH)$/include
++.ENDIF
++
++CFLAGS+=-I$(PRJINC) -I$(PRJINC)$/cppconn $(MYSQL_INC) -DCPPCONN_LIB_BUILD
++
+diff -urN foo/mysql-connector-cpp.patch mysqlcppconn/mysql-connector-cpp.patch
+--- foo/mysql-connector-cpp.patch	1970-01-01 01:00:00.000000000 +0100
++++ mysqlcppconn/mysql-connector-cpp.patch	2010-03-26 23:00:34.000000000 +0100
+@@ -0,0 +1,351 @@
 +--- misc/mysql-connector-cpp/cppconn/build_config.h	2009-08-13 17:13:46.000000000 +0200
-++++ misc/build/mysql-connector-cpp/cppconn/build_config.h	2009-09-11 09:41:41.150391316 +0200
-+@@ -1,36 +1,34 @@
-+-/*
-+-   Copyright 2007 - 2008 MySQL AB, 2008 - 2009 Sun Microsystems, Inc.  All rights reserved.
-+-
-+-   The MySQL Connector/C++ is licensed under the terms of the GPL
-+-   <http://www.gnu.org/licenses/old-licenses/gpl-2.0.html>, like most
-+-   MySQL Connectors. There are special exceptions to the terms and
-+-   conditions of the GPL as it is applied to this software, see the
-+-   FLOSS License Exception
-+-   <http://www.mysql.com/about/legal/licensing/foss-exception.html>.
-+-*/
-+-
-+-#ifndef _SQL_BUILD_CONFIG_H_
-+-#define _SQL_BUILD_CONFIG_H_
-+-
+++++ misc/build/mysql-connector-cpp/cppconn/build_config.h	2009-08-14 09:56:40.296875000 +0200
++@@ -12,25 +12,23 @@
++ #ifndef _SQL_BUILD_CONFIG_H_
++ #define _SQL_BUILD_CONFIG_H_
++ 
 +-#ifndef CPPCONN_PUBLIC_FUNC
 +-
 +-#if defined(_WIN32)
-+- // mysqlcppconn_EXPORTS is added by cmake and defined for dynamic lib build only
-+-  #ifdef mysqlcppconn_EXPORTS
-+-    #define CPPCONN_PUBLIC_FUNC __declspec(dllexport)
-+-  #else
-+-    // this is for static build
-+-    #ifdef CPPCONN_LIB_BUILD
-+-      #define CPPCONN_PUBLIC_FUNC
-+-    #else
-+-      // this is for clients using dynamic lib
-+-      #define CPPCONN_PUBLIC_FUNC __declspec(dllimport)
-+-    #endif
-+-  #endif
-+-#else
-+-  #define CPPCONN_PUBLIC_FUNC
-+-#endif
-+-
-+-#endif    //#ifndef CPPCONN_PUBLIC_FUNC
-+-
-+-#endif    //#ifndef _SQL_BUILD_CONFIG_H_
-++/*
-++   Copyright 2007 - 2008 MySQL AB, 2008 - 2009 Sun Microsystems, Inc.  All rights reserved.
-++
-++   The MySQL Connector/C++ is licensed under the terms of the GPL
-++   <http://www.gnu.org/licenses/old-licenses/gpl-2.0.html>, like most
-++   MySQL Connectors. There are special exceptions to the terms and
-++   conditions of the GPL as it is applied to this software, see the
-++   FLOSS License Exception
-++   <http://www.mysql.com/about/legal/licensing/foss-exception.html>.
-++*/
-++
-++#ifndef _SQL_BUILD_CONFIG_H_
-++#define _SQL_BUILD_CONFIG_H_
-++
 ++#ifndef _SAL_TYPES_H_
 ++#include <sal/types.h>
 ++#endif
 ++  
-++ // mysqlcppconn_EXPORTS is added by cmake and defined for dynamic lib build only
-++  #ifdef mysqlcppconn_EXPORTS
++  // mysqlcppconn_EXPORTS is added by cmake and defined for dynamic lib build only
++   #ifdef mysqlcppconn_EXPORTS
++-    #define CPPCONN_PUBLIC_FUNC __declspec(dllexport)
 ++    #define CPPCONN_PUBLIC_FUNC SAL_DLLPUBLIC_EXPORT
-++  #else
-++    // this is for static build
-++    #ifdef CPPCONN_LIB_BUILD
-++      #define CPPCONN_PUBLIC_FUNC
-++    #else
-++      // this is for clients using dynamic lib
++   #else
++     // this is for static build
++     #ifdef CPPCONN_LIB_BUILD
++       #define CPPCONN_PUBLIC_FUNC
++     #else
++       // this is for clients using dynamic lib
++-      #define CPPCONN_PUBLIC_FUNC __declspec(dllimport)
 ++      #define CPPCONN_PUBLIC_FUNC SAL_DLLPUBLIC_IMPORT
-++    #endif
-++  #endif
-++
++     #endif
++   #endif
++-#else
++-  #define CPPCONN_PUBLIC_FUNC
++-#endif
++ 
++-#endif    //#ifndef CPPCONN_PUBLIC_FUNC
 ++  #define CPPCONN_PUBLIC_EXCEPTION SAL_EXCEPTION_DLLPUBLIC_EXPORT
-++
-++#endif    //#ifndef _SQL_BUILD_CONFIG_H_
++ 
++ #endif    //#ifndef _SQL_BUILD_CONFIG_H_
 +--- misc/mysql-connector-cpp/cppconn/config.h	2009-08-14 10:17:38.234375000 +0200
 ++++ misc/build/mysql-connector-cpp/cppconn/config.h	2009-08-14 09:56:37.000000000 +0200
 +@@ -1 +1,34 @@
@@ -11674,9 +11450,9 @@ diff -r 66620d8e1623 -r e88d214fb62a mysqlcppconn/mysql-connector-cpp.patch
 + 
 + typedef std::map< sql::SQLString, ConnectPropertyVal > ConnectOptionsMap;
 + 
-+--- misc/mysql-connector-cpp/cppconn/exception.h	2009-08-20 17:51:23.000000000 +0200
-++++ misc/build/mysql-connector-cpp/cppconn/exception.h	2009-09-11 09:41:41.076379817 +0200
-+@@ -37,7 +37,7 @@
++--- misc/mysql-connector-cpp/cppconn/exception.h	2009-08-13 17:13:46.000000000 +0200
+++++ misc/build/mysql-connector-cpp/cppconn/exception.h	2009-08-14 09:56:37.000000000 +0200
++@@ -38,7 +38,7 @@
 + #pragma warning(push)
 + #pragma warning(disable: 4275)
 + #endif
@@ -11685,7 +11461,7 @@ diff -r 66620d8e1623 -r e88d214fb62a mysqlcppconn/mysql-connector-cpp.patch
 + {
 + #ifdef _WIN32
 + #pragma warning(pop)
-+@@ -83,26 +83,26 @@
++@@ -78,7 +78,7 @@
 + 	MEMORY_ALLOC_OPERATORS(SQLException)
 + };
 + 
@@ -11694,6 +11470,8 @@ diff -r 66620d8e1623 -r e88d214fb62a mysqlcppconn/mysql-connector-cpp.patch
 + {
 + 	MethodNotImplementedException(const MethodNotImplementedException& e) : SQLException(e.what(), e.sql_state, e.errNo) { }
 + 	MethodNotImplementedException(const std::string& reason) : SQLException(reason, "", 0) {}
++@@ -87,7 +87,7 @@
++ 	virtual SQLException* copy() { return new MethodNotImplementedException(*this); }
 + };
 + 
 +-struct CPPCONN_PUBLIC_FUNC InvalidArgumentException : public SQLException
@@ -11701,6 +11479,8 @@ diff -r 66620d8e1623 -r e88d214fb62a mysqlcppconn/mysql-connector-cpp.patch
 + {
 + 	InvalidArgumentException(const InvalidArgumentException& e) : SQLException(e.what(), e.sql_state, e.errNo) { }
 + 	InvalidArgumentException(const std::string& reason) : SQLException(reason, "", 0) {}
++@@ -96,7 +96,7 @@
++ 	virtual SQLException* copy() { return new InvalidArgumentException(*this); }
 + };
 + 
 +-struct CPPCONN_PUBLIC_FUNC InvalidInstanceException : public SQLException
@@ -11708,6 +11488,7 @@ diff -r 66620d8e1623 -r e88d214fb62a mysqlcppconn/mysql-connector-cpp.patch
 + {
 + 	InvalidInstanceException(const InvalidInstanceException& e) : SQLException(e.what(), e.sql_state, e.errNo) { }
 + 	InvalidInstanceException(const std::string& reason) : SQLException(reason, "", 0) {}
++@@ -106,7 +106,7 @@
 + };
 + 
 + 
@@ -11716,9 +11497,9 @@ diff -r 66620d8e1623 -r e88d214fb62a mysqlcppconn/mysql-connector-cpp.patch
 + {
 + 	NonScrollableException(const NonScrollableException& e) : SQLException(e.what(), e.sql_state, e.errNo) { }
 + 	NonScrollableException(const std::string& reason) : SQLException(reason, "", 0) {}
-+--- misc/mysql-connector-cpp/driver/makefile.mk	2009-09-11 09:42:34.087202551 +0200
-++++ misc/build/mysql-connector-cpp/driver/makefile.mk	2009-09-11 09:42:25.902286382 +0200
-+@@ -1 +1,64 @@
++--- misc/mysql-connector-cpp/driver/makefile.mk	2009-08-14 10:17:33.890625000 +0200
+++++ misc/build/mysql-connector-cpp/driver/makefile.mk	2009-08-14 09:56:37.015625000 +0200
++@@ -1 +1,63@@
 +-dummy
 ++PRJ=..$/..$/..$/..$/..
 ++
@@ -11762,7 +11543,6 @@ diff -r 66620d8e1623 -r e88d214fb62a mysqlcppconn/mysql-connector-cpp.patch
 ++SHL1STDLIBS=\
 ++       $(MYSQL_LIB)
 ++
-++SHL1RPATH=OXT
 ++SHL1IMPLIB=  i$(TARGET)
 ++SHL1LIBS=    $(LIB1TARGET) $(SLB)$/$(CPPCONN_NATIVEAPI).lib
 ++SHL1DEF=     $(MISC)$/$(SHL1TARGET).def
@@ -11881,85 +11661,16 @@ diff -r 66620d8e1623 -r e88d214fb62a mysqlcppconn/mysql-connector-cpp.patch
 ++
 ++# --- Targets ------------------------------------------------------
 ++.INCLUDE :  target.mk
-diff -r 66620d8e1623 -r e88d214fb62a mysqlcppconn/mysql_config.pmk
---- /dev/null	Thu Jan 01 00:00:00 1970 +0000
-+++ mysqlcppconn/mysql_config.pmk	Mon Feb 15 15:27:59 2010 +0100
-@@ -0,0 +1,49 @@
-+#*************************************************************************
-+#
-+# DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
-+# 
-+# Copyright 2008 by Sun Microsystems, Inc.
-+#
-+#   OpenOffice.org - a multi-platform office productivity suite
-+#
-+# This file is part of OpenOffice.org.
-+#
-+# OpenOffice.org is free software: you can redistribute it and/or modify
-+# it under the terms of the GNU Lesser General Public License version 3
-+# only, as published by the Free Software Foundation.
-+#
-+# OpenOffice.org is distributed in the hope that it will be useful,
-+#     but WITHOUT ANY WARRANTY; without even the implied warranty of
-+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-+# GNU Lesser General Public License version 3 for more details
-+# (a copy is included in the LICENSE file that accompanied this code).
-+#
-+# You should have received a copy of the GNU Lesser General Public License
-+# version 3 along with OpenOffice.org.  If not, see
-+# <http://www.openoffice.org/license.html>
-+# for a copy of the LGPLv3 License.
-+#
-+#*************************************************************************
-+
-+.IF "$(SYSTEM_MYSQL)" == "YES"
-+  CFLAGS+=-DSYSTEM_MYSQL
-+.ELSE
-+  .IF "$(LIBMYSQL_PATH)" == ""
-+    alltar:
-+      @echo "need to have LIBMYSQL_PATH set to the location where libmysql (also known as 'MySQL Connector/C') is installed"
-+      @force_dmake_to_error
-+  .ENDIF
-+.ENDIF
-+
-+.IF "$(GUI)"=="WNT"
-+
-+CFLAGS+=-DCPPDBC_WIN32 -D_CRT_SECURE_NO_WARNINGS -D_SCL_SECURE_NO_WARNINGS
-+
-+.ENDIF  # "$(GUI)"=="WNT"
-+
-+.IF "$(SYSTEM_MYSQL)" != "YES"
-+    MYSQL_INC+=-I$(LIBMYSQL_PATH)$/include
-+.ENDIF
-+
-+CFLAGS+=-I$(PRJINC) -I$(PRJINC)$/cppconn $(MYSQL_INC) -DCPPCONN_LIB_BUILD
-+
-diff -r 66620d8e1623 -r e88d214fb62a mysqlcppconn/patches/default_to_protocol_tcp.patch
---- /dev/null	Thu Jan 01 00:00:00 1970 +0000
-+++ mysqlcppconn/patches/default_to_protocol_tcp.patch	Mon Feb 15 15:27:59 2010 +0100
-@@ -0,0 +1,12 @@
-+--- misc/mysql-connector-cpp/driver/mysql_connection.cpp	2009-12-16 13:24:24.088933245 +0100
-++++ misc/build/mysql-connector-cpp/driver/mysql_connection.cpp	2009-12-16 13:24:15.666841004 +0100
-+@@ -437,6 +437,9 @@
-+ 		throw sql::InvalidArgumentException(e.what());
-+ 	}
-+ 
-++	int default_protocol_tcp = MYSQL_PROTOCOL_TCP;
-++	proxy->options(MYSQL_OPT_PROTOCOL, (const char *) &default_protocol_tcp);
-++
-+ #ifndef _WIN32
-+ 	if (!hostName.compare(0, sizeof("unix://") - 1, "unix://")) {
-+ 		protocol_tcp = false;
-diff -r 66620d8e1623 -r e88d214fb62a mysqlcppconn/prj/build.lst
---- /dev/null	Thu Jan 01 00:00:00 1970 +0000
-+++ mysqlcppconn/prj/build.lst	Mon Feb 15 15:27:59 2010 +0100
+diff -urN foo/prj/build.lst mysqlcppconn/prj/build.lst
+--- foo/prj/build.lst	1970-01-01 01:00:00.000000000 +0100
++++ mysqlcppconn/prj/build.lst	2010-03-26 23:00:34.000000000 +0100
 @@ -0,0 +1,3 @@
 +my	mysqlcppconn	:	solenv sal NULL
 +my	mysqlcppconn    nmake	-	all	my_mkout NULL
 +
-diff -r 66620d8e1623 -r e88d214fb62a mysqlcppconn/prj/d.lst
---- /dev/null	Thu Jan 01 00:00:00 1970 +0000
-+++ mysqlcppconn/prj/d.lst	Mon Feb 15 15:27:59 2010 +0100
+diff -urN foo/prj/d.lst mysqlcppconn/prj/d.lst
+--- foo/prj/d.lst	1970-01-01 01:00:00.000000000 +0100
++++ mysqlcppconn/prj/d.lst	2010-03-26 23:00:34.000000000 +0100
 @@ -0,0 +1,15 @@
 +# mirror the dir structure a make install would create
 +mkdir: %_DEST%\inc%_EXT%\mysqlcppconn
@@ -11976,19 +11687,164 @@ diff -r 66620d8e1623 -r e88d214fb62a mysqlcppconn/prj/d.lst
 +..\%__SRC%\lib\*.dylib.* %_DEST%\lib%_EXT%\*.dylib.*
 +..\%__SRC%\lib\*.a %_DEST%\lib%_EXT%\*.a
 +..\%__SRC%\lib\i*.lib %_DEST%\lib%_EXT%
-diff -r 66620d8e1623 -r e88d214fb62a postprocess/prj/build.lst
---- postprocess/prj/build.lst	Mon Feb 15 15:07:47 2010 +0100
-+++ postprocess/prj/build.lst	Mon Feb 15 15:27:59 2010 +0100
-@@ -1,4 +1,4 @@
--po	postprocess	::	accessibility automation basctl bean fondu BINFILTER:binfilter chart2 configmgr CRASHREP:crashrep dbaccess desktop dtrans embeddedobj embedserv EPM:epm eventattacher extensions extras fileaccess filter forms fpicker helpcontent2 hwpfilter io JAVAINSTALLER2:javainstaller2 lingucomponent MATHMLDTD:MathMLDTD ODK:odk officecfg package padmin psprint_config remotebridges sc scaddins sccomp scp2 scripting sd setup_native slideshow starmath sw sysui testshl2 testtools ucb UnoControls unoxml ure wizards xmerge xmlsecurity BITSTREAM_VERA_FONTS:bitstream_vera_fonts AGFA_MONOTYPE_FONTS:agfa_monotype_fonts DICTIONARIES:dictionaries OOo:pyuno OOo:readlicense_oo SO:top unodevtools JFREEREPORT:jfreereport REPORTBUILDER:reportbuilder reportdesign SDEXT:sdext SWEXT:swext writerfilter oox NULL
-+po	postprocess	::	accessibility automation basctl bean fondu BINFILTER:binfilter chart2 configmgr CRASHREP:crashrep dbaccess desktop dtrans embeddedobj embedserv EPM:epm eventattacher extensions extras fileaccess filter forms fpicker helpcontent2 hwpfilter io JAVAINSTALLER2:javainstaller2 lingucomponent MATHMLDTD:MathMLDTD ODK:odk officecfg package padmin psprint_config remotebridges sc scaddins sccomp scp2 scripting sd setup_native slideshow starmath sw sysui testshl2 testtools ucb UnoControls unoxml ure wizards xmerge xmlsecurity BITSTREAM_VERA_FONTS:bitstream_vera_fonts AGFA_MONOTYPE_FONTS:agfa_monotype_fonts DICTIONARIES:dictionaries OOo:pyuno OOo:readlicense_oo SO:top unodevtools JFREEREPORT:jfreereport REPORTBUILDER:reportbuilder reportdesign SDEXT:sdext SWEXT:swext writerfilter oox MYSQLC:mysqlc NULL
- po	postprocess			    	usr1	-	all	po_mkout NULL
- po	postprocess\checkxml		nmake	-	all	po_checkxml NULL
- po	postprocess\checkdeliver	nmake	-	all	po_checkdlv NULL
-diff -r 66620d8e1623 -r e88d214fb62a set_soenv.in
---- set_soenv.in	Mon Feb 15 15:07:47 2010 +0100
-+++ set_soenv.in	Mon Feb 15 15:27:59 2010 +0100
-@@ -1835,6 +1835,13 @@
+--- configure.in	2010-03-29 10:50:19.000000000 +0200
++++ configure.in-new	2010-03-29 10:49:44.000000000 +0200
+@@ -375,6 +375,23 @@
+ [  --with-lucene-analyzers-jar=JARFILE   Specify path to jarfile manually ],
+ [ LUCENE_ANALYZERS_JAR="$withval"
+ ])
++AC_ARG_ENABLE(mysql-connector,
++[  --enable-mysql-connector     enables the build of the MySQL Connector/OOo extension.
++                                This requires access to the MySQL Connector/C (aka libmysql) to be given, too, with
++                                either the --with-system-mysql or --with-libmysql-path option.
++],,)
++AC_ARG_WITH(system-mysql,
++[  --with-system-mysql          Use MySQL libraries already on system, for building the MySQL Connector/OOo extension.
++                                Requires MYSQLCONFIG to point to the mysql_config executable.
++],,with_system_mysql="no")
++AC_ARG_WITH(libmysql-path,
++[  --with-libmysql-path         Use Connector/C (libmysql) installation for building the MySQL Connector/OOo extension.
++
++                                Usage: --with-libmysql-path=<absolute path to your Connector/C installation>
++],,)
++AC_ARG_WITH(system-mysql-cppconn,
++[  --with-system-mysql-cppconn  Use MySQL C++ Connector libraries already on system
++],,)
+ AC_ARG_WITH(system-hsqldb,
+ [  --with-system-hsqldb    Use hsqldb already on system
+ ],,)
+@@ -3925,6 +3942,128 @@
+ AC_SUBST(LUCENE_CORE_JAR)
+ AC_SUBST(LUCENE_ANALYZERS_JAR)
+ 
++AC_MSG_CHECKING([whether to build the MySQL Connector extension])
++if test -n "$enable_mysql_connector" -a "$enable_mysql_connector" != "no"; then
++  AC_MSG_RESULT([yes])
++  ENABLE_MYSQLC=YES
++  AC_MSG_CHECKING([for mysqlc module])
++  if test -d mysqlc; then
++   AC_MSG_RESULT([OK])
++  else
++   AC_MSG_ERROR([not existing. get it (did you get the -extensions tarball?)])
++  fi
++  BUILD_TYPE="$BUILD_TYPE MYSQLC"
++else
++  AC_MSG_RESULT([no])
++  ENABLE_MYSQLC=NO
++fi
++AC_SUBST(ENABLE_MYSQLC)
++
++if test "$ENABLE_MYSQLC" = "YES"; then
++dnl ===================================================================
++dnl Check for system MySQL
++dnl ===================================================================
++AC_MSG_CHECKING([for mysql pre-requisites])
++if test -n "$with_system_mysql" -o -n "$with_system_libs" && \
++       test "$with_system_mysql" != "no" && test "$with_system_libs" != "no"; then
++	AC_MSG_RESULT([external MySQL])
++	SYSTEM_MYSQL=YES
++	AC_PATH_PROG( MYSQLCONFIG, mysql_config)
++	AC_MSG_CHECKING([MySQL version])
++	MYSQL_VERSION=`$MYSQLCONFIG --version` 
++	MYSQL_MAJOR=`$MYSQLCONFIG --version | cut -d"." -f1`
++	if test "$MYSQL_MAJOR" -ge "5"; then
++		AC_MSG_RESULT([OK])
++	else
++		AC_MSG_ERROR([too old, use 5.0.x or 5.1.x])
++	fi
++	AC_MSG_CHECKING([for MySQL Client library])
++	MYSQL_INC=`$MYSQLCONFIG --include` 
++	MYSQL_LIB=`$MYSQLCONFIG --libs`
++	MYSQL_DEFINES=`$MYSQLCONFIG --cflags | sed -e s,$MYSQL_INC,,`
++	AC_MSG_RESULT([includes $MYSQL_INC, libraries $MYSQL_LIB])
++else
++    SYSTEM_MYSQL=NO
++    if test -n "$with_libmysql_path"; then
++        AC_MSG_RESULT([external Connector/C (libmysql)])
++        LIBMYSQL=libmysql.so
++        if test "$_os" = "Darwin"; then
++            LIBMYSQL=libmysql.dylib
++        elif test "$_os" = "WINNT"; then
++            LIBMYSQL=libmysql.dll
++        fi
++        AC_MSG_CHECKING([for $LIBMYSQL])
++        if test -e "$with_libmysql_path/lib/$LIBMYSQL"; then
++            AC_MSG_RESULT([found.])
++            LIBMYSQL_PATH=$with_libmysql_path
++        else
++            AC_MSG_ERROR([not found. Please specify proper path in --with-libmysql-path.])
++        fi
++    else
++        AC_MSG_ERROR([not given. Please specify either --with-system-mysql or --with-libmysql-path])
++    fi
++fi
++AC_SUBST(SYSTEM_MYSQL)
++AC_SUBST(MYSQL_INC)
++AC_SUBST(MYSQL_LIB)
++AC_SUBST(MYSQL_DEFINES)
++AC_SUBST(LIBMYSQL_PATH)
++
++AC_LANG_PUSH([C++])
++dnl ===================================================================
++dnl Check for system MySQL C++ Connector
++dnl ===================================================================
++# FIXME!
++# who thought this too-generic cppconn dir was a good idea?
++AC_MSG_CHECKING([MySQL Connector/C++])
++if test -n "$with_system_mysql_cppconn" -o -n "$with_system_libs" && \
++		test "$with_system_mysql_cppconn" != "no" && test "$with_system_libs" != "no"; then
++	AC_MSG_RESULT([external])
++	SYSTEM_MYSQL_CPPCONN=YES
++        AC_LANG_PUSH([C++])
++	AC_CHECK_HEADER(mysql_driver.h, [],
++					[AC_MSG_ERROR(mysql_driver.h not found. install MySQL C++ Connectivity)], [])
++	AC_CHECK_LIB(mysqlcppconn, main, [],
++					[AC_MSG_ERROR(MySQL C++ Connectivity lib not found or functional)], [])
++   AC_MSG_CHECKING([version])
++      AC_TRY_RUN([
++#include <mysql_driver.h>
++
++int main(int argc, char **argv) {
++	sql::Driver *driver;
++	driver = get_driver_instance();
++	if (driver->getMajorVersion() > 1 || \
++	   (driver->getMajorVersion() == 1 && driver->getMinorVersion() > 0) || \
++	   (driver->getMajorVersion() == 1 && driver->getMinorVersion() == 0 && driver->getPatchVersion() >= 6)) 
++        return 0;
++      else
++        return 1;
++}
++      ], [AC_MSG_RESULT(OK)], [AC_MSG_ERROR([not suitable, we need >= 1.0.6])])
++        AC_LANG_POP([C++])
++
++	AC_MSG_CHECKING([STL compatibility])
++	if test "$WITH_STLPORT" != "no"; then
++		AC_MSG_ERROR([to use system mysqlcppconn you need to use --without-stlport])
++	else
++		AC_MSG_RESULT([OK])	
++	fi
++
++else
++	AC_MSG_RESULT([internal])
++        AC_MSG_CHECKING([for mysqlcppconn module])
++        if test -d mysqlcppconn; then
++          AC_MSG_RESULT([OK])
++        else
++          AC_MSG_ERROR([not existing. get it (did you get the -extensions tarball?)])
++        fi
++	BUILD_TYPE="$BUILD_TYPE MYSQLCPPCONN"
++	SYSTEM_MYSQL_CPPCONN=NO
++fi
++AC_LANG_POP([C++])
++AC_SUBST(SYSTEM_MYSQL_CPPCONN)
++fi
++
+ dnl ===================================================================
+ dnl Check for system hsqldb
+ dnl ===================================================================
+--- set_soenv.in	2010-03-29 10:51:02.000000000 +0200
++++ set_soenv.in.new	2010-03-29 10:50:46.000000000 +0200
+@@ -1894,6 +1894,13 @@
  ToFile( "SYSTEM_DB",         "@SYSTEM_DB@",        "e" );
  ToFile( "DB_VERSION",        "@DB_VERSION@",       "e" );
  ToFile( "DB_INCLUDES",       "@DB_INCLUDES@",      "e" );
@@ -12002,272 +11858,3 @@ diff -r 66620d8e1623 -r e88d214fb62a set_soenv.in
  ToFile( "SYSTEM_HSQLDB",     "@SYSTEM_HSQLDB@",    "e" );
  ToFile( "HSQLDB_JAR",        "@HSQLDB_JAR@",       "e" );
  ToFile( "SYSTEM_LUCENE",     "@SYSTEM_LUCENE@",    "e" );
-diff -r 66620d8e1623 -r e88d214fb62a solenv/bin/transform_description.pl
---- /dev/null	Thu Jan 01 00:00:00 1970 +0000
-+++ solenv/bin/transform_description.pl	Mon Feb 15 15:27:59 2010 +0100
-@@ -0,0 +1,138 @@
-+#!/usr/bin/perl
-+#*************************************************************************
-+#*
-+# DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
-+# 
-+# Copyright 2009 by Sun Microsystems, Inc.
-+#
-+# OpenOffice.org - a multi-platform office productivity suite
-+#
-+# This file is part of OpenOffice.org.
-+#
-+# OpenOffice.org is free software: you can redistribute it and/or modify
-+# it under the terms of the GNU Lesser General Public License version 3
-+# only, as published by the Free Software Foundation.
-+#
-+# OpenOffice.org is distributed in the hope that it will be useful,
-+# but WITHOUT ANY WARRANTY; without even the implied warranty of
-+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-+# GNU Lesser General Public License version 3 for more details
-+# (a copy is included in the LICENSE file that accompanied this code).
-+#
-+# You should have received a copy of the GNU Lesser General Public License
-+# version 3 along with OpenOffice.org.  If not, see
-+# <http://www.openoffice.org/license.html>
-+# for a copy of the LGPLv3 License.
-+#
-+#************************************************************************/
-+
-+parse_args();
-+execute_args();
-+exit(0);
-+
-+my $source = undef;
-+my $dest = undef;
-+my @languages = undef;
-+
-+sub parse_args
-+{
-+    # at most two arguments
-+    explain(), exit(100) if ( $#ARGV > 1 );
-+
-+    # destination file is the second argument, if present
-+    $dest = $ARGV[1] if ( $#ARGV > 0 );
-+
-+    # source file is the first argument if present
-+    if ( $#ARGV > -1 )
-+    {
-+        $source = $ARGV[0];
-+        if ( ! -f $source )
-+        {
-+            print STDERR "$source is not a valid file, aborting";
-+            exit(101);
-+        }
-+    }
-+
-+    # check which languages to use
-+    my $languages = $ENV{WITH_LANG};
-+    if ( ! defined $languages )
-+    {
-+        print STDERR "$0: WITH_LANG not set, defaulting to 'en-US'\n";
-+        $languages = "en-US";
-+    }
-+    @languages = split ( ' ', $languages );
-+}
-+
-+sub execute_args
-+{
-+    my @description = ();
-+    if ( defined $source )
-+    {
-+        open SOURCE, "$source" || die "could not open $source: $?\n";
-+        @description = <SOURCE>;
-+        close SOURCE;
-+    }
-+    else
-+    {
-+        @description = <STDIN>;
-+    }
-+
-+    if ( defined $dest )
-+    {
-+        open DEST, ">$dest" || die "could not open $dest for writing: $?\n";
-+    }
-+
-+    foreach (@description)
-+    {
-+        chomp; s/\r//;
-+
-+        if ( /\#LANG\#/ )
-+        {
-+            foreach $lang ( @languages )
-+            {
-+                my $transformed = $_;
-+                $transformed =~ s/\#LANG#/$lang/g;
-+                if ( defined $dest )
-+                {
-+                    print DEST "$transformed\n";
-+                }
-+                else
-+                {
-+                    print STDOUT "$transformed\n";
-+                }
-+            }
-+        }
-+        else
-+        {
-+            if ( defined $dest )
-+            {
-+                print DEST "$_\n";
-+            }
-+            else
-+            {
-+                print STDOUT "$_\n";
-+            }
-+        }
-+    }
-+    
-+    close DEST if ( defined $dest );
-+}
-+
-+# explains the program's usage
-+sub explain
-+{
-+    print STDOUT "usage:\n";
-+    print STDOUT "  $0 [<description_file> [<output_file>]]\n";
-+    print STDOUT "  transforms the given extension description file\n";
-+    print STDOUT "\n";
-+    print STDOUT "  If <output_file> is not given, STDOUT is used.\n";
-+    print STDOUT "  If <description_file> is not given, STDIN is used.\n";
-+    print STDOUT "\n";
-+    print STDOUT "  The following transformations are done at the moment:\n";
-+    print STDOUT "  - duplicate all lines containing #LANG#, for ever token of \$WITH_LANG\n";
-+    print STDOUT "    replacing every occurance of \$LANG with a token\n";
-+    print STDOUT "\n";
-+    print STDOUT "  And yes, the functionality of this script should be\n";
-+    print STDOUT "  - moved to solenv/inc/tg_ext.mk\n";
-+    print STDOUT "  - implemented as XSLT, to be much less error-prone\n";
-+}
-diff -r 66620d8e1623 -r e88d214fb62a solenv/config/sdev300.ini
---- solenv/config/sdev300.ini	Mon Feb 15 15:07:47 2010 +0100
-+++ solenv/config/sdev300.ini	Mon Feb 15 15:27:59 2010 +0100
-@@ -13,7 +13,7 @@
- 			BMP_WRITES_FLAG TRUE
- 			BTARGET 1
- 			BUILD_SPECIAL TRUE
--			BUILD_TYPE SO OOo EXT BINFILTER BITSTREAM_VERA_FONTS BSH CURL DICTIONARIES HSQLDB HUNSPELL JPEG LIBXML2 LIBXMLSEC LPSOLVE MOZ NEON TWAIN PYTHON ZLIB SANE UNIXODBC X11_EXTENSIONS LIBWPD EPM QADEVOOO ODK MSFONTEXTRACT MATHMLDTD BOOST EXPAT CRASHREP BERKELEYDB LIBXSLT SUN AGG GTK ICU SYSTRAY_GTK JAVAINSTALLER2 VIGRA OPENSSL JFREEREPORT APACHE_COMMONS TOMCAT REPORTBUILDER SDEXT SWEXT XPDF LUCENE REDLAND SAXON WRITER2LATEX NSS L10N GRAPHITE
-+			BUILD_TYPE SO OOo EXT BINFILTER BITSTREAM_VERA_FONTS BSH CURL DICTIONARIES HSQLDB HUNSPELL JPEG LIBXML2 LIBXMLSEC LPSOLVE MOZ NEON TWAIN PYTHON ZLIB SANE UNIXODBC X11_EXTENSIONS LIBWPD EPM QADEVOOO ODK MSFONTEXTRACT MATHMLDTD BOOST EXPAT CRASHREP BERKELEYDB LIBXSLT SUN AGG GTK ICU SYSTRAY_GTK JAVAINSTALLER2 VIGRA OPENSSL JFREEREPORT APACHE_COMMONS TOMCAT REPORTBUILDER SDEXT SWEXT XPDF LUCENE REDLAND SAXON WRITER2LATEX NSS L10N GRAPHITE MYSQLCPPCONN MYSQLC
- 			common_build TRUE
- 			COMMON_OUTDIR common
- 			CONFIG_PROJECT config_office
-@@ -23,6 +23,7 @@
- 			ENABLE_GTK TRUE
- 			ENABLE_MEDIAWIKI YES
- 			ENABLE_MINIMIZER YES
-+ 			ENABLE_MYSQLC YES
- 			ENABLE_NSS_MODULE YES
- 			ENABLE_RANDR TRUE
- 			ENABLE_REPORTBUILDER YES
-@@ -649,6 +650,7 @@
- 			JDK14PATH %SOLAR_JDK14PATH%
- 			JDK15PATH %SOLAR_JDK15PATH%
- 			KDE_ROOT /so/env/kde/linux/kde-3.2.2
-+            LIBMYSQL_PATH %SOLAR_ENV_ROOT%/mysql-connector-c-6.0.2/unxlngi6
- 			NO_BSYMBOLIC True
- 			OJDK16PATH %SOLAR_OJDK16PATH%
- 			OS LINUX
-@@ -920,6 +922,7 @@
- 			JDK14PATH %SOLAR_JDK14PATH%
- 			JDK15PATH %SOLAR_JDK15PATH%
- 			KDE_ROOT /so/env/kde/linux/kde-3.2.2
-+            LIBMYSQL_PATH %SOLAR_ENV_ROOT%/mysql-connector-c-6.0.2/unxlngx6
- 			NO_BSYMBOLIC True
- 			OJDK16PATH %SOLAR_OJDK16PATH%
- 			OS LINUX
-@@ -1211,6 +1214,7 @@
- 			JDK13PATH %SOLAR_JDK13PATH%
- 			JDK14PATH %SOLAR_JDK15PATH%
- 			JDK15PATH %SOLAR_JDK15PATH%
-+            LIBMYSQL_PATH %SOLAR_ENV_ROOT%/mysql-connector-c-6.0.2/unxmacxi
- 			NO_BSYMBOLIC True
- 			OS MACOSX
- 			OUTPATH unxmacxi
-@@ -1455,6 +1459,7 @@
- 			JDK13PATH %SOLAR_JDK13PATH%
- 			JDK14PATH %SOLAR_JDK14PATH%
- 			JDK15PATH %SOLAR_JDK15PATH%
-+            LIBMYSQL_PATH %SOLAR_ENV_ROOT%/mysql-connector-c-6.0.2/unxsoli4
- 			OJDK16PATH %SOLAR_OJDK16PATH%
- 			OS SOLARIS
- 			OUTPATH unxsoli4
-@@ -1710,6 +1715,7 @@
- 			JDK13PATH %SOLAR_JDK13PATH%
- 			JDK14PATH %SOLAR_JDK14PATH%
- 			JDK15PATH %SOLAR_JDK15PATH%
-+            LIBMYSQL_PATH %SOLAR_ENV_ROOT%/mysql-connector-c-6.0.2/unxsols4
- 			LM_LICENSE_FILE %SOLAR_LICENSE_FILE%
- 			OJDK16PATH %SOLAR_OJDK16PATH%
- 			OS SOLARIS
-@@ -3020,6 +3026,7 @@
- 			GUIBASE WIN
- 			GVER NT351
- 			INPATH wntmsci12%PROEXT%
-+            LIBMYSQL_PATH %SOLAR_ENV_ROOT%$/mysql-connector-c-6.0.2$/wntmsci12
- 			MOZILLABUILD %SOLARROOT%/mozilla-build-1.3
- 			OS WNT
- 			OUTPATH wntmsci12
-diff -r 66620d8e1623 -r e88d214fb62a solenv/inc/extension_post.mk
---- solenv/inc/extension_post.mk	Mon Feb 15 15:07:47 2010 +0100
-+++ solenv/inc/extension_post.mk	Mon Feb 15 15:27:59 2010 +0100
-@@ -29,6 +29,8 @@
- #
- #*************************************************************************
- 
-+EXTENSION_TARGET:=$(ZIP9TARGETN)
-+
- .SOURCE.xcu : $(MISC)/$(EXTNAME)/merge $(MISC)/$(EXTNAME)/registry/data $(MISC)/$(COMPONENT_SHARED_CONFIG)_in/merge $(MISC)/$(COMPONENT_SHARED_CONFIG)_in/registry/data $(COMPONENT_CONFIGDIR) .
- .SOURCE.xcs : $(MISC)/$(EXTNAME)/registry $(MISC)/$(EXTNAME)/registry/schema .
- 
-@@ -129,12 +131,18 @@
- .IF "$(DESCRIPTION)"!=""
- $(DESCRIPTION) $(PHONYDESC) : $(DESCRIPTION_SRC)
- 	@@-$(MKDIRHIER) $(@:d)
--	$(COMMAND_ECHO)$(PERL) $(SOLARENV)/bin/licinserter.pl $(DESCRIPTION_SRC) $(COMPONENT_LIC_TEMPL) $@.$(EXTNAME)
- 	@echo LAST_WITH_LANG=$(WITH_LANG) > $(MISC)/$(TARGET)_lang_track.mk
--	$(COMMAND_ECHO)$(TYPE) $@.$(EXTNAME) | sed s/UPDATED_IDENTIFIER/$(IMPLEMENTATION_IDENTIFIER)/ >  $(MISC)/desc.tmp.$(EXTNAME)
--	@@-$(RM) $@.$(EXTNAME)
--	$(COMMAND_ECHO)$(TYPE) $(MISC)/desc.tmp.$(EXTNAME) | sed s/UPDATED_SUPPORTED_PLATFORM/$(PLATFORMID)/ > $@
--	@@-$(RM) $(MISC)/desc.tmp.$(EXTNAME)
-+
-+	$(COMMAND_ECHO)$(PERL) $(SOLARENV)/bin/licinserter.pl $(DESCRIPTION_SRC) $(COMPONENT_LIC_TEMPL) $@.1.$(EXTNAME)
-+
-+	$(COMMAND_ECHO)$(PERL) $(SOLARENV)/bin/transform_description.pl $@.1.$(EXTNAME) $@.2.$(EXTNAME)
-+	@@-$(RM) $@.1.$(EXTNAME)
-+
-+	$(COMMAND_ECHO)$(TYPE) $@.2.$(EXTNAME) | sed s/UPDATED_IDENTIFIER/$(IMPLEMENTATION_IDENTIFIER)/ >  $@.3.$(EXTNAME)
-+	@@-$(RM) $@.2.$(EXTNAME)
-+
-+	$(COMMAND_ECHO)$(TYPE) $@.3.$(EXTNAME) | sed s/UPDATED_SUPPORTED_PLATFORM/$(PLATFORMID)/ > $@
-+	@@-$(RM) $@.3.$(EXTNAME)
- 
- .ENDIF			# "$(DESCRIPTION)"!=""
- # default OOo license text!!!
-diff -r 66620d8e1623 -r e88d214fb62a solenv/inc/unxsoli4.mk
---- solenv/inc/unxsoli4.mk	Mon Feb 15 15:07:47 2010 +0100
-+++ solenv/inc/unxsoli4.mk	Mon Feb 15 15:27:59 2010 +0100
-@@ -33,7 +33,6 @@
- ASM=/usr/ccs/bin/as
- AFLAGS=-P
- 
--
- CDEFS+=-D_PTHREADS -DSYSV -DSUN -DSUN4 -D_REENTRANT -D_POSIX_PTHREAD_SEMANTICS -DSTLPORT_VERSION=$(STLPORT_VER)
- 
- SOLAR_JAVA*=TRUE
-diff -r 66620d8e1623 -r e88d214fb62a solenv/inc/unxsols4.mk
---- solenv/inc/unxsols4.mk	Mon Feb 15 15:07:47 2010 +0100
-+++ solenv/inc/unxsols4.mk	Mon Feb 15 15:27:59 2010 +0100
-@@ -34,7 +34,6 @@
- # needs -D__sparcv8plus because it's not defined by the assembler with -xarch=v8plus
- AFLAGS=-P -xarch=v8plus -D__sparcv8plus
- 
--
- CDEFS+=-D_PTHREADS -DSYSV -DSUN -DSUN4 -D_REENTRANT -D_POSIX_PTHREAD_SEMANTICS -DSTLPORT_VERSION=$(STLPORT_VER)
- 
- SOLAR_JAVA*=TRUE
-
