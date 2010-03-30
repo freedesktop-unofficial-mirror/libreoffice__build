@@ -1,37 +1,141 @@
-#!/bin/bash
+#! /usr/bin/perl -w
 
-usage() {
-    echo 1>&2 << EOF
-cws-extract [-s] cws_name
-Create a patch from an up-stream CWS suitable for ooo-build.
+$default_mws = 'DEV300';
 
-  -s            Don't ignore changes in whitespace.
-EOF
+sub usage()
+{
+    print STDERR "cws-extract - Create a patch from an up-stream CWS suitable for ooo-build.
+Usage: cws-extract [-s] cws_name
+
+  -b            Mercurial bundle to use
+  -w, --mws     Master Workspace name (defaults to $default_mws)
+                Use with care! Almost all CWSs are created for $default_mws.
+                They are cloned for branches by need.
+
+Note: We need to create a full master checkout in current dir (or reuse one 
+already there).\n";
     exit 1;
 }
 
-echo "Warning!  This is the SVN version of cws-extract, use
-cws-extract-cvs for the older OOo CWSes."
+sub mws_checkout($$)
+{
+    my ( $mws, $bundle ) = @_;
+    system( "echo '===== mws_checkout =====' >> .log" );
 
-CWS=""
-DIFFPARAMS="-ubwp"
-while [ -n "$1" ] ; do
-    case "$1" in
-        -s) DIFFPARAMS="-up"
-            ;;
-        *)  CWS="$1"
-            ;;
-    esac
-    shift
-done
+	if ( $bundle eq "" ) {
+		$bundle = "/tmp/$mws.hg";
+		if ( ! -f $bundle || ( -M $bundle > 14 ) ) {
+			if ( system( "mv $bundle $bundle.save" ) == 0 ) {
+				print "Bundle:\t\tSaved the old one as '$bundle.save'\n";
+			}
+			system( "wget http://hg.services.openoffice.org/bundle/$mws.hg -O $bundle" );
+		}
+	}
 
-[ -n "$CWS" ] || usage
+    if ( system( "mkdir $mws 2>> .log" ) != 0 ) {
+        print "Cannot create '$mws' subdir, already exists.  Consider using '-d'.\n";
+        exit 1;
+    }
+    if ( system( "cd $mws && \
+                  hg init && \
+                  echo -e 'Mercurial:\tUnbundling $bundle, go and have some tea...' && \
+                  hg unbundle $bundle" ) != 0 ) {
+        print STDERR "Unable to setup mws clone, check the log for details.\n";
+        exit 1;
+    }
+}
 
-# log of the branch only
-MERGE_BASE=`svn log --stop-on-copy "svn+ssh://svn@svn.services.openoffice.org/ooo/cws/$CWS" | \
-            grep 'CWS-TOOLING: \(rebase\|create\) CWS' | head -n 1 | \
-            sed 's/^.*trunk@\([0-9]\+\).*$/\1/'`
+sub cws_extract($$$)
+{
+    my ( $mws, $cws, $bundle ) = @_;
 
-if [ -n "$MERGE_BASE" ] ; then
-    svn diff -x "$DIFFPARAMS" "svn+ssh://svn@svn.services.openoffice.org/ooo/trunk@$MERGE_BASE" "svn+ssh://svn@svn.services.openoffice.org/ooo/cws/$CWS" > "cws-$CWS.diff"
-fi
+    my $milestone = `cws query -c $cws current 2>> .log | tail -n 1`;
+    $milestone =~ s/\n//g;
+
+	if (not -d $mws or not -d "$mws/.hg") {
+		mws_checkout($mws, $bundle);
+	}
+
+    print "MWS:\t\tpulling latest changes\n";
+    if ( system( "cd $mws && \
+                  hg pull -u http://hg.services.openoffice.org/$mws" ) != 0 ) {
+        print STDERR "Unable to pull latest master, check the log for details.\n";
+        exit 1;
+    }
+
+    print "MWS:\t\tupdating to $milestone\n";
+    if ( system( "cd $mws && \
+                  hg checkout ${mws}_${milestone}" ) != 0 ) {
+        print STDERR "Unable to checkout suitable milestone, check the log for details.\n";
+        exit 1;
+    }
+
+    print "CWS:\t\tgenerating diff against $milestone\n";
+    if ( system( "cd $mws && \
+                  hg incoming -p -f -n -M http://hg.services.openoffice.org/cws/$cws > ../cws-$cws.diff" ) != 0 ) {
+        print STDERR "Unable to generate patch against $cws, check the log for details.\n";
+        exit 1;
+    }
+}
+
+#
+# main()
+#
+if ( !defined( $ENV{'SOLARENV'} ) || $ENV{'SOLARENV'} eq '' ) {
+    my $my_path = $0;
+    $my_path =~ s#/[^/]*$##;    # confuses vim syntax highlighting :-(
+    my $build_dir = `. $my_path/setup > /dev/null 2>&1 ; echo \$OOBUILDDIR`;
+    if ( $build_dir eq "" ) {
+        print STDERR "Unable to find build dir, check OOBUILDDIR in bin/setup.\n";
+        exit 1;
+    }
+    $build_dir =~ s/\n//;
+    if ( ! -f "$build_dir/LinuxIntelEnv.Set.sh" and ! -f "$build_dir/LinuxX86-64Env.Set.sh" ) {
+        print STDERR "Unable to find '$build_dir/LinuxIntelEnv.Set.sh'.\n";
+        exit 1;
+    }
+    if ( -f "$build_dir/LinuxIntelEnv.Set.sh" ) {
+		open( $VARS, "bash -c '. $build_dir/LinuxIntelEnv.Set.sh ; set'|");
+	} else {
+		open( $VARS, "bash -c '. $build_dir/LinuxX86-64Env.Set.sh ; set'|");
+	}
+    while ( <$VARS> ) {
+        /([^=]*)=(.*)/ || next;
+        $ENV{$1} = $2 unless "$1" eq "SHELLOPTS";
+    }
+    close( $VARS );
+}
+
+my $cws_name = "";
+my $mws = "";
+my $bundle = "";
+
+( my $pwd = `pwd` ) =~ s/\n//;
+
+while (@ARGV) {
+    $opt = shift @ARGV;
+
+    if ( $opt eq "-h" || $opt eq "--help" ) {
+        usage();
+    }
+    elsif ( $opt eq "-b" ) {
+        $bundle = shift @ARGV;
+    }
+    elsif ( $opt eq "-w" || $opt eq "--mws" ) {
+        $mws = shift @ARGV;
+    }
+    else {
+        $cws_name = $opt;
+    }
+}
+
+if ( !defined( $cws_name ) || $cws_name eq "" ) {
+    print STDERR "Please specify CWS.\n";
+    exit 1;
+}
+if ( !defined( $mws ) || $mws eq "" ) {
+    $mws = $default_mws;
+    print "MWS:\t\tnot specified, assuming '$mws'\n";
+}
+
+cws_extract( $mws, $cws_name, $bundle );
