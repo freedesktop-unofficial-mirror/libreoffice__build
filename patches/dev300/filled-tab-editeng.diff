@@ -1,0 +1,337 @@
+diff --git drawinglayer/inc/drawinglayer/primitive2d/textprimitive2d.hxx drawinglayer/inc/drawinglayer/primitive2d/textprimitive2d.hxx
+index 412477c..f377c6f 100644
+--- drawinglayer/inc/drawinglayer/primitive2d/textprimitive2d.hxx
++++ drawinglayer/inc/drawinglayer/primitive2d/textprimitive2d.hxx
+@@ -137,6 +137,8 @@ namespace drawinglayer
+ 
+             // #i96669# add simple range buffering for this primitive
+             basegfx::B2DRange						maB2DRange;
++            bool                                    mbFilled;           // Whether to fill a given width with the text
++            long                                    mnWidthToFill;      // the width to fill
+ 
+         protected:
+             // local decomposition.
+@@ -151,7 +153,9 @@ namespace drawinglayer
+                 const ::std::vector< double >& rDXArray,
+                 const FontAttributes& rFontAttributes,
+                 const ::com::sun::star::lang::Locale& rLocale,
+-                const basegfx::BColor& rFontColor);
++                const basegfx::BColor& rFontColor,
++                bool bFilled = false,
++                long nWidthToFill = 0);
+ 
+             // helpers
+             // get text outlines as polygons and their according ObjectTransformation. Handles all
+@@ -167,6 +171,8 @@ namespace drawinglayer
+             const FontAttributes& getFontAttributes() const { return maFontAttributes; }
+             const ::com::sun::star::lang::Locale& getLocale() const { return  maLocale; }
+             const basegfx::BColor& getFontColor() const { return maFontColor; }
++            bool isFilled() const { return mbFilled; }
++            long getWidthToFill() const { return mnWidthToFill; }
+ 
+             // compare operator
+             virtual bool operator==( const BasePrimitive2D& rPrimitive ) const;
+diff --git drawinglayer/source/primitive2d/textprimitive2d.cxx drawinglayer/source/primitive2d/textprimitive2d.cxx
+index 92f3e3b..bea612d 100644
+--- drawinglayer/source/primitive2d/textprimitive2d.cxx
++++ drawinglayer/source/primitive2d/textprimitive2d.cxx
+@@ -268,7 +268,9 @@ namespace drawinglayer
+             const ::std::vector< double >& rDXArray,
+             const FontAttributes& rFontAttributes,
+             const ::com::sun::star::lang::Locale& rLocale,
+-            const basegfx::BColor& rFontColor)
++            const basegfx::BColor& rFontColor,
++            bool bFilled,
++            long nWidthToFill)
+         :	BasePrimitive2D(),
+             maTextTransform(rNewTransform),
+             maText(rText),
+@@ -278,7 +280,9 @@ namespace drawinglayer
+             maFontAttributes(rFontAttributes),
+             maLocale(rLocale),
+             maFontColor(rFontColor),
+-            maB2DRange()
++            maB2DRange(),
++            mbFilled(bFilled),
++            mnWidthToFill(nWidthToFill)
+         {
+ #ifdef DBG_UTIL
+             const xub_StrLen aStringLength(getText().Len());
+@@ -307,7 +311,9 @@ namespace drawinglayer
+                     && getDXArray() == rCompare.getDXArray()
+                     && getFontAttributes() == rCompare.getFontAttributes()
+                     && impLocalesAreEqual(getLocale(), rCompare.getLocale())
+-                    && getFontColor() == rCompare.getFontColor());
++                    && getFontColor() == rCompare.getFontColor()
++                    && mbFilled == rCompare.mbFilled
++                    && mnWidthToFill == rCompare.mnWidthToFill);
+             }
+ 
+             return false;
+diff --git drawinglayer/source/processor2d/vclprocessor2d.cxx drawinglayer/source/processor2d/vclprocessor2d.cxx
+index 05a73e1..46439f8 100644
+--- drawinglayer/source/processor2d/vclprocessor2d.cxx
++++ drawinglayer/source/processor2d/vclprocessor2d.cxx
+@@ -291,23 +291,50 @@ namespace drawinglayer
+ 
+                     mpOutputDevice->SetFont(aFont);
+                     mpOutputDevice->SetTextColor(Color(aRGBFontColor));
++                    
++                    String aText( rTextCandidate.getText() );
++                    xub_StrLen nPos = rTextCandidate.getTextPosition();
++                    xub_StrLen nLen = rTextCandidate.getTextLength();
++                    
++                    sal_Int32* pDXArray = aTransformedDXArray.size() ? &(aTransformedDXArray[0]) : NULL ;
++
++                    if ( rTextCandidate.isFilled() )
++                    {
++                        basegfx::B2DVector aOldFontScaling, aOldTranslate;
++                        double fOldRotate, fOldShearX;
++                        rTextCandidate.getTextTransform().decompose(aOldFontScaling, aOldTranslate, fOldRotate, fOldShearX);
++
++                        long nWidthToFill = rTextCandidate.getWidthToFill( ) * aFontScaling.getX() / aOldFontScaling.getX();
++
++                        long nWidth = mpOutputDevice->GetTextArray( 
++                            rTextCandidate.getText(), pDXArray, 0, 1 );
++                        long nChars = 2;
++                        if ( nWidth )
++                            nChars = nWidthToFill / nWidth;
++
++                        String aFilled;
++                        aFilled.Fill( (USHORT)nChars, aText.GetChar( 0 ) );
++                        aText = aFilled;
++                        nPos = 0;
++                        nLen = nChars;
++                    }
+ 
+                     if(aTransformedDXArray.size())
+                     {
+                         mpOutputDevice->DrawTextArray(
+                             aStartPoint, 
+-                            rTextCandidate.getText(), 
+-                            &(aTransformedDXArray[0]),
+-                            rTextCandidate.getTextPosition(),
+-                            rTextCandidate.getTextLength());
++                            aText, 
++                            pDXArray,
++                            nPos,
++                            nLen);
+                     }
+                     else
+                     {
+                         mpOutputDevice->DrawText(
+                             aStartPoint, 
+-                            rTextCandidate.getText(), 
+-                            rTextCandidate.getTextPosition(),
+-                            rTextCandidate.getTextLength());
++                            aText, 
++                            nPos,
++                            nLen);
+                     }
+ 
+                     if(rTextCandidate.getFontAttributes().getRTL())
+diff --git svx/inc/svx/editeng.hxx svx/inc/svx/editeng.hxx
+index 2097318..d569e48 100644
+--- svx/inc/svx/editeng.hxx
++++ svx/inc/svx/editeng.hxx
+@@ -445,6 +445,14 @@ public:
+         const ::com::sun::star::lang::Locale* pLocale,
+         const Color& rOverlineColor,
+         const Color& rTextLineColor);
++    
++    virtual void DrawingTab(
++        const Point& rStartPos, long nWidth, const String& rChar,
++        const SvxFont& rFont, USHORT nPara, xub_StrLen nIndex, BYTE nRightToLeft,
++        bool bEndOfLine,
++        bool bEndOfParagraph,
++        const Color& rOverlineColor,
++        const Color& rTextLineColor);
+ 
+     virtual String	GetUndoComment( USHORT nUndoId ) const;
+     virtual BOOL	FormattingParagraph( USHORT nPara );
+diff --git svx/inc/svx/outliner.hxx svx/inc/svx/outliner.hxx
+index 1331e8c..e11eb30 100644
+--- svx/inc/svx/outliner.hxx
++++ svx/inc/svx/outliner.hxx
+@@ -419,6 +419,9 @@ public:
+     // #101498# BiDi level needs to be transported, too.
+     BYTE			    mnBiDiLevel;
+ 
++    bool                mbFilled;
++    long                mnWidthToFill;
++
+     // bitfield
+     unsigned            mbEndOfLine : 1;
+     unsigned            mbEndOfParagraph : 1;
+@@ -442,6 +445,8 @@ public:
+         const Color& rOverlineColor,
+         const Color& rTextLineColor,
+         BYTE nBiDiLevel,
++        bool bFilled,
++        long nWidthToFill,
+         bool bEndOfLine,
+         bool bEndOfParagraph,
+         bool bEndOfBullet)
+@@ -459,6 +464,8 @@ public:
+         maOverlineColor(rOverlineColor),
+         maTextLineColor(rTextLineColor),
+         mnBiDiLevel(nBiDiLevel),
++        mbFilled( bFilled ),
++        mnWidthToFill( nWidthToFill ),
+         mbEndOfLine(bEndOfLine),
+         mbEndOfParagraph(bEndOfParagraph),
+         mbEndOfBullet(bEndOfBullet)
+@@ -822,7 +829,7 @@ public:
+ 
+     void            SetDrawPortionHdl(const Link& rLink){aDrawPortionHdl=rLink;}
+     Link            GetDrawPortionHdl() const { return aDrawPortionHdl; }
+-
++    
+     void            SetDrawBulletHdl(const Link& rLink){aDrawBulletHdl=rLink;}
+     Link            GetDrawBulletHdl() const { return aDrawBulletHdl; }
+ 
+@@ -891,6 +898,14 @@ public:
+         const ::com::sun::star::lang::Locale* pLocale,
+         const Color& rOverlineColor,
+         const Color& rTextLineColor);
++    
++    virtual void DrawingTab(
++        const Point& rStartPos, long nWidth, const String& rChar,
++        const SvxFont& rFont, USHORT nPara, xub_StrLen nIndex, BYTE nRightToLeft,
++        bool bEndOfLine,
++        bool bEndOfParagraph,
++        const Color& rOverlineColor,
++        const Color& rTextLineColor);
+ 
+     Size            CalcTextSize();
+ 
+diff --git svx/source/editeng/editeng.cxx svx/source/editeng/editeng.cxx
+index f9d726b..0ce1492 100644
+--- svx/source/editeng/editeng.cxx
++++ svx/source/editeng/editeng.cxx
+@@ -2474,6 +2474,14 @@ void __EXPORT EditEngine::DrawingText( const Point&, const XubString&, USHORT, U
+     DBG_CHKTHIS( EditEngine, 0 );
+ }
+ 
++void __EXPORT EditEngine::DrawingTab( const Point& rStartPos, long nWidth, const String& rChar,
++    const SvxFont& rFont, USHORT nPara, xub_StrLen nIndex, BYTE nRightToLeft,
++    bool bEndOfLine, bool bEndOfParagraph, 
++    const Color& rOverlineColor, const Color& rTextLineColor)
++{
++    DBG_CHKTHIS( EditEngine, 0 );
++}
++
+ void __EXPORT EditEngine::PaintingFirstLine( sal_uInt16, const Point&, long, const Point&, short, OutputDevice* )
+ {
+     DBG_CHKTHIS( EditEngine, 0 );
+diff --git svx/source/editeng/impedit3.cxx svx/source/editeng/impedit3.cxx
+index 3e91d45..152cdb9 100644
+--- svx/source/editeng/impedit3.cxx
++++ svx/source/editeng/impedit3.cxx
+@@ -3575,7 +3575,26 @@ void ImpEditEngine::Paint( OutputDevice* pOutDev, Rectangle aClipRec, Point aSta
+ 
+                                     String aText;
+                                     aText.Fill( (USHORT)nChars, pTextPortion->GetExtraValue() );
++                                    aTmpFont.QuickDrawText( pOutDev, aTmpPos, aText, 0, aText.Len(), NULL );
+                                     pOutDev->DrawStretchText( aTmpPos, pTextPortion->GetSize().Width(), aText );
++                                   
++                                    if ( bStripOnly )
++                                    {
++                                        // create EOL and EOP bools
++                                        const bool bEndOfLine(y == pLine->GetEndPortion());
++                                        const bool bEndOfParagraph(bEndOfLine && nLine + 1 == nLines);
++                                        
++                                        const Color aOverlineColor(pOutDev->GetOverlineColor());
++                                        const Color aTextLineColor(pOutDev->GetTextLineColor());
++
++                                        // StripPortions() data callback
++                                        GetEditEnginePtr()->DrawingTab( aTmpPos, 
++                                            pTextPortion->GetSize().Width(), 
++                                            pTextPortion->GetExtraValue(),
++                                            aTmpFont, n, nIndex, pTextPortion->GetRightToLeft(),
++                                            bEndOfLine, bEndOfParagraph,
++                                            aOverlineColor, aTextLineColor);
++                                    }
+                                 }
+                             }
+                             break;
+diff --git svx/source/outliner/outleeng.cxx svx/source/outliner/outleeng.cxx
+index 43fea6e..736bd68 100644
+--- svx/source/outliner/outleeng.cxx
++++ svx/source/outliner/outleeng.cxx
+@@ -201,6 +201,15 @@ void OutlinerEditEng::DrawingText( const Point& rStartPos, const XubString& rTex
+         pWrongSpellVector, pFieldData, bEndOfLine, bEndOfParagraph, bEndOfBullet, pLocale, rOverlineColor, rTextLineColor);
+ }
+ 
++void OutlinerEditEng::DrawingTab( const Point& rStartPos, long nWidth, const String& rChar,
++    const SvxFont& rFont, USHORT nPara, xub_StrLen nIndex, BYTE nRightToLeft,
++    bool bEndOfLine, bool bEndOfParagraph, 
++    const Color& rOverlineColor, const Color& rTextLineColor)
++{
++    pOwner->DrawingTab(rStartPos, nWidth, rChar, rFont, nPara, nIndex, nRightToLeft,
++            bEndOfLine, bEndOfParagraph, rOverlineColor, rTextLineColor );
++}
++
+ void OutlinerEditEng::FieldClicked( const SvxFieldItem& rField, USHORT nPara, USHORT nPos )
+ {
+     EditEngine::FieldClicked( rField, nPara, nPos );	// Falls URL
+diff --git svx/source/outliner/outleeng.hxx svx/source/outliner/outleeng.hxx
+index cf4d7d1..54166f4 100644
+--- svx/source/outliner/outleeng.hxx
++++ svx/source/outliner/outleeng.hxx
+@@ -70,6 +70,14 @@ public:
+         const ::com::sun::star::lang::Locale* pLocale,
+         const Color& rOverlineColor,
+         const Color& rTextLineColor);
++    
++    virtual void DrawingTab(
++        const Point& rStartPos, long nWidth, const String& rChar,
++        const SvxFont& rFont, USHORT nPara, xub_StrLen nIndex, BYTE nRightToLeft,
++        bool bEndOfLine,
++        bool bEndOfParagraph,
++        const Color& rOverlineColor,
++        const Color& rTextLineColor);
+ 
+     virtual	void 		StyleSheetChanged( SfxStyleSheet* pStyle );
+     virtual void 		ParaAttribsChanged( USHORT nPara );
+diff --git svx/source/outliner/outliner.cxx svx/source/outliner/outliner.cxx
+index f739176..3a4e509 100644
+--- svx/source/outliner/outliner.cxx
++++ svx/source/outliner/outliner.cxx
+@@ -1796,7 +1796,20 @@ void Outliner::DrawingText( const Point& rStartPos, const XubString& rText, USHO
+     {
+         // #101498#
+         DrawPortionInfo aInfo( rStartPos, rText, nTextStart, nTextLen, rFont, nPara, nIndex, pDXArray, pWrongSpellVector,
+-            pFieldData, pLocale, rOverlineColor, rTextLineColor, nRightToLeft, bEndOfLine, bEndOfParagraph, bEndOfBullet);
++            pFieldData, pLocale, rOverlineColor, rTextLineColor, nRightToLeft, false, 0, bEndOfLine, bEndOfParagraph, bEndOfBullet);
++
++        aDrawPortionHdl.Call( &aInfo );
++    }
++}
++
++void Outliner::DrawingTab( const Point& rStartPos, long nWidth, const String& rChar, const SvxFont& rFont, 
++    USHORT nPara, xub_StrLen nIndex, BYTE nRightToLeft, bool bEndOfLine, bool bEndOfParagraph,
++    const Color& rOverlineColor, const Color& rTextLineColor)
++{
++    if(aDrawPortionHdl.IsSet())
++    {
++        DrawPortionInfo aInfo( rStartPos, rChar, 0, rChar.Len(), rFont, nPara, nIndex, NULL, NULL,
++            NULL, NULL, rOverlineColor, rTextLineColor, nRightToLeft, true, nWidth, bEndOfLine, bEndOfParagraph, false);
+ 
+         aDrawPortionHdl.Call( &aInfo );
+     }
+diff --git svx/source/svdraw/svdotextdecomposition.cxx svx/source/svdraw/svdotextdecomposition.cxx
+index fdf0914..b7c34d4 100644
+--- svx/source/svdraw/svdotextdecomposition.cxx
++++ svx/source/svdraw/svdotextdecomposition.cxx
+@@ -404,7 +404,9 @@ namespace
+                     aDXArray,
+                     aFontAttributes,
+                     rInfo.mpLocale ? *rInfo.mpLocale : ::com::sun::star::lang::Locale(),
+-                    aBFontColor);
++                    aBFontColor,
++                    rInfo.mbFilled,
++                    rInfo.mnWidthToFill);
+             }
+ 
+             if(rInfo.mbEndOfBullet)
