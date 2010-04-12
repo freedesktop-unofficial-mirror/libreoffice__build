@@ -1,0 +1,183 @@
+diff --git sc/inc/queryparam.hxx sc/inc/queryparam.hxx
+index 01ddffb..555f4a5 100644
+--- sc/inc/queryparam.hxx
++++ sc/inc/queryparam.hxx
+@@ -50,6 +50,8 @@ struct ScQueryParamBase
+ 
+     virtual ~ScQueryParamBase();
+ 
++    virtual bool IsValidFieldIndex() const;
++
+     SC_DLLPUBLIC SCSIZE GetEntryCount() const;
+     SC_DLLPUBLIC ScQueryEntry& GetEntry(SCSIZE n) const;
+     void Resize(SCSIZE nNew);
+@@ -129,6 +131,8 @@ struct ScDBQueryParamInternal : public ScDBQueryParamBase, public ScQueryParamTa
+ {
+     ScDBQueryParamInternal();
+     virtual ~ScDBQueryParamInternal();
++
++    virtual bool IsValidFieldIndex() const;
+ };
+ 
+ // ============================================================================
+@@ -139,6 +143,8 @@ struct ScDBQueryParamMatrix : public ScDBQueryParamBase
+ 
+     ScDBQueryParamMatrix();
+     virtual ~ScDBQueryParamMatrix();
++
++    virtual bool IsValidFieldIndex() const;
+ };
+ 
+ #endif
+diff --git sc/source/core/tool/doubleref.cxx sc/source/core/tool/doubleref.cxx
+index e1bba5c..985daf8 100644
+--- sc/source/core/tool/doubleref.cxx
++++ sc/source/core/tool/doubleref.cxx
+@@ -335,9 +335,13 @@ SCSIZE ScDBInternalRange::getVisibleDataCellCount() const
+ 
+ OUString ScDBInternalRange::getString(SCCOL nCol, SCROW nRow) const
+ {
+-    String aStr;
++    OUString aStr;
+     const ScAddress& s = maRange.aStart;
+-    getDoc()->GetString(s.Col() + nCol, s.Row() + nRow, maRange.aStart.Tab(), aStr);
++    ScBaseCell* pCell = getDoc()->GetCell(ScAddress(s.Col() + nCol, s.Row() + nRow, maRange.aStart.Tab()));
++    if (!pCell)
++        return aStr;
++
++    getCellString(aStr, pCell);
+     return aStr;
+ }
+ 
+@@ -350,15 +354,11 @@ SCCOL ScDBInternalRange::findFieldColumn(SCCOL nIndex) const
+ {
+     const ScRange& rRange = getRange();
+     const ScAddress& s = rRange.aStart;
+-    const ScAddress& e = rRange.aEnd;
+ 
+     SCCOL nDBCol1 = s.Col();
+-    SCCOL nDBCol2 = e.Col();
+-
+-    if ( nIndex <= 0 || nIndex > (nDBCol2 - nDBCol1 + 1) )
+-        return nDBCol1;
+ 
+-    return Min(nDBCol2, static_cast<SCCOL>(nDBCol1 + nIndex - 1));
++    // Don't handle out-of-bound condition here.  We'll do that later.
++    return nIndex + nDBCol1 - 1;
+ }
+ 
+ sal_uInt16 ScDBInternalRange::getCellString(OUString& rStr, ScBaseCell* pCell) const
+@@ -520,14 +520,6 @@ SCCOL ScDBExternalRange::getFirstFieldColumn() const
+ 
+ SCCOL ScDBExternalRange::findFieldColumn(SCCOL nIndex) const
+ {
+-    if (nIndex < 1)
+-        // 1st field
+-        return 0;
+-
+-    if (nIndex > mnCols)
+-        // last field
+-        return mnCols - 1;
+-
+     return nIndex - 1;
+ }
+ 
+diff --git sc/source/core/tool/interpr1.cxx sc/source/core/tool/interpr1.cxx
+index 4adee80..863baad 100644
+--- sc/source/core/tool/interpr1.cxx
++++ sc/source/core/tool/interpr1.cxx
+@@ -5990,6 +5990,11 @@ void ScInterpreter::DBIterator( ScIterFunc eFunc )
+     auto_ptr<ScDBQueryParamBase> pQueryParam( GetDBParams(bMissingField) );
+     if (pQueryParam.get())
+     {
++        if (!pQueryParam->IsValidFieldIndex())
++        {
++            SetError(errNoValue);
++            return;
++        }
+         ScDBQueryDataIterator aValIter(pDok, pQueryParam.release());
+         ScDBQueryDataIterator::Value aValue;
+         if ( aValIter.GetFirst(aValue) && !aValue.mnError )
+@@ -6066,6 +6071,7 @@ void ScInterpreter::ScDBCount()
+             // return empty cells, which would mean to adapt all callers of
+             // iterators.
+             ScDBQueryParamInternal* p = static_cast<ScDBQueryParamInternal*>(pQueryParam.get());
++            p->nCol2 = p->nCol1; // Don't forget to select only one column.
+             SCTAB nTab = p->nTab;
+             ScQueryCellIterator aCellIter( pDok, nTab, *p);
+             if ( aCellIter.GetFirst() )
+@@ -6078,6 +6084,11 @@ void ScInterpreter::ScDBCount()
+         }
+         else
+         {   // count only matching records with a value in the "result" field
++            if (!pQueryParam->IsValidFieldIndex())
++            {
++                SetError(errNoValue);
++                return;
++            }
+             ScDBQueryDataIterator aValIter( pDok, pQueryParam.release());
+             ScDBQueryDataIterator::Value aValue;
+             if ( aValIter.GetFirst(aValue) && !aValue.mnError )
+@@ -6104,6 +6115,11 @@ void ScInterpreter::ScDBCount2()
+     auto_ptr<ScDBQueryParamBase> pQueryParam( GetDBParams(bMissingField) );
+     if (pQueryParam.get())
+     {
++        if (!pQueryParam->IsValidFieldIndex())
++        {
++            SetError(errNoValue);
++            return;
++        }
+         ULONG nCount = 0;
+         pQueryParam->mbSkipString = false;
+         ScDBQueryDataIterator aValIter( pDok, pQueryParam.release());
+@@ -6165,6 +6181,11 @@ void ScInterpreter::GetDBStVarParams( double& rVal, double& rValCount )
+     auto_ptr<ScDBQueryParamBase> pQueryParam( GetDBParams(bMissingField) );
+     if (pQueryParam.get())
+     {
++        if (!pQueryParam->IsValidFieldIndex())
++        {
++            SetError(errNoValue);
++            return;
++        }
+         ScDBQueryDataIterator aValIter(pDok, pQueryParam.release());
+         ScDBQueryDataIterator::Value aValue;
+         if (aValIter.GetFirst(aValue) && !aValue.mnError)
+diff --git sc/source/core/tool/queryparam.cxx sc/source/core/tool/queryparam.cxx
+index 80dd170..7dd6b72 100644
+--- sc/source/core/tool/queryparam.cxx
++++ sc/source/core/tool/queryparam.cxx
+@@ -57,6 +57,11 @@ ScQueryParamBase::~ScQueryParamBase()
+ {
+ }
+ 
++bool ScQueryParamBase::IsValidFieldIndex() const
++{
++    return true;
++}
++
+ SCSIZE ScQueryParamBase::GetEntryCount() const
+ {
+     return maEntries.size();
+@@ -366,6 +371,11 @@ ScDBQueryParamInternal::~ScDBQueryParamInternal()
+ {
+ }
+ 
++bool ScDBQueryParamInternal::IsValidFieldIndex() const
++{
++    return nCol1 <= mnField && mnField <= nCol2;
++}
++
+ // ============================================================================
+ 
+ ScDBQueryParamMatrix::ScDBQueryParamMatrix() :
+@@ -377,3 +387,10 @@ ScDBQueryParamMatrix::~ScDBQueryParamMatrix()
+ {
+ }
+ 
++bool ScDBQueryParamMatrix::IsValidFieldIndex() const
++{
++    SCSIZE nC, nR;
++    mpMatrix->GetDimensions(nC, nR);
++    return 0 <= mnField && mnField <= static_cast<SCCOL>(nC);
++}
++
