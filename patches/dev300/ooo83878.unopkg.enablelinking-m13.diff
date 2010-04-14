@@ -152,9 +152,23 @@ diff -u -r1.26 dp_manager.cxx
      // copy content into activation temp dir:
      if (mediaType.matchIgnoreAsciiCaseAsciiL(
              RTL_CONSTASCII_STRINGPARAM(
-@@ -552,13 +587,37 @@
-             buf.append(sourceContent.getURL());
-         }
+@@ -552,19 +587,49 @@
+     {
+         // inflate content:
+         ::rtl::OUStringBuffer buf;
+-        buf.appendAscii( RTL_CONSTASCII_STRINGPARAM("vnd.sun.star.zip://") );
+-        buf.append( ::rtl::Uri::encode( sourceContent.getURL(),
++        if (!sourceContent.isFolder())
++        {
++            buf.appendAscii( RTL_CONSTASCII_STRINGPARAM("vnd.sun.star.zip://") );
++            buf.append( ::rtl::Uri::encode( sourceContent.getURL(),
+                                         rtl_UriCharClassRegName,
+                                         rtl_UriEncodeIgnoreEscapes,
+                                         RTL_TEXTENCODING_UTF8 ) );
++        }
++        else
++            buf.append( sourceContent.getURL() );
++
          buf.append( static_cast<sal_Unicode>('/') );
 -        sourceContent = ::ucbhelper::Content( 
 -            buf.makeStringAndClear(), xCmdEnv );
@@ -204,9 +218,9 @@ diff -u -r1.6.84.1 unopkg_app.cxx
 --- desktop/source/pkgchk/unopkg/unopkg_app.cxx	10 Aug 2007 15:03:53 -0000	1.6.84.1
 +++ desktop/source/pkgchk/unopkg/unopkg_app.cxx	10 Aug 2007 15:03:53 -0000	1.6.84.1
 @@ -86,6 +86,9 @@
+ " -V, --version           version information\n"
+ " -v, --verbose           verbose output to stdout\n"
  " -f, --force             force overwriting existing extensions\n"
- " -s, --suppress-license  prevents showing the license provided that\n"
- "                         the extension allows it\n"
 +#ifdef UNX
 +" -l, --link              attempt to link to instead of copying extensions\n"
 +#endif
@@ -230,7 +244,7 @@ diff -u -r1.6.84.1 unopkg_app.cxx
 +    bool option_link = false;
      bool option_verbose = false;
      bool option_bundled = false;
-     bool option_suppressLicense = false;
+     bool subcmd_add = false;
 @@ -218,11 +225,13 @@
      OUString deploymentContext;
      OUString cmdArg;
@@ -247,19 +261,19 @@ diff -u -r1.6.84.1 unopkg_app.cxx
          s_option_infos, OUSTR("verbose") );
      OptionInfo const * info_log = getOptionInfo(
 @@ -276,6 +285,7 @@
+                      !readOption( &option_shared, info_shared, &nPos ) &&
                       !readOption( &option_force, info_force, &nPos ) &&
                       !readOption( &option_bundled, info_bundled, &nPos ) &&
-                      !readOption( &option_suppressLicense, info_suppressLicense, &nPos ) &&
 +                     !readOption( &option_link, info_link, &nPos ) &&
                       !readArgument( &deploymentContext, info_context, &nPos ) &&
                       !isBootstrapVariable(&nPos))
              {
 @@ -346,7 +356,7 @@
+         
          Reference< ::com::sun::star::ucb::XCommandEnvironment > xCmdEnv(
              createCmdEnv( xComponentContext, logFile,
-                           option_force, option_verbose, option_bundled, 
--                          option_suppressLicense) );
-+                          option_suppressLicense, option_link) );
+-                          option_force, option_verbose, option_bundled) );
++                          option_force, option_link, option_verbose, option_bundled) );
          
          if (subcmd_add ||
              subCommand.equalsAsciiL(
@@ -286,29 +300,28 @@ diff -u -r1.8 unopkg_cmdenv.cxx
 +    bool m_option_link;
      bool m_option_verbose;
      bool m_option_bundled;
-     bool m_option_suppressLicense;
+ 	Reference< XComponentContext > m_xComponentContext;
 @@ -112,6 +114,7 @@
          Reference<XComponentContext> const & xComponentContext,
          OUString const & log_file,
          bool option_force_overwrite,
 +        bool option_link,
          bool option_verbose,
-         bool option_bundled,
-         bool option_suppressLicense);
-@@ -137,11 +140,13 @@
+         bool option_bundled);
+     
+@@ -137,10 +140,12 @@
      Reference<XComponentContext> const & xComponentContext,
      OUString const & log_file,
      bool option_force_overwrite,
 +    bool option_link,
      bool option_verbose,
-     bool option_bundled,
-     bool option_suppressLicense)
+     bool option_bundled)
      : m_logLevel(0),
        m_option_force_overwrite( option_force_overwrite ),
 +      m_option_link( option_link ),
        m_option_verbose( option_verbose ),
        m_option_bundled( option_bundled),
-       m_option_suppressLicense( option_suppressLicense),
+ 	  m_xComponentContext(xComponentContext)
 @@ -270,6 +275,7 @@
      lang::WrappedTargetException wtExc;
  	deployment::LicenseException licExc;
@@ -318,8 +331,8 @@ diff -u -r1.8 unopkg_cmdenv.cxx
      deployment::PlatformException platExc;
      deployment::VersionException verExc;
 @@ -318,6 +324,10 @@
-         else
-             printLicense(licExc.Text, approve, abort);
+         bLicenseException = true;
+         printLicense(licExc.Text, approve, abort);
  	}
 +   	else if (request >>= linkExc)
 +	{
@@ -328,19 +341,17 @@ diff -u -r1.8 unopkg_cmdenv.cxx
     	else if (request >>= instExc)
  	{
  		//Only if the unopgk was started with gui + extension then we user is asked.
-@@ -457,13 +467,14 @@
+@@ -457,11 +467,12 @@
      Reference< XComponentContext > const & xContext,
      OUString const & logFile,
      bool option_force_overwrite,
 +    bool option_link,
      bool option_verbose,
-     bool option_bundled,
-     bool option_suppressLicense)
+     bool option_bundled)
  {
      return new CommandEnvironmentImpl(
-         xContext, logFile, option_force_overwrite, option_verbose, option_bundled,
--        option_suppressLicense);
-+        option_suppressLicense, option_link);
+-        xContext, logFile, option_force_overwrite, option_verbose, option_bundled);
++        xContext, logFile, option_force_overwrite, option_link, option_verbose, option_bundled);
  }
  
  } // unopkg
@@ -357,31 +368,5 @@ diff -u -r1.2.130.1 unopkg_shared.h
      bool option_force_overwrite,
 +    bool option_link,
      bool option_verbose,
-     bool option_bundled,
-     bool option_suppressLicense);
---- javaunohelper/com/sun/star/comp/juhtest/SmoketestCommandEnvironment.java	2010-02-11 13:42:37.000000000 +0000
-+++ javaunohelper/com/sun/star/comp/juhtest/SmoketestCommandEnvironment.java	2010-02-22 15:43:34.000000000 +0000
-@@ -35,6 +35,7 @@
- import com.sun.star.uno.XComponentContext;
- import com.sun.star.lang.XServiceInfo;
- import com.sun.star.ucb.XCommandEnvironment;
-+import com.sun.star.uno.AnyConverter;
+     bool option_bundled);
  
- /** This service is for use by the smoketest which checks the installation of
-  * extensions. The service provides the XCommandEnvironment interface, which
-@@ -113,6 +114,15 @@
- //                 approve = true;
- //             }
- 
-+        try {
-+            Object link_Exception =
-+                AnyConverter.toObject(
-+                    com.sun.star.deployment.LinkException.class, request);
-+            if (link_Exception != null)
-+                approve = false;
-+        } catch( Exception e ) {
-+        }
-+
-         com.sun.star.task.XInteractionContinuation[] conts = xRequest.getContinuations();
-         for (int i = 0; i < conts.length; i++)
-         {
