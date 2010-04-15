@@ -1,0 +1,431 @@
+diff --git sc/source/filter/excel/excimp8.cxx sc/source/filter/excel/excimp8.cxx
+index 400ccff..0993eea 100644
+--- sc/source/filter/excel/excimp8.cxx
++++ sc/source/filter/excel/excimp8.cxx
+@@ -324,6 +324,7 @@ void ImportExcel8::EndSheet( void )
+ {
+     ImportExcel::EndSheet();
+     GetCondFormatManager().Apply();
++    GetValidationManager().Apply();
+ }
+ 
+ 
+diff --git sc/source/filter/excel/read.cxx sc/source/filter/excel/read.cxx
+index df37249..1a70de2 100644
+--- sc/source/filter/excel/read.cxx
++++ sc/source/filter/excel/read.cxx
+@@ -803,6 +803,7 @@ FltError ImportExcel8::Read( void )
+     XclImpLinkManager&      rLinkMgr        = GetLinkManager();
+     XclImpObjectManager&    rObjMgr         = GetObjectManager();
+     XclImpCondFormatManager& rCondFmtMgr    = GetCondFormatManager();
++    XclImpValidationManager& rValidMgr      = GetValidationManager();
+     XclImpPivotTableManager& rPTableMgr     = GetPivotTableManager();
+     XclImpWebQueryBuffer&   rWQBfr          = GetWebQueryBuffer();
+ 
+@@ -1204,8 +1205,8 @@ FltError ImportExcel8::Read( void )
+                     case EXC_ID_CONDFMT:        rCondFmtMgr.ReadCondfmt( maStrm );      break;
+                     case EXC_ID_CF:             rCondFmtMgr.ReadCF( maStrm );           break;
+ 
+-                    case EXC_ID_DVAL:           XclImpValidation::ReadDval( maStrm );   break;
+-                    case EXC_ID_DV:             XclImpValidation::ReadDV( maStrm );     break;
++                    case EXC_ID_DVAL:           rValidMgr.ReadDval( maStrm );           break;
++                    case EXC_ID_DV:             rValidMgr.ReadDV( maStrm );             break;
+ 
+                     case EXC_ID_QSI:            rWQBfr.ReadQsi( maStrm );               break;
+                     case EXC_ID_WQSTRING:       rWQBfr.ReadWqstring( maStrm );          break;
+diff --git sc/source/filter/excel/xicontent.cxx sc/source/filter/excel/xicontent.cxx
+index 0470830..3c0f343 100644
+--- sc/source/filter/excel/xicontent.cxx
++++ sc/source/filter/excel/xicontent.cxx
+@@ -702,7 +702,15 @@ void XclImpCondFormatManager::Apply()
+ 
+ // Data Validation ============================================================
+ 
+-void XclImpValidation::ReadDval( XclImpStream& rStrm )
++XclImpValidationManager::DVItem::DVItem( const ScRangeList& rRanges, const ScValidationData& rValidData ) :
++    maRanges(rRanges), maValidData(rValidData) {}
++
++XclImpValidationManager::XclImpValidationManager( const XclImpRoot& rRoot ) :
++    XclImpRoot( rRoot )
++{
++}
++
++void XclImpValidationManager::ReadDval( XclImpStream& rStrm )
+ {
+     const XclImpRoot& rRoot = rStrm.GetRoot();
+     DBG_ASSERT_BIFF( rRoot.GetBiff() == EXC_BIFF8 );
+@@ -717,7 +725,7 @@ void XclImpValidation::ReadDval( XclImpStream& rStrm )
+     }
+ }
+ 
+-void XclImpValidation::ReadDV( XclImpStream& rStrm )
++void XclImpValidationManager::ReadDV( XclImpStream& rStrm )
+ {
+     const XclImpRoot& rRoot = rStrm.GetRoot();
+     DBG_ASSERT_BIFF( rRoot.GetBiff() == EXC_BIFF8 );
+@@ -741,130 +749,145 @@ void XclImpValidation::ReadDV( XclImpStream& rStrm )
+     rStrm.SetNulSubstChar();    // back to default
+ 
+     // formula(s)
+-    if( rStrm.GetRecLeft() > 8 )
++    if ( rStrm.GetRecLeft() <= 8 )
++        // Not enough bytes left in the record.  Bail out.
++        return;
++
++    sal_uInt16 nLen;
++
++    // first formula
++    // string list is single tStr token with NUL separators -> replace them with LF
++    rStrm.SetNulSubstChar( '\n' );
++    ::std::auto_ptr< ScTokenArray > xTokArr1;
++    rStrm >> nLen;
++    rStrm.Ignore( 2 );
++    if( nLen > 0 )
+     {
+-        sal_uInt16 nLen;
++        const ScTokenArray* pTokArr = 0;
++        rFmlaConv.Reset();
++        rFmlaConv.Convert( pTokArr, rStrm, nLen, false, FT_RangeName );
++        // formula converter owns pTokArr -> create a copy of the token array
++        if( pTokArr )
++            xTokArr1.reset( pTokArr->Clone() );
++    }
++    rStrm.SetNulSubstChar();    // back to default
+ 
+-        // first formula
+-        // string list is single tStr token with NUL separators -> replace them with LF
+-        rStrm.SetNulSubstChar( '\n' );
+-        ::std::auto_ptr< ScTokenArray > xTokArr1;
+-        rStrm >> nLen;
+-        rStrm.Ignore( 2 );
+-        if( nLen > 0 )
+-        {
+-            const ScTokenArray* pTokArr = 0;
+-            rFmlaConv.Reset();
+-            rFmlaConv.Convert( pTokArr, rStrm, nLen, false, FT_RangeName );
+-            // formula converter owns pTokArr -> create a copy of the token array
+-            if( pTokArr )
+-                xTokArr1.reset( pTokArr->Clone() );
+-        }
+-        rStrm.SetNulSubstChar();    // back to default
++    // second formula
++    ::std::auto_ptr< ScTokenArray > xTokArr2;
++    rStrm >> nLen;
++    rStrm.Ignore( 2 );
++    if( nLen > 0 )
++    {
++        const ScTokenArray* pTokArr = 0;
++        rFmlaConv.Reset();
++        rFmlaConv.Convert( pTokArr, rStrm, nLen, false, FT_RangeName );
++        // formula converter owns pTokArr -> create a copy of the token array
++        if( pTokArr )
++            xTokArr2.reset( pTokArr->Clone() );
++    }
+ 
+-        // second formula
+-        ::std::auto_ptr< ScTokenArray > xTokArr2;
+-        rStrm >> nLen;
+-        rStrm.Ignore( 2 );
+-        if( nLen > 0 )
+-        {
+-            const ScTokenArray* pTokArr = 0;
+-            rFmlaConv.Reset();
+-            rFmlaConv.Convert( pTokArr, rStrm, nLen, false, FT_RangeName );
+-            // formula converter owns pTokArr -> create a copy of the token array
+-            if( pTokArr )
+-                xTokArr2.reset( pTokArr->Clone() );
+-        }
++    // read all cell ranges
++    XclRangeList aXclRanges;
++    rStrm >> aXclRanges;
+ 
+-        // read all cell ranges
+-        XclRangeList aXclRanges;
+-        rStrm >> aXclRanges;
++    // convert to Calc range list
++    ScRangeList aScRanges;
++    rRoot.GetAddressConverter().ConvertRangeList( aScRanges, aXclRanges, nScTab, true );
+ 
+-        // convert to Calc range list
+-        ScRangeList aScRanges;
+-        rRoot.GetAddressConverter().ConvertRangeList( aScRanges, aXclRanges, nScTab, true );
++    // only continue if there are valid ranges
++    if ( !aScRanges.Count() )
++        return;
+ 
+-        // only continue if there are valid ranges
+-        if( aScRanges.Count() )
+-        {
+-            bool bIsValid = true;   // valid settings in flags field
++    bool bIsValid = true;   // valid settings in flags field
+ 
+-            ScValidationMode eValMode = SC_VALID_ANY;
+-            switch( nFlags & EXC_DV_MODE_MASK )
+-            {
+-                case EXC_DV_MODE_ANY:       eValMode = SC_VALID_ANY;        break;
+-                case EXC_DV_MODE_WHOLE:     eValMode = SC_VALID_WHOLE;      break;
+-                case EXC_DV_MODE_DECIMAL:   eValMode = SC_VALID_DECIMAL;    break;
+-                case EXC_DV_MODE_LIST:      eValMode = SC_VALID_LIST;       break;
+-                case EXC_DV_MODE_DATE:      eValMode = SC_VALID_DATE;       break;
+-                case EXC_DV_MODE_TIME:      eValMode = SC_VALID_TIME;       break;
+-                case EXC_DV_MODE_TEXTLEN:   eValMode = SC_VALID_TEXTLEN;    break;
+-                case EXC_DV_MODE_CUSTOM:    eValMode = SC_VALID_CUSTOM;     break;
+-                default:                    bIsValid = false;
+-            }
+-            rRoot.GetTracer().TraceDVType(eValMode == SC_VALID_CUSTOM);
++    ScValidationMode eValMode = SC_VALID_ANY;
++    switch( nFlags & EXC_DV_MODE_MASK )
++    {
++        case EXC_DV_MODE_ANY:       eValMode = SC_VALID_ANY;        break;
++        case EXC_DV_MODE_WHOLE:     eValMode = SC_VALID_WHOLE;      break;
++        case EXC_DV_MODE_DECIMAL:   eValMode = SC_VALID_DECIMAL;    break;
++        case EXC_DV_MODE_LIST:      eValMode = SC_VALID_LIST;       break;
++        case EXC_DV_MODE_DATE:      eValMode = SC_VALID_DATE;       break;
++        case EXC_DV_MODE_TIME:      eValMode = SC_VALID_TIME;       break;
++        case EXC_DV_MODE_TEXTLEN:   eValMode = SC_VALID_TEXTLEN;    break;
++        case EXC_DV_MODE_CUSTOM:    eValMode = SC_VALID_CUSTOM;     break;
++        default:                    bIsValid = false;
++    }
++    rRoot.GetTracer().TraceDVType(eValMode == SC_VALID_CUSTOM);
+ 
+-            ScConditionMode eCondMode = SC_COND_BETWEEN;
+-            switch( nFlags & EXC_DV_COND_MASK )
+-            {
+-                case EXC_DV_COND_BETWEEN:   eCondMode = SC_COND_BETWEEN;    break;
+-                case EXC_DV_COND_NOTBETWEEN:eCondMode = SC_COND_NOTBETWEEN; break;
+-                case EXC_DV_COND_EQUAL:     eCondMode = SC_COND_EQUAL;      break;
+-                case EXC_DV_COND_NOTEQUAL:  eCondMode = SC_COND_NOTEQUAL;   break;
+-                case EXC_DV_COND_GREATER:   eCondMode = SC_COND_GREATER;    break;
+-                case EXC_DV_COND_LESS:      eCondMode = SC_COND_LESS;       break;
+-                case EXC_DV_COND_EQGREATER: eCondMode = SC_COND_EQGREATER;  break;
+-                case EXC_DV_COND_EQLESS:    eCondMode = SC_COND_EQLESS;     break;
+-                default:                    bIsValid = false;
+-            }
++    ScConditionMode eCondMode = SC_COND_BETWEEN;
++    switch( nFlags & EXC_DV_COND_MASK )
++    {
++        case EXC_DV_COND_BETWEEN:   eCondMode = SC_COND_BETWEEN;    break;
++        case EXC_DV_COND_NOTBETWEEN:eCondMode = SC_COND_NOTBETWEEN; break;
++        case EXC_DV_COND_EQUAL:     eCondMode = SC_COND_EQUAL;      break;
++        case EXC_DV_COND_NOTEQUAL:  eCondMode = SC_COND_NOTEQUAL;   break;
++        case EXC_DV_COND_GREATER:   eCondMode = SC_COND_GREATER;    break;
++        case EXC_DV_COND_LESS:      eCondMode = SC_COND_LESS;       break;
++        case EXC_DV_COND_EQGREATER: eCondMode = SC_COND_EQGREATER;  break;
++        case EXC_DV_COND_EQLESS:    eCondMode = SC_COND_EQLESS;     break;
++        default:                    bIsValid = false;
++    }
+ 
+-            if( bIsValid )
+-            {
+-                // first range for base address for relative references
+-                const ScRange& rScRange = *aScRanges.GetObject( 0 );    // aScRanges is not empty
++    if ( !bIsValid )
++        // No valid validation found.  Bail out.
++        return;
+ 
+-                // process string list of a list validity (convert to list of string tokens)
+-                if( xTokArr1.get() && (eValMode == SC_VALID_LIST) && ::get_flag( nFlags, EXC_DV_STRINGLIST ) )
+-                    XclTokenArrayHelper::ConvertStringToList( *xTokArr1, '\n', true );
+ 
+-                ScValidationData aValidData( eValMode, eCondMode, xTokArr1.get(), xTokArr2.get(), &rDoc, rScRange.aStart );
++    // first range for base address for relative references
++    const ScRange& rScRange = *aScRanges.GetObject( 0 );    // aScRanges is not empty
+ 
+-                aValidData.SetIgnoreBlank( ::get_flag( nFlags, EXC_DV_IGNOREBLANK ) );
+-                aValidData.SetListType( ::get_flagvalue( nFlags, EXC_DV_SUPPRESSDROPDOWN, ValidListType::INVISIBLE, ValidListType::UNSORTED ) );
++    // process string list of a list validity (convert to list of string tokens)
++    if( xTokArr1.get() && (eValMode == SC_VALID_LIST) && ::get_flag( nFlags, EXC_DV_STRINGLIST ) )
++        XclTokenArrayHelper::ConvertStringToList( *xTokArr1, '\n', true );
+ 
+-                // *** prompt box ***
+-                if( aPromptTitle.Len() || aPromptMessage.Len() )
+-                {
+-                    // set any text stored in the record
+-                    aValidData.SetInput( aPromptTitle, aPromptMessage );
+-                    if( !::get_flag( nFlags, EXC_DV_SHOWPROMPT ) )
+-                        aValidData.ResetInput();
+-                }
++    maDVItems.push_back(
++        new DVItem(aScRanges, ScValidationData(eValMode, eCondMode, xTokArr1.get(), xTokArr2.get(), &rDoc, rScRange.aStart)));
++    DVItem& rItem = maDVItems.back();
+ 
+-                // *** error box ***
+-                ScValidErrorStyle eErrStyle = SC_VALERR_STOP;
+-                switch( nFlags & EXC_DV_ERROR_MASK )
+-                {
+-                    case EXC_DV_ERROR_WARNING:  eErrStyle = SC_VALERR_WARNING;  break;
+-                    case EXC_DV_ERROR_INFO:     eErrStyle = SC_VALERR_INFO;     break;
+-                }
+-                // set texts and error style
+-                aValidData.SetError( aErrorTitle, aErrorMessage, eErrStyle );
+-                if( !::get_flag( nFlags, EXC_DV_SHOWERROR ) )
+-                    aValidData.ResetError();
+-
+-                // set the handle ID
+-                ULONG nHandle = rDoc.AddValidationEntry( aValidData );
+-                ScPatternAttr aPattern( rDoc.GetPool() );
+-                aPattern.GetItemSet().Put( SfxUInt32Item( ATTR_VALIDDATA, nHandle ) );
+-
+-                // apply all ranges
+-                for( const ScRange* pScRange = aScRanges.First(); pScRange; pScRange = aScRanges.Next() )
+-                    rDoc.ApplyPatternAreaTab( pScRange->aStart.Col(), pScRange->aStart.Row(),
+-                        pScRange->aEnd.Col(), pScRange->aEnd.Row(), nScTab, aPattern );
+-            }
+-        }
++    rItem.maValidData.SetIgnoreBlank( ::get_flag( nFlags, EXC_DV_IGNOREBLANK ) );
++    rItem.maValidData.SetListType( ::get_flagvalue( nFlags, EXC_DV_SUPPRESSDROPDOWN, ValidListType::INVISIBLE, ValidListType::UNSORTED ) );
++
++    // *** prompt box ***
++    if( aPromptTitle.Len() || aPromptMessage.Len() )
++    {
++        // set any text stored in the record
++        rItem.maValidData.SetInput( aPromptTitle, aPromptMessage );
++        if( !::get_flag( nFlags, EXC_DV_SHOWPROMPT ) )
++            rItem.maValidData.ResetInput();
++    }
++
++    // *** error box ***
++    ScValidErrorStyle eErrStyle = SC_VALERR_STOP;
++    switch( nFlags & EXC_DV_ERROR_MASK )
++    {
++        case EXC_DV_ERROR_WARNING:  eErrStyle = SC_VALERR_WARNING;  break;
++        case EXC_DV_ERROR_INFO:     eErrStyle = SC_VALERR_INFO;     break;
++    }
++    // set texts and error style
++    rItem.maValidData.SetError( aErrorTitle, aErrorMessage, eErrStyle );
++    if( !::get_flag( nFlags, EXC_DV_SHOWERROR ) )
++        rItem.maValidData.ResetError();
++}
++
++void XclImpValidationManager::Apply()
++{
++    ScDocument& rDoc = GetRoot().GetDoc();
++    DVItemList::iterator itr = maDVItems.begin(), itrEnd = maDVItems.end();
++    for (; itr != itrEnd; ++itr)
++    {
++        DVItem& rItem = *itr;
++        // set the handle ID
++        ULONG nHandle = rDoc.AddValidationEntry( rItem.maValidData );
++        ScPatternAttr aPattern( rDoc.GetPool() );
++        aPattern.GetItemSet().Put( SfxUInt32Item( ATTR_VALIDDATA, nHandle ) );
++
++        // apply all ranges
++        for( const ScRange* pScRange = rItem.maRanges.First(); pScRange; pScRange = rItem.maRanges.Next() )
++            rDoc.ApplyPatternAreaTab( pScRange->aStart.Col(), pScRange->aStart.Row(),
++                pScRange->aEnd.Col(), pScRange->aEnd.Row(), pScRange->aStart.Tab(), aPattern );
+     }
++    maDVItems.clear();
+ }
+ 
+ // Web queries ================================================================
+diff --git sc/source/filter/excel/xiroot.cxx sc/source/filter/excel/xiroot.cxx
+index 30cab47..2f50d94 100644
+--- sc/source/filter/excel/xiroot.cxx
++++ sc/source/filter/excel/xiroot.cxx
+@@ -82,6 +82,7 @@ XclImpRoot::XclImpRoot( XclImpRootData& rImpRootData ) :
+         mrImpData.mxLinkMgr.reset( new XclImpLinkManager( GetRoot() ) );
+         mrImpData.mxSst.reset( new XclImpSst( GetRoot() ) );
+         mrImpData.mxCondFmtMgr.reset( new XclImpCondFormatManager( GetRoot() ) );
++        mrImpData.mxValidMgr.reset( new XclImpValidationManager( GetRoot() ) );
+         // TODO still in old RootData (deleted by RootData)
+         GetOldRoot().pAutoFilterBuffer = new XclImpAutoFilterBuffer;
+         mrImpData.mxWebQueryBfr.reset( new XclImpWebQueryBuffer( GetRoot() ) );
+@@ -215,6 +216,12 @@ XclImpCondFormatManager& XclImpRoot::GetCondFormatManager() const
+     return *mrImpData.mxCondFmtMgr;
+ }
+ 
++XclImpValidationManager& XclImpRoot::GetValidationManager() const
++{
++    DBG_ASSERT( mrImpData.mxValidMgr.is(), "XclImpRoot::GetValidationManager - invalid call, wrong BIFF" );
++    return *mrImpData.mxValidMgr;
++}
++
+ XclImpAutoFilterBuffer& XclImpRoot::GetFilterManager() const
+ {
+     // TODO still in old RootData
+diff --git sc/source/filter/inc/xicontent.hxx sc/source/filter/inc/xicontent.hxx
+index 07b237a..d37dd07 100644
+--- sc/source/filter/inc/xicontent.hxx
++++ sc/source/filter/inc/xicontent.hxx
+@@ -36,8 +36,10 @@
+ #include "xlcontent.hxx"
+ #include "xistring.hxx"
+ #include "xiroot.hxx"
++#include "validat.hxx"
+ 
+ #include <map>
++#include <boost/ptr_container/ptr_vector.hpp>
+ 
+ /* ============================================================================
+ Classes to import the big Excel document contents (related to several cells or
+@@ -165,14 +167,29 @@ private:
+ 
+ // Data Validation ============================================================
+ 
+-/** Provides importing validation data and inserting it into a document. */
+-class XclImpValidation : ScfNoInstance
++/** Imports validation data. */
++class XclImpValidationManager : protected XclImpRoot
+ {
+ public:
++    explicit            XclImpValidationManager( const XclImpRoot& rRoot );
++
+     /** Reads a DVAL record and sets marks the dropdown arrow control to be ignored. */
+-    static void         ReadDval( XclImpStream& rStrm );
++    void                ReadDval( XclImpStream& rStrm );
+     /** Reads a DV record and inserts validation data into the document. */
+-    static void         ReadDV( XclImpStream& rStrm );
++    void                ReadDV( XclImpStream& rStrm );
++
++    void                Apply();
++private:
++    struct DVItem
++    {
++        ScRangeList         maRanges;
++        ScValidationData    maValidData;
++
++        explicit DVItem ( const ScRangeList& rRanges, const ScValidationData& rValidData );
++    };
++    typedef ::boost::ptr_vector<DVItem> DVItemList;
++
++    DVItemList maDVItems;
+ };
+ 
+ // Web queries ================================================================
+diff --git sc/source/filter/inc/xiroot.hxx sc/source/filter/inc/xiroot.hxx
+index f331683..295297b 100644
+--- sc/source/filter/inc/xiroot.hxx
++++ sc/source/filter/inc/xiroot.hxx
+@@ -55,6 +55,7 @@ class XclImpNameManager;
+ class XclImpLinkManager;
+ class XclImpObjectManager;
+ class XclImpCondFormatManager;
++class XclImpValidationManager;
+ class XclImpAutoFilterBuffer;
+ class XclImpWebQueryBuffer;
+ class XclImpPivotTableManager;
+@@ -84,6 +85,7 @@ struct XclImpRootData : public XclRootData
+     typedef ScfRef< XclImpLinkManager >         XclImpLinkMgrRef;
+     typedef ScfRef< XclImpObjectManager >       XclImpObjectMgrRef;
+     typedef ScfRef< XclImpCondFormatManager >   XclImpCondFmtMgrRef;
++    typedef ScfRef< XclImpValidationManager >   XclImpValidationMgrRef;
+     typedef ScfRef< XclImpWebQueryBuffer >      XclImpWebQueryBfrRef;
+     typedef ScfRef< XclImpPivotTableManager >   XclImpPTableMgrRef;
+     typedef ScfRef< XclImpPageSettings >        XclImpPageSettRef;
+@@ -108,6 +110,7 @@ struct XclImpRootData : public XclRootData
+ 
+     XclImpObjectMgrRef  mxObjMgr;           /// All drawing objects.
+     XclImpCondFmtMgrRef mxCondFmtMgr;       /// Conditional formattings.
++    XclImpValidationMgrRef mxValidMgr;      /// Data validation
+     XclImpWebQueryBfrRef mxWebQueryBfr;     /// All web queries.
+     XclImpPTableMgrRef  mxPTableMgr;        /// All pivot tables and pivot caches.
+ 
+@@ -181,6 +184,8 @@ public:
+     XclImpObjectManager& GetObjectManager() const;
+     /** Returns the conditional formattings manager. */
+     XclImpCondFormatManager& GetCondFormatManager() const;
++
++    XclImpValidationManager& GetValidationManager() const;
+     /** Returns the filter manager. */
+     XclImpAutoFilterBuffer& GetFilterManager() const;
+     /** Returns the web query buffer. */
