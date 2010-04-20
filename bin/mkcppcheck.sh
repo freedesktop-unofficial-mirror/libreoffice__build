@@ -57,7 +57,7 @@ INCLUDE_PATH=`echo $SOLARINC | sed -e ' s/-I\.//'g | sed -e ' s/ -I/ /'g | sed -
 for PROJECT in $INPUT_PROJECTS; 
 do
   echo "Checking module $PROJECT"
-  cppcheck -j$NCPUS $REPORT_UNUSED -v $STYLE $SOLARINC -I$PROJECT/inc -I$PROJECT/inc/pch $PROJECT/source
+  cppcheck -j$NCPUS $REPORT_UNUSED -v $STYLE $SOLARINC -I$SRC_ROOT/$PROJECT/inc -I$SRC_ROOT/$PROJECT/inc/pch $PROJECT/source
   echo
 done
 
