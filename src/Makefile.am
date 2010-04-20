@@ -36,6 +36,7 @@ EXTRA_DIST=\
 	openabout_pld.bmp \
 	openintro_fsfhu.bmp \
 	sg3.sdg sg3.sdv sg3.thm \
+	sofficerc-upstream \
 	tango_mainapp_16.png \
 	glib-1.2.10-ooo.patch \
 	libIDL-0.6.8-ooo.patch \
