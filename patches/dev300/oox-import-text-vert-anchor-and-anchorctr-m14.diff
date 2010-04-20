@@ -1,0 +1,130 @@
+diff -rup oox-orig-1/inc/oox/drawingml/drawingmltypes.hxx oox/inc/oox/drawingml/drawingmltypes.hxx
+--- oox-orig-1/inc/oox/drawingml/drawingmltypes.hxx	2009-10-12 15:04:52.000000000 +0200
++++ oox/inc/oox/drawingml/drawingmltypes.hxx	2009-10-12 15:10:19.000000000 +0200
+@@ -33,6 +33,7 @@
+ 
+ #include <boost/shared_ptr.hpp>
+ #include <com/sun/star/style/TabAlign.hpp>
++#include <com/sun/star/drawing/TextVerticalAdjust.hpp>
+ #include <com/sun/star/geometry/IntegerRectangle2D.hpp>
+ #include <com/sun/star/awt/Point.hpp>
+ #include <com/sun/star/awt/Size.hpp>
+@@ -123,6 +124,8 @@ float GetTextSize( const ::rtl::OUString
+ sal_Int32 GetTextSpacingPoint(  const ::rtl::OUString& sValue );
+ sal_Int32 GetTextSpacingPoint(  const sal_Int32 nValue );
+ 
++::com::sun::star::drawing::TextVerticalAdjust GetTextVerticalAdjust( sal_Int32 nToken );
++
+ /** */
+ ::com::sun::star::style::TabAlign GetTabAlign( ::sal_Int32 aToken );
+ 
+diff -rup oox-orig-1/source/drawingml/drawingmltypes.cxx oox/source/drawingml/drawingmltypes.cxx
+--- oox-orig-1/source/drawingml/drawingmltypes.cxx	2009-10-12 15:04:52.000000000 +0200
++++ oox/source/drawingml/drawingmltypes.cxx	2009-10-12 15:10:19.000000000 +0200
+@@ -40,8 +40,9 @@ using ::rtl::OUString;
+ using ::com::sun::star::uno::Reference;
+ using ::com::sun::star::xml::sax::XFastAttributeList;
+ using namespace ::com::sun::star::awt;
+-using namespace ::com::sun::star::style;
++using namespace ::com::sun::star::drawing;
+ using namespace ::com::sun::star::geometry;
++using namespace ::com::sun::star::style;
+ 
+ namespace oox {
+ namespace drawingml {
+@@ -137,6 +138,22 @@ sal_Int32 GetTextSpacingPoint( const sal
+ 	return ( nValue * 254 + 360 ) / 720;
+ }
+ 
++TextVerticalAdjust GetTextVerticalAdjust( sal_Int32 nToken )
++{
++    TextVerticalAdjust rVal = TextVerticalAdjust_TOP;
++
++    switch( nToken ) {
++	case XML_b:
++	    rVal = TextVerticalAdjust_BOTTOM;
++	    break;
++	case XML_ctr:
++	    rVal = TextVerticalAdjust_CENTER;
++	    break;
++    }
++
++    return rVal;
++}
++
+ float GetFontHeight( sal_Int32 nHeight )
+ {
+     // convert 1/100 points to points
+diff -rup oox-orig-1/source/drawingml/textbodypropertiescontext.cxx oox/source/drawingml/textbodypropertiescontext.cxx
+--- oox-orig-1/source/drawingml/textbodypropertiescontext.cxx	2009-10-12 15:04:52.000000000 +0200
++++ oox/source/drawingml/textbodypropertiescontext.cxx	2009-10-12 15:15:56.000000000 +0200
+@@ -30,7 +30,9 @@
+ 
+ #include "oox/drawingml/textbodypropertiescontext.hxx"
+ 
++#include <com/sun/star/drawing/TextHorizontalAdjust.hpp>
+ #include <com/sun/star/text/ControlCharacter.hpp>
++#include <com/sun/star/text/WritingMode.hpp>
+ #include "oox/drawingml/textbodyproperties.hxx"
+ #include "oox/drawingml/drawingmltypes.hxx"
+ #include "oox/helper/attributelist.hxx"
+@@ -41,8 +43,9 @@
+ 
+ using ::rtl::OUString;
+ using namespace ::oox::core;
+-using namespace ::com::sun::star::uno;
++using namespace ::com::sun::star::drawing;
+ using namespace ::com::sun::star::text;
++using namespace ::com::sun::star::uno;
+ using namespace ::com::sun::star::xml::sax;
+ 
+ namespace oox { namespace drawingml {
+@@ -81,9 +84,12 @@ TextBodyPropertiesContext::TextBodyPrope
+ 
+ 
+     // ST_TextAnchoringType
+-//   sal_Int32 nAnchoringType = xAttributes->getOptionalValueToken( XML_anchor, XML_t );
++    mrTextBodyProp.maPropertyMap[ PROP_TextVerticalAdjust ] <<= GetTextVerticalAdjust( xAttributes->getOptionalValueToken( XML_anchor, XML_t ) );
+ 
+-//   bool bAnchorCenter = aAttribs.getBool( XML_anchorCtr, false );
++    bool bAnchorCenter = aAttribs.getBool( XML_anchorCtr, false );
++    if( bAnchorCenter )
++	mrTextBodyProp.maPropertyMap[ PROP_TextHorizontalAdjust ] <<= 
++	    TextHorizontalAdjust_CENTER;
+ 
+ //   bool bCompatLineSpacing = aAttribs.getBool( XML_compatLnSpc, false );
+ //   bool bForceAA = aAttribs.getBool( XML_forceAA, false );
+@@ -108,6 +114,15 @@ TextBodyPropertiesContext::TextBodyPrope
+ 
+     // ST_TextVerticalType
+     mrTextBodyProp.moVert = aAttribs.getToken( XML_vert );
++    bool bRtl = aAttribs.getBool( XML_rtl, false );
++    if( mrTextBodyProp.moVert.get( XML_horz ) == XML_vert ) {
++	mrTextBodyProp.maPropertyMap[ PROP_TextWritingMode ]
++	    <<= ( bRtl ? WritingMode_RL_TB : WritingMode_LR_TB );
++	// workaround for TB_LR as using WritingMode2 doesn't work
++	if( !bAnchorCenter )
++	    mrTextBodyProp.maPropertyMap[ PROP_TextHorizontalAdjust ] <<= 
++		TextHorizontalAdjust_LEFT;
++    }
+ }
+ 
+ // --------------------------------------------------------------------
+diff -rup oox-orig-1/source/token/properties.txt oox/source/token/properties.txt
+--- oox-orig-1/source/token/properties.txt	2009-10-12 15:04:52.000000000 +0200
++++ oox/source/token/properties.txt	2009-10-12 15:12:32.000000000 +0200
+@@ -367,12 +367,14 @@ TargetFrame
+ TextAutoGrowHeight
+ TextBreak
+ TextColor
++TextHorizontalAdjust
+ TextLeftDistance
+ TextLowerDistance
+ TextOverlap
+ TextRightDistance
+ TextRotation
+ TextUpperDistance
++TextVerticalAdjust
+ TextWordWrap
+ TextWritingMode
+ Toggle
