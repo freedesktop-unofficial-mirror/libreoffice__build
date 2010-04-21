@@ -1,0 +1,190 @@
+diff --git basic/source/classes/errobject.cxx basic/source/classes/errobject.cxx
+index 4005d85..0bc95a1 100644
+--- basic/source/classes/errobject.cxx
++++ basic/source/classes/errobject.cxx
+@@ -19,6 +19,7 @@ class ErrObject : public ErrObjectImpl_BASE
+         rtl::OUString m_sDescription; 
+ 	sal_Int32 m_nNumber;
+ 	sal_Int32 m_nHelpContext;
++        bool mbIsInError;
+ 	
+ public:
+ 	ErrObject();
+@@ -47,7 +48,7 @@ ErrObject::~ErrObject()
+ {
+ }
+ 
+-ErrObject::ErrObject() : m_nNumber(0), m_nHelpContext(0)
++ErrObject::ErrObject() : m_nNumber(0), m_nHelpContext(0), mbIsInError(false)
+ {
+ }
+ 
+@@ -60,9 +61,9 @@ ErrObject::getNumber() throw (uno::RuntimeException)
+ void SAL_CALL 
+ ErrObject::setNumber( ::sal_Int32 _number ) throw (uno::RuntimeException)
+ {
+-	m_nNumber = _number;
+-
+-	
++//	m_nNumber = _number;
++    if ( !mbIsInError )
++        Raise( uno::makeAny( _number ), uno::Any(),  uno::Any(), uno::Any(), uno::Any() );
+ }
+ 
+ ::sal_Int32 SAL_CALL 
+@@ -128,6 +129,8 @@ ErrObject::Raise( const uno::Any& Number, const uno::Any& Source, const uno::Any
+ {
+ 	if ( !Number.hasValue() )
+ 		throw uno::RuntimeException( rtl::OUString::createFromAscii("Missing Required Paramater"), uno::Reference< uno::XInterface >() );
++        mbIsInError = true;
++        Clear();
+ 	Description >>= m_sDescription;
+ 	Source >>= m_sSource;
+ 	HelpFile >>= m_sHelpFile;
+@@ -140,6 +143,7 @@ ErrObject::Raise( const uno::Any& Number, const uno::Any& Source, const uno::Any
+ 			n = m_nNumber; // force orig number, probably should have a specific table of vb ( localized ) errors
+ 		pINST->Error( n, m_sDescription );
+ 	}
++        mbIsInError = false;
+ }
+ 
+ // XDefaultProperty	
+diff --git basic/source/classes/sb.cxx basic/source/classes/sb.cxx
+index 481e4b3..cbbc565 100644
+--- basic/source/classes/sb.cxx
++++ basic/source/classes/sb.cxx
+@@ -58,6 +58,7 @@
+ #include "sb.hrc"
+ #include <basrid.hxx>
+ #include <vos/mutex.hxx>
++#include "errobject.hxx"
+ 
+ #include <com/sun/star/script/ModuleType.hpp>
+ #include <com/sun/star/script/ModuleInfo.hpp>
+@@ -1309,6 +1310,7 @@ void StarBASIC::MakeErrorText( SbError nId, const String& aMsg )
+     }
+     else
+         GetSbData()->aErrMsg = String::EmptyString();
++
+ }
+ 
+ BOOL StarBASIC::CError
+@@ -1365,7 +1382,22 @@ BOOL StarBASIC::RTError( SbError code, const String& rMsg, USHORT l, USHORT c1,
+ 
+     // Umsetzung des Codes fuer String-Transport in SFX-Error
+     if( rMsg.Len() )
++        {
++            // very confusing, even though MakeErrorText sets up the error text
++            // seems that this is not used ( if rMsg already has content )
++            // In the case of VBA MakeErrorText also formats the error to be alittle more 
++            // like vba ( adds an error number etc )
++            if ( SbiRuntime::isVBAEnabled() && ( code == SbERR_BASIC_COMPAT ) )
++            {
++                String aTmp = '\'';
++                aTmp += String::CreateFromInt32( SbxErrObject::getUnoErrObject()->getNumber() );
++                aTmp += String( RTL_CONSTASCII_USTRINGPARAM("\'\n") );
++                aTmp +=  GetSbData()->aErrMsg.Len() ? GetSbData()->aErrMsg : rMsg;
++		code = (ULONG)*new StringErrorInfo( code, aTmp );
++            }
++            else
+         code = (ULONG)*new StringErrorInfo( code, String(rMsg) );
++        }
+ 
+     SetErrorData( code, l, c1, c2 );
+     if( GetSbData()->aErrHdl.IsSet() )
+diff --git basic/source/classes/sb.src basic/source/classes/sb.src
+index 8124cad..92bedff 100644
+--- basic/source/classes/sb.src
++++ basic/source/classes/sb.src
+@@ -593,8 +593,8 @@ Resource RID_BASIC_START
+     };
+ 	String ERRCODE_BASIC_COMPAT & ERRCODE_RES_MASK
+ 	{
+-		Text [ de ] = "$(ARG1)." ;
+-		Text [ en-US ] = "$(ARG1)." ;
++		Text [ de ] = "$(ARG1)" ;
++		Text [ en-US ] = "$(ARG1)" ;
+ 		Text [ x-comment ] = " ";
+ 	};
+ };
+diff --git basic/source/runtime/methods.cxx basic/source/runtime/methods.cxx
+index f726457..643a1f8 100644
+--- basic/source/runtime/methods.cxx
++++ basic/source/runtime/methods.cxx
+@@ -65,6 +65,7 @@
+ #else
+ #include <osl/file.hxx>
+ #endif
++#include "errobject.hxx"
+ 
+ #ifdef _USE_UNO
+ #include <comphelper/processfactory.hxx>
+@@ -269,6 +270,7 @@ RTLFUNC(Error)
+     {
+         String aErrorMsg;
+         SbError nErr = 0L;
++		INT32 nCode = 0;
+         if( rPar.Count() == 1 )
+         {
+             nErr = StarBASIC::GetErrBasic();
+@@ -276,14 +278,24 @@ RTLFUNC(Error)
+         }
+         else
+         {
+-            INT32 nCode = rPar.Get( 1 )->GetLong();
++			nCode = rPar.Get( 1 )->GetLong();
+             if( nCode > 65535L )
+                 StarBASIC::Error( SbERR_CONVERSION );
+             else
+                 nErr = StarBASIC::GetSfxFromVBError( (USHORT)nCode );
+         }
+         pBasic->MakeErrorText( nErr, aErrorMsg );
+-        rPar.Get( 0 )->PutString( pBasic->GetErrorText() );
++                String tmpErrMsg(  pBasic->GetErrorText() );
++                // If this rtlfunc 'Error'  passed a errcode the same as the active Err Objects's
++                // current err then  return the description for the error message if it is set
++                // ( complicated isn't it ? )
++                if ( SbiRuntime::isVBAEnabled() && rPar.Count() > 1 );
++                {
++                    com::sun::star::uno::Reference< ooo::vba::XErrObject > xErrObj( SbxErrObject::getUnoErrObject() );
++                    if ( xErrObj.is() && xErrObj->getNumber() == nCode && xErrObj->getDescription().getLength() )
++                        tmpErrMsg = xErrObj->getDescription();
++                }
++		rPar.Get( 0 )->PutString( tmpErrMsg );
+     }
+ }
+ 
+diff --git basic/source/runtime/runtime.cxx basic/source/runtime/runtime.cxx
+index b1feac7..b28f436 100644
+--- basic/source/runtime/runtime.cxx
++++ basic/source/runtime/runtime.cxx
+@@ -843,7 +843,11 @@ void SbiRuntime::Error( SbError n )
+ 			// we really need a new vba compatible error list
+ 			if ( !aMsg.Len() )
+ 			{
+-				StarBASIC::MakeErrorText( n, aMsg );	
++                                // is the error number vb or ( sb )
++                                SbError nTmp = StarBASIC::GetSfxFromVBError( n );
++                                if ( !nTmp )
++                                    nTmp = n;
++				StarBASIC::MakeErrorText( nTmp, aMsg );	
+ 				aMsg =  StarBASIC::GetErrorText();
+ 				if ( !aMsg.Len() ) // no message for err no.
+ 					// need localized resource here
+@@ -851,15 +855,7 @@ void SbiRuntime::Error( SbError n )
+ 			}
+ 			// no num? most likely then it *is* really a vba err
+ 			SbxErrObject::getUnoErrObject()->setNumber( ( StarBASIC::GetVBErrorCode( n ) == 0 ) ? n : StarBASIC::GetVBErrorCode( n ) );
+-			SbxErrObject::getUnoErrObject()->setDescription( aMsg );
+-
+-			// prepend an error number to the message.
+-			String aTmp = '\'';
+-                        aTmp += String::CreateFromInt32( SbxErrObject::getUnoErrObject()->getNumber() );
+-                        aTmp += String( RTL_CONSTASCII_USTRINGPARAM("\'\n") );
+-                        aTmp += aMsg;
+-
+-			pInst->aErrorMsg = aTmp;
++			pInst->aErrorMsg = aMsg;
+ 			nError = SbERR_BASIC_COMPAT;
+ 		}
+ 	}
