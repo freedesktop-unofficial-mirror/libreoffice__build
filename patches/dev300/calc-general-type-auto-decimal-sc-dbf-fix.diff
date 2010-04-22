@@ -1,0 +1,125 @@
+diff --git sc/inc/column.hxx sc/inc/column.hxx
+index 97805cd..6deb7c5 100644
+--- sc/inc/column.hxx
++++ sc/inc/column.hxx
+@@ -410,7 +410,7 @@ public:
+     void 		CompileColRowNameFormula();
+ 
+     sal_Int32	GetMaxStringLen( SCROW nRowStart, SCROW nRowEnd, CharSet eCharSet ) const;
+-    xub_StrLen	GetMaxNumberStringLen( USHORT& nPrecision,
++    xub_StrLen	GetMaxNumberStringLen( sal_uInt16& nPrecision,
+                                     SCROW nRowStart, SCROW nRowEnd ) const;
+ 
+ private:
+diff --git sc/inc/document.hxx sc/inc/document.hxx
+index 6ecd5ca..dbe4d91 100644
+--- sc/inc/document.hxx
++++ sc/inc/document.hxx
+@@ -1736,7 +1736,7 @@ public:
+     /** Maximum string length of numerical cells of a column, e.g. for dBase export.
+         @return String length in characters (!) including the decimal
+                 separator, and the decimal precision needed. */
+-    xub_StrLen		GetMaxNumberStringLen( USHORT& nPrecision,
++    xub_StrLen		GetMaxNumberStringLen( sal_uInt16& nPrecision,
+                                     SCTAB nTab, SCCOL nCol,
+                                     SCROW nRowStart, SCROW nRowEnd ) const;
+ 
+diff --git sc/inc/table.hxx sc/inc/table.hxx
+index 4c9a291..03c2b0b 100644
+--- sc/inc/table.hxx
++++ sc/inc/table.hxx
+@@ -756,7 +756,7 @@ public:
+ 
+     sal_Int32	GetMaxStringLen( SCCOL nCol,
+                                     SCROW nRowStart, SCROW nRowEnd, CharSet eCharSet ) const;
+-    xub_StrLen	GetMaxNumberStringLen( USHORT& nPrecision,
++    xub_StrLen	GetMaxNumberStringLen( sal_uInt16& nPrecision,
+                                     SCCOL nCol,
+                                     SCROW nRowStart, SCROW nRowEnd ) const;
+ 
+diff --git sc/source/core/data/column3.cxx sc/source/core/data/column3.cxx
+index e5f6fd3..e82092a 100644
+--- sc/source/core/data/column3.cxx
++++ sc/source/core/data/column3.cxx
+@@ -1950,11 +1950,15 @@ sal_Int32 ScColumn::GetMaxStringLen( SCROW nRowStart, SCROW nRowEnd, CharSet eCh
+ }
+ 
+ 
+-xub_StrLen ScColumn::GetMaxNumberStringLen( USHORT& nPrecision,
++xub_StrLen ScColumn::GetMaxNumberStringLen( sal_uInt16& nPrecision,
+         SCROW nRowStart, SCROW nRowEnd ) const
+ {
+     xub_StrLen nStringLen = 0;
+     nPrecision = pDocument->GetDocOptions().GetStdPrecision();
++    if ( nPrecision == SvNumberFormatter::UNLIMITED_PRECISION )
++        // In case of unlimited precision, use 2 instead.
++        nPrecision = 2;
++
+     if ( pItems )
+     {
+         String aString;
+@@ -1975,6 +1979,7 @@ xub_StrLen ScColumn::GetMaxNumberStringLen( USHORT& nPrecision,
+                 xub_StrLen nLen = aString.Len();
+                 if ( nLen )
+                 {
++                    sal_uInt16 nNewPrec = SvNumberFormatter::UNLIMITED_PRECISION;
+                     if ( nFormat )
+ 					{
+                         const SvNumberformat* pEntry = pNumFmt->GetEntry( nFormat );
+@@ -1982,11 +1987,16 @@ xub_StrLen ScColumn::GetMaxNumberStringLen( USHORT& nPrecision,
+                         {
+                             BOOL bThousand, bNegRed;
+                             USHORT nLeading;
+-                            pEntry->GetFormatSpecialInfo(bThousand, bNegRed, nPrecision, nLeading);
++                            pEntry->GetFormatSpecialInfo(bThousand, bNegRed, nNewPrec, nLeading);
+                         }
+                         else
+                             nPrecision = pNumFmt->GetFormatPrecision( nFormat );
+                     }
++
++                    if (nNewPrec != SvNumberFormatter::UNLIMITED_PRECISION)
++                        // Skip unlimited precisions.
++                        nPrecision = nNewPrec;
++
+                     if ( nPrecision )
+                     {	// less than nPrecision in string => widen it
+                         // more => shorten it
+diff --git sc/source/core/data/documen4.cxx sc/source/core/data/documen4.cxx
+index 49ae166..733f620 100644
+--- sc/source/core/data/documen4.cxx
++++ sc/source/core/data/documen4.cxx
+@@ -430,7 +430,7 @@ sal_Int32 ScDocument::GetMaxStringLen( SCTAB nTab, SCCOL nCol,
+         return 0;
+ }
+ 
+-xub_StrLen ScDocument::GetMaxNumberStringLen( USHORT& nPrecision, SCTAB nTab,
++xub_StrLen ScDocument::GetMaxNumberStringLen( sal_uInt16& nPrecision, SCTAB nTab,
+                                     SCCOL nCol,
+                                     SCROW nRowStart, SCROW nRowEnd ) const
+ {
+diff --git sc/source/core/data/table3.cxx sc/source/core/data/table3.cxx
+index cf02e65..719edac 100644
+--- sc/source/core/data/table3.cxx
++++ sc/source/core/data/table3.cxx
+@@ -2017,7 +2017,7 @@ sal_Int32 ScTable::GetMaxStringLen( SCCOL nCol, SCROW nRowStart,
+         return 0;
+ }
+ 
+-xub_StrLen ScTable::GetMaxNumberStringLen( USHORT& nPrecision, SCCOL nCol,
++xub_StrLen ScTable::GetMaxNumberStringLen( sal_uInt16& nPrecision, SCCOL nCol,
+                                 SCROW nRowStart, SCROW nRowEnd ) const
+ {
+     if ( ValidCol(nCol) )
+diff --git sc/source/ui/docshell/docsh8.cxx sc/source/ui/docshell/docsh8.cxx
+index f65fb38..27d6b0c 100644
+--- sc/source/ui/docshell/docsh8.cxx
++++ sc/source/ui/docshell/docsh8.cxx
+@@ -681,7 +681,7 @@ void lcl_GetColumnTypes( ScDocShell& rDocShell,
+         else if ( nDbType == sdbc::DataType::DECIMAL )
+         {	// maximale Feldbreite und Nachkommastellen bestimmen
+             xub_StrLen nLen;
+-            USHORT nPrec;
++            sal_uInt16 nPrec;
+             nLen = pDoc->GetMaxNumberStringLen( nPrec, nTab, nCol,
+                 nFirstDataRow, nLastRow );
+             // dBaseIII Limit Nachkommastellen: 15
