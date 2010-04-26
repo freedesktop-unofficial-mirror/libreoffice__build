@@ -10,8 +10,8 @@
  		// keep a language options instance...
  		pLanguageOptions.reset( new SvtLanguageOptions(sal_True));
  
---- desktop/source/migration/migration.cxx.old	2010-04-01 16:31:14.000000000 +0200
-+++ desktop/source/migration/migration.cxx	2010-04-13 15:30:18.000000000 +0200
+--- desktop/source/migration/migration.cxx.old	2010-04-14 17:20:22.000000000 +0200
++++ desktop/source/migration/migration.cxx	2010-04-26 15:00:50.000000000 +0200
 @@ -55,6 +55,10 @@
  #include <com/sun/star/util/XRefreshable.hpp>
  #include <com/sun/star/util/XChangesBatch.hpp>
@@ -131,10 +131,10 @@
 +                                  MigrationImpl::VersionNumber& rAppVerNum)
 +{
 +    if (!splitVersionString(rConfVerStr, rConfVerNum))
-+        return sal_False;
+         return sal_False;
 +
 +    if (!splitVersionString(rAppVerStr, rAppVerNum))
-         return sal_False;
++        return sal_False;
 +
 +#if OSL_DEBUG_LEVEL > 0
 +    fprintf(stdout, "desktop::isMigrationNeeded: config ver = %d.%d.%d\n", 
@@ -215,21 +215,21 @@
 +    {
 +        try
 +        {
-+            initDirectoryMigration();
-+
-+            copyFiles();
++            if (initDirectoryMigration())
++            {
++                copyFiles();
      
 -    sal_Bool result = sal_False;
 -    try{
 -        copyFiles();
 -
--		// execute the migration items from Setup.xcu
--		// and refresh the cache
+-        // execute the migration items from Setup.xcu
+-        // and refresh the cache
 -        copyConfig();
--		refresh();
+-        refresh();
 -
--		// execute custom migration services from Setup.xcu
--		// and refresh the cache
+-        // execute custom migration services from Setup.xcu
+-        // and refresh the cache
 -        runServices();
 -        refresh();
 -
@@ -240,16 +240,16 @@
 -        aMsg += "\nOldVersion: " + OUStringToOString(m_aInfo.productname, RTL_TEXTENCODING_ASCII_US);
 -        aMsg += "\nDataPath  : " + OUStringToOString(m_aInfo.userdata, RTL_TEXTENCODING_ASCII_US);
 -        OSL_ENSURE(sal_False, aMsg.getStr());
-+            // execute the migration items from Setup.xcu
-+            // and refresh the cache
-+            copyConfig();
-+            refresh();
++                // execute the migration items from Setup.xcu
++                // and refresh the cache
++                copyConfig();
++                refresh();
 +    
-+            // execute custom migration services from Setup.xcu
-+            // and refresh the cache
-+            runServices();
-+            refresh();
-+    
++                // execute custom migration services from Setup.xcu
++                // and refresh the cache
++                runServices();
++                refresh();
++            }
 +        }
 +        catch (...)
 +        {
@@ -272,23 +272,22 @@
 +    {
 +        result = sal_False;
 +    }
- 	// prevent running the migration multiple times
- 	setMigrationCompleted();
+     // prevent running the migration multiple times
+     setMigrationCompleted();
      return result;
-@@ -197,31 +351,122 @@ void MigrationImpl::refresh()
+@@ -197,31 +351,126 @@ void MigrationImpl::refresh()
  
  }
  
 -void MigrationImpl::setMigrationCompleted()
 +void MigrationImpl::transKeyConfig()
  {
--	try {
--		uno::Reference< XPropertySet > aPropertySet(getConfigAccess("org.openoffice.Setup/Office", true), uno::UNO_QUERY_THROW);
--		aPropertySet->setPropertyValue(OUString::createFromAscii("MigrationCompleted"), uno::makeAny(sal_True));
--		uno::Reference< XChangesBatch >(aPropertySet, uno::UNO_QUERY_THROW)->commitChanges();
--	} catch (...) {
--		// fail silently
--	}
+-    try {
+-        uno::Reference< XPropertySet > aPropertySet(getConfigAccess("org.openoffice.Setup/Office", true), uno::UNO_QUERY_THROW);
+-        aPropertySet->setPropertyValue(OUString::createFromAscii("MigrationCompleted"), uno::makeAny(sal_True));
+-        uno::Reference< XChangesBatch >(aPropertySet, uno::UNO_QUERY_THROW)->commitChanges();
+-    } catch (...) {
+-        // fail silently
 +    using namespace ::com::sun::star;
 +    using namespace ::com::sun::star::ui;
 +
@@ -332,7 +331,7 @@
 +        
 +            xScAccel->store();
 +        }
-+    }
+     }
  }
  
 -sal_Bool MigrationImpl::checkMigrationCompleted()
@@ -340,7 +339,7 @@
  {
 -    sal_Bool bMigrationCompleted = sal_False;
 -    try {
--		uno::Reference< XPropertySet > aPropertySet(
+-        uno::Reference< XPropertySet > aPropertySet(
 -            getConfigAccess("org.openoffice.Setup/Office"), uno::UNO_QUERY_THROW);
 -        aPropertySet->getPropertyValue(
 -            OUString::createFromAscii("MigrationCompleted")) >>= bMigrationCompleted;
@@ -379,9 +378,10 @@
 +    }
 +    catch (const Exception&)
 +    {
-+    }
-+}
-+
+     }
+-    return bMigrationCompleted;
+ }
+ 
 +void MigrationImpl::setMigrationCompleted()
 +{
 +    try
@@ -398,20 +398,23 @@
 +    } 
 +    catch (const Exception&)
 +    {
-     }
--    return bMigrationCompleted;
- }
- 
-+void MigrationImpl::initDirectoryMigration()
++    }
++}
++
++bool MigrationImpl::initDirectoryMigration()
 +{
 +    m_vrVersions.reset(new strings_v);
 +    readAvailableMigrations(m_vMigrationsAvailable);
 +    sal_Int32 nIndex = findPreferedMigrationProcess(m_vMigrationsAvailable);
 +    if ( nIndex >= 0 )
++    {
 +        m_vrMigrations = readMigrationSteps(m_vMigrationsAvailable[nIndex].name);
-+    // compile file and service list for migration
-+    m_vrFileList = compileFileList();
-+    m_vrServiceList = compileServiceList();
++        // compile file and service list for migration
++        m_vrFileList = compileFileList();
++        m_vrServiceList = compileServiceList();
++        return true;
++    }
++    return false;
 +}
  static void insertSorted(migrations_available& rAvailableMigrations, supported_migration& aSupportedMigration)
  {
@@ -444,7 +447,7 @@
 +    VersionNumber m_aAppVerNum;
 +    VersionNumber m_aConfigVerNum;
 +
-+    void initDirectoryMigration();
++    bool initDirectoryMigration();
  
      // functions to control the migration process
      bool          readAvailableMigrations(migrations_available&);
