@@ -1,0 +1,405 @@
+--- vcl/source/gdi/impimagetree.cxx.old	2009-08-26 10:25:02.000000000 +0000
++++ vcl/source/gdi/impimagetree.cxx	2009-09-11 14:53:46.000000000 +0000
+@@ -46,6 +46,7 @@
+ #include "com/sun/star/uno/RuntimeException.hpp"
+ #include "com/sun/star/uno/Sequence.hxx"
+ #include "comphelper/processfactory.hxx"
++#include "osl/file.hxx"
+ #include "osl/diagnose.h"
+ #include "rtl/bootstrap.hxx"
+ #include "rtl/string.h"
+@@ -123,12 +124,43 @@ ImplImageTree::ImplImageTree()
+ 
+ ImplImageTree::~ImplImageTree() {}
+ 
++bool ImplImageTree::checkStyle(rtl::OUString const & style)
++{
++    bool exists;
++
++    // using cache because setStyle is an expensive operation
++    // setStyle calls resetZips => closes any opened zip files with icons, cleans the icon cache, ...
++    if (checkStyleCacheLookup(style, exists)) {
++        return exists;
++    }
++
++    setStyle(style);
++
++    exists = false;
++    const rtl::OUString sBrandURLSuffix(RTL_CONSTASCII_USTRINGPARAM("_brand.zip"));
++    for (Zips::iterator i(m_zips.begin()); i != m_zips.end() && !exists;) {
++        ::rtl::OUString aZipURL = i->first;
++        sal_Int32 nFromIndex = aZipURL.getLength() - sBrandURLSuffix.getLength();
++        // skip brand-specific icon themes; they are incomplete and thus not useful for this check
++        if (nFromIndex < 0 || !aZipURL.match(sBrandURLSuffix, nFromIndex)) {
++            osl::File aZip(aZipURL);
++            if (aZip.open(OpenFlag_Read) == ::osl::FileBase::E_None) {
++                aZip.close();
++                exists = true;
++            }
++        }
++        ++i;
++    }
++    m_checkStyleCache[style] = exists;
++    return exists;
++}
++
+ bool ImplImageTree::loadImage(
+     rtl::OUString const & name, rtl::OUString const & style, BitmapEx & bitmap,
+     bool localized)
+ {
+     setStyle(style);
+-    if (cacheLookup(name, localized, bitmap)) {
++    if (iconCacheLookup(name, localized, bitmap)) {
+         return true;
+     }
+     if (!bitmap.IsEmpty()) {
+@@ -169,7 +201,7 @@ bool ImplImageTree::loadImage(
+             rtl::OUStringToOString(e.Message, RTL_TEXTENCODING_UTF8).getStr());
+     }
+     if (found) {
+-        m_cache[name.intern()] = std::make_pair(localized, bitmap);
++        m_iconCache[name.intern()] = std::make_pair(localized, bitmap);
+     }
+     return found;
+ }
+@@ -178,7 +210,8 @@ void ImplImageTree::shutDown() {
+     m_style = rtl::OUString();
+         // for safety; empty m_style means "not initialized"
+     m_zips.clear();
+-    m_cache.clear();
++    m_iconCache.clear();
++    m_checkStyleCache.clear();
+ }
+ 
+ void ImplImageTree::setStyle(rtl::OUString const & style) {
+@@ -186,7 +219,7 @@ void ImplImageTree::setStyle(rtl::OUStri
+     if (style != m_style) {
+         m_style = style;
+         resetZips();
+-        m_cache.clear();
++        m_iconCache.clear();
+     }
+ }
+ 
+@@ -243,6 +276,7 @@ void ImplImageTree::resetZips() {
+                 u.GetMainURL(INetURLObject::NO_DECODE),
+                 css::uno::Reference< css::container::XNameAccess >()));
+     }
++    if ( m_style.equals(::rtl::OUString::createFromAscii("default")) )
+     {
+         rtl::OUString url(
+             RTL_CONSTASCII_USTRINGPARAM(
+@@ -252,11 +286,23 @@ void ImplImageTree::resetZips() {
+     }
+ }
+ 
+-bool ImplImageTree::cacheLookup(
++bool ImplImageTree::checkStyleCacheLookup(
++    rtl::OUString const & style, bool &exists)
++{
++    CheckStyleCache::iterator i(m_checkStyleCache.find(style));
++    if (i != m_checkStyleCache.end()) {
++        exists = i->second;
++        return true;
++    } else {
++        return false;
++    }
++}
++
++bool ImplImageTree::iconCacheLookup(
+     rtl::OUString const & name, bool localized, BitmapEx & bitmap)
+ {
+-    Cache::iterator i(m_cache.find(name));
+-    if (i != m_cache.end() && i->second.first == localized) {
++    IconCache::iterator i(m_iconCache.find(name));
++    if (i != m_iconCache.end() && i->second.first == localized) {
+         bitmap = i->second.second;
+         return true;
+     } else {
+--- vcl/source/app/settings.cxx.old	2009-08-26 10:25:12.000000000 +0000
++++ vcl/source/app/settings.cxx	2009-09-11 15:12:56.000000000 +0000
+@@ -41,6 +41,8 @@
+ #include "vcl/configsettings.hxx"
+ #include "vcl/gradient.hxx"
+ #include "vcl/unohelp.hxx"
++#include "vcl/bitmapex.hxx"
++#include "vcl/impimagetree.hxx"
+ #include "unotools/localedatawrapper.hxx"
+ #include "unotools/collatorwrapper.hxx"
+ #include "unotools/configmgr.hxx"
+@@ -770,12 +772,12 @@ ULONG StyleSettings::GetCurrentSymbolsSt
+ 	// style selected in Tools -> Options... -> OpenOffice.org -> View
+ 	ULONG nStyle = GetSymbolsStyle();
+ 
+-	if ( nStyle == STYLE_SYMBOLS_AUTO )
++	if ( nStyle == STYLE_SYMBOLS_AUTO || ( !CheckSymbolStyle (nStyle) ) )
+ 	{
+ 		// the preferred style can be read from the desktop setting by the desktop native widgets modules
+ 		ULONG nPreferredStyle = GetPreferredSymbolsStyle();
+ 
+-		if ( nPreferredStyle == STYLE_SYMBOLS_AUTO )
++		if ( nPreferredStyle == STYLE_SYMBOLS_AUTO || ( !CheckSymbolStyle (nPreferredStyle) ) )
+ 		{
+ 
+ 			// use a hardcoded desktop-specific fallback if no preferred style has been detected
+@@ -784,14 +786,17 @@ ULONG StyleSettings::GetCurrentSymbolsSt
+ 
+ 			if ( !sbFallbackDesktopChecked )
+ 			{
+-                snFallbackDesktopStyle = GetAutoSymbolsStyle();
++				snFallbackDesktopStyle = GetAutoSymbolsStyle();
+ 				sbFallbackDesktopChecked = true;
+ 			}
+ 
+ 			nPreferredStyle = snFallbackDesktopStyle;
+ 		}
+ 
+-		nStyle = GetHighContrastMode()? STYLE_SYMBOLS_HICONTRAST: nPreferredStyle;
++		if (GetHighContrastMode() && CheckSymbolStyle (STYLE_SYMBOLS_HICONTRAST) )
++		    nStyle = STYLE_SYMBOLS_HICONTRAST;
++		else
++		    nStyle = nPreferredStyle;
+ 	}
+ 
+ 	return nStyle;
+@@ -830,10 +835,43 @@ ULONG StyleSettings::GetAutoSymbolsStyle
+             nRet = STYLE_SYMBOLS_CRYSTAL;
+     }
+ 
++    // falback to any existing style
++    if ( ! CheckSymbolStyle (nRet) )
++    {
++        for ( ULONG n = 0 ; n <= STYLE_SYMBOLS_THEMES_MAX  ; n++ )
++        {
++            ULONG nStyleToCheck = n;
++
++            // auto is not a real theme => can't be fallback
++            if ( nStyleToCheck == STYLE_SYMBOLS_AUTO )
++                continue;
++
++            // will check hicontrast in the end
++            if ( nStyleToCheck == STYLE_SYMBOLS_HICONTRAST )
++                continue;
++            if ( nStyleToCheck == STYLE_SYMBOLS_THEMES_MAX )
++                nStyleToCheck = STYLE_SYMBOLS_HICONTRAST;
++
++            if ( CheckSymbolStyle ( nStyleToCheck ) )
++            {
++                nRet = nStyleToCheck;
++                n = STYLE_SYMBOLS_THEMES_MAX;
++            }
++        }
++    }
++
+     return nRet;
+ }
+ 
+ // -----------------------------------------------------------------------
++
++bool StyleSettings::CheckSymbolStyle( ULONG nStyle ) const
++{
++    static ImplImageTreeSingletonRef aImageTree;
++    return aImageTree->checkStyle( ImplSymbolsStyleToName( nStyle ) );
++}
++
++// -----------------------------------------------------------------------
+ 
+ void StyleSettings::SetStandardStyles()
+ {
+--- vcl/inc/vcl/settings.hxx.old	2009-08-26 10:25:12.000000000 +0000
++++ vcl/inc/vcl/settings.hxx	2009-09-10 15:27:10.000000000 +0000
+@@ -520,7 +520,7 @@ private:
+ #define STYLE_SYMBOLS_CRYSTAL		((ULONG)4)
+ #define STYLE_SYMBOLS_TANGO		((ULONG)5)
+ #define STYLE_SYMBOLS_CLASSIC		((ULONG)6)
+-#define STYLE_SYMBOLS_THEMES_MAX	((ULONG)6)
++#define STYLE_SYMBOLS_THEMES_MAX	((ULONG)7)
+ 
+ #define STYLE_CURSOR_NOBLINKTIME    ((ULONG)0xFFFFFFFF)
+ 
+@@ -944,6 +944,8 @@ public:
+     void							SetPreferredSymbolsStyleName( const ::rtl::OUString &rName );
+     ULONG							GetPreferredSymbolsStyle() const
+     									{ return mpData->mnPreferredSymbolsStyle; }
++    // check whether the symbols style is supported (icons are installed)									
++    bool							CheckSymbolStyle( ULONG nStyle ) const;
+     ULONG                           GetAutoSymbolsStyle() const;
+ 
+     ULONG							GetCurrentSymbolsStyle() const;
+--- vcl/inc/vcl/impimagetree.hxx.old	2009-08-26 10:25:02.000000000 +0000
++++ vcl/inc/vcl/impimagetree.hxx	2009-09-11 14:53:11.000000000 +0000
+@@ -54,6 +54,9 @@ public:
+ 
+     ~ImplImageTree();
+ 
++    // check whether the icon style is installed
++    bool checkStyle(rtl::OUString const & style);
++
+     bool loadImage(
+         rtl::OUString const & name, rtl::OUString const & style,
+         BitmapEx & bitmap, bool localized = false);
+@@ -61,7 +64,7 @@ public:
+     void shutDown();
+         // a crude form of life cycle control (called from DeInitVCL; otherwise,
+         // if the ImplImageTree singleton were destroyed during exit that would
+-        // be too late for the destructors of the bitmaps in m_cache)
++        // be too late for the destructors of the bitmaps in m_iconCache)
+ 
+ private:
+     typedef std::list<
+@@ -71,7 +74,9 @@ private:
+                 com::sun::star::container::XNameAccess > > > Zips;
+ 
+     typedef std::hash_map<
+-        rtl::OUString, std::pair< bool, BitmapEx >, rtl::OUStringHash > Cache;
++        rtl::OUString, bool, rtl::OUStringHash > CheckStyleCache;
++    typedef std::hash_map<
++        rtl::OUString, std::pair< bool, BitmapEx >, rtl::OUStringHash > IconCache;
+ 
+     rtl::OUString m_style;
+     Zips m_zips;
+@@ -79,13 +84,16 @@ private:
+ 
+     rtl::OUString m_style;
+     Zips m_zips;
+-    Cache m_cache;
++    CheckStyleCache m_checkStyleCache;
++    IconCache m_iconCache;
+ 
+     void setStyle(rtl::OUString const & style);
+ 
+     void resetZips();
+ 
+-    bool cacheLookup(
++    bool checkStyleCacheLookup(
++        rtl::OUString const & style, bool &exists);
++    bool iconCacheLookup(
+         rtl::OUString const & name, bool localized, BitmapEx & bitmap);
+ 
+     bool find(std::vector< rtl::OUString > const & paths, BitmapEx & bitmap);
+--- svx/source/cui/optgdlg.cxx.old	2009-08-26 10:25:14.000000000 +0000
++++ svx/source/cui/optgdlg.cxx	2009-09-11 15:20:42.000000000 +0000
+@@ -802,6 +802,31 @@ OfaViewTabPage::OfaViewTabPage(Window* p
+         m_aSystemFont.Enable( FALSE );
+     }
+ 
++    const StyleSettings& aStyleSettings = Application::GetSettings().GetStyleSettings();
++
++    // remove non-installed icon themes
++    if( aIconStyleLB.GetEntryCount() == STYLE_SYMBOLS_THEMES_MAX )
++    {
++	// do not check 0th item == auto; it is not a real theme
++	aIconStyleItemId[0] = 0;
++	ULONG nItem = 1;
++	for ( ULONG n=0; ++n < STYLE_SYMBOLS_THEMES_MAX; )
++	{
++	    if ( aStyleSettings.CheckSymbolStyle( n ) )
++	    {
++		// existing style => save the item id
++		aIconStyleItemId[n] = nItem++;
++	    }
++	    else
++	    {
++		// non-existing style => remove item;
++		aIconStyleLB.RemoveEntry( nItem );
++		aIconStyleItemId[n] = 0;
++	    }
++	}
++    
++    }
++
+     // add real theme name to 'auto' theme, e.g. 'auto' => 'auto (classic)'
+     if( aIconStyleLB.GetEntryCount() > 1 )
+     {
+@@ -809,19 +834,14 @@ OfaViewTabPage::OfaViewTabPage(Window* p
+ 
+         aAutoStr += ::rtl::OUString::createFromAscii( " (" );
+ 
+-        switch( Application::GetSettings().GetStyleSettings().GetAutoSymbolsStyle() )
+-        {
+-            case STYLE_SYMBOLS_DEFAULT:     aAutoStr += aIconStyleLB.GetEntry( 1 ); break;
+-            case STYLE_SYMBOLS_INDUSTRIAL:  aAutoStr += aIconStyleLB.GetEntry( 2 ); break;
+-            case STYLE_SYMBOLS_CRYSTAL:     aAutoStr += aIconStyleLB.GetEntry( 3 ); break;
+-            case STYLE_SYMBOLS_TANGO:       aAutoStr += aIconStyleLB.GetEntry( 4 ); break;
+-            case STYLE_SYMBOLS_CLASSIC:     aAutoStr += aIconStyleLB.GetEntry( 5 ); break;
+-            case STYLE_SYMBOLS_HICONTRAST:  aAutoStr += aIconStyleLB.GetEntry( 6 ); break;
+-        }
++        ULONG nAutoStyle = aStyleSettings.GetAutoSymbolsStyle();
++        if ( aIconStyleItemId[nAutoStyle] )
++                aAutoStr += aIconStyleLB.GetEntry( aIconStyleItemId[nAutoStyle] );
+ 
+         aIconStyleLB.RemoveEntry( 0 );
+         aIconStyleLB.InsertEntry( aAutoStr += ::rtl::OUString::createFromAscii( ")" ), 0 );
+-        aIconStyleLB.SetSeparatorPos( aIconStyleLB.GetEntryCount() - 2 );
++        // separate auto and other icon themes
++        aIconStyleLB.SetSeparatorPos( 0 );
+     }
+ }
+ 
+@@ -891,25 +910,18 @@ BOOL OfaViewTabPage::FillItemSet( SfxIte
+     UINT16 nStyleLB_NewSelection = aIconStyleLB.GetSelectEntryPos();
+     if( nStyleLB_InitialSelection != nStyleLB_NewSelection )
+     {
+-        sal_Int16 eSet = SFX_SYMBOLS_STYLE_AUTO;
+-        switch( nStyleLB_NewSelection )
+-        {
+-            case 0: eSet = SFX_SYMBOLS_STYLE_AUTO;       break;
+-            case 1: eSet = SFX_SYMBOLS_STYLE_DEFAULT;    break;
+-            case 2: eSet = SFX_SYMBOLS_STYLE_HICONTRAST; break;
+-            case 3: eSet = SFX_SYMBOLS_STYLE_INDUSTRIAL; break;
+-            case 4: eSet = SFX_SYMBOLS_STYLE_CRYSTAL;    break;
+-            case 5: eSet = SFX_SYMBOLS_STYLE_TANGO;      break;
+-            case 6: eSet = SFX_SYMBOLS_STYLE_CLASSIC;    break;
+-            default:
+-                DBG_ERROR( "OfaViewTabPage::FillItemSet(): This state of aIconStyleLB should not be possible!" );
+-        }
+-        aMiscOptions.SetSymbolsStyle( eSet );
++        // find the style name in the aIconStyleItemId table
++        // items from the non-installed icon themes were removed
++        for ( ULONG n=0; n < STYLE_SYMBOLS_THEMES_MAX; n++ )
++            if ( aIconStyleItemId[n] == nStyleLB_NewSelection )
++            {
++                aMiscOptions.SetSymbolsStyle( n );
++                n = STYLE_SYMBOLS_THEMES_MAX;
++            }
+     }
+ 
+     BOOL bAppearanceChanged = FALSE;
+ 
+-
+ 	// Screen Scaling
+     UINT16 nOldScale = pAppearanceCfg->GetScaleFactor();
+ 	UINT16 nNewScale = (UINT16)aWindowSizeMF.GetValue();
+@@ -1052,19 +1063,7 @@ void OfaViewTabPage::Reset( const SfxIte
+     aIconSizeLB.SaveValue();
+ 
+     if( aMiscOptions.GetSymbolsStyle() != SFX_SYMBOLS_STYLE_AUTO )
+-    {
+-        switch ( aMiscOptions.GetCurrentSymbolsStyle() )
+-        {
+-            case SFX_SYMBOLS_STYLE_DEFAULT:    nStyleLB_InitialSelection = 1; break;
+-            case SFX_SYMBOLS_STYLE_HICONTRAST: nStyleLB_InitialSelection = 2; break;
+-            case SFX_SYMBOLS_STYLE_INDUSTRIAL: nStyleLB_InitialSelection = 3; break;
+-            case SFX_SYMBOLS_STYLE_CRYSTAL:    nStyleLB_InitialSelection = 4; break;
+-            case SFX_SYMBOLS_STYLE_TANGO:      nStyleLB_InitialSelection = 5; break;
+-            case SFX_SYMBOLS_STYLE_CLASSIC:    nStyleLB_InitialSelection = 6; break;
+-            default:                           nStyleLB_InitialSelection = 0; break;
+-        }
+-    }
+-
++        nStyleLB_InitialSelection = aIconStyleItemId[aMiscOptions.GetCurrentSymbolsStyle()];
+     aIconStyleLB.SelectEntryPos( nStyleLB_InitialSelection );
+     aIconStyleLB.SaveValue();
+ 
+--- svx/source/cui/optgdlg.hxx.old	2009-08-26 10:25:14.000000000 +0000
++++ svx/source/cui/optgdlg.hxx	2009-09-09 15:40:36.000000000 +0000
+@@ -136,6 +136,9 @@ private:
+ 	UINT16			nStyleLB_InitialSelection;
+ 	BOOL			bSfxSymbolsAuto;
+ 
++    // item ID for the given icon theme
++    // might be zero when the theme is not installed and the item is removed
++    ULONG			aIconStyleItemId[STYLE_SYMBOLS_THEMES_MAX];
+     SvtTabAppearanceCfg*	pAppearanceCfg;
+     CanvasSettings*			pCanvasSettings;
+     SvtOptionsDrawinglayer*	mpDrawinglayerOpt;
