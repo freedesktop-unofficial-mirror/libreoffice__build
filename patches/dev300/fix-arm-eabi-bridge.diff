@@ -1,0 +1,401 @@
+
+# HG changeset patch
+# User Caolán McNamara <cmc@openoffice.org>
+# Date 1272363448 -3600
+# Node ID 36887d11c60fe58d5524ebb168fd8bb1ad62ab4a
+# Parent  bdd775934f7fe5ac1e523bad46d4e4da02f2c7ab
+armeabi02: #i105359# fix arm-eabi uno bridge, fix exception handling, and fix struct returning rules
+
+diff -r bdd775934f7f -r 36887d11c60f bridges/source/cpp_uno/gcc3_linux_arm/armhelper.S
+--- /dev/null	Thu Jan 01 00:00:00 1970 +0000
++++ bridges/source/cpp_uno/gcc3_linux_arm/armhelper.S	Tue Apr 27 11:17:28 2010 +0100
+@@ -0,0 +1,38 @@
++@ ARM support code for OpenOffice C++/UNO bridging
++@
++@ Written by Peter Naulls <peter@chocky.org>
++@ Modified by Caolan McNamara <caolanm@redhat.com>
++@ Fixed by Michael Casadevall
++
++#ifdef __ARM_EABI__
++#  define UNWIND
++#else
++#  define UNWIND @
++#endif
++
++	.file	"armhelper.s"
++	.text
++	.align	4
++	.global privateSnippetExecutor
++	.type privateSnippetExecutor, %function
++privateSnippetExecutor:
++	UNWIND .fnstart            @ start of unwinder entry
++
++	stmfd sp!, {r0-r3}         @ follow other parameters on stack
++	UNWIND .pad  #16           @ throw this data away on exception
++	mov   r0, ip               @ r0 points to functionoffset/vtable
++	mov   r1, sp               @ r1 points to this and params
++	                           @ (see cppuno.cxx:codeSnippet())
++	stmfd sp!, {r4,lr}         @ save return address 
++	                           @ (r4 pushed to preserve stack alignment)
++	UNWIND .save {r4,lr}       @ restore these regs on exception
++
++	bl    cpp_vtable_call(PLT)
++
++	add   sp, sp, #4           @ no need to restore r4 (we didn't touch it)
++	ldr   pc, [sp], #20        @ return, discarding function arguments
++
++	UNWIND .fnend              @ end of unwinder entry
++
++	.size privateSnippetExecutor, . - privateSnippetExecutor
++        .section        .note.GNU-stack,"",%progbits
+diff -r bdd775934f7f -r 36887d11c60f bridges/source/cpp_uno/gcc3_linux_arm/armhelper.s
+--- bridges/source/cpp_uno/gcc3_linux_arm/armhelper.s	Wed Apr 21 18:35:51 2010 +0200
++++ /dev/null	Thu Jan 01 00:00:00 1970 +0000
+@@ -1,22 +0,0 @@
+-@ ARM support code for OpenOffice C++/UNO bridging
+-@
+-@ Written by Peter Naulls <peter@chocky.org>
+-@ Modified by Caolan McNamara <caolanm@redhat.com>
+-	.file	"armhelper.s"
+-	.text
+-	.align	4
+-	.global privateSnippetExecutor
+-	.type privateSnippetExecutor, %function
+-privateSnippetExecutor:
+-        stmfd sp!, {r0-r3}         @ follow other parameters on stack
+-	mov   r0, ip               @ r0 points to functionoffset/vtable
+-        mov   ip, sp		   @ fix up the ip
+-        stmfd sp!, {fp,ip,lr,pc}   @ 8 x 4 => stack remains 8 aligned
+-	sub   fp, ip, #4	   @ set frame pointer
+-
+-        add   r1, sp, #16          @ r1 points to this and params
+-        bl    cpp_vtable_call(PLT)
+-
+-        add  sp, sp, #32           @ restore stack
+-        ldr  fp, [sp, #-32]	   @ restore frame pointer
+-        ldr  pc, [sp, #-24]        @ return
+diff -r bdd775934f7f -r 36887d11c60f bridges/source/cpp_uno/gcc3_linux_arm/cpp2uno.cxx
+--- bridges/source/cpp_uno/gcc3_linux_arm/cpp2uno.cxx	Wed Apr 21 18:35:51 2010 +0200
++++ bridges/source/cpp_uno/gcc3_linux_arm/cpp2uno.cxx	Tue Apr 27 11:17:28 2010 +0100
+@@ -76,10 +76,8 @@
+         
+         if (pReturnTypeDescr)
+         {
+-            if (bridges::cpp_uno::shared::isSimpleType( pReturnTypeDescr ))
+-            {
++            if (!arm::return_in_hidden_param(pReturnTypeRef))
+                 pUnoReturn = pRegisterReturn; // direct way for simple types
+-            }
+             else // complex return via ptr (pCppReturn)
+             {
+                 pCppReturn = *(void **)pCppStack;
+@@ -422,9 +420,9 @@
+     const int codeSnippetSize = 20;
+ 
+     unsigned char *codeSnippet(unsigned char* code, sal_Int32 functionIndex, 
+-        sal_Int32 vtableOffset, bool simple_ret_type )
++        sal_Int32 vtableOffset, bool bHasHiddenParam)
+     {
+-        if (!simple_ret_type)
++        if (bHasHiddenParam)
+             functionIndex |= 0x80000000;
+ 
+         unsigned long * p = (unsigned long *)code;
+@@ -478,24 +476,25 @@
+         switch (member->eTypeClass)
+         {
+             case typelib_TypeClass_INTERFACE_ATTRIBUTE:
++            {
++                typelib_InterfaceAttributeTypeDescription *pAttrTD =
++                    reinterpret_cast<typelib_InterfaceAttributeTypeDescription *>( member );
++
+                 // Getter:
+                 (s++)->fn = code + writetoexecdiff;
+                 code = codeSnippet(
+                     code, functionOffset++, vtableOffset,
+-                    bridges::cpp_uno::shared::isSimpleType(
+-                        reinterpret_cast<
+-                            typelib_InterfaceAttributeTypeDescription * >(
+-                            member)->pAttributeTypeRef));
++                    arm::return_in_hidden_param( pAttrTD->pAttributeTypeRef ));
++
+                 // Setter:
+-                if (!reinterpret_cast<
+-                    typelib_InterfaceAttributeTypeDescription * >(
+-                        member)->bReadOnly)
++                if (!pAttrTD->bReadOnly)
+                 {
+                     (s++)->fn = code + writetoexecdiff;
+                     code = codeSnippet(
+-                        code, functionOffset++, vtableOffset, true);
++                        code, functionOffset++, vtableOffset, false);
+                 }
+                 break;
++            }
+             case typelib_TypeClass_INTERFACE_METHOD:
+             {
+                 (s++)->fn = code + writetoexecdiff;
+@@ -504,11 +503,8 @@
+                     reinterpret_cast<
+                         typelib_InterfaceMethodTypeDescription * >(member);
+ 
+-                bool issimple = bridges::cpp_uno::shared::isSimpleType(
+-                    pMethodTD->pReturnTypeRef);
+-
+                 code = codeSnippet(code, functionOffset++, vtableOffset,
+-                    issimple);
++                    arm::return_in_hidden_param(pMethodTD->pReturnTypeRef));
+                 break;
+             }
+         default:
+diff -r bdd775934f7f -r 36887d11c60f bridges/source/cpp_uno/gcc3_linux_arm/except.cxx
+--- bridges/source/cpp_uno/gcc3_linux_arm/except.cxx	Wed Apr 21 18:35:51 2010 +0200
++++ bridges/source/cpp_uno/gcc3_linux_arm/except.cxx	Tue Apr 27 11:17:28 2010 +0100
+@@ -162,8 +162,8 @@
+             else
+             {
+                 // try to lookup the symbol in the generated rtti map
+-                t_rtti_map::const_iterator iFind( m_generatedRttis.find( unoName ) );
+-                if (iFind == m_generatedRttis.end())
++                t_rtti_map::const_iterator iFind2( m_generatedRttis.find( unoName ) );
++                if (iFind2 == m_generatedRttis.end())
+                 {
+                     // we must generate it !
+                     // symbol and rtti-name is nearly identical,
+@@ -192,7 +192,7 @@
+                 }
+                 else // taking already generated rtti
+                 {
+-                    rtti = iFind->second;
++                    rtti = iFind2->second;
+                 }
+             }
+         }
+diff -r bdd775934f7f -r 36887d11c60f bridges/source/cpp_uno/gcc3_linux_arm/makefile.mk
+--- bridges/source/cpp_uno/gcc3_linux_arm/makefile.mk	Wed Apr 21 18:35:51 2010 +0200
++++ bridges/source/cpp_uno/gcc3_linux_arm/makefile.mk	Tue Apr 27 11:17:28 2010 +0100
+@@ -80,5 +80,5 @@
+ 
+ .INCLUDE :  target.mk
+ 
+-$(SLO)$/%.obj: %.s
++$(SLO)$/%.obj: %.S
+        $(CXX) -c -o $(SLO)$/$(@:b).o $< -fPIC ; touch $@
+diff -r bdd775934f7f -r 36887d11c60f bridges/source/cpp_uno/gcc3_linux_arm/share.hxx
+--- bridges/source/cpp_uno/gcc3_linux_arm/share.hxx	Wed Apr 21 18:35:51 2010 +0200
++++ bridges/source/cpp_uno/gcc3_linux_arm/share.hxx	Tue Apr 27 11:17:28 2010 +0100
+@@ -89,5 +89,12 @@
+     void fillUnoException(
+         __cxa_exception * header, uno_Any *, uno_Mapping * pCpp2Uno );
+ }
++
++namespace arm
++{
++    enum armlimits { MAX_GPR_REGS = 4 };
++    bool return_in_hidden_param( typelib_TypeDescriptionReference *pTypeRef );
++}
++
+ #endif
+ /* vi:set tabstop=4 shiftwidth=4 expandtab: */
+diff -r bdd775934f7f -r 36887d11c60f bridges/source/cpp_uno/gcc3_linux_arm/uno2cpp.cxx
+--- bridges/source/cpp_uno/gcc3_linux_arm/uno2cpp.cxx	Wed Apr 21 18:35:51 2010 +0200
++++ bridges/source/cpp_uno/gcc3_linux_arm/uno2cpp.cxx	Tue Apr 27 11:17:28 2010 +0100
+@@ -105,17 +105,58 @@
+ 
+ namespace arm
+ {
+-    enum armlimits { MAX_GPR_REGS = 4 };
++    bool is_complex_struct(const typelib_TypeDescription * type)
++    {
++        const typelib_CompoundTypeDescription * p
++            = reinterpret_cast< const typelib_CompoundTypeDescription * >(type);
++        for (sal_Int32 i = 0; i < p->nMembers; ++i)
++        {
++            if (p->ppTypeRefs[i]->eTypeClass == typelib_TypeClass_STRUCT ||
++                p->ppTypeRefs[i]->eTypeClass == typelib_TypeClass_EXCEPTION)
++            {
++                typelib_TypeDescription * t = 0;
++                TYPELIB_DANGER_GET(&t, p->ppTypeRefs[i]);
++                bool b = is_complex_struct(t);
++                TYPELIB_DANGER_RELEASE(t);
++                if (b) {
++                    return true;
++                }
++            }
++            else if (!bridges::cpp_uno::shared::isSimpleType(p->ppTypeRefs[i]->eTypeClass))
++                return true;
++        }
++        if (p->pBaseTypeDescription != 0)
++            return is_complex_struct(&p->pBaseTypeDescription->aBase);
++        return false;
++    }
++
++    bool return_in_hidden_param( typelib_TypeDescriptionReference *pTypeRef )
++    {
++        if (bridges::cpp_uno::shared::isSimpleType(pTypeRef))
++            return false;
++        else if (pTypeRef->eTypeClass == typelib_TypeClass_STRUCT || pTypeRef->eTypeClass == typelib_TypeClass_EXCEPTION)
++        {
++            typelib_TypeDescription * pTypeDescr = 0;
++            TYPELIB_DANGER_GET( &pTypeDescr, pTypeRef );
++
++            //A Composite Type not larger than 4 bytes is returned in r0
++            bool bRet = pTypeDescr->nSize > 4 || is_complex_struct(pTypeDescr);
++
++            TYPELIB_DANGER_RELEASE( pTypeDescr );
++            return bRet;
++        }
++        return true;
++    }
+ }
+ 
+-void MapReturn(long r0, long r1, typelib_TypeClass eReturnType, void *pRegisterReturn)
++void MapReturn(long r0, long r1, typelib_TypeDescriptionReference * pReturnType, void *pRegisterReturn)
+ {
+ #if !defined(__ARM_EABI__) && !defined(__SOFTFP__)
+     register float fret asm("f0");
+     register double dret asm("f0");
+ #endif
+ 
+-    switch( eReturnType )
++    switch( pReturnType->eTypeClass )
+     {
+         case typelib_TypeClass_HYPER:
+         case typelib_TypeClass_UNSIGNED_HYPER:
+@@ -149,6 +190,13 @@
+             *(double*)pRegisterReturn = dret;
+ #endif
+             break;
++        case typelib_TypeClass_STRUCT:
++        case typelib_TypeClass_EXCEPTION:
++        {
++            if (!arm::return_in_hidden_param(pReturnType))
++                ((long*)pRegisterReturn)[0] = r0;
++            break;
++        }
+         default:
+             break;
+     }
+@@ -162,7 +210,7 @@
+     void * pThis,
+     sal_Int32 nVtableIndex,
+     void * pRegisterReturn,
+-    typelib_TypeClass eReturnType,
++    typelib_TypeDescriptionReference * pReturnType,
+     sal_uInt32 *pStack,
+     sal_uInt32 nStack,
+     sal_uInt32 *pGPR,
+@@ -172,7 +220,7 @@
+     void * pThis,
+     sal_Int32 nVtableIndex,
+     void * pRegisterReturn,
+-    typelib_TypeClass eReturnType,
++    typelib_TypeDescriptionReference * pReturnType,
+     sal_uInt32 *pStack,
+     sal_uInt32 nStack,
+     sal_uInt32 *pGPR,
+@@ -201,23 +249,10 @@
+     typedef void (*FunctionCall )( sal_uInt32, sal_uInt32, sal_uInt32, sal_uInt32);
+     FunctionCall pFunc = (FunctionCall)pMethod;
+ 
+-    // fill registers
+-    __asm__ __volatile__ (
+-        "ldr r0, [%0, #0]\n\t"
+-        "ldr r1, [%0, #4]\n\t"
+-        "ldr r2, [%0, #8]\n\t"
+-        "ldr r3, [%0, #12]\n\t"
+-        : : "r" (pGPR)
+-        : "r0", "r1", "r2", "r3"
+-    );
++    (*pFunc)(pGPR[0], pGPR[1], pGPR[2], pGPR[3]);
+ 
+-    // tell gcc that r0 to r3 are not available to it
+-    register sal_uInt32 r0 asm("r0");
+-    register sal_uInt32 r1 asm("r1");
+-    register sal_uInt32 r2 asm("r2");
+-    register sal_uInt32 r3 asm("r3");
+-
+-    (*pFunc)(r0, r1, r2, r3);
++    sal_uInt32 r0;
++    sal_uInt32 r1;
+ 
+     // get return value
+     __asm__ __volatile__ (
+@@ -225,7 +260,7 @@
+         "mov %1, r1\n\t"
+         : "=r" (r0), "=r" (r1) : );
+ 
+-    MapReturn(r0, r1, eReturnType, pRegisterReturn);
++    MapReturn(r0, r1, pReturnType, pRegisterReturn);
+ }
+ }
+ 
+@@ -312,14 +347,14 @@
+     void * pCppReturn = 0; // if != 0 && != pUnoReturn, needs reconversion
+ 
+     bool bOverFlow = false;
+-    
++    bool bSimpleReturn = true;
+     if (pReturnTypeDescr)
+     {
++        if (arm::return_in_hidden_param( pReturnTypeRef ) )
++            bSimpleReturn = false;
+ 
+-        if (bridges::cpp_uno::shared::isSimpleType( pReturnTypeDescr ))
+-        {
++        if (bSimpleReturn)
+             pCppReturn = pUnoReturn; // direct way for simple types
+-        }
+         else
+         {
+             // complex return via ptr
+@@ -390,6 +425,8 @@
+             case typelib_TypeClass_DOUBLE:
+                 INSERT_DOUBLE( pCppArgs[nPos], nGPR, pGPR, pStack, pStackStart, bOverFlow );
+                 break;
++            default:
++                break;
+             }
+             // no longer needed
+             TYPELIB_DANGER_RELEASE( pParamTypeDescr );
+@@ -431,7 +468,7 @@
+     {
+         callVirtualMethod(
+             pAdjustedThisPtr, aVtableSlot.index,
+-            pCppReturn, pReturnTypeDescr->eTypeClass,
++            pCppReturn, pReturnTypeRef,
+             pStackStart, 
+             (pStack - pStackStart),
+             pGPR, nGPR);
+@@ -504,15 +541,19 @@
+     // is my surrogate
+     bridges::cpp_uno::shared::UnoInterfaceProxy * pThis
+           = static_cast< bridges::cpp_uno::shared::UnoInterfaceProxy * >(pUnoI);
++#if OSL_DEBUG_LEVEL > 0
+     typelib_InterfaceTypeDescription * pTypeDescr = pThis->pTypeDescr;
++#endif
+     
+     switch (pMemberDescr->eTypeClass)
+     {
+     case typelib_TypeClass_INTERFACE_ATTRIBUTE:
+     {
++#if OSL_DEBUG_LEVEL > 0
+         // determine vtable call index
+         sal_Int32 nMemberPos = ((typelib_InterfaceMemberTypeDescription *)pMemberDescr)->nPosition;
+         OSL_ENSURE( nMemberPos < pTypeDescr->nAllMembers, "### member pos out of range!" );
++#endif
+         
+         VtableSlot aVtableSlot(
+             getVtableSlot(
+@@ -557,9 +598,11 @@
+     }
+     case typelib_TypeClass_INTERFACE_METHOD:
+     {
++#if OSL_DEBUG_LEVEL > 0
+         // determine vtable call index
+         sal_Int32 nMemberPos = ((typelib_InterfaceMemberTypeDescription *)pMemberDescr)->nPosition;
+         OSL_ENSURE( nMemberPos < pTypeDescr->nAllMembers, "### member pos out of range!" );
++#endif
+ 
+         VtableSlot aVtableSlot(
+             getVtableSlot(
