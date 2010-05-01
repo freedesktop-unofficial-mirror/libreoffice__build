@@ -4,7 +4,6 @@ script_files = \
 	add_acor.py \
 	amt-license-patch \
 	applyflags \
-	a2az.pl \
 	bash-completion.in \
 	build-galleries \
 	build-ooo \
