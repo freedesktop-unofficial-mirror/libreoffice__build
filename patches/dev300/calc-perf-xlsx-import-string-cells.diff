@@ -1,0 +1,122 @@
+diff --git oox/inc/oox/xls/richstring.hxx oox/inc/oox/xls/richstring.hxx
+index 6293aac..1c456d5 100644
+--- oox/inc/oox/xls/richstring.hxx
++++ oox/inc/oox/xls/richstring.hxx
+@@ -76,6 +76,10 @@ public:
+                             const ::com::sun::star::uno::Reference< ::com::sun::star::text::XText >& rxText,
+                             sal_Int32 nXfId );
+ 
++    void                writeFontProperties(
++        const ::com::sun::star::uno::Reference< ::com::sun::star::text::XText >& rxText, 
++        sal_Int32 nXfId ) const;
++
+ private:
+     ::rtl::OUString     maText;         /// Portion text.
+     FontRef             mxFont;         /// Embedded portion font, may be empty.
+diff --git oox/source/core/contexthandler2.cxx oox/source/core/contexthandler2.cxx
+index 0f39ba3..25d0469 100644
+--- oox/source/core/contexthandler2.cxx
++++ oox/source/core/contexthandler2.cxx
+@@ -44,12 +44,13 @@ namespace core {
+ /** Information about a processed context element. */
+ struct ContextInfo
+ {
+-    OUStringBuffer      maCurrChars;        /// Collected characters from context.
+-    OUStringBuffer      maFinalChars;       /// Finalized (stipped) characters.
++    OUString            maCurrChars;        /// Collected characters from context.
++    OUString            maFinalChars;       /// Finalized (stipped) characters.
+     sal_Int32           mnElement;          /// The element identifier.
+     bool                mbTrimSpaces;       /// True = trims leading/trailing spaces from text data.
+ 
+     explicit            ContextInfo();
++                        ContextInfo( sal_Int32 nElement ) : mnElement( nElement ) {}
+ };
+ 
+ ContextInfo::ContextInfo() :
+@@ -115,7 +116,7 @@ void ContextHandler2Helper::implCharacters( const OUString& rChars )
+ {
+     // #i76091# collect characters until context ends
+     if( !mxContextStack->empty() )
+-        mxContextStack->back().maCurrChars.append( rChars );
++        mxContextStack->back().maCurrChars += rChars;
+ }
+ 
+ void ContextHandler2Helper::implEndCurrentContext( sal_Int32 nElement )
+@@ -127,7 +128,7 @@ void ContextHandler2Helper::implEndCurrentContext( sal_Int32 nElement )
+         // #i76091# process collected characters
+         appendCollectedChars();
+         // finalize the current context and pop context info from stack
+-        onEndElement( mxContextStack->back().maFinalChars.makeStringAndClear() );
++        onEndElement( mxContextStack->back().maFinalChars );
+         popContextInfo();
+     }
+ }
+@@ -157,10 +158,9 @@ void ContextHandler2Helper::implEndRecord( sal_Int32 nRecId )
+ 
+ ContextInfo& ContextHandler2Helper::pushContextInfo( sal_Int32 nElement )
+ {
+-    mxContextStack->resize( mxContextStack->size() + 1 );
+-    ContextInfo& rInfo = mxContextStack->back();
+-    rInfo.mnElement = nElement;
+-    return rInfo;
++    ContextInfo aInfo( nElement );
++    mxContextStack->push_back( aInfo );
++    return mxContextStack->back();
+ }
+ 
+ void ContextHandler2Helper::popContextInfo()
+@@ -176,8 +176,10 @@ void ContextHandler2Helper::appendCollectedChars()
+     ContextInfo& rInfo = mxContextStack->back();
+     if( rInfo.maCurrChars.getLength() > 0 )
+     {
+-        OUString aChars = rInfo.maCurrChars.makeStringAndClear();
+-        rInfo.maFinalChars.append( (mbEnableTrimSpace && rInfo.mbTrimSpaces) ? aChars.trim() : aChars );
++        OUString aChars( rInfo.maCurrChars );
++
++        rInfo.maCurrChars = OUString();
++        rInfo.maFinalChars += ( (mbEnableTrimSpace && rInfo.mbTrimSpaces) ? aChars.trim() : aChars );
+     }
+ }
+ 
+diff --git oox/source/xls/richstring.cxx oox/source/xls/richstring.cxx
+index 4e82b1e..a52a566 100644
+--- oox/source/xls/richstring.cxx
++++ oox/source/xls/richstring.cxx
+@@ -103,6 +103,20 @@ void RichStringPortion::convert( const Reference< XText >& rxText, sal_Int32 nXf
+     }
+ }
+ 
++void RichStringPortion::writeFontProperties( const Reference<XText>& rxText, sal_Int32 nXfId ) const
++{
++    PropertySet aPropSet(rxText);
++
++    if (mxFont.get())
++        mxFont->writeToPropertySet(aPropSet, FONT_PROPTYPE_TEXT);
++
++    if (const Font* pFont = getStyles().getFontFromCellXf(nXfId).get())
++    {
++        if (pFont->needsRichTextFormat())
++            pFont->writeToPropertySet(aPropSet, FONT_PROPTYPE_TEXT);
++    }
++}
++
+ // ----------------------------------------------------------------------------
+ 
+ void FontPortionModel::read( RecordInputStream& rStrm )
+@@ -499,6 +513,16 @@ OUString RichString::getPlainText() const
+ 
+ void RichString::convert( const Reference< XText >& rxText, sal_Int32 nXfId ) const
+ {
++    if (maFontPortions.size() == 1)
++    {
++        // Set text directly to the cell when the string has only one portion.
++        // It's much faster this way.
++        RichStringPortion& rPtn = *maFontPortions.front();
++        rxText->setString(rPtn.getText());
++        rPtn.writeFontProperties(rxText, nXfId);
++        return;
++    }
++
+     for( PortionVec::const_iterator aIt = maFontPortions.begin(), aEnd = maFontPortions.end(); aIt != aEnd; ++aIt )
+     {
+         (*aIt)->convert( rxText, nXfId );
