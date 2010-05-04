@@ -1,0 +1,106 @@
+diff --git sc/source/core/data/column2.cxx sc/source/core/data/column2.cxx
+index 0ce77fb..d303e45 100644
+--- sc/source/core/data/column2.cxx
++++ sc/source/core/data/column2.cxx
+@@ -195,6 +195,7 @@ long ScColumn::GetNeededSize( SCROW nRow, OutputDevice* pDev,
+     double nPPT = bWidth ? nPPTX : nPPTY;
+     if (Search(nRow,nIndex))
+     {
++        ScBaseCell* pCell = pItems[nIndex].pCell;
+         const ScPatternAttr* pPattern = rOptions.pPattern;
+         if (!pPattern)
+             pPattern = pAttrArray->GetPattern( nRow );
+@@ -235,22 +236,26 @@ long ScColumn::GetNeededSize( SCROW nRow, OutputDevice* pDev,
+         else
+             eHorJust = (SvxCellHorJustify)((const SvxHorJustifyItem&)
+                                             pPattern->GetItem( ATTR_HOR_JUSTIFY )).GetValue();
+-        BOOL bBreak;
++        bool bBreak;
+         if ( eHorJust == SVX_HOR_JUSTIFY_BLOCK )
+-            bBreak = TRUE;
++            bBreak = true;
+         else if ( pCondSet &&
+                     pCondSet->GetItemState(ATTR_LINEBREAK, TRUE, &pCondItem) == SFX_ITEM_SET)
+             bBreak = ((const SfxBoolItem*)pCondItem)->GetValue();
+         else
+             bBreak = ((const SfxBoolItem&)pPattern->GetItem(ATTR_LINEBREAK)).GetValue();
+ 
++        if (pCell->HasValueData())
++            // Cell has a value.  Disable line break.
++            bBreak = false;
++
+         //	get other attributes from pattern and conditional formatting
+ 
+         SvxCellOrientation eOrient = pPattern->GetCellOrientation( pCondSet );
+         BOOL bAsianVertical = ( eOrient == SVX_ORIENTATION_STACKED &&
+                 ((const SfxBoolItem&)pPattern->GetItem( ATTR_VERTICAL_ASIAN, pCondSet )).GetValue() );
+         if ( bAsianVertical )
+-            bBreak = FALSE;
++            bBreak = false;
+ 
+         if ( bWidth && bBreak )		// after determining bAsianVertical (bBreak may be reset)
+             return 0;
+@@ -302,7 +307,6 @@ long ScColumn::GetNeededSize( SCROW nRow, OutputDevice* pDev,
+                 nIndent = ((const SfxUInt16Item&)pPattern->GetItem(ATTR_INDENT)).GetValue();
+         }
+ 
+-        ScBaseCell* pCell = pItems[nIndex].pCell;
+         BYTE nScript = pDocument->GetScriptType( nCol, nRow, nTab, pCell );
+         if (nScript == 0) nScript = ScGlobal::GetDefaultScriptType();
+ 
+diff --git sc/source/ui/view/output2.cxx sc/source/ui/view/output2.cxx
+index 35f48bf..301a973 100644
+--- sc/source/ui/view/output2.cxx
++++ sc/source/ui/view/output2.cxx
+@@ -75,6 +75,8 @@
+ #include "scmod.hxx"
+ #include "fillinfo.hxx"
+ 
++#include <boost/scoped_ptr.hpp>
++
+ #include <math.h>
+ 
+ //!	Autofilter-Breite mit column.cxx zusammenfassen
+@@ -1324,10 +1326,6 @@ void ScOutputData::DrawStrings( BOOL bPixelToLogic )
+ 
+     ScDrawStringsVars aVars( this, bPixelToLogic );
+ 
+-    const ScPatternAttr* pOldPattern = NULL;
+-    const SfxItemSet* pOldCondSet = NULL;
+-    BYTE nOldScript = 0;
+-
+     BOOL bProgress = FALSE;
+ 
+     long nInitPosX = nScrX;
+@@ -1350,6 +1348,13 @@ void ScOutputData::DrawStrings( BOOL bPixelToLogic )
+     SvxCellHorJustify eOutHorJust = SVX_HOR_JUSTIFY_STANDARD;
+     const ScPatternAttr* pPattern = NULL;
+     const SfxItemSet* pCondSet = NULL;
++    const ScPatternAttr* pOldPattern = NULL;
++    const SfxItemSet* pOldCondSet = NULL;
++    BYTE nOldScript = 0;
++
++    // alternative pattern instance in case we need to modify the pattern 
++    // before processing the cell value.
++    ::boost::scoped_ptr<ScPatternAttr> pAltPattern;
+ 
+     long nPosY = nScrY;
+     for (SCSIZE nArrY=1; nArrY+1<nArrCount; nArrY++)
+@@ -1487,6 +1492,17 @@ void ScOutputData::DrawStrings( BOOL bPixelToLogic )
+                         pCondSet = pDoc->GetCondResult( nCellX, nCellY, nTab );
+                     }
+ 
++                    if (pCell->HasValueData() && 
++                        static_cast<const SfxBoolItem&>(
++                            pPattern->GetItem(ATTR_LINEBREAK, pCondSet)).GetValue())
++                    {
++                        // Disable line break when the cell content is numeric.
++                        pAltPattern.reset(new ScPatternAttr(*pPattern));
++                        SfxBoolItem aLineBreak(ATTR_LINEBREAK, false);
++                        pAltPattern->GetItemSet().Put(aLineBreak);
++                        pPattern = pAltPattern.get();
++                    }
++
+                     BYTE nScript = GetScriptType( pDoc, pCell, pPattern, pCondSet );
+                     if (nScript == 0) nScript = ScGlobal::GetDefaultScriptType();
+                     if ( pPattern != pOldPattern || pCondSet != pOldCondSet ||
