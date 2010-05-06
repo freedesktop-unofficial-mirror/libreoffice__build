@@ -1,0 +1,187 @@
+diff --git sc/inc/document.hxx sc/inc/document.hxx
+index dbe4d91..70b29c3 100644
+--- sc/inc/document.hxx
++++ sc/inc/document.hxx
+@@ -809,6 +809,8 @@ public:
+         @param bForced  True = always create all captions, false = skip when Undo is disabled. */
+     void            InitializeAllNoteCaptions( bool bForced = false );
+ 
++    void            SetDrawPageSize(SCTAB nTab);
++
+     BOOL            ExtendMergeSel( SCCOL nStartCol, SCROW nStartRow,
+                                 SCCOL& rEndCol, SCROW& rEndRow, const ScMarkData& rMark,
+                                 BOOL bRefresh = FALSE, BOOL bAttrs = FALSE );
+@@ -1834,6 +1836,7 @@ private: // CLOOK-Impl-Methoden
+     void	UpdateDrawPrinter();
+     void	UpdateDrawLanguages();
+     void    UpdateDrawDefaults();
++
+     SC_DLLPUBLIC void	InitClipPtrs( ScDocument* pSourceDoc );
+ 
+     void	LoadDdeLinks(SvStream& rStream);
+diff --git sc/inc/table.hxx sc/inc/table.hxx
+index 03c2b0b..fd59629 100644
+--- sc/inc/table.hxx
++++ sc/inc/table.hxx
+@@ -768,6 +768,7 @@ public:
+     BOOL		IsSortCollatorGlobal() const;
+     void		InitSortCollator( const ScSortParam& rPar );
+     void		DestroySortCollator();
++    void        SetDrawPageSize( bool bResetStreamValid = true, bool bUpdateNoteCaptionPos = true );
+ 
+ private:
+     void		FillSeries( SCCOL nCol1, SCROW nRow1, SCCOL nCol2, SCROW nRow2,
+@@ -847,7 +848,6 @@ private:
+     BOOL 		GetNextSpellingCell(SCCOL& rCol, SCROW& rRow, BOOL bInSel,
+                                     const ScMarkData& rMark) const;
+     BOOL		GetNextMarkedCell( SCCOL& rCol, SCROW& rRow, const ScMarkData& rMark );
+-    void        SetDrawPageSize( bool bResetStreamValid = true, bool bUpdateNoteCaptionPos = true );
+     BOOL		TestTabRefAbs(SCTAB nTable);
+     void 		CompileDBFormula();
+     void 		CompileDBFormula( BOOL bCreateFormulaString );
+diff --git sc/source/core/data/documen9.cxx sc/source/core/data/documen9.cxx
+index 55ea8e8..8263b17 100644
+--- sc/source/core/data/documen9.cxx
++++ sc/source/core/data/documen9.cxx
+@@ -300,6 +300,14 @@ void ScDocument::UpdateDrawPrinter()
+     }
+ }
+ 
++void ScDocument::SetDrawPageSize(SCTAB nTab)
++{
++    if (!ValidTab(nTab) || !pTab[nTab])
++        return;
++
++    pTab[nTab]->SetDrawPageSize();
++}
++
+ sal_Bool ScDocument::IsChart( const SdrObject* pObject )
+ {
+     // #109985#
+diff --git sc/source/core/data/table2.cxx sc/source/core/data/table2.cxx
+index fca878a..bbbfeb1 100644
+--- sc/source/core/data/table2.cxx
++++ sc/source/core/data/table2.cxx
+@@ -2461,8 +2461,6 @@ void ScTable::ShowRow(SCROW nRow, BOOL bShow)
+         bool bWasVis = !RowHidden(nRow);
+         if (bWasVis != bShow)
+         {
+-            IncRecalcLevel();
+-            InitializeNoteCaptions();
+             ScDrawLayer* pDrawLayer = pDocument->GetDrawLayer();
+             if (pDrawLayer)
+             {
+@@ -2478,8 +2476,6 @@ void ScTable::ShowRow(SCROW nRow, BOOL bShow)
+             if (bShow)
+                 SetRowFiltered(nRow, nRow, false);
+ 
+-            DecRecalcLevel();
+-
+             ScChartListenerCollection* pCharts = pDocument->GetChartListenerCollection();
+             if ( pCharts )
+                 pCharts->SetRangeDirty(ScRange( 0, nRow, nTab, MAXCOL, nRow, nTab ));
+diff --git sc/source/core/tool/consoli.cxx sc/source/core/tool/consoli.cxx
+index eca33db..4c1b155 100644
+--- sc/source/core/tool/consoli.cxx
++++ sc/source/core/tool/consoli.cxx
+@@ -820,8 +820,10 @@ void ScConsData::OutputToDocument( ScDocument* pDestDoc, SCCOL nCol, SCROW nRow,
+                 SCROW nOutEnd = nRow+nArrY+nNeeded-1;
+                 BOOL bSize = FALSE;
+                 pOutArr->Insert( nOutStart, nOutEnd, bSize );
++                pDestDoc->InitializeNoteCaptions(nTab);
+                 for (SCROW nOutRow=nOutStart; nOutRow<=nOutEnd; nOutRow++)
+                     pDestDoc->ShowRow( nOutRow, nTab, FALSE );
++                pDestDoc->SetDrawPageSize(nTab);
+                 pDestDoc->UpdateOutlineRow( nOutStart, nOutEnd, nTab, FALSE );
+ 
+                 //	Zwischentitel
+diff --git sc/source/ui/app/transobj.cxx sc/source/ui/app/transobj.cxx
+index 31aa2e8..0ab6334 100644
+--- sc/source/ui/app/transobj.cxx
++++ sc/source/ui/app/transobj.cxx
+@@ -603,7 +603,6 @@ void ScTransferObj::InitDocShell()
+         //	(must be copied before CopyFromClip, for drawing objects)
+ 
+ 		SCCOL nCol, nLastCol;
+-        SCROW nRow;
+         SCTAB nSrcTab = aBlock.aStart.Tab();
+         pDestDoc->SetLayoutRTL(0, pDoc->IsLayoutRTL(nSrcTab));
+         for (nCol=nStartX; nCol<=nEndX; nCol++)
+@@ -700,7 +699,7 @@ void ScTransferObj::InitDocShell()
+                 break;
+             nSizeX += nAdd;
+         }
+-        for (nRow=nStartY; nRow<=nEndY; nRow++)
++        for (SCROW nRow=nStartY; nRow<=nEndY; nRow++)
+         {
+             long nAdd = pDestDoc->FastGetRowHeight( nRow, 0 );
+             if ( nSizeY+nAdd > aPaperSize.Height() && nSizeY )	// above limit?
+diff --git sc/source/ui/docshell/olinefun.cxx sc/source/ui/docshell/olinefun.cxx
+index 80615ae..1d69f80 100644
+--- sc/source/ui/docshell/olinefun.cxx
++++ sc/source/ui/docshell/olinefun.cxx
+@@ -392,6 +392,7 @@ BOOL ScOutlineDocFunc::SelectLevel( SCTAB nTab, BOOL bColumns, USHORT nLevel,
+                                     bColumns, nLevel ) );
+     }
+ 
++    pDoc->InitializeNoteCaptions(nTab);
+     ScSubOutlineIterator aIter( pArray );					// alle Eintraege
+     ScOutlineEntry* pEntry;
+     while ((pEntry=aIter.GetNext()) != NULL)
+@@ -424,7 +425,7 @@ BOOL ScOutlineDocFunc::SelectLevel( SCTAB nTab, BOOL bColumns, USHORT nLevel,
+                     pDoc->ShowRow( i, nTab, bShow );
+         }
+     }
+-
++    pDoc->SetDrawPageSize(nTab);
+     pDoc->UpdatePageBreaks( nTab );
+ 
+     if (bPaint)
+@@ -505,6 +506,7 @@ BOOL ScOutlineDocFunc::ShowMarkedOutlines( const ScRange& rRange, BOOL bRecord,
+         nMax=0;
+         pArray = pTable->GetRowArray();
+         ScSubOutlineIterator aRowIter( pArray );
++        pDoc->InitializeNoteCaptions(nTab);
+         while ((pEntry=aRowIter.GetNext()) != NULL)
+         {
+             nStart = pEntry->GetStart();
+@@ -521,6 +523,7 @@ BOOL ScOutlineDocFunc::ShowMarkedOutlines( const ScRange& rRange, BOOL bRecord,
+ 			if ( !pDoc->RowFiltered( i,nTab ) )				// weggefilterte nicht einblenden
+                 pDoc->ShowRow( i, nTab, TRUE );
+ 
++        pDoc->SetDrawPageSize(nTab);
+         pDoc->UpdatePageBreaks( nTab );
+ 
+         rDocShell.PostPaint( 0,0,nTab, MAXCOL,MAXROW,nTab, PAINT_GRID | PAINT_LEFT | PAINT_TOP );
+@@ -671,6 +674,7 @@ BOOL ScOutlineDocFunc::ShowOutline( SCTAB nTab, BOOL bColumns, USHORT nLevel, US
+ 
+ //!	HideCursor();
+ 
++    pDoc->InitializeNoteCaptions(nTab);
+     pEntry->SetHidden(FALSE);
+     SCCOLROW i;
+     for ( i = nStart; i <= nEnd; i++ )
+@@ -701,6 +705,7 @@ BOOL ScOutlineDocFunc::ShowOutline( SCTAB nTab, BOOL bColumns, USHORT nLevel, US
+ 
+     pArray->SetVisibleBelow( nLevel, nEntry, TRUE, TRUE );
+ 
++    pDoc->SetDrawPageSize(nTab);
+     pDoc->InvalidatePageBreaks(nTab);
+     pDoc->UpdatePageBreaks( nTab );
+ 
+@@ -755,6 +760,7 @@ BOOL ScOutlineDocFunc::HideOutline( SCTAB nTab, BOOL bColumns, USHORT nLevel, US
+ 
+ //!	HideCursor();
+ 
++    pDoc->InitializeNoteCaptions(nTab);
+     pEntry->SetHidden(TRUE);
+     SCCOLROW i;
+     for ( i = nStart; i <= nEnd; i++ )
+@@ -767,6 +773,7 @@ BOOL ScOutlineDocFunc::HideOutline( SCTAB nTab, BOOL bColumns, USHORT nLevel, US
+ 
+     pArray->SetVisibleBelow( nLevel, nEntry, FALSE );
+ 
++    pDoc->SetDrawPageSize(nTab);
+     pDoc->InvalidatePageBreaks(nTab);
+     pDoc->UpdatePageBreaks( nTab );
+ 
