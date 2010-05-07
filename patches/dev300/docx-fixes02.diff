@@ -6,15 +6,17 @@ From: Cédric Bosdonnat <cedricbosdo@openoffice.org>
 ---
 
  sax/source/tools/fastserializer.cxx          |   45 +++
- sax/source/tools/fastserializer.hxx          |    7 +
- sw/source/filter/ww8/attributeoutputbase.hxx |    3 
- sw/source/filter/ww8/docxattributeoutput.cxx |  338 +++++++++++++++++++++++---
- sw/source/filter/ww8/docxattributeoutput.hxx |    6 
+ sax/source/tools/fastserializer.hxx          |    7 
+ sw/source/filter/ww8/attributeoutputbase.hxx |    5 
+ sw/source/filter/ww8/docxattributeoutput.cxx |  393 +++++++++++++++++++++++---
+ sw/source/filter/ww8/docxattributeoutput.hxx |    8 -
  sw/source/filter/ww8/makefile.mk             |    1 
+ sw/source/filter/ww8/wrtw8nds.cxx            |   88 +-----
  sw/source/filter/ww8/wrtw8sty.cxx            |   15 +
+ sw/source/filter/ww8/wrtww8.hxx              |   69 +++++
  sw/source/filter/ww8/ww8atr.cxx              |   25 --
- sw/source/filter/ww8/ww8attributeoutput.hxx  |    3 
- 9 files changed, 374 insertions(+), 69 deletions(-)
+ sw/source/filter/ww8/ww8attributeoutput.hxx  |    5 
+ 11 files changed, 514 insertions(+), 147 deletions(-)
 
 
 diff --git sax/source/tools/fastserializer.cxx sax/source/tools/fastserializer.cxx
@@ -113,9 +115,18 @@ index 94cf7c4..f07094d 100644
  
      void writeFastAttributeList( const ::com::sun::star::uno::Reference< ::com::sun::star::xml::sax::XFastAttributeList >& Attribs );
 diff --git sw/source/filter/ww8/attributeoutputbase.hxx sw/source/filter/ww8/attributeoutputbase.hxx
-index c005746..da3e873 100644
+index c005746..1ec45f6 100644
 --- sw/source/filter/ww8/attributeoutputbase.hxx
 +++ sw/source/filter/ww8/attributeoutputbase.hxx
+@@ -176,7 +176,7 @@ public:
+     virtual void RawText( const String& rText, bool bForceUnicode, rtl_TextEncoding eCharSet ) = 0;
+ 
+     /// Output ruby start.
+-    virtual void StartRuby( const SwTxtNode& rNode, const SwFmtRuby& rRuby ) = 0;
++    virtual void StartRuby( const SwTxtNode& rNode, xub_StrLen nPos, const SwFmtRuby& rRuby ) = 0;
+ 
+     /// Output ruby end.
+     virtual void EndRuby() = 0;
 @@ -245,7 +245,8 @@ public:
  
      /// Start of a style in the styles table.
@@ -127,10 +138,10 @@ index c005746..da3e873 100644
      /// End of a style in the styles table.
      virtual void EndStyle() = 0;
 diff --git sw/source/filter/ww8/docxattributeoutput.cxx sw/source/filter/ww8/docxattributeoutput.cxx
-index ce74da7..eefd19b 100644
+index ce74da7..42afc15 100644
 --- sw/source/filter/ww8/docxattributeoutput.cxx
 +++ sw/source/filter/ww8/docxattributeoutput.cxx
-@@ -31,6 +31,10 @@
+@@ -31,6 +31,12 @@
  #include "writerwordglue.hxx"
  #include "wrtww8.hxx"
  #include "ww8par.hxx"
@@ -138,10 +149,12 @@ index ce74da7..eefd19b 100644
 +#include "fmtsrnd.hxx"
 +#include "fchrfmt.hxx"
 +#include "tgrditem.hxx"
++#include "fmtruby.hxx"
++#include "charfmt.hxx"
  
  #include <oox/core/tokens.hxx>
  #include <oox/export/drawingml.hxx>
-@@ -213,6 +217,25 @@ void DocxAttributeOutput::EndParagraph( ww8::WW8TableNodeInfoInner::Pointer_t pT
+@@ -213,6 +219,25 @@ void DocxAttributeOutput::EndParagraph( ww8::WW8TableNodeInfoInner::Pointer_t pT
      FinishTableRowCell( pTextNodeInfoInner );
  
      m_bParagraphOpened = false;
@@ -167,7 +180,7 @@ index ce74da7..eefd19b 100644
  }
  
  void DocxAttributeOutput::FinishTableRowCell( ww8::WW8TableNodeInfoInner::Pointer_t pInner, bool bForceEmptyParagraph )
-@@ -292,6 +315,14 @@ void DocxAttributeOutput::InitCollectedParagraphProperties()
+@@ -292,6 +317,14 @@ void DocxAttributeOutput::InitCollectedParagraphProperties()
  
  void DocxAttributeOutput::WriteCollectedParagraphProperties()
  {
@@ -182,7 +195,78 @@ index ce74da7..eefd19b 100644
      if ( m_pSpacingAttrList )
      {
          XFastAttributeListRef xAttrList( m_pSpacingAttrList );
-@@ -1810,6 +1841,12 @@ void DocxAttributeOutput::OutputFlyFrame_Impl( const sw::Frame &rFrame, const Po
+@@ -755,11 +788,59 @@ void DocxAttributeOutput::RawText( const String& /*rText*/, bool /*bForceUnicode
+ #endif
+ }
+ 
+-void DocxAttributeOutput::StartRuby( const SwTxtNode& /*rNode*/, const SwFmtRuby& /*rRuby*/ )
++void DocxAttributeOutput::StartRuby( const SwTxtNode& rNode, xub_StrLen nPos, const SwFmtRuby& rRuby )
+ {
+ #if OSL_DEBUG_LEVEL > 0
+     fprintf( stderr, "TODO DocxAttributeOutput::StartRuby( const SwTxtNode& rNode, const SwFmtRuby& rRuby )\n" );
+ #endif
++    m_pSerializer->startElementNS( XML_w, XML_ruby, FSEND );
++    m_pSerializer->startElementNS( XML_w, XML_rubyPr, FSEND );
++    // hps
++    // hpsBaseText
++    // hpsRaise
++    // lid
++    OString sAlign ( "center" );
++    switch ( rRuby.GetAdjustment( ) )
++    {
++        case 0:
++            sAlign = OString( "left" );
++            break;
++        case 1:
++            // Defaults to center
++            break;
++        case 2:
++            sAlign = OString( "right" );
++            break;
++        case 3:
++            sAlign = OString( "distributeLetter" );
++            break;
++        case 4:
++            sAlign = OString( "distributeSpace" );
++            break;
++        default:
++            break;
++    }
++    m_pSerializer->singleElementNS( XML_w, XML_rubyAlign, 
++            FSNS( XML_w, XML_val ), sAlign.getStr(), FSEND );
++    m_pSerializer->endElementNS( XML_w, XML_rubyPr );
++
++    m_pSerializer->startElementNS( XML_w, XML_rt, FSEND );
++    StartRun( NULL );
++    StartRunProperties( );
++    SwAttrIter aAttrIt( m_rExport, rNode );
++    aAttrIt.OutAttr( nPos, true );
++    USHORT nStyle = m_rExport.GetId( *rRuby.GetTxtRuby()->GetCharFmt() );
++    OString aStyleId( "style" );
++    aStyleId += OString::valueOf( sal_Int32( nStyle ) );
++    m_pSerializer->singleElementNS( XML_w, XML_rStyle,
++            FSNS( XML_w, XML_val ), aStyleId.getStr(), FSEND );
++    EndRunProperties( NULL );
++    RunText( rRuby.GetText( ) );
++    EndRun( );
++    m_pSerializer->endElementNS( XML_w, XML_rt );
++   
++    m_pSerializer->startElementNS( XML_w, XML_rubyBase, FSEND );
++    StartRun( NULL );
+ }
+ 
+ void DocxAttributeOutput::EndRuby()
+@@ -767,6 +848,9 @@ void DocxAttributeOutput::EndRuby()
+ #if OSL_DEBUG_LEVEL > 0
+     fprintf( stderr, "TODO DocxAttributeOutput::EndRuby()\n" );
+ #endif
++    EndRun( );
++    m_pSerializer->endElementNS( XML_w, XML_rubyBase );
++    m_pSerializer->endElementNS( XML_w, XML_ruby );
+ }
+ 
+ bool DocxAttributeOutput::AnalyzeURL( const String& rUrl, const String& rTarget, String* pLinkURL, String* pMark )
+@@ -1810,6 +1894,12 @@ void DocxAttributeOutput::OutputFlyFrame_Impl( const sw::Frame &rFrame, const Po
                      WriteOLE2Obj( pSdrObj, rFrame.GetLayoutSize() );
              }
              break;
@@ -195,7 +279,7 @@ index ce74da7..eefd19b 100644
          default:
  #if OSL_DEBUG_LEVEL > 0
              fprintf( stderr, "TODO DocxAttributeOutput::OutputFlyFrame_Impl( const sw::Frame& rFrame, const Point& rNdTopLeft ) - frame type '%s'\n",
-@@ -1824,7 +1861,7 @@ void DocxAttributeOutput::OutputFlyFrame_Impl( const sw::Frame &rFrame, const Po
+@@ -1824,7 +1914,7 @@ void DocxAttributeOutput::OutputFlyFrame_Impl( const sw::Frame &rFrame, const Po
  }
  
  void DocxAttributeOutput::StartStyle( const String& rName, bool bPapFmt,
@@ -204,7 +288,7 @@ index ce74da7..eefd19b 100644
  {
      OString aStyle( "style" );
  
-@@ -1847,6 +1884,9 @@ void DocxAttributeOutput::StartStyle( const String& rName, bool bPapFmt,
+@@ -1847,6 +1937,9 @@ void DocxAttributeOutput::StartStyle( const String& rName, bool bPapFmt,
      m_pSerializer->singleElementNS( XML_w, XML_next,
              FSNS( XML_w, XML_val ), ( aStyle + OString::valueOf( sal_Int32( nNext ) ) ).getStr(),
              FSEND );
@@ -214,7 +298,7 @@ index ce74da7..eefd19b 100644
  }
  
  void DocxAttributeOutput::EndStyle()
-@@ -2364,11 +2404,43 @@ void DocxAttributeOutput::CharCrossedOut( const SvxCrossedOutItem& rCrossedOut )
+@@ -2364,11 +2457,43 @@ void DocxAttributeOutput::CharCrossedOut( const SvxCrossedOutItem& rCrossedOut )
      }
  }
  
@@ -263,7 +347,7 @@ index ce74da7..eefd19b 100644
  }
  
  void DocxAttributeOutput::CharFont( const SvxFontItem& rFont)
-@@ -2400,7 +2472,7 @@ void DocxAttributeOutput::CharFontSize( const SvxFontHeightItem& rFontSize)
+@@ -2400,7 +2525,7 @@ void DocxAttributeOutput::CharFontSize( const SvxFontHeightItem& rFontSize)
  void DocxAttributeOutput::CharKerning( const SvxKerningItem& rKerning )
  {
      OString aKerning = OString::valueOf( ( sal_Int32 ) rKerning.GetValue() );
@@ -272,7 +356,7 @@ index ce74da7..eefd19b 100644
  }
  
  void DocxAttributeOutput::CharLanguage( const SvxLanguageItem& rLanguage )
-@@ -2653,11 +2725,12 @@ void DocxAttributeOutput::TextINetFormat( const SwFmtINetFmt& rLink )
+@@ -2653,11 +2778,12 @@ void DocxAttributeOutput::TextINetFormat( const SwFmtINetFmt& rLink )
      m_pSerializer->singleElementNS( XML_w, XML_rStyle, FSNS( XML_w, XML_val ), aStyleId.getStr(), FSEND );
  }
  
@@ -289,7 +373,7 @@ index ce74da7..eefd19b 100644
  }
  
  void DocxAttributeOutput::RefField( const SwField&  rFld, const String& rRef )
-@@ -3071,9 +3144,22 @@ void DocxAttributeOutput::FormatFrameSize( const SwFmtFrmSize& rSize )
+@@ -3071,9 +3197,22 @@ void DocxAttributeOutput::FormatFrameSize( const SwFmtFrmSize& rSize )
  {
      if ( m_rExport.bOutFlyFrmAttrs )
      {
@@ -315,7 +399,7 @@ index ce74da7..eefd19b 100644
      }
      else if ( m_rExport.bOutPageDescs ) 
      {
-@@ -3103,9 +3189,12 @@ void DocxAttributeOutput::FormatLRSpace( const SvxLRSpaceItem& rLRSpace )
+@@ -3103,9 +3242,12 @@ void DocxAttributeOutput::FormatLRSpace( const SvxLRSpaceItem& rLRSpace )
  {
      if ( m_rExport.bOutFlyFrmAttrs )
      {
@@ -331,7 +415,7 @@ index ce74da7..eefd19b 100644
      }
      else if ( m_rExport.bOutPageDescs ) 
      {
-@@ -3146,11 +3235,17 @@ void DocxAttributeOutput::FormatLRSpace( const SvxLRSpaceItem& rLRSpace )
+@@ -3146,11 +3288,17 @@ void DocxAttributeOutput::FormatLRSpace( const SvxLRSpaceItem& rLRSpace )
  
  void DocxAttributeOutput::FormatULSpace( const SvxULSpaceItem& rULSpace )
  {
@@ -350,7 +434,7 @@ index ce74da7..eefd19b 100644
      } 
      else if (m_rExport.bOutPageDescs )
      {
-@@ -3192,32 +3287,150 @@ void DocxAttributeOutput::FormatULSpace( const SvxULSpaceItem& rULSpace )
+@@ -3192,32 +3340,150 @@ void DocxAttributeOutput::FormatULSpace( const SvxULSpaceItem& rULSpace )
      }
  }
  
@@ -516,7 +600,7 @@ index ce74da7..eefd19b 100644
  }
  
  void DocxAttributeOutput::FormatBackground( const SvxBrushItem& rBrush )
-@@ -3229,10 +3442,6 @@ void DocxAttributeOutput::FormatBackground( const SvxBrushItem& rBrush )
+@@ -3229,10 +3495,6 @@ void DocxAttributeOutput::FormatBackground( const SvxBrushItem& rBrush )
                  FSNS( XML_w, XML_fill ), sColor.getStr( ),
                  FSEND );
      }
@@ -527,7 +611,7 @@ index ce74da7..eefd19b 100644
  }
  
  void DocxAttributeOutput::FormatBox( const SvxBoxItem& rBox )
-@@ -3315,11 +3524,52 @@ void DocxAttributeOutput::FormatKeep( const SvxFmtKeepItem& )
+@@ -3315,11 +3577,52 @@ void DocxAttributeOutput::FormatKeep( const SvxFmtKeepItem& )
      m_pSerializer->singleElementNS( XML_w, XML_keepNext, FSEND );
  }
  
@@ -584,7 +668,7 @@ index ce74da7..eefd19b 100644
  }
  
  void DocxAttributeOutput::FormatLineNumbering( const SwFmtLineNumber& rNumbering )
-@@ -3377,6 +3627,7 @@ DocxAttributeOutput::DocxAttributeOutput( DocxExport &rExport, FSHelperPtr pSeri
+@@ -3377,6 +3680,7 @@ DocxAttributeOutput::DocxAttributeOutput( DocxExport &rExport, FSHelperPtr pSeri
        m_pCharLangAttrList( NULL ),
        m_pSpacingAttrList( NULL ),
        m_pHyperlinkAttrList( NULL ),
@@ -592,7 +676,7 @@ index ce74da7..eefd19b 100644
        m_pFootnotesList( new ::docx::FootnotesList() ),
        m_pEndnotesList( new ::docx::FootnotesList() ),
        m_pSectionInfo( NULL ),
-@@ -3389,7 +3640,8 @@ DocxAttributeOutput::DocxAttributeOutput( DocxExport &rExport, FSHelperPtr pSeri
+@@ -3389,7 +3693,8 @@ DocxAttributeOutput::DocxAttributeOutput( DocxExport &rExport, FSHelperPtr pSeri
        m_bTableCellOpen( false ),
        m_nTableDepth( 0 ),
        m_bParagraphOpened( false ),
@@ -602,7 +686,7 @@ index ce74da7..eefd19b 100644
  {
  }
  
-@@ -3400,11 +3652,13 @@ DocxAttributeOutput::~DocxAttributeOutput()
+@@ -3400,11 +3705,13 @@ DocxAttributeOutput::~DocxAttributeOutput()
      delete m_pCharLangAttrList, m_pCharLangAttrList = NULL;
      delete m_pSpacingAttrList, m_pSpacingAttrList = NULL;
      delete m_pHyperlinkAttrList, m_pHyperlinkAttrList = NULL;
@@ -617,9 +701,18 @@ index ce74da7..eefd19b 100644
  
  MSWordExportBase& DocxAttributeOutput::GetExport()
 diff --git sw/source/filter/ww8/docxattributeoutput.hxx sw/source/filter/ww8/docxattributeoutput.hxx
-index 64d8217..e12a828 100644
+index 64d8217..3f2b143 100644
 --- sw/source/filter/ww8/docxattributeoutput.hxx
 +++ sw/source/filter/ww8/docxattributeoutput.hxx
+@@ -103,7 +103,7 @@ public:
+     virtual void RawText( const String& rText, bool bForceUnicode, rtl_TextEncoding eCharSet );
+ 
+     /// Output ruby start.
+-    virtual void StartRuby( const SwTxtNode& rNode, const SwFmtRuby& rRuby );
++    virtual void StartRuby( const SwTxtNode& rNode, xub_StrLen nPos, const SwFmtRuby& rRuby );
+ 
+     /// Output ruby end.
+     virtual void EndRuby();
 @@ -174,7 +174,8 @@ public:
  
      /// Start of a style in the styles table.
@@ -659,6 +752,133 @@ index c682fea..6aa8213 100644
          $(SLO)$/docxexportfilter.obj \
          $(SLO)$/ww8atr.obj \
          $(SLO)$/ww8par.obj \
+diff --git sw/source/filter/ww8/wrtw8nds.cxx sw/source/filter/ww8/wrtw8nds.cxx
+index d0a5094..d2c16ff 100644
+--- sw/source/filter/ww8/wrtw8nds.cxx
++++ sw/source/filter/ww8/wrtw8nds.cxx
+@@ -166,76 +166,6 @@ MSWordAttrIter::~MSWordAttrIter()
+     m_rExport.pChpIter = pOld;
+ }
+ 
+-// Die Klasse SwAttrIter ist eine Hilfe zum Aufbauen der Fkp.chpx.
+-// Dabei werden nur Zeichen-Attribute beachtet; Absatz-Attribute brauchen
+-// diese Behandlung nicht.
+-// Die Absatz- und Textattribute des Writers kommen rein, und es wird
+-// mit Where() die naechste Position geliefert, an der sich die Attribute
+-// aendern. IsTxtAtr() sagt, ob sich an der mit Where() gelieferten Position
+-// ein Attribut ohne Ende und mit \xff im Text befindet.
+-// Mit OutAttr() werden die Attribute an der angegebenen SwPos
+-// ausgegeben.
+-
+-class SwAttrIter : public MSWordAttrIter
+-{
+-private:
+-    const SwTxtNode& rNd;
+-
+-    CharRuns maCharRuns;
+-    cCharRunIter maCharRunIter;
+-
+-    rtl_TextEncoding meChrSet;
+-    sal_uInt16 mnScript;
+-    bool mbCharIsRTL;
+-
+-    const SwRedline* pCurRedline;
+-    xub_StrLen nAktSwPos;
+-    USHORT nCurRedlinePos;
+-
+-    bool mbParaIsRTL;
+-
+-    const SwFmtDrop &mrSwFmtDrop;
+-
+-    sw::Frames maFlyFrms;     // #i2916#
+-    sw::FrameIter maFlyIter;
+-
+-    xub_StrLen SearchNext( xub_StrLen nStartPos );
+-    void FieldVanish( const String& rTxt );
+-
+-    void OutSwFmtRefMark(const SwFmtRefMark& rAttr, bool bStart);
+-
+-    void IterToCurrent();
+-
+-    //No copying
+-    SwAttrIter(const SwAttrIter&);
+-    SwAttrIter& operator=(const SwAttrIter&);
+-public:
+-    SwAttrIter( MSWordExportBase& rWr, const SwTxtNode& rNd );
+-
+-    bool IsTxtAttr( xub_StrLen nSwPos );
+-    bool IsRedlineAtEnd( xub_StrLen nPos ) const;
+-    bool IsDropCap( int nSwPos );
+-    bool RequiresImplicitBookmark();
+-
+-    void NextPos() { nAktSwPos = SearchNext( nAktSwPos + 1 ); }
+-
+-    void OutAttr( xub_StrLen nSwPos );
+-    virtual const SfxPoolItem* HasTextItem( USHORT nWhich ) const;
+-    virtual const SfxPoolItem& GetItem( USHORT nWhich ) const;
+-    int OutAttrWithRange(xub_StrLen nPos);
+-    const SwRedlineData* GetRedline( xub_StrLen nPos );
+-    void OutFlys(xub_StrLen nSwPos);
+-
+-    xub_StrLen WhereNext() const    { return nAktSwPos; }
+-    sal_uInt16 GetScript() const { return mnScript; }
+-    bool IsCharRTL() const { return mbCharIsRTL; }
+-    bool IsParaRTL() const { return mbParaIsRTL; }
+-    rtl_TextEncoding GetCharSet() const { return meChrSet; }
+-    String GetSnippet(const String &rStr, xub_StrLen nAktPos,
+-        xub_StrLen nLen) const;
+-    const SwFmtDrop& GetSwFmtDrop() const { return mrSwFmtDrop; }
+-};
+-
+ class sortswflys :
+     public std::binary_function<const sw::Frame&, const sw::Frame&, bool>
+ {
+@@ -454,7 +384,14 @@ xub_StrLen SwAttrIter::SearchNext( xub_StrLen nStartPos )
+     return nMinPos;
+ }
+ 
+-void SwAttrIter::OutAttr( xub_StrLen nSwPos )
++bool lcl_isFontsizeItem( const SfxPoolItem& rItem )
++{
++    return ( rItem.Which( ) == RES_CHRATR_FONTSIZE ||
++            rItem.Which( ) == RES_CHRATR_CJK_FONTSIZE ||
++            rItem.Which( ) == RES_CHRATR_CTL_FONTSIZE );
++}
++
++void SwAttrIter::OutAttr( xub_StrLen nSwPos, bool bRuby )
+ {
+     m_rExport.AttrOutput().RTLAndCJKState( IsCharRTL(), GetScript() );
+ 
+@@ -542,7 +479,10 @@ void SwAttrIter::OutAttr( xub_StrLen nSwPos )
+ 
+     sw::cPoolItemIter aEnd = aRangeItems.end();
+     for ( sw::cPoolItemIter aI = aRangeItems.begin(); aI != aEnd; ++aI )
+-        aExportItems[aI->first] = aI->second;
++    {
++        if ( !bRuby || !lcl_isFontsizeItem( *aI->second ) )
++            aExportItems[aI->first] = aI->second;
++    }
+ 
+     if ( !aExportItems.empty() )
+     {
+@@ -695,7 +635,7 @@ const SfxPoolItem& SwAttrIter::GetItem(USHORT nWhich) const
+     return pRet ? *pRet : rNd.SwCntntNode::GetAttr(nWhich);
+ }
+ 
+-void WW8AttributeOutput::StartRuby( const SwTxtNode& rNode, const SwFmtRuby& rRuby )
++void WW8AttributeOutput::StartRuby( const SwTxtNode& rNode, xub_StrLen /*nPos*/, const SwFmtRuby& rRuby )
+ {
+     String aStr( FieldString( ww::eEQ ) );
+     aStr.APPEND_CONST_ASC( "\\* jc" );
+@@ -1224,7 +1164,7 @@ int SwAttrIter::OutAttrWithRange(xub_StrLen nPos)
+                 case RES_TXTATR_CJK_RUBY:
+                     if ( nPos == *pHt->GetStart() )
+                     {
+-                        m_rExport.AttrOutput().StartRuby( rNd, *static_cast< const SwFmtRuby* >( pItem ) );
++                        m_rExport.AttrOutput().StartRuby( rNd, nPos, *static_cast< const SwFmtRuby* >( pItem ) );
+                         ++nRet;
+                     }
+                     if ( 0 != ( pEnd = pHt->GetEnd() ) && nPos == *pEnd )
 diff --git sw/source/filter/ww8/wrtw8sty.cxx sw/source/filter/ww8/wrtw8sty.cxx
 index cd5b8f3..2279184 100644
 --- sw/source/filter/ww8/wrtw8sty.cxx
@@ -703,6 +923,86 @@ index cd5b8f3..2279184 100644
          
          if ( bFmtColl )
              WriteProperties( pFmt, true, nPos, nBase==0xfff );           // UPX.papx
+diff --git sw/source/filter/ww8/wrtww8.hxx sw/source/filter/ww8/wrtww8.hxx
+index 8e9ba8c..fe2e7f0 100644
+--- sw/source/filter/ww8/wrtww8.hxx
++++ sw/source/filter/ww8/wrtww8.hxx
+@@ -1329,6 +1329,75 @@ public:
+     virtual const SfxPoolItem& GetItem( USHORT nWhich ) const = 0;
+ };
+ 
++// Die Klasse SwAttrIter ist eine Hilfe zum Aufbauen der Fkp.chpx.
++// Dabei werden nur Zeichen-Attribute beachtet; Absatz-Attribute brauchen
++// diese Behandlung nicht.
++// Die Absatz- und Textattribute des Writers kommen rein, und es wird
++// mit Where() die naechste Position geliefert, an der sich die Attribute
++// aendern. IsTxtAtr() sagt, ob sich an der mit Where() gelieferten Position
++// ein Attribut ohne Ende und mit \xff im Text befindet.
++// Mit OutAttr() werden die Attribute an der angegebenen SwPos
++// ausgegeben.
++class SwAttrIter : public MSWordAttrIter
++{
++private:
++    const SwTxtNode& rNd;
++
++    sw::util::CharRuns maCharRuns;
++    sw::util::cCharRunIter maCharRunIter;
++
++    rtl_TextEncoding meChrSet;
++    sal_uInt16 mnScript;
++    bool mbCharIsRTL;
++
++    const SwRedline* pCurRedline;
++    xub_StrLen nAktSwPos;
++    USHORT nCurRedlinePos;
++
++    bool mbParaIsRTL;
++
++    const SwFmtDrop &mrSwFmtDrop;
++
++    sw::Frames maFlyFrms;     // #i2916#
++    sw::FrameIter maFlyIter;
++
++    xub_StrLen SearchNext( xub_StrLen nStartPos );
++    void FieldVanish( const String& rTxt );
++
++    void OutSwFmtRefMark(const SwFmtRefMark& rAttr, bool bStart);
++
++    void IterToCurrent();
++
++    //No copying
++    SwAttrIter(const SwAttrIter&);
++    SwAttrIter& operator=(const SwAttrIter&);
++public:
++    SwAttrIter( MSWordExportBase& rWr, const SwTxtNode& rNd );
++
++    bool IsTxtAttr( xub_StrLen nSwPos );
++    bool IsRedlineAtEnd( xub_StrLen nPos ) const;
++    bool IsDropCap( int nSwPos );
++    bool RequiresImplicitBookmark();
++
++    void NextPos() { nAktSwPos = SearchNext( nAktSwPos + 1 ); }
++
++    void OutAttr( xub_StrLen nSwPos, bool bRuby = false );
++    virtual const SfxPoolItem* HasTextItem( USHORT nWhich ) const;
++    virtual const SfxPoolItem& GetItem( USHORT nWhich ) const;
++    int OutAttrWithRange(xub_StrLen nPos);
++    const SwRedlineData* GetRedline( xub_StrLen nPos );
++    void OutFlys(xub_StrLen nSwPos);
++
++    xub_StrLen WhereNext() const    { return nAktSwPos; }
++    sal_uInt16 GetScript() const { return mnScript; }
++    bool IsCharRTL() const { return mbCharIsRTL; }
++    bool IsParaRTL() const { return mbParaIsRTL; }
++    rtl_TextEncoding GetCharSet() const { return meChrSet; }
++    String GetSnippet(const String &rStr, xub_StrLen nAktPos,
++        xub_StrLen nLen) const;
++    const SwFmtDrop& GetSwFmtDrop() const { return mrSwFmtDrop; }
++};
++
+ /// Class to collect and output the styles table.
+ class MSWordStyles
+ {
 diff --git sw/source/filter/ww8/ww8atr.cxx sw/source/filter/ww8/ww8atr.cxx
 index 6c321e9..58cf073 100644
 --- sw/source/filter/ww8/ww8atr.cxx
@@ -756,9 +1056,18 @@ index 6c321e9..58cf073 100644
                  break;
              default:
 diff --git sw/source/filter/ww8/ww8attributeoutput.hxx sw/source/filter/ww8/ww8attributeoutput.hxx
-index a54de86..6c31c0d 100644
+index a54de86..48dc1b4 100644
 --- sw/source/filter/ww8/ww8attributeoutput.hxx
 +++ sw/source/filter/ww8/ww8attributeoutput.hxx
+@@ -75,7 +75,7 @@ public:
+     virtual void RawText( const String& rText, bool bForceUnicode, rtl_TextEncoding eCharSet );
+ 
+     /// Output ruby start.
+-    virtual void StartRuby( const SwTxtNode& rNode, const SwFmtRuby& rRuby );
++    virtual void StartRuby( const SwTxtNode& rNode, xub_StrLen nPos, const SwFmtRuby& rRuby );
+ 
+     /// Output ruby end.
+     virtual void EndRuby();
 @@ -138,7 +138,8 @@ public:
  
      /// Start of a style in the styles table.
