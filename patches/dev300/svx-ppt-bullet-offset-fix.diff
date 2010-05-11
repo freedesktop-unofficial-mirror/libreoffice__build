@@ -1,0 +1,73 @@
+diff -rup svx-orig/source/msfilter/msdffimp.cxx svx/source/msfilter/msdffimp.cxx
+--- svx-orig/source/msfilter/msdffimp.cxx	2010-05-11 17:01:43.000000000 +0200
++++ svx/source/msfilter/msdffimp.cxx	2010-05-11 17:15:52.000000000 +0200
+@@ -4214,18 +4214,25 @@ FASTBOOL SvxMSDffManager::ReadObjText(Sv
+                             UINT16 nLen = (UINT16)aHd.nRecLen;
+                             if(nLen)
+                             {
++				UINT32 nMask;
+                                 UINT16 nVal1, nVal2, nVal3;
+                                 UINT16 nDefaultTab = 2540; // PPT def: 1 Inch //rOutliner.GetDefTab();
+                                 UINT16 nMostrightTab = 0;
+                                 SfxItemSet aSet(rOutliner.GetEmptyItemSet());
+                                 SvxTabStopItem aTabItem(0, 0, SVX_TAB_ADJUST_DEFAULT, EE_PARA_TABS);
+ 
+-                                rSt >> nVal1;
+-                                rSt >> nVal2;
++                                rSt >> nMask;
+                                 nLen -= 4;
+ 
++                                if(nLen && (nMask & 0x0002))
++				{
++				    // number of indent levels
++				    rSt >> nVal3;
++                                    nLen -= 2;
++				}
++
+                                 // Allg. TAB verstellt auf Wert in nVal3
+-                                if(nLen && (nVal1 & 0x0001))
++                                if(nLen && (nMask & 0x0001))
+                                 {
+                                     rSt >> nVal3;
+                                     nLen -= 2;
+@@ -4233,7 +4240,7 @@ FASTBOOL SvxMSDffManager::ReadObjText(Sv
+                                 }
+ 
+                                 // Weitere, frei gesetzte TABs
+-                                if(nLen && (nVal1 & 0x0004))
++                                if(nLen && (nMask & 0x0004))
+                                 {
+                                     rSt >> nVal1;
+                                     nLen -= 2;
+diff -rup svx-orig/source/svdraw/svdfppt.cxx svx/source/svdraw/svdfppt.cxx
+--- svx-orig/source/svdraw/svdfppt.cxx	2010-05-11 17:01:44.000000000 +0200
++++ svx/source/svdraw/svdfppt.cxx	2010-05-11 17:45:57.000000000 +0200
+@@ -4784,6 +4784,10 @@ PPTTextRulerInterpreter::PPTTextRulerInt
+             sal_Int16	nTCount;
+             sal_Int32	i;
+             rIn >> mpImplRuler->nFlags;
++
++	    // number of indent levels, unused now
++            if ( mpImplRuler->nFlags & 2 )
++                rIn >> nTCount;
+             if ( mpImplRuler->nFlags & 1 )
+                 rIn >> mpImplRuler->nDefaultTab;
+             if ( mpImplRuler->nFlags & 4 )
+@@ -4806,6 +4810,17 @@ PPTTextRulerInterpreter::PPTTextRulerInt
+                     rIn >> mpImplRuler->nTextOfs[ i ];
+                 if ( mpImplRuler->nFlags & ( 256 << i ) )
+                     rIn >> mpImplRuler->nBulletOfs[ i ];
++		if( mpImplRuler->nBulletOfs[ i ] > 0x7fff) {
++		    // workaround
++		    // when bullet offset is > 0x7fff, the paragraph should look like
++		    // *    first line text
++		    // second line text
++		    //
++		    // we add to bullet para indent 0xffff - bullet offset. it looks like
++		    // best we can do for now
++		    mpImplRuler->nTextOfs[ i ] += 0xffff - mpImplRuler->nBulletOfs[ i ];
++		    mpImplRuler->nBulletOfs[ i ] = 0;
++		}
+             }
+         }
+         rIn.Seek( nOldPos );
