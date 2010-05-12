@@ -60,6 +60,15 @@ my $line_matched = 0;
 while (<STDIN>) {
     my $line = $_;
 
+    # ignore the git headers
+    # especially "index " line" drives the patch tool mad when:
+    #   + it is included but the related --- and +++ lines are not used in the end
+    #   + it looks like "index 0000000..00204f9" which means a new file but
+    #     it is actually a mess from the last used hunk
+    next if $line =~ m/^diff --git/;
+    next if $line =~ m/^new file/;
+    next if $line =~ m/^index /;
+
     # same of unified context patch header:
     # --- file.old	2009-02-26 20:04:16.000000000 +0100 
     # +++ file		2009-02-26 20:04:41.000000000 +0100 
