@@ -1,5 +1,5 @@
 diff --git svx/source/tbxctrls/layctrl.cxx svx/source/tbxctrls/layctrl.cxx
-index 27b8bfd..956a768 100644
+index 27b8bfd..b4eb85d 100644
 --- svx/source/tbxctrls/layctrl.cxx
 +++ svx/source/tbxctrls/layctrl.cxx
 @@ -32,9 +32,7 @@
@@ -12,7 +12,7 @@ index 27b8bfd..956a768 100644
  #include <svtools/intitem.hxx>
  #include <sfx2/dispatch.hxx>
  #include <sfx2/app.hxx>
-@@ -56,27 +54,36 @@ SFX_IMPL_TOOLBOX_CONTROL(SvxColumnsToolBoxControl,SfxUInt16Item);
+@@ -56,51 +54,72 @@ SFX_IMPL_TOOLBOX_CONTROL(SvxColumnsToolBoxControl,SfxUInt16Item);
  
  // class TableWindow -----------------------------------------------------
  
@@ -23,7 +23,7 @@ index 27b8bfd..956a768 100644
 +const long TABLE_CELLS_VERT  = 15;
 +
 +const long TABLE_POS_X = 2;
-+const long TABLE_POS_Y = 18;
++const long TABLE_POS_Y = 2;
 +
 +const long TABLE_WIDTH  = TABLE_POS_X + TABLE_CELLS_HORIZ*TABLE_CELL_WIDTH;
 +const long TABLE_HEIGHT = TABLE_POS_Y + TABLE_CELLS_VERT*TABLE_CELL_HEIGHT;
@@ -31,8 +31,7 @@ index 27b8bfd..956a768 100644
  class TableWindow : public SfxPopupWindow
  {
  private:
-+    FixedText*          aTitleTxt;
-+    PushButton*         aTableButton;
++    PushButton          aTableButton;
      ::Color			    aLineColor;
 -    ::Color			    aHighlightLineColor;
      ::Color			    aFillColor;
@@ -56,14 +55,18 @@ index 27b8bfd..956a768 100644
  
  public:
                              TableWindow( USHORT                     nSlotId,
-@@ -87,20 +94,31 @@ public:
+                                          const rtl::OUString&       rCmd,
++                                         const String&              rText,
+                                          ToolBox&                   rParentTbx,
+                                          const Reference< XFrame >& rFrame );
+                             ~TableWindow();
  
      void                    KeyInput( const KeyEvent& rKEvt );
      virtual void            MouseMove( const MouseEvent& rMEvt );
 -    virtual void			MouseButtonDown( const MouseEvent& rMEvt );
      virtual void			MouseButtonUp( const MouseEvent& rMEvt );
      virtual void    		Paint( const Rectangle& );
--    virtual void    		PopupModeEnd();
+     virtual void    		PopupModeEnd();
      virtual SfxPopupWindow*	Clone() const;
  
 -    USHORT          		GetColCount() const { return (USHORT)nCol; }
@@ -71,12 +74,13 @@ index 27b8bfd..956a768 100644
 +private:
 +    void    				Update( long nNewCol, long nNewLine );
 +    void    				TableDialog( const Sequence< PropertyValue >& rArgs );
-+    void    				CloseAndCreateTable( bool bSucess );
 +    void    				CloseAndShowTableDialog();
  };
  
  // -----------------------------------------------------------------------
  
+-TableWindow::TableWindow( USHORT nSlotId, const rtl::OUString& rCmd, ToolBox& rParentTbx, const Reference< XFrame >& rFrame ) :
+-    SfxPopupWindow( nSlotId, rFrame, WB_SYSTEMWINDOW ),
 +IMPL_LINK( TableWindow, SelectHdl, void *, EMPTYARG )
 +{
 +    CloseAndShowTableDialog();
@@ -85,14 +89,15 @@ index 27b8bfd..956a768 100644
 +
 +// -----------------------------------------------------------------------
 +
- TableWindow::TableWindow( USHORT nSlotId, const rtl::OUString& rCmd, ToolBox& rParentTbx, const Reference< XFrame >& rFrame ) :
-     SfxPopupWindow( nSlotId, rFrame, WB_SYSTEMWINDOW ),
++TableWindow::TableWindow( USHORT nSlotId, const rtl::OUString& rCmd, const String& rText, ToolBox& rParentTbx, const Reference< XFrame >& rFrame ) :
++    SfxPopupWindow( nSlotId, rFrame, WinBits( WB_STDPOPUP ) ),
++    aTableButton( this ),
 +    nCol( 0 ),
 +    nLine( 0 ),
      bInitialKeyInput(TRUE),
      m_bMod1(FALSE),
      rTbx(rParentTbx),
-@@ -109,33 +127,45 @@ TableWindow::TableWindow( USHORT nSlotId, const rtl::OUString& rCmd, ToolBox& rP
+@@ -109,38 +128,41 @@ TableWindow::TableWindow( USHORT nSlotId, const rtl::OUString& rCmd, ToolBox& rP
  {
      const StyleSettings& rStyles = Application::GetSettings().GetStyleSettings();
      svtools::ColorConfig aColorConfig;
@@ -119,27 +124,17 @@ index 27b8bfd..956a768 100644
 -    nLine   = 0;
 -    nWidth  = 5;
 -    nHeight = 5;
--
++    SetText( rText );
+ 
 -    Size aLogicSize = LogicToPixel( Size( 55, 35 ), MapMode( MAP_10TH_MM ) );
 -    nMX = aLogicSize.Width();
 -    nMY = aLogicSize.Height();
 -    SetOutputSizePixel( Size( nMX*nWidth-1, nMY*nHeight-1+nTextHeight ) );
-+    aTitleTxt = new FixedText( this );
-+    aTitleTxt->SetPosPixel( Point( 2, 2 ) );
-+    aTitleTxt->SetSizePixel( Size( 106, 15 ) );
-+    aTitleTxt->SetText( String( SVX_RESSTR( RID_SVXSTR_TABLE ) ) );
-+    aFont = aTitleTxt->GetFont();
-+    aFont.SetWeight( WEIGHT_BOLD );
-+    aTitleTxt->SetFont( aFont );
-+    aTitleTxt->SetBackground( GetBackground() );
-+    aTitleTxt->Show();
-+
-+    aTableButton = new PushButton( this );
-+    aTableButton->SetPosPixel( Point( TABLE_POS_X + TABLE_CELL_WIDTH, TABLE_HEIGHT + 5 ) );
-+    aTableButton->SetSizePixel( Size( TABLE_WIDTH - TABLE_POS_X - 2*TABLE_CELL_WIDTH, 24 ) );
-+    aTableButton->SetText( String( SVX_RESSTR( RID_SVXSTR_MORE ) ) );
-+    aTableButton->SetClickHdl( LINK( this, TableWindow, SelectHdl ) );
-+    aTableButton->Show();
++    aTableButton.SetPosSizePixel( Point( TABLE_POS_X + TABLE_CELL_WIDTH, TABLE_HEIGHT + 5 ),
++            Size( TABLE_WIDTH - TABLE_POS_X - 2*TABLE_CELL_WIDTH, 24 ) );
++    aTableButton.SetText( String( SVX_RESSTR( RID_SVXSTR_MORE ) ) );
++    aTableButton.SetClickHdl( LINK( this, TableWindow, SelectHdl ) );
++    aTableButton.Show();
 +
 +    SetOutputSizePixel( Size( TABLE_WIDTH + 3, TABLE_HEIGHT + 33 ) );
  }
@@ -153,7 +148,13 @@ index 27b8bfd..956a768 100644
  // -----------------------------------------------------------------------
  
  SfxPopupWindow* TableWindow::Clone() const
-@@ -151,164 +181,64 @@ void TableWindow::MouseMove( const MouseEvent& rMEvt )
+ {
+-    return new TableWindow( GetId(), maCommand, rTbx, mxFrame );
++    return new TableWindow( GetId(), maCommand, GetText(), rTbx, mxFrame );
+ }
+ 
+ // -----------------------------------------------------------------------
+@@ -151,164 +173,64 @@ void TableWindow::MouseMove( const MouseEvent& rMEvt )
      Point aPos = rMEvt.GetPosPixel();
      Point aMousePos( aPos );
  
@@ -188,7 +189,7 @@ index 27b8bfd..956a768 100644
 +    Update( nNewCol, nNewLine );
  }
 -/* -----------------------------15.05.2002 17:14------------------------------
--
+ 
 - ---------------------------------------------------------------------------*/
 -void TableWindow::UpdateSize_Impl( long nNewCol, long nNewLine)
 -{
@@ -258,7 +259,7 @@ index 27b8bfd..956a768 100644
 -    {
 -        Invalidate( Rectangle( 0, aWinSize.Height()-nTextHeight+2,
 -                               aWinSize.Width(), aWinSize.Height() ) );
- 
+-
 -        if ( nNewCol != nCol )
 -        {
 -            Invalidate( Rectangle( nMinCol*nMX-1, 0, nMaxCol*nMX+1, nMaxLine*nMY ) );
@@ -311,7 +312,7 @@ index 27b8bfd..956a768 100644
 +                if ( nNewLine > 1 )
 +                    nNewLine--;
 +                else
-+                    CloseAndCreateTable( false );
++                    EndPopupMode( FLOATWIN_POPUPMODEEND_CANCEL );
                  break;
 -                case KEY_DOWN :
 +            case KEY_DOWN:
@@ -328,7 +329,7 @@ index 27b8bfd..956a768 100644
 +                if ( nNewCol > 1 )
 +                    nNewCol--;
 +                else
-+                    CloseAndCreateTable( false );
++                    EndPopupMode( FLOATWIN_POPUPMODEEND_CANCEL );
                  break;
 -                case KEY_RIGHT :
 +            case KEY_RIGHT:
@@ -342,11 +343,11 @@ index 27b8bfd..956a768 100644
 -                        ReleaseMouse();
 -                    EndPopupMode(FLOATWIN_POPUPMODEEND_CLOSEALL );
 +            case KEY_ESCAPE:
-+                CloseAndCreateTable( false );
++                EndPopupMode( FLOATWIN_POPUPMODEEND_CANCEL );
                  break;
 -            }
 +            case KEY_RETURN:
-+                CloseAndCreateTable( true );
++                EndPopupMode( FLOATWIN_POPUPMODEEND_CLOSEALL );
 +                break;
 +            case KEY_TAB:
 +                CloseAndShowTableDialog();
@@ -359,7 +360,7 @@ index 27b8bfd..956a768 100644
              //make sure that a table can initially be created
              if(bInitialKeyInput)
              {
-@@ -318,27 +248,17 @@ void TableWindow::KeyInput( const KeyEvent& rKEvt )
+@@ -318,27 +240,17 @@ void TableWindow::KeyInput( const KeyEvent& rKEvt )
                  if(!nNewCol)
                      nNewCol = 1;
              }
@@ -373,7 +374,7 @@ index 27b8bfd..956a768 100644
 -        if(IsMouseCaptured())
 -            ReleaseMouse();
 -        EndPopupMode(FLOATWIN_POPUPMODEEND_CLOSEALL );
-+        CloseAndCreateTable( true );
++        EndPopupMode( FLOATWIN_POPUPMODEEND_CLOSEALL );
      }
  
      if(!bHandled)
@@ -389,7 +390,7 @@ index 27b8bfd..956a768 100644
  }
  
  // -----------------------------------------------------------------------
-@@ -346,56 +266,45 @@ void TableWindow::MouseButtonDown( const MouseEvent& rMEvt )
+@@ -346,56 +258,45 @@ void TableWindow::MouseButtonDown( const MouseEvent& rMEvt )
  void TableWindow::MouseButtonUp( const MouseEvent& rMEvt )
  {
      SfxPopupWindow::MouseButtonUp( rMEvt );
@@ -397,7 +398,7 @@ index 27b8bfd..956a768 100644
 -
 -    if ( IsInPopupMode() )
 -        EndPopupMode( FLOATWIN_POPUPMODEEND_CLOSEALL );
-+    CloseAndCreateTable( true );
++    EndPopupMode( FLOATWIN_POPUPMODEEND_CLOSEALL );
  }
  
  // -----------------------------------------------------------------------
@@ -472,20 +473,33 @@ index 27b8bfd..956a768 100644
          aText += String::CreateFromInt32( nCol );
          aText.AppendAscii( " x " );
          aText += String::CreateFromInt32( nLine );
-@@ -405,61 +314,107 @@ void TableWindow::Paint( const Rectangle& )
+@@ -405,22 +306,30 @@ void TableWindow::Paint( const Rectangle& )
              aText += String(SVX_RESSTR(RID_SVXSTR_PAGES));
          }
  
+-    }
+-    else
+-        aText = Button::GetStandardText( BUTTON_CANCEL );
+-    Size aTextSize( GetTextWidth( aText ), GetTextHeight() );
 +        Size aSize = GetOutputSizePixel();
 +        Size aTextSize( GetTextWidth( aText ), GetTextHeight() );
-+
+ 
+-    Rectangle aClearRect( 0, aSize.Height()-nTextHeight+2, (aSize.Width()), aSize.Height() );
+-    DrawRect( aClearRect );
 +        long nTextX = nSelectionWidth + TABLE_CELL_WIDTH;
 +        long nTextY = nSelectionHeight + TABLE_CELL_HEIGHT;
 +        const long nTipBorder = 2;
-+
+ 
+-    // #i95350# force RTL output
+-    if( IsRTLEnabled() && 	nCol && nLine )
+-        aText.Insert(0x202D, 0);
+-    DrawText( Point( (aSize.Width() - aTextSize.Width()) / 2, aSize.Height() - nTextHeight + 2 ), aText );
 +        if ( aTextSize.Width() + TABLE_POS_X + TABLE_CELL_WIDTH + 2*nTipBorder < nSelectionWidth )
 +            nTextX = nSelectionWidth - TABLE_CELL_WIDTH - aTextSize.Width();
-+
+ 
+-    SetLineColor( aLineColor );
+-    SetFillColor();
+-    DrawRect( Rectangle( Point(0,0), aSize ) );
 +        if ( aTextSize.Height() + TABLE_POS_Y + TABLE_CELL_HEIGHT + 2*nTipBorder < nSelectionHeight )
 +            nTextY = nSelectionHeight - TABLE_CELL_HEIGHT - aTextSize.Height();
 +
@@ -499,68 +513,18 @@ index 27b8bfd..956a768 100644
 +            aText.Insert( 0x202D, 0 );
 +
 +        DrawText( Point( nTextX, nTextY ), aText );
-     }
--    else
--        aText = Button::GetStandardText( BUTTON_CANCEL );
--    Size aTextSize( GetTextWidth( aText ), GetTextHeight() );
-+}
- 
--    Rectangle aClearRect( 0, aSize.Height()-nTextHeight+2, (aSize.Width()), aSize.Height() );
--    DrawRect( aClearRect );
-+// -----------------------------------------------------------------------
-+
-+void TableWindow::Update( long nNewCol, long nNewLine )
-+{
-+    if ( nNewCol < 0 || nNewCol > TABLE_CELLS_HORIZ )
-+        nNewCol = 0;
- 
--    // #i95350# force RTL output
--    if( IsRTLEnabled() && 	nCol && nLine )
--        aText.Insert(0x202D, 0);
--    DrawText( Point( (aSize.Width() - aTextSize.Width()) / 2, aSize.Height() - nTextHeight + 2 ), aText );
-+    if ( nNewLine < 0 || nNewLine > TABLE_CELLS_VERT )
-+        nNewLine = 0;
- 
--    SetLineColor( aLineColor );
--    SetFillColor();
--    DrawRect( Rectangle( Point(0,0), aSize ) );
-+    if ( nNewCol != nCol || nNewLine != nLine )
-+    {
-+        nCol = nNewCol;
-+        nLine = nNewLine;
-+        Invalidate( Rectangle( TABLE_POS_X, TABLE_POS_Y, TABLE_WIDTH, TABLE_HEIGHT ) );
 +    }
  }
  
  // -----------------------------------------------------------------------
- 
--void TableWindow::PopupModeEnd()
-+void TableWindow::TableDialog( const Sequence< PropertyValue >& rArgs )
+@@ -429,37 +338,71 @@ void TableWindow::PopupModeEnd()
  {
--    if ( !IsPopupModeCanceled() && nCol && nLine )
-+    Window* pParent = rTbx.GetParent();
-+    USHORT nId = GetId();
-+    pParent->UserEvent(SVX_EVENT_COLUM_WINDOW_EXECUTE, reinterpret_cast<void*>(nId));
-+
-+    Reference< XDispatchProvider > xDispatchProvider( mxFrame, UNO_QUERY );
-+    if ( xDispatchProvider.is() )
+     if ( !IsPopupModeCanceled() && nCol && nLine )
      {
 -        Window* pParent = rTbx.GetParent();
 -        USHORT nId = GetId();
 -        pParent->UserEvent(SVX_EVENT_COLUM_WINDOW_EXECUTE, reinterpret_cast<void*>(nId));
-+        com::sun::star::util::URL aTargetURL;
-+        Reference < XURLTransformer > xTrans( ::comphelper::getProcessServiceFactory()->createInstance(
-+                    rtl::OUString::createFromAscii("com.sun.star.util.URLTransformer" )),
-+                UNO_QUERY );
-+        aTargetURL.Complete = maCommand;
-+        xTrans->parseStrict( aTargetURL );
-+
-+        Reference< XDispatch > xDispatch = xDispatchProvider->queryDispatch( aTargetURL, rtl::OUString(), 0 );
-+        if ( xDispatch.is() )
-+            xDispatch->dispatch( aTargetURL, rArgs );
-+    }
-+}
- 
+-
 -        Reference< XDispatchProvider > xDispatchProvider( mxFrame, UNO_QUERY );
 -        if ( xDispatchProvider.is() )
 -        {
@@ -578,40 +542,71 @@ index 27b8bfd..956a768 100644
 -                aArgs[0].Value = makeAny( sal_Int16( nCol ));
 -                aArgs[1].Name = ::rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( "Rows" ));
 -                aArgs[1].Value = makeAny( sal_Int16( nLine ));
-+// -----------------------------------------------------------------------
- 
--                xDispatch->dispatch( aTargetURL, aArgs );
--            }
--        }
-+void TableWindow::CloseAndCreateTable( bool bCreate )
-+{
-+    if ( !GetDockingManager()->IsInPopupMode( this ) )
-+        return;
-+
-+    if ( bCreate && nCol && nLine )
-+    {
 +        Sequence< PropertyValue > aArgs( 2 );
 +        aArgs[0].Name = ::rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( "Columns" ));
 +        aArgs[0].Value = makeAny( sal_Int16( nCol ));
 +        aArgs[1].Name = ::rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( "Rows" ));
 +        aArgs[1].Value = makeAny( sal_Int16( nLine ));
-+
+ 
+-                xDispatch->dispatch( aTargetURL, aArgs );
+-            }
+-        }
 +        TableDialog( aArgs );
      }
 -    else if ( IsPopupModeCanceled() )
 -        ReleaseMouse();
--    SfxPopupWindow::PopupModeEnd();
-+    
-+    GetDockingManager()->EndPopupMode( this );
-+    doLazyDelete();
++
+     SfxPopupWindow::PopupModeEnd();
  }
  
++// -----------------------------------------------------------------------
++
++void TableWindow::Update( long nNewCol, long nNewLine )
++{
++    if ( nNewCol < 0 || nNewCol > TABLE_CELLS_HORIZ )
++        nNewCol = 0;
++
++    if ( nNewLine < 0 || nNewLine > TABLE_CELLS_VERT )
++        nNewLine = 0;
++
++    if ( nNewCol != nCol || nNewLine != nLine )
++    {
++        nCol = nNewCol;
++        nLine = nNewLine;
++        Invalidate( Rectangle( TABLE_POS_X, TABLE_POS_Y, TABLE_WIDTH, TABLE_HEIGHT ) );
++    }
++}
++
++// -----------------------------------------------------------------------
++
++void TableWindow::TableDialog( const Sequence< PropertyValue >& rArgs )
++{
++    Window* pParent = rTbx.GetParent();
++    USHORT nId = GetId();
++    pParent->UserEvent(SVX_EVENT_COLUM_WINDOW_EXECUTE, reinterpret_cast<void*>(nId));
++
++    Reference< XDispatchProvider > xDispatchProvider( mxFrame, UNO_QUERY );
++    if ( xDispatchProvider.is() )
++    {
++        com::sun::star::util::URL aTargetURL;
++        Reference < XURLTransformer > xTrans( ::comphelper::getProcessServiceFactory()->createInstance(
++                    rtl::OUString::createFromAscii("com.sun.star.util.URLTransformer" )),
++                UNO_QUERY );
++        aTargetURL.Complete = maCommand;
++        xTrans->parseStrict( aTargetURL );
++
++        Reference< XDispatch > xDispatch = xDispatchProvider->queryDispatch( aTargetURL, rtl::OUString(), 0 );
++        if ( xDispatch.is() )
++            xDispatch->dispatch( aTargetURL, rArgs );
++    }
++}
++
 +// -----------------------------------------------------------------------
 +
 +void TableWindow::CloseAndShowTableDialog()
 +{
 +    // close the toolbar tool
-+    CloseAndCreateTable( false );
++    EndPopupMode( FLOATWIN_POPUPMODEEND_CANCEL );
 +
 +    // and open the table dialog instead
 +    TableDialog( Sequence< PropertyValue >() );
@@ -620,7 +615,73 @@ index 27b8bfd..956a768 100644
  // class ColumnsWindow ---------------------------------------------------
  
  class ColumnsWindow : public SfxPopupWindow
-@@ -735,7 +690,8 @@ void ColumnsWindow::Paint( const Rectangle& )
+@@ -469,6 +412,7 @@ private:
+     ::Color			    aHighlightLineColor;
+     ::Color			    aFillColor;
+     ::Color			    aHighlightFillColor;
++    ::Color			    aFaceColor;
+     long                nCol;
+     long                nWidth;
+     long                nMX;
+@@ -481,7 +425,7 @@ private:
+ 
+     void UpdateSize_Impl( long nNewCol );
+ public:
+-                            ColumnsWindow( USHORT nId, const ::rtl::OUString& rCmd, ToolBox& rParentTbx, const Reference< XFrame >& rFrame );
++                            ColumnsWindow( USHORT nId, const ::rtl::OUString& rCmd, const String& rText, ToolBox& rParentTbx, const Reference< XFrame >& rFrame );
+ 
+     void                    KeyInput( const KeyEvent& rKEvt );
+     virtual void            MouseMove( const MouseEvent& rMEvt );
+@@ -496,8 +440,8 @@ public:
+ 
+ // -----------------------------------------------------------------------
+ 
+-ColumnsWindow::ColumnsWindow( USHORT nId, const ::rtl::OUString& rCmd, ToolBox& rParentTbx, const Reference< XFrame >& rFrame ) :
+-    SfxPopupWindow( nId, rFrame, WB_SYSTEMWINDOW ),
++ColumnsWindow::ColumnsWindow( USHORT nId, const ::rtl::OUString& rCmd, const String& rText, ToolBox& rParentTbx, const Reference< XFrame >& rFrame ) :
++    SfxPopupWindow( nId, rFrame, WB_STDPOPUP ),
+     bInitialKeyInput(TRUE),
+     m_bMod1(FALSE),
+     rTbx(rParentTbx),
+@@ -510,18 +454,21 @@ ColumnsWindow::ColumnsWindow( USHORT nId, const ::rtl::OUString& rCmd, ToolBox&
+     aHighlightLineColor = rStyles.GetHighlightTextColor();
+     aFillColor = rStyles.GetWindowColor();
+     aHighlightFillColor = rStyles.GetHighlightColor();
++    aFaceColor = rStyles.GetFaceColor();
+ 
+     nTextHeight = GetTextHeight()+1;
+     SetBackground();
+     Font aFont( GetFont() );
+     aFont.SetColor( aLineColor );
+-    aFont.SetFillColor( aFillColor );
++    aFont.SetFillColor( aFaceColor );
+     aFont.SetTransparent( FALSE );
+     SetFont( aFont );
+ 
+     nCol        = 0;
+     nWidth      = 4;
+ 
++    SetText( rText );
++
+     Size aLogicSize = LogicToPixel( Size( 95, 155 ), MapMode( MAP_10TH_MM ) );
+     nMX = aLogicSize.Width();
+     SetOutputSizePixel( Size( nMX*nWidth-1, aLogicSize.Height()+nTextHeight ) );
+@@ -532,7 +479,7 @@ ColumnsWindow::ColumnsWindow( USHORT nId, const ::rtl::OUString& rCmd, ToolBox&
+ 
+ SfxPopupWindow* ColumnsWindow::Clone() const
+ {
+-    return new ColumnsWindow( GetId(), maCommand, rTbx, mxFrame );
++    return new ColumnsWindow( GetId(), maCommand, GetText(), rTbx, mxFrame );
+ }
+ 
+ // -----------------------------------------------------------------------
+@@ -730,12 +677,13 @@ void ColumnsWindow::Paint( const Rectangle& )
+     }
+ 
+     SetLineColor();
+-    SetFillColor( aFillColor );
++    SetFillColor( aFaceColor );
+     String aText;
      if ( nCol )
          aText = String( String::CreateFromInt32(nCol) );
      else
@@ -630,14 +691,48 @@ index 27b8bfd..956a768 100644
      Size aTextSize(GetTextWidth( aText ), GetTextHeight());
      DrawText( Point( ( aSize.Width() - aTextSize.Width() ) / 2, aSize.Height() - nTextHeight + 2 ), aText );
  
-@@ -803,8 +759,8 @@ SfxPopupWindow* SvxTableToolBoxControl::CreatePopupWindow()
+@@ -744,7 +692,7 @@ void ColumnsWindow::Paint( const Rectangle& )
+ 
+     SetLineColor( aLineColor );
+     SetFillColor();
+-    DrawRect( Rectangle( Point(0,0), aSize ) );
++    DrawRect( Rectangle( 0, 0, aSize.Width() - 1, aSize.Height() - nTextHeight + 1 ) );
+ }
+ 
+ // -----------------------------------------------------------------------
+@@ -802,7 +750,7 @@ SfxPopupWindow* SvxTableToolBoxControl::CreatePopupWindow()
+     if ( bEnabled )
      {
          ToolBox& rTbx = GetToolBox();
-         TableWindow* pWin = new TableWindow( GetSlotId(), m_aCommandURL, rTbx, m_xFrame );
--        pWin->StartPopupMode( &rTbx, FLOATWIN_POPUPMODE_GRABFOCUS|FLOATWIN_POPUPMODE_NOKEYCLOSE );
--        SetPopupWindow( pWin );
-+        pWin->EnableDocking(true);
-+        pWin->GetDockingManager()->StartPopupMode(&GetToolBox(),pWin);
+-        TableWindow* pWin = new TableWindow( GetSlotId(), m_aCommandURL, rTbx, m_xFrame );
++        TableWindow* pWin = new TableWindow( GetSlotId(), m_aCommandURL, GetToolBox().GetItemText( GetId() ), rTbx, m_xFrame );
+         pWin->StartPopupMode( &rTbx, FLOATWIN_POPUPMODE_GRABFOCUS|FLOATWIN_POPUPMODE_NOKEYCLOSE );
+         SetPopupWindow( pWin );
          return pWin;
-     }
+@@ -815,7 +763,7 @@ SfxPopupWindow* SvxTableToolBoxControl::CreatePopupWindow()
+ SfxPopupWindow* SvxTableToolBoxControl::CreatePopupWindowCascading()
+ {
+     if ( bEnabled )
+-        return new TableWindow( GetSlotId(), m_aCommandURL, GetToolBox(), m_xFrame );
++        return new TableWindow( GetSlotId(), m_aCommandURL, GetToolBox().GetItemText( GetId() ), GetToolBox(), m_xFrame );
      return 0;
+ }
+ 
+@@ -868,7 +816,7 @@ SfxPopupWindow* SvxColumnsToolBoxControl::CreatePopupWindow()
+     ColumnsWindow* pWin = 0;
+     if(bEnabled)
+     {
+-            pWin = new ColumnsWindow( GetSlotId(), m_aCommandURL, GetToolBox(), m_xFrame );
++            pWin = new ColumnsWindow( GetSlotId(), m_aCommandURL, GetToolBox().GetItemText( GetId() ), GetToolBox(), m_xFrame );
+             pWin->StartPopupMode( &GetToolBox(),
+                                   FLOATWIN_POPUPMODE_GRABFOCUS|FLOATWIN_POPUPMODE_NOKEYCLOSE );
+             SetPopupWindow( pWin );
+@@ -883,7 +831,7 @@ SfxPopupWindow* SvxColumnsToolBoxControl::CreatePopupWindowCascading()
+     ColumnsWindow* pWin = 0;
+     if(bEnabled)
+     {
+-        pWin = new ColumnsWindow( GetSlotId(), m_aCommandURL, GetToolBox(), m_xFrame );
++        pWin = new ColumnsWindow( GetSlotId(), m_aCommandURL, GetToolBox().GetItemText( GetId() ), GetToolBox(), m_xFrame );
+     }
+     return pWin;
+ }
