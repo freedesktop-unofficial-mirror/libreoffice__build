@@ -4,61 +4,91 @@ usage()
 {
     echo "This script regerenates the system OOo UNO package cache"
     echo
-    echo "Usage: ${0##*/} [--help] ooo_home broken_extension..."
+    echo "Usage: ${0##*/} [--help] [--force] ooo_home [broken_extension...]"
     echo
     echo "Options:"
     echo
     echo "	--help 		 this help"
+    echo "	--force		 regenerate the cache without checking against the list of broken extensions"
     echo "	ooo_home	 path where OOo is installed, e.g. /usr/lib/ooo3"
     echo "	broken_extension list of broken extensions, e.g. LanguageTool-0.9.3.oxt"
 }
 
-if test "$1" = "--help" -o $# -lt 1 ; then
-    usage
-    exit 0;
+force=
+ooo_home=
+ooo_broken_extensions=
+while test -n "$1" ; do
+    case "$1" in
+	--help)
+	    usage
+	    exit 0;
+	    ;;
+	--force)
+	    force=1
+	    ;;
+	-*)
+	    echo "Error: unknown option: $1"
+	    exit 1;
+	    ;;
+	*)
+	    if test -z "$ooo_home" ; then
+		ooo_home="$1"
+		if ! test -d "$ooo_home" ; then
+		    echo "Error: the OOo home direcotry does not exists: $ooo_home"
+		    exit 1;
+		fi
+	    else
+		ooo_broken_extensions="$ooo_broken_extensions $1"
+	    fi
+	    ;;
+    esac
+    shift
+done
+
+if test -z "$ooo_home" ; then
+    echo "Error: Please define the ooo_home, try --help"
+    exit 1;
 fi
 
-OOO_HOME="$1"
-shift;
-OOO_BROKEN_EXTENSIONS="$*"
-
-OOO_UNO_CACHE="$OOO_HOME/share/uno_packages/cache"
+ooo_uno_cache="$ooo_home/share/uno_packages/cache"
 
 # nothing to do if the cache does not exist (fresh installation or so)
-test -d "$OOO_UNO_CACHE" || exit 0;
+test -d "$ooo_uno_cache" || exit 0;
 
 # check for broken extensions
 found=
-for extension in $OOO_UNO_CACHE/uno_packages/*/* ; do
-    extension_name=`basename $extension`
-    if echo "$OOO_BROKEN_EXTENSIONS" | grep -q "$extension_name" ; then
-	echo "Need to regenerate the uno cache because of the broken extension $extension_name."
-	found=1
-	break
-    fi
-done
+if test -z "$force" ; then
+    for extension in $ooo_uno_cache/uno_packages/*/* ; do
+	extension_name=`basename $extension`
+	if echo "$ooo_broken_extensions" | grep -q "$extension_name" ; then
+	    echo "Need to regenerate the uno cache because of the broken extension $extension_name."
+	    found=1
+	    break
+	fi
+    done
+fi
 
-if test -n "$found" ; then
+if test -n "$force" -o -n "$found" ; then
     # saving sources of the registered extensions
-    temp_cache=`mktemp -d $OOO_UNO_CACHE.XXXXXX`
-    for extension in $OOO_UNO_CACHE/uno_packages/*/* ; do
+    temp_cache=`mktemp -d $ooo_uno_cache.XXXXXX`
+    for extension in $ooo_uno_cache/uno_packages/*/* ; do
 	extension_name=`basename $extension`
 	echo "Saving $extension_name..."
 	if test -f $extension ; then
-	    cp $extension $temp_cache
+	    cp $extension $temp_cache || exit 1;
 	elif test -d $extension && cd $extension ; then
-	    zip -q -r $temp_cache/$extension_name *
+	    zip -q -r $temp_cache/$extension_name * || exit 1;
 	    cd - >/dev/null 2>&1
 	fi
     done
 
     echo "Removing the cache"
-    rm -rf $OOO_UNO_CACHE/*
+    rm -rf $ooo_uno_cache/*
 
     # registering the good extensions once again
     for extension in $temp_cache/* ; do
 	extension_name=`basename $extension`
-	if echo "$OOO_BROKEN_EXTENSIONS" | grep -q "$extension_name" ; then
+	if echo "$ooo_broken_extensions" | grep -q "$extension_name" ; then
 	    echo "Skipping unusable $extension_name..."
 	    continue;
 	fi
