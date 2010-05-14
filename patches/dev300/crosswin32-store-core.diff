@@ -5,7 +5,7 @@
  	storeAccessMode  eAccessMode,
  	sal_uInt16       nPageSize,
 -	storeFileHandle *phFile
-+	storeFileHandle *phFile,
++    storeFileHandle *phFile,
 +    sal_uInt16       nFormatVersion = STORE_FORMAT_V1
  ) SAL_THROW_EXTERN_C();
  
@@ -17,7 +17,7 @@
  		const rtl::OUString &rFilename,
  		storeAccessMode      eAccessMode,
 -		sal_uInt16           nPageSize = STORE_DEFAULT_PAGESIZE
-+		sal_uInt16           nPageSize = STORE_DEFAULT_PAGESIZE,
++        sal_uInt16           nPageSize = STORE_DEFAULT_PAGESIZE,
 +        sal_uInt16           nFormatVersion = STORE_FORMAT_V1
  	) SAL_THROW(());
  
@@ -29,8 +29,8 @@
  	const rtl::OUString &rFilename,
  	storeAccessMode      eAccessMode,
 -	sal_uInt16           nPageSize) SAL_THROW(())
-+	sal_uInt16           nPageSize,
-+	sal_uInt16           nFormatVersion) SAL_THROW(())
++    sal_uInt16           nPageSize,
++    sal_uInt16           nFormatVersion) SAL_THROW(())
  {
  	if (m_hImpl)
  	{
@@ -38,7 +38,7 @@
  		m_hImpl = 0;
  	}
 -	return store_openFile (rFilename.pData, eAccessMode, nPageSize, &m_hImpl);
-+	return store_openFile (rFilename.pData, eAccessMode, nPageSize, &m_hImpl, nFormatVersion);
++    return store_openFile (rFilename.pData, eAccessMode, nPageSize, &m_hImpl, nFormatVersion);
  }
  
  inline storeError OStoreFile::createInMemory (
@@ -81,11 +81,11 @@
  	osl::MutexGuard aGuard (m_aMutex);
  	if (m_pImpl->isValid())
 -		return m_pImpl->writeAt (nOffset, pBuffer, nBytes, rnDone);
-+	{
-+		storeError nErr;
-+		nErr = m_pImpl->writeAt (nOffset, pBuffer, nBytes, rnDone);
-+		return nErr;
-+	}
++    {
++        storeError nErr;
++        nErr = m_pImpl->writeAt (nOffset, pBuffer, nBytes, rnDone);
++        return nErr;
++    }
  	else
  		return store_E_InvalidHandle;
  }
@@ -128,7 +128,7 @@
  	 */
  	OStoreSuperBlock (void)
 -		: m_aGuard  (STORE_MAGIC_SUPERBLOCK),
-+		: m_aGuard  (STORE_MAGIC_SUPERBLOCK_V2),
++        : m_aGuard  (STORE_MAGIC_SUPERBLOCK_V2),
  		  m_nMarked (0),
  		  m_aMarked (0),
  		  m_nUnused (0),
@@ -137,13 +137,13 @@
  				(m_aMarked == rOther.m_aMarked) &&
  				(m_nUnused == rOther.m_nUnused) &&
 -				(m_aUnused == rOther.m_aUnused)    );
-+				(m_aUnused == rOther.m_aUnused)   );
++                (m_aUnused == rOther.m_aUnused)   );
  	}
  
  	/** create.
  	 */
 -	void create (const D& rDescr)
-+	void create (const D& rDescr, sal_uInt16 nFormatVersion)
++    void create (const D& rDescr, sal_uInt16 nFormatVersion)
  	{
 -		m_aGuard  = G(STORE_MAGIC_SUPERBLOCK);
 +        switch (nFormatVersion) {
@@ -162,14 +162,14 @@
  	/** verify (external representation).
  	 */
 -	storeError verify (void)
-+	storeError verify (sal_uInt32 nVersion)
++    storeError verify (sal_uInt32 nVersion)
  	{
  		sal_uInt32 nMagic = m_aGuard.m_nMagic;
  #ifdef OSL_BIGENDIAN
  		nMagic = OSL_SWAPDWORD(nMagic);
  #endif /* OSL_BIGENDIAN */
 -		if (nMagic != STORE_MAGIC_SUPERBLOCK)
-+		if ((nVersion == STORE_FORMAT_V1 && nMagic != STORE_MAGIC_SUPERBLOCK_V1) ||
++        if ((nVersion == STORE_FORMAT_V1 && nMagic != STORE_MAGIC_SUPERBLOCK_V1) ||
 +            (nVersion == STORE_FORMAT_V2 && nMagic != STORE_MAGIC_SUPERBLOCK_V2))
  			return store_E_WrongFormat;
  
@@ -217,7 +217,7 @@
  	/** Construction.
  	 */
 -	OStoreSuperBlockPage (void)
-+	OStoreSuperBlockPage (sal_uInt16 nFormatVersion) : m_nVersion (nFormatVersion)
++    OStoreSuperBlockPage (sal_uInt16 nFormatVersion) : m_nVersion (nFormatVersion)
  	{}
  
  	/** swap (internal and external representation).
@@ -235,7 +235,7 @@
  		{
  			// Setup 1st and 2nd SuperBlock copy.
 -			m_aSuperOne.create (rDescr);
-+			m_aSuperOne.create (rDescr, m_nVersion);
++            m_aSuperOne.create (rDescr, m_nVersion);
  			m_aSuperTwo = m_aSuperOne;
  
  			// Mark as modified.
@@ -244,12 +244,12 @@
  
  	// Verify 1st copy.
 -	storeError eErrCode = m_aSuperOne.verify();
-+	storeError eErrCode = m_aSuperOne.verify (m_nVersion);
++    storeError eErrCode = m_aSuperOne.verify (m_nVersion);
  	if (eErrCode == store_E_None)
  	{
  		// Ok. Verify 2nd copy.
 -		eErrCode = m_aSuperTwo.verify();
-+		eErrCode = m_aSuperTwo.verify (m_nVersion);
++        eErrCode = m_aSuperTwo.verify (m_nVersion);
  		if (eErrCode == store_E_None)
  		{
  			// Ok. Ensure identical copies (1st copy wins).
@@ -258,7 +258,7 @@
  	{
  		// Failure. Verify 2nd copy.
 -		eErrCode = m_aSuperTwo.verify();
-+		eErrCode = m_aSuperTwo.verify (m_nVersion);
++        eErrCode = m_aSuperTwo.verify (m_nVersion);
  		if (eErrCode == store_E_None)
  		{
  			// Ok. Replace 1st copy with 2nd copy.
@@ -267,7 +267,7 @@
  	{
  		// Allocate.
 -		if ((rpSuper = new SuperPage()) == 0)
-+		if ((rpSuper = new SuperPage(version ())) == 0)
++        if ((rpSuper = new SuperPage(version ())) == 0)
  			return store_E_OutOfMemory;
  
  		// Load (w/o verification).
@@ -301,7 +301,7 @@
  
  	// Check SuperBlock page allocation.
 -	if ((m_pSuper == 0) && ((m_pSuper = new SuperPage()) == 0))
-+	if ((m_pSuper == 0) && ((m_pSuper = new SuperPage(nFormatVersion)) == 0))
++    if ((m_pSuper == 0) && ((m_pSuper = new SuperPage(nFormatVersion)) == 0))
  	{
  		// Cleanup and fail.
  		releaseLock (0, SuperPage::size());
@@ -315,7 +315,7 @@
 +#else
 +            sal_uInt8 *aPageHeadData = (sal_uInt8 *) alloca (OStorePageData::size());
 +#endif
-+			OStorePageData aPageHead (OStorePageData::size(), sizeof (OStorePageData), aPageHeadData);
++            OStorePageData aPageHead (OStorePageData::size(), sizeof (OStorePageData), aPageHeadData);
  			aPageHead.location (aListHead.m_nAddr);
  
  			// Load PageHead.
@@ -324,10 +324,10 @@
  			// Verify FreeList head.
  			OSL_PRECOND(
 -				aPageHead.m_aUnused.m_nAddr != STORE_PAGE_NULL,
-+				aPageHead.PageHeader ().m_aUnused.m_nAddr != STORE_PAGE_NULL,
++                aPageHead.PageHeader ().m_aUnused.m_nAddr != STORE_PAGE_NULL,
  				"OStorePageBIOS::allocate(): page not free");
 -			if (aPageHead.m_aUnused.m_nAddr == STORE_PAGE_NULL)
-+			if (aPageHead.PageHeader ().m_aUnused.m_nAddr == STORE_PAGE_NULL)
++            if (aPageHead.PageHeader ().m_aUnused.m_nAddr == STORE_PAGE_NULL)
  			{
  				// Recovery: Reset FreeList.
  				m_pSuper->m_aSuperTwo.unusedReset();
@@ -336,13 +336,13 @@
  			// Assign location.
  			OStorePageData &rData = rPage.getData();
 -			rData.location (aPageHead.m_aDescr.m_nAddr);
-+			rData.location (aPageHead.PageHeader ().m_aDescr.m_nAddr);
++            rData.location (aPageHead.PageHeader ().m_aDescr.m_nAddr);
  
  			// Pop from FreeList.
 -			aListHead.m_nAddr = aPageHead.m_aUnused.m_nAddr;
 -			rData.m_aUnused.m_nAddr = STORE_PAGE_NULL;
-+			aListHead.m_nAddr = aPageHead.PageHeader ().m_aUnused.m_nAddr;
-+			rData.PageHeader ().m_aUnused.m_nAddr = STORE_PAGE_NULL;
++            aListHead.m_nAddr = aPageHead.PageHeader ().m_aUnused.m_nAddr;
++            rData.PageHeader ().m_aUnused.m_nAddr = STORE_PAGE_NULL;
  
  			// Save page.
  			eErrCode = poke (rPage);
@@ -352,8 +352,8 @@
  
 -	rData.m_aUnused.m_nAddr = aListHead.m_nAddr;
 -	aListHead.m_nAddr = rData.m_aDescr.m_nAddr;
-+	rData.PageHeader ().m_aUnused.m_nAddr = aListHead.m_nAddr;
-+	aListHead.m_nAddr = rData.PageHeader ().m_aDescr.m_nAddr;
++    rData.PageHeader ().m_aUnused.m_nAddr = aListHead.m_nAddr;
++    aListHead.m_nAddr = rData.PageHeader ().m_aDescr.m_nAddr;
  
  	// Save PageHead.
  	eErrCode = poke (rData);
@@ -362,16 +362,16 @@
  	// Save PageDescriptor.
  	OStorePageData       &rData = rPage.getData();
 -	OStorePageDescriptor  aDescr (rData.m_aDescr);
-+	OStorePageDescriptor  aDescr (rData.PageHeader ().m_aDescr);
++    OStorePageDescriptor  aDescr (rData.PageHeader ().m_aDescr);
  
  	// Read page.
 -	storeError eErrCode = read (aDescr.m_nAddr, &rData, aDescr.m_nSize);
-+	storeError eErrCode = read (aDescr.m_nAddr, rData.Data (), aDescr.m_nSize);
++    storeError eErrCode = read (aDescr.m_nAddr, rData.Data (), aDescr.m_nSize);
  	if (eErrCode != store_E_None)
  	{
  		// Restore PageDescriptor.
 -		rData.m_aDescr = aDescr;
-+		rData.PageHeader ().m_aDescr = aDescr;
++        rData.PageHeader ().m_aDescr = aDescr;
  		return eErrCode;
  	}
  
@@ -380,7 +380,7 @@
  	{
  		// Restore PageDescriptor.
 -		rData.m_aDescr = aDescr;
-+		rData.PageHeader ().m_aDescr = aDescr;
++        rData.PageHeader ().m_aDescr = aDescr;
  		return eErrCode;
  	}
  
@@ -390,8 +390,8 @@
  	// Verify PageDescriptor.
 -	if (!((aDescr == rData.m_aDescr) ||
 -		  (aDescr <= rData.m_aDescr)    ))
-+	if (!((aDescr == rData.PageHeader ().m_aDescr) ||
-+		  (aDescr <= rData.PageHeader ().m_aDescr)    ))
++    if (!((aDescr == rData.PageHeader ().m_aDescr) ||
++          (aDescr <= rData.PageHeader ().m_aDescr)    ))
  		return store_E_InvalidAccess;
  
  	// Mark page as clean.
@@ -414,12 +414,12 @@
  
  		// Check PageHead Magic number.
 -		if (aPageHead.m_aGuard.m_nMagic != rCtx.m_nMagic)
-+		if (aPageHead.PageHeader ().m_aGuard.m_nMagic != rCtx.m_nMagic)
++        if (aPageHead.PageHeader ().m_aGuard.m_nMagic != rCtx.m_nMagic)
  			continue;
  
  		// Check PageHead Unused link.
 -		if (aPageHead.m_aUnused.m_nAddr != STORE_PAGE_NULL)
-+		if (aPageHead.PageHeader ().m_aUnused.m_nAddr != STORE_PAGE_NULL)
++        if (aPageHead.PageHeader ().m_aUnused.m_nAddr != STORE_PAGE_NULL)
  			continue;
  
  		// Load page.
@@ -428,16 +428,16 @@
  {
  	// Save PageDescriptor.
 -	OStorePageDescriptor aDescr (rData.m_aDescr);
-+	OStorePageDescriptor aDescr (rData.PageHeader ().m_aDescr);
++    OStorePageDescriptor aDescr (rData.PageHeader ().m_aDescr);
  
  	// Read PageHead.
 -	storeError eErrCode = read (aDescr.m_nAddr, &rData, rData.size());
-+	storeError eErrCode = read (aDescr.m_nAddr, rData.Data (), rData.size());
++    storeError eErrCode = read (aDescr.m_nAddr, rData.Data (), rData.size());
  	if (eErrCode != store_E_None)
  	{
  		// Restore PageDescriptor.
 -		rData.m_aDescr = aDescr;
-+		rData.PageHeader ().m_aDescr = aDescr;
++        rData.PageHeader ().m_aDescr = aDescr;
  		return eErrCode;
  	}
  
@@ -446,7 +446,7 @@
  	{
  		// Restore PageDescriptor.
 -		rData.m_aDescr = aDescr;
-+		rData.PageHeader ().m_aDescr = aDescr;
++        rData.PageHeader ().m_aDescr = aDescr;
  		return eErrCode;
  	}
  
@@ -456,8 +456,8 @@
  	// Verify PageDescriptor.
 -	if (!((aDescr == rData.m_aDescr) ||
 -		  (aDescr <= rData.m_aDescr)    ))
-+	if (!((aDescr == rData.PageHeader ().m_aDescr) ||
-+		  (aDescr <= rData.PageHeader ().m_aDescr)    ))
++    if (!((aDescr == rData.PageHeader ().m_aDescr) ||
++          (aDescr <= rData.PageHeader ().m_aDescr)    ))
  		return store_E_InvalidAccess;
  	else
  		return store_E_None;
@@ -466,7 +466,7 @@
  {
  	// Save PageDescriptor.
 -	OStorePageDescriptor aDescr (rData.m_aDescr);
-+	OStorePageDescriptor aDescr (rData.PageHeader ().m_aDescr);
++    OStorePageDescriptor aDescr (rData.PageHeader ().m_aDescr);
  
  #ifdef OSL_BIGENDIAN
  	// Swap to external representation.
@@ -475,7 +475,7 @@
  
  	// Write PageHead.
 -	storeError eErrCode = write (aDescr.m_nAddr, &rData, rData.size());
-+	storeError eErrCode = write (aDescr.m_nAddr, rData.Data (), rData.size());
++    storeError eErrCode = write (aDescr.m_nAddr, rData.Data (), rData.size());
  
  #ifdef OSL_BIGENDIAN
  	// Swap back to internal representation.
@@ -484,7 +484,7 @@
  	// Save PageDescriptor.
  	OStorePageData       &rData = rPage.getData();
 -	OStorePageDescriptor  aDescr (rData.m_aDescr);
-+	OStorePageDescriptor  aDescr (rData.PageHeader ().m_aDescr);
++    OStorePageDescriptor  aDescr (rData.PageHeader ().m_aDescr);
  
  #ifdef OSL_BIGENDIAN
  	// Swap to external representation.
@@ -493,7 +493,7 @@
  
  	// Write page.
 -	storeError eErrCode = write (aDescr.m_nAddr, &rData, aDescr.m_nSize);
-+	storeError eErrCode = write (aDescr.m_nAddr, rData.Data (), aDescr.m_nSize);
++    storeError eErrCode = write (aDescr.m_nAddr, rData.Data (), aDescr.m_nSize);
  
  #ifdef OSL_BIGENDIAN
  	// Swap back to internal representation.
@@ -512,8 +512,8 @@
 +static void
 +copyAndTerminate( sal_Char *pDest, const sal_Char *pSrc, sal_Int32 nBytes)
 +{
-+	rtl_copyMemory (pDest, pSrc, nBytes);
-+	pDest[nBytes] = '\0';
++    rtl_copyMemory (pDest, pSrc, nBytes);
++    pDest[nBytes] = '\0';
 +}
 +
 +#define STORE_MAGIC_LONGNAME sal_uInt32 (0x12345678)
@@ -526,21 +526,21 @@
 +        sal_Char m_nData[1];
 +    };
 +  public:
-+	OStorePageLongNameData(sal_uInt16 nPageSize, sal_uInt8 *pData) :
-+		OStorePageData (nPageSize, sizeof (OStorePageLongNameData), pData)
++    OStorePageLongNameData(sal_uInt16 nPageSize, sal_uInt8 *pData) :
++        OStorePageData (nPageSize, sizeof (OStorePageLongNameData), pData)
 +    {
 +        base::PageHeader ().m_aGuard.m_nMagic = STORE_MAGIC_LONGNAME;
-+		base::PageHeader ().m_aDescr.m_nUsed = sal::static_int_cast< sal_uInt16 >(
++        base::PageHeader ().m_aDescr.m_nUsed = sal::static_int_cast< sal_uInt16 >(
 +            base::PageHeader ().m_aDescr.m_nUsed);
-+		rtl_zeroMemory (&RepresentationData (), capacity());
++        rtl_zeroMemory (&RepresentationData (), capacity());
 +    }
 +
-+	/** capacity.
-+	*/
-+	sal_uInt16 capacity (void)
-+	{
-+		return (base::PageHeader ().m_aDescr.m_nSize - (base::size()));
-+	}
++    /** capacity.
++    */
++    sal_uInt16 capacity (void)
++    {
++        return (base::PageHeader ().m_aDescr.m_nSize - (base::size()));
++    }
 +
 +    Representation& RepresentationData ()
 +    {
@@ -551,10 +551,10 @@
 +static sal_uInt16
 +lcl_getPageSize (OStorePageBIOS &rBIOS)
 +{
-+	sal_uInt16 nPageSize = STORE_MAXIMUM_PAGESIZE;
-+	rBIOS.getPageSize(nPageSize);
++    sal_uInt16 nPageSize = STORE_MAXIMUM_PAGESIZE;
++    rBIOS.getPageSize(nPageSize);
 +//	fprintf (stderr, "page size for extended names %d\n", nPageSize);
-+	return nPageSize;
++    return nPageSize;
 +}
 +
 +#define USE_OTHER_BLOCK STORE_INTERNAL_MAX_NAMESIZE
@@ -566,120 +566,120 @@
 +                    pName->buffer, pName->length);
 +    rtl_zeroMemory (&m_pRepresentation->m_pData[pName->length],
 +                    STORE_MAXIMUM_NAMESIZE - pName->length);
-+	return store_E_None;
++    return store_E_None;
 +}
 +
 +storeError
 +OStorePageNameBlockV1::Name (rtl_String **pName, OStorePageBIOS &rBIOS)
 +{
 +    sal_Int32 length = rtl_str_getLength(m_pRepresentation->m_pData);
-+	rtl_string_new_WithLength (pName, length + 1);
-+	(*pName)->length = length;
++    rtl_string_new_WithLength (pName, length + 1);
++    (*pName)->length = length;
 +    rtl_copyMemory ((*pName)->buffer,
 +                    &m_pRepresentation->m_pData[0], length);
 +    (*pName)->buffer [length] = 0;
 +
-+	return store_E_None;
++    return store_E_None;
 +}
 +
 +storeError
 +OStorePageNameBlockV2::SetName (const rtl_String *pName, OStorePageBIOS &rBIOS)
 +{
-+	storeError nRet;
-+	sal_Char *pDest;
++    storeError nRet;
++    sal_Char *pDest;
 +
 +//	fprintf (stderr, "setName '%s'\n", pName->buffer);
 +
 +    if (!m_pRepresentation)
 +        return store_E_NotExists;
 +
-+	m_pRepresentation->m_nNameLength = pName->length;
++    m_pRepresentation->m_nNameLength = pName->length;
 +
-+	if (pName->length >= USE_OTHER_BLOCK)
-+	{
++    if (pName->length >= USE_OTHER_BLOCK)
++    {
 +        sal_uInt16 nSize = lcl_getPageSize(rBIOS);
 +#ifdef WNT
 +        sal_uInt8 *aPageHeadData = (sal_uInt8 *) _alloca (nSize);
 +#else
 +        sal_uInt8 *aPageHeadData = (sal_uInt8 *) alloca (nSize);
 +#endif
-+		OStorePageLongNameData aNameData (nSize, aPageHeadData);
-+		OStorePageObject aNamePage(aNameData);
-+		if (!m_pRepresentation->m_nNameBlock)
-+		{
-+			if ((nRet = rBIOS.allocate (aNamePage)) != store_E_None)
-+			{
-+				fprintf (stderr, "failed to allocate name page %d\n", nRet);
-+				return nRet;
-+			}
-+			m_pRepresentation->m_nNameBlock = aNameData.location();
-+		}
-+		else
-+		{
-+			aNameData.location (m_pRepresentation->m_nNameBlock);
-+			if ((nRet = rBIOS.load(aNamePage)) != store_E_None)
-+			{
-+				fprintf (stderr, "failed to load name page %d\n", nRet);
-+				return nRet;
-+			}
-+		}
-+		copyAndTerminate (m_pRepresentation->m_pNameData, pName->buffer, USE_OTHER_BLOCK - 1);
-+		copyAndTerminate (aNameData.RepresentationData ().m_nData, pName->buffer + USE_OTHER_BLOCK - 1,
-+						  pName->length - (USE_OTHER_BLOCK - 1));
++        OStorePageLongNameData aNameData (nSize, aPageHeadData);
++        OStorePageObject aNamePage(aNameData);
++        if (!m_pRepresentation->m_nNameBlock)
++        {
++            if ((nRet = rBIOS.allocate (aNamePage)) != store_E_None)
++            {
++                fprintf (stderr, "failed to allocate name page %d\n", nRet);
++                return nRet;
++            }
++            m_pRepresentation->m_nNameBlock = aNameData.location();
++        }
++        else
++        {
++            aNameData.location (m_pRepresentation->m_nNameBlock);
++            if ((nRet = rBIOS.load(aNamePage)) != store_E_None)
++            {
++                fprintf (stderr, "failed to load name page %d\n", nRet);
++                return nRet;
++            }
++        }
++        copyAndTerminate (m_pRepresentation->m_pNameData, pName->buffer, USE_OTHER_BLOCK - 1);
++        copyAndTerminate (aNameData.RepresentationData ().m_nData, pName->buffer + USE_OTHER_BLOCK - 1,
++                          pName->length - (USE_OTHER_BLOCK - 1));
 +
-+		if ((nRet = rBIOS.save (aNamePage)) != store_E_None)
-+		{
-+			fprintf (stderr, "failed to save name page %d\n", nRet);
-+			return nRet;
-+		}
-+	}
-+	else
-+		copyAndTerminate (m_pRepresentation->m_pNameData, pName->buffer, pName->length);
++        if ((nRet = rBIOS.save (aNamePage)) != store_E_None)
++        {
++            fprintf (stderr, "failed to save name page %d\n", nRet);
++            return nRet;
++        }
++    }
++    else
++        copyAndTerminate (m_pRepresentation->m_pNameData, pName->buffer, pName->length);
 +
-+	return store_E_None;
++    return store_E_None;
 +}
 +
 +storeError
 +OStorePageNameBlockV2::Name (rtl_String **pName, OStorePageBIOS &rBIOS)
 +{
-+	storeError nRet;
++    storeError nRet;
 +
 +//	fprintf (stderr, "get!Name (%d)...\n", m_nNameLength);
 +
 +    if (!m_pRepresentation)
 +        return store_E_NotExists;
 +
-+	rtl_string_new_WithLength (pName, m_pRepresentation->m_nNameLength + 1);
-+	(*pName)->length = m_pRepresentation->m_nNameLength;
++    rtl_string_new_WithLength (pName, m_pRepresentation->m_nNameLength + 1);
++    (*pName)->length = m_pRepresentation->m_nNameLength;
 +
-+	if (m_pRepresentation->m_nNameLength >= USE_OTHER_BLOCK)
-+	{
++    if (m_pRepresentation->m_nNameLength >= USE_OTHER_BLOCK)
++    {
 +        sal_uInt16 nSize = lcl_getPageSize(rBIOS);
 +#ifdef WNT
 +        sal_uInt8 *aPageHeadData = (sal_uInt8 *) _alloca (nSize);
 +#else
 +        sal_uInt8 *aPageHeadData = (sal_uInt8 *) alloca (nSize);
 +#endif
-+		OStorePageLongNameData aNameData (nSize, aPageHeadData);
-+		OStorePageObject aNamePage(aNameData);
-+		aNameData.location (m_pRepresentation->m_nNameBlock);
++        OStorePageLongNameData aNameData (nSize, aPageHeadData);
++        OStorePageObject aNamePage(aNameData);
++        aNameData.location (m_pRepresentation->m_nNameBlock);
 +
-+		if ((nRet = rBIOS.load(aNamePage)) != store_E_None)
-+		{
-+			fprintf (stderr, "failed to load name page %d\n", nRet);
-+			return nRet;
-+		}
++        if ((nRet = rBIOS.load(aNamePage)) != store_E_None)
++        {
++            fprintf (stderr, "failed to load name page %d\n", nRet);
++            return nRet;
++        }
 +
-+		copyAndTerminate ((*pName)->buffer, m_pRepresentation->m_pNameData, USE_OTHER_BLOCK - 1);
-+		copyAndTerminate ((*pName)->buffer + USE_OTHER_BLOCK - 1,
-+						  aNameData.RepresentationData ().m_nData, m_pRepresentation->m_nNameLength - (USE_OTHER_BLOCK - 1));
-+	}
-+	else
-+		copyAndTerminate ((*pName)->buffer, m_pRepresentation->m_pNameData, m_pRepresentation->m_nNameLength);
++        copyAndTerminate ((*pName)->buffer, m_pRepresentation->m_pNameData, USE_OTHER_BLOCK - 1);
++        copyAndTerminate ((*pName)->buffer + USE_OTHER_BLOCK - 1,
++                          aNameData.RepresentationData ().m_nData, m_pRepresentation->m_nNameLength - (USE_OTHER_BLOCK - 1));
++    }
++    else
++        copyAndTerminate ((*pName)->buffer, m_pRepresentation->m_pNameData, m_pRepresentation->m_nNameLength);
 +
 +//	fprintf (stderr, "... returns '%s'\n", (*pName)->buffer);
 +
-+	return store_E_None;
++    return store_E_None;
 +}
 --- ./store/source/storbase.hxx.old	2009-04-02 10:44:48.000000000 +0000
 +++ ./store/source/storbase.hxx	2009-04-06 16:42:11.000000000 +0000
@@ -729,16 +729,16 @@
  {
 -	typedef OStorePageGuard G;
  	typedef OStorePageKey   K;
-+	typedef OStorePageGuard G;
++    typedef OStorePageGuard G;
  
 -	/** Representation.
-+	/** initialize.
++    /** initialize.
  	*/
 -	G          m_aGuard;
 -	K          m_aKey;
 -	sal_uInt32 m_nAttrib;
 -	sal_Char   m_pData[STORE_MAXIMUM_NAMESIZE];
-+	virtual void initialize (void) = 0;
++    virtual void initialize (void) = 0;
 +
 + 	/** Comparison.
 + 	*/
@@ -750,40 +750,40 @@
  	/** size.
  	*/
 -	static sal_uInt16 size (void)
-+	virtual sal_uInt16 size (void) = 0;
++    virtual sal_uInt16 size (void) = 0;
 +
-+	/** swap (internal and external representation).
-+	*/
-+	virtual void swap (void) = 0;
++    /** swap (internal and external representation).
++    */
++    virtual void swap (void) = 0;
 +
-+	/** guard (external representation).
-+	*/
-+	virtual void guard (void) = 0;
++    /** guard (external representation).
++    */
++    virtual void guard (void) = 0;
 +
-+	/** verify (external representation).
-+	*/
-+	virtual storeError verify (void) = 0;
++    /** verify (external representation).
++    */
++    virtual storeError verify (void) = 0;
 +
-+	/** namei.
-+	*/
-+	static storeError namei (
-+		const rtl_String *pPath, const rtl_String *pName, K &rKey)
-+	{
-+		// Check parameter.
-+		if (!(pPath && pName))
-+			return store_E_InvalidParameter;
++    /** namei.
++    */
++    static storeError namei (
++        const rtl_String *pPath, const rtl_String *pName, K &rKey)
++    {
++        // Check parameter.
++        if (!(pPath && pName))
++            return store_E_InvalidParameter;
 +
-+		// Check name length.
-+		if (pName->length >= STORE_MAXIMUM_NAMESIZE)
-+			return store_E_NameTooLong;
++        // Check name length.
++        if (pName->length >= STORE_MAXIMUM_NAMESIZE)
++            return store_E_NameTooLong;
 +
-+		// Transform pathname into key.
-+		rKey.m_nLow  = G::crc32 (0, pName->buffer, pName->length);
-+		rKey.m_nHigh = G::crc32 (0, pPath->buffer, pPath->length);
++        // Transform pathname into key.
++        rKey.m_nLow  = G::crc32 (0, pName->buffer, pName->length);
++        rKey.m_nHigh = G::crc32 (0, pPath->buffer, pPath->length);
 +
-+		// Done.
-+		return store_E_None;
-+	}
++        // Done.
++        return store_E_None;
++    }
 +
 +    /** Properties.
 +     */
@@ -795,16 +795,16 @@
 +    virtual K Key () = 0;
 +    virtual void SetKey (K aKey) = 0;
 +
-+	virtual storeError SetName (const rtl_String *pName, OStorePageBIOS &rBIOS) = 0;
-+	virtual storeError Name (rtl_String **pName, OStorePageBIOS &rBIOS) = 0;
++    virtual storeError SetName (const rtl_String *pName, OStorePageBIOS &rBIOS) = 0;
++    virtual storeError Name (rtl_String **pName, OStorePageBIOS &rBIOS) = 0;
 +};
 +
 +struct OStorePageNameBlockV1 : OStorePageNameBlockA
 +{
-+	typedef OStorePageGuard G;
-+	typedef OStorePageKey   K;
++    typedef OStorePageGuard G;
++    typedef OStorePageKey   K;
 +
-+	struct Representation {
++    struct Representation {
 +        G          m_aGuard;
 +        K          m_aKey;
 +        sal_uInt32 m_nAttrib;
@@ -815,9 +815,9 @@
 +    Representation* m_pRepresentation;
 +
 +public:
-+	/** size.
-+	*/
-+	sal_uInt16 size (void)
++    /** size.
++    */
++    sal_uInt16 size (void)
  	{
  		return sal_uInt16(sizeof(G) + sizeof(K) + sizeof(sal_uInt32) +
  						  sizeof(sal_Char[STORE_MAXIMUM_NAMESIZE]));
@@ -842,8 +842,8 @@
  	*/
 -	OStorePageNameBlock (void)
 -		: m_nAttrib (0)
-+	OStorePageNameBlockV1 (sal_uInt8 *data)
-+		: m_pRepresentation ((Representation *) data)
++    OStorePageNameBlockV1 (sal_uInt8 *data)
++        : m_pRepresentation ((Representation *) data)
  	{
 -		__store_memset (m_pData, 0, sizeof(m_pData));
  	}
@@ -851,7 +851,7 @@
 -	/** Comparison.
 -	*/
 -	sal_Bool operator== (const OStorePageNameBlock& rOther) const
-+	OStorePageNameBlockV1 (void)
++    OStorePageNameBlockV1 (void)
 +        : m_pRepresentation (NULL)
  	{
 -		return (m_aGuard == rOther.m_aGuard);
@@ -903,13 +903,13 @@
  		sal_uInt32 nCRC32 = 0;
 -		nCRC32 = G::crc32 (nCRC32, &m_aGuard.m_nMagic, sizeof(sal_uInt32));
 -		nCRC32 = G::crc32 (nCRC32, &m_aKey, size() - sizeof(G));
-+		nCRC32 = G::crc32 (nCRC32, &m_pRepresentation->m_aGuard.m_nMagic, sizeof(sal_uInt32));
-+		nCRC32 = G::crc32 (nCRC32, &m_pRepresentation->m_aKey, size() - sizeof(G));
++        nCRC32 = G::crc32 (nCRC32, &m_pRepresentation->m_aGuard.m_nMagic, sizeof(sal_uInt32));
++        nCRC32 = G::crc32 (nCRC32, &m_pRepresentation->m_aKey, size() - sizeof(G));
  #ifdef OSL_BIGENDIAN
  		nCRC32 = OSL_SWAPDWORD(nCRC32);
  #endif /* OSL_BIGENDIAN */
 -		if (m_aGuard.m_nCRC32 != nCRC32)
-+		if (m_pRepresentation->m_aGuard.m_nCRC32 != nCRC32)
++        if (m_pRepresentation->m_aGuard.m_nCRC32 != nCRC32)
  			return store_E_InvalidChecksum;
  		else
  			return store_E_None;
@@ -952,16 +952,16 @@
 +            m_pRepresentation->m_aKey = aKey;
 +    }
 +
-+	storeError SetName (const rtl_String *pName, OStorePageBIOS &rBIOS);
-+	storeError Name (rtl_String **pName, OStorePageBIOS &rBIOS);
++    storeError SetName (const rtl_String *pName, OStorePageBIOS &rBIOS);
++    storeError Name (rtl_String **pName, OStorePageBIOS &rBIOS);
 +};
 +
 +struct OStorePageNameBlockV2 : OStorePageNameBlockA
 +{
-+	typedef OStorePageGuard G;
-+	typedef OStorePageKey   K;
++    typedef OStorePageGuard G;
++    typedef OStorePageKey   K;
 +
-+	struct Representation {
++    struct Representation {
 +        G          m_aGuard;
 +        K          m_aKey;
 +        sal_uInt32 m_nAttrib;
@@ -972,26 +972,26 @@
 +
 +    Representation* m_pRepresentation;
 +
-+	/** size.
++    /** size.
  	*/
 -	static storeError namei (
 -		const rtl_String *pPath, const rtl_String *pName, K &rKey)
-+	sal_uInt16 size (void)
++    sal_uInt16 size (void)
  	{
 -		// Check parameter.
 -		if (!(pPath && pName))
 -			return store_E_InvalidParameter;
-+		return sal_uInt16 (sizeof(G) + sizeof(K) + 3*sizeof(sal_uInt32) +
++        return sal_uInt16 (sizeof(G) + sizeof(K) + 3*sizeof(sal_uInt32) +
 +                           sizeof(sal_Char[STORE_INTERNAL_MAX_NAMESIZE]));
-+	}
++    }
  
 -		// Check name length.
 -		if (!(pName->length < STORE_MAXIMUM_NAMESIZE))
 -			return store_E_NameTooLong;
-+	/** initialize.
-+	*/
-+	void initialize (void)
-+	{
++    /** initialize.
++    */
++    void initialize (void)
++    {
 +        if (m_pRepresentation) {
 +            m_pRepresentation->m_aGuard  = G();
 +            m_pRepresentation->m_aKey    = K();
@@ -1000,31 +1000,31 @@
 +            m_pRepresentation->m_nNameBlock = 0;
 +            __store_memset (m_pRepresentation->m_pNameData, 0, sizeof(sal_Char[STORE_INTERNAL_MAX_NAMESIZE]));
 +        }
-+	}
++    }
  
 -		// Transform pathname into key.
 -		rKey.m_nLow  = G::crc32 (0, pName->buffer, pName->length);
 -		rKey.m_nHigh = G::crc32 (0, pPath->buffer, pPath->length);
-+	/** Construction.
-+	*/
-+	OStorePageNameBlockV2 (sal_uInt8 *data)
-+		: m_pRepresentation ((Representation *) data)
-+	{
-+	}
++    /** Construction.
++    */
++    OStorePageNameBlockV2 (sal_uInt8 *data)
++        : m_pRepresentation ((Representation *) data)
++    {
++    }
  
 -		// Done.
 -		return store_E_None;
-+	OStorePageNameBlockV2 (void)
++    OStorePageNameBlockV2 (void)
 +        : m_pRepresentation (NULL)
 +        //        : m_nAttrib (0), m_nNameBlock (0), m_nNameLength (0)
-+	{
++    {
 +        //		__store_memset (m_pNameData, 0, sizeof(m_pNameData));
-+	}
++    }
 +
-+	/** swap (internal and external representation).
-+	*/
-+	void swap (void)
-+	{
++    /** swap (internal and external representation).
++    */
++    void swap (void)
++    {
 +#ifdef OSL_BIGENDIAN
 +        if (m_pRepresentation) {
 +            m_pRepresentation->m_aGuard.swap();
@@ -1034,12 +1034,12 @@
 +            m_pRepresentation->m_nNameBlock = OSL_SWAPDWORD(m_pRepresentation->m_nNameBlock);
 +        }
 +#endif /* OSL_BIGENDIAN */
-+	}
++    }
 +
-+	/** guard (external representation).
-+	*/
-+	void guard (void)
-+	{
++    /** guard (external representation).
++    */
++    void guard (void)
++    {
 +        if (m_pRepresentation) {
 +            sal_uInt32 nCRC32 = 0;
 +            nCRC32 = G::crc32 (nCRC32, &m_pRepresentation->m_aGuard.m_nMagic, sizeof(sal_uInt32));
@@ -1049,25 +1049,25 @@
 +#endif /* OSL_BIGENDIAN */
 +            m_pRepresentation->m_aGuard.m_nCRC32 = nCRC32;
 +        }
-+	}
++    }
 +
-+	/** verify (external representation).
-+	*/
-+	storeError verify (void)
-+	{
++    /** verify (external representation).
++    */
++    storeError verify (void)
++    {
 +        if (!m_pRepresentation)
 +            return store_E_NotExists;
 +
-+		sal_uInt32 nCRC32 = 0;
-+		nCRC32 = G::crc32 (nCRC32, &m_pRepresentation->m_aGuard.m_nMagic, sizeof(sal_uInt32));
-+		nCRC32 = G::crc32 (nCRC32, &m_pRepresentation->m_aKey, size() - sizeof(G));
++        sal_uInt32 nCRC32 = 0;
++        nCRC32 = G::crc32 (nCRC32, &m_pRepresentation->m_aGuard.m_nMagic, sizeof(sal_uInt32));
++        nCRC32 = G::crc32 (nCRC32, &m_pRepresentation->m_aKey, size() - sizeof(G));
 +#ifdef OSL_BIGENDIAN
-+		nCRC32 = OSL_SWAPDWORD(nCRC32);
++        nCRC32 = OSL_SWAPDWORD(nCRC32);
 +#endif /* OSL_BIGENDIAN */
-+		if (m_pRepresentation->m_aGuard.m_nCRC32 != nCRC32)
-+			return store_E_InvalidChecksum;
-+		else
-+			return store_E_None;
++        if (m_pRepresentation->m_aGuard.m_nCRC32 != nCRC32)
++            return store_E_InvalidChecksum;
++        else
++            return store_E_None;
  	}
 +
 +    /** Properties.
@@ -1106,8 +1106,8 @@
 +            m_pRepresentation->m_aKey = aKey;
 +    }
 +
-+	storeError SetName (const rtl_String *pName, OStorePageBIOS &rBIOS);
-+	storeError Name (rtl_String **pName, OStorePageBIOS &rBIOS);
++    storeError SetName (const rtl_String *pName, OStorePageBIOS &rBIOS);
++    storeError Name (rtl_String **pName, OStorePageBIOS &rBIOS);
  };
  
  /*========================================================================
@@ -1137,9 +1137,9 @@
 +        return *m_pPageHeader;
 +    }
 +
-+	/** Representation.
-+	*/
-+	inline sal_uInt8* Data () const
++    /** Representation.
++    */
++    inline sal_uInt8* Data () const
 +    {
 +        return (sal_uInt8*) m_pPageHeader;
 +    }
@@ -1151,13 +1151,13 @@
  	sal_uInt32 location (void) const
  	{
 -		return m_aDescr.m_nAddr;
-+		return PageHeader ().m_aDescr.m_nAddr;
++        return PageHeader ().m_aDescr.m_nAddr;
  	}
  
  	void location (sal_uInt32 nAddr)
  	{
 -		m_aDescr.m_nAddr = nAddr;
-+		PageHeader ().m_aDescr.m_nAddr = nAddr;
++        PageHeader ().m_aDescr.m_nAddr = nAddr;
  	}
  
  	/** Allocation.
@@ -1170,7 +1170,7 @@
  	}
  
 -	static void* operator new (size_t, sal_uInt16 nPageSize)
-+	static void* operator new (size_t n, sal_uInt16 nPageSize)
++    static void* operator new (size_t n, sal_uInt16 nPageSize)
  	{
 -		return rtl_allocateMemory (nPageSize);
 +        void* mem = rtl_allocateMemory (n + nPageSize);
@@ -1187,7 +1187,7 @@
  	 */
 -	OStorePageData (sal_uInt16 nPageSize)
 +
-+	OStorePageData (sal_uInt16 nPageSize, sal_uInt32 nDataOffset, sal_uInt8* pData = NULL)
++    OStorePageData (sal_uInt16 nPageSize, sal_uInt32 nDataOffset, sal_uInt8* pData = NULL)
  	{
 -		m_aDescr.m_nSize = nPageSize;
 -		m_aDescr.m_nUsed = size();
@@ -1195,8 +1195,8 @@
 +            m_pPageHeader = (Representation *) pData;
 +        else
 +            m_pPageHeader = (Representation *) (((sal_uInt8*) this) + nDataOffset);
-+		PageHeader ().m_aDescr.m_nSize = nPageSize;
-+		PageHeader ().m_aDescr.m_nUsed = size();
++        PageHeader ().m_aDescr.m_nSize = nPageSize;
++        PageHeader ().m_aDescr.m_nUsed = size();
  	}
  
  	OStorePageData& operator= (const OStorePageData& rOther)
@@ -1205,10 +1205,10 @@
 -		m_aDescr  = rOther.m_aDescr;
 -		m_aMarked = rOther.m_aMarked;
 -		m_aUnused = rOther.m_aUnused;
-+		PageHeader ().m_aGuard  = rOther.PageHeader ().m_aGuard;
-+		PageHeader ().m_aDescr  = rOther.PageHeader ().m_aDescr;
-+		PageHeader ().m_aMarked = rOther.PageHeader ().m_aMarked;
-+		PageHeader ().m_aUnused = rOther.PageHeader ().m_aUnused;
++        PageHeader ().m_aGuard  = rOther.PageHeader ().m_aGuard;
++        PageHeader ().m_aDescr  = rOther.PageHeader ().m_aDescr;
++        PageHeader ().m_aMarked = rOther.PageHeader ().m_aMarked;
++        PageHeader ().m_aUnused = rOther.PageHeader ().m_aUnused;
  		return *this;
  	}
  
@@ -1220,10 +1220,10 @@
 -				(m_aDescr  == rOther.m_aDescr ) &&
 -				(m_aMarked == rOther.m_aMarked) &&
 -				(m_aUnused == rOther.m_aUnused)    );
-+		return ((PageHeader ().m_aGuard  == rOther.PageHeader ().m_aGuard ) &&
-+				(PageHeader ().m_aDescr  == rOther.PageHeader ().m_aDescr ) &&
-+				(PageHeader ().m_aMarked == rOther.PageHeader ().m_aMarked) &&
-+				(PageHeader ().m_aUnused == rOther.PageHeader ().m_aUnused)    );
++        return ((PageHeader ().m_aGuard  == rOther.PageHeader ().m_aGuard ) &&
++                (PageHeader ().m_aDescr  == rOther.PageHeader ().m_aDescr ) &&
++                (PageHeader ().m_aMarked == rOther.PageHeader ().m_aMarked) &&
++                (PageHeader ().m_aUnused == rOther.PageHeader ().m_aUnused)    );
  	}
  
  	/** swap (internal and external representation).
@@ -1235,10 +1235,10 @@
 -		m_aDescr.swap();
 -		m_aMarked.swap();
 -		m_aUnused.swap();
-+		PageHeader ().m_aGuard.swap();
-+		PageHeader ().m_aDescr.swap();
-+		PageHeader ().m_aMarked.swap();
-+		PageHeader ().m_aUnused.swap();
++        PageHeader ().m_aGuard.swap();
++        PageHeader ().m_aDescr.swap();
++        PageHeader ().m_aMarked.swap();
++        PageHeader ().m_aUnused.swap();
  #endif /* OSL_BIGENDIAN */
  	}
  
@@ -1248,13 +1248,13 @@
  		sal_uInt32 nCRC32 = 0;
 -		nCRC32 = G::crc32 (nCRC32, &m_aGuard.m_nMagic, sizeof(sal_uInt32));
 -		nCRC32 = G::crc32 (nCRC32, &m_aDescr, size() - sizeof(G));
-+		nCRC32 = G::crc32 (nCRC32, &PageHeader ().m_aGuard.m_nMagic, sizeof(sal_uInt32));
-+		nCRC32 = G::crc32 (nCRC32, &PageHeader ().m_aDescr, size() - sizeof(G));
++        nCRC32 = G::crc32 (nCRC32, &PageHeader ().m_aGuard.m_nMagic, sizeof(sal_uInt32));
++        nCRC32 = G::crc32 (nCRC32, &PageHeader ().m_aDescr, size() - sizeof(G));
  #ifdef OSL_BIGENDIAN
  		nCRC32 = OSL_SWAPDWORD(nCRC32);
  #endif /* OSL_BIGENDIAN */
 -		m_aGuard.m_nCRC32 = nCRC32;
-+		PageHeader ().m_aGuard.m_nCRC32 = nCRC32;
++        PageHeader ().m_aGuard.m_nCRC32 = nCRC32;
  	}
  
  	/** verify (external representation).
@@ -1264,13 +1264,13 @@
  		sal_uInt32 nCRC32 = 0;
 -		nCRC32 = G::crc32 (nCRC32, &m_aGuard.m_nMagic, sizeof(sal_uInt32));
 -		nCRC32 = G::crc32 (nCRC32, &m_aDescr, size() - sizeof(G));
-+		nCRC32 = G::crc32 (nCRC32, &PageHeader ().m_aGuard.m_nMagic, sizeof(sal_uInt32));
-+		nCRC32 = G::crc32 (nCRC32, &PageHeader ().m_aDescr, size() - sizeof(G));
++        nCRC32 = G::crc32 (nCRC32, &PageHeader ().m_aGuard.m_nMagic, sizeof(sal_uInt32));
++        nCRC32 = G::crc32 (nCRC32, &PageHeader ().m_aDescr, size() - sizeof(G));
  #ifdef OSL_BIGENDIAN
  		nCRC32 = OSL_SWAPDWORD(nCRC32);
  #endif /* OSL_BIGENDIAN */
 -		if (m_aGuard.m_nCRC32 != nCRC32)
-+		if (PageHeader ().m_aGuard.m_nCRC32 != nCRC32)
++        if (PageHeader ().m_aGuard.m_nCRC32 != nCRC32)
  			return store_E_InvalidChecksum;
  		else
  			return store_E_None;
@@ -1303,7 +1303,7 @@
  	typedef OStorePageCacheEntry self;
 -	typedef OStorePageData       data;
 +    typedef OStorePageData       PD;
-+	typedef sal_uInt8            data;
++    typedef sal_uInt8            data;
  	typedef OStorePageDescriptor D;
  
  	/** Representation.
@@ -1312,33 +1312,33 @@
  	/** Construction.
  	*/
 -	OStorePageCacheEntry (const D& rDescr, const data& rData)
-+	OStorePageCacheEntry (const D& rDescr, const PD& rData)
++    OStorePageCacheEntry (const D& rDescr, const PD& rData)
  		: m_aDescr (rDescr)
  	{
 -		sal_uInt16 nSize = m_aDescr.m_nSize;
 -		m_pData = new(nSize) data(nSize);
 -		__store_memcpy (m_pData, &rData, nSize);
-+		m_pData = (data*) rtl_allocateMemory (m_aDescr.m_nSize);
-+		__store_memcpy (m_pData, rData.Data (), m_aDescr.m_nSize);
++        m_pData = (data*) rtl_allocateMemory (m_aDescr.m_nSize);
++        __store_memcpy (m_pData, rData.Data (), m_aDescr.m_nSize);
  		m_pNext = m_pPrev = this;
  	}
  
  	/** Data assignment.
  	*/
 -	void assign (const D& rDescr, const data& rData)
-+	void assign (const D& rDescr, const PD& rData)
++    void assign (const D& rDescr, const PD& rData)
  	{
  		m_aDescr.m_nAddr = rDescr.m_nAddr;
  		if (!(m_aDescr.m_nSize == rDescr.m_nSize))
  		{
 -			delete m_pData;
 -			m_pData = new(rDescr.m_nSize) data(rDescr.m_nSize);
-+			rtl_freeMemory (m_pData);
++            rtl_freeMemory (m_pData);
 +            m_pData = (data*) rtl_allocateMemory (m_aDescr.m_nSize);
  			m_aDescr.m_nSize = rDescr.m_nSize;
  		}
 -		__store_memcpy (m_pData, &rData, m_aDescr.m_nSize);
-+		__store_memcpy (m_pData, rData.Data (), m_aDescr.m_nSize);
++        __store_memcpy (m_pData, rData.Data (), m_aDescr.m_nSize);
  	}
  
  	/** Destruction.
@@ -1355,7 +1355,7 @@
  
  			// Load data and Leave.
 -			__store_memcpy (&rData, m_pHead->m_pData, rDescr.m_nSize);
-+			__store_memcpy (rData.Data (), m_pHead->m_pData, rDescr.m_nSize);
++            __store_memcpy (rData.Data (), m_pHead->m_pData, rDescr.m_nSize);
  			STORE_METHOD_LEAVE(pMutex, store_E_None);
  		}
  	}
@@ -1364,7 +1364,7 @@
  	// Load data.
  	storeError eErrCode = rBIOS.read (
 -		rDescr.m_nAddr, &rData, rDescr.m_nSize);
-+		rDescr.m_nAddr, rData.Data (), rDescr.m_nSize);
++        rDescr.m_nAddr, rData.Data (), rDescr.m_nSize);
  	if (eErrCode != store_E_None)
  		STORE_METHOD_LEAVE(pMutex, eErrCode);
  
@@ -1373,7 +1373,7 @@
  
  			// Update data and leave.
 -			__store_memcpy (m_pHead->m_pData, &rData, rDescr.m_nSize);
-+			__store_memcpy (m_pHead->m_pData, rData.Data (), rDescr.m_nSize);
++            __store_memcpy (m_pHead->m_pData, rData.Data (), rDescr.m_nSize);
  			STORE_METHOD_LEAVE(pMutex, store_E_None);
  		}
  	}
@@ -1384,7 +1384,7 @@
   */
  OStoreIndirectionPageData::OStoreIndirectionPageData (sal_uInt16 nPageSize)
 -	: OStorePageData (nPageSize)
-+	: OStorePageData (nPageSize, sizeof (self))
++    : OStorePageData (nPageSize, sizeof (self))
  {
  	initialize();
  }
@@ -1396,15 +1396,15 @@
 -	base::m_aDescr.m_nUsed = sal::static_int_cast< sal_uInt16 >(
 -        base::m_aDescr.m_nUsed + self::size());
 -	self::m_aGuard.m_nMagic = 0;
-+	base::PageHeader ().m_aGuard.m_nMagic = STORE_MAGIC_INDIRECTPAGE;
-+	base::PageHeader ().m_aDescr.m_nUsed = sal::static_int_cast< sal_uInt16 >(
++    base::PageHeader ().m_aGuard.m_nMagic = STORE_MAGIC_INDIRECTPAGE;
++    base::PageHeader ().m_aDescr.m_nUsed = sal::static_int_cast< sal_uInt16 >(
 +        base::PageHeader ().m_aDescr.m_nUsed + self::size());
-+	self::DataRepresentation ().m_aGuard.m_nMagic = 0;
++    self::DataRepresentation ().m_aGuard.m_nMagic = 0;
  
  	sal_uInt16 i, n = capacityCount();
  	for (i = 0; i < n; i++)
 -		m_pData[i] = STORE_PAGE_NULL;
-+		DataRepresentation ().m_pData[i] = STORE_PAGE_NULL;
++        DataRepresentation ().m_pData[i] = STORE_PAGE_NULL;
  }
  
  /*
@@ -1413,12 +1413,12 @@
  {
  #ifdef OSL_BIGENDIAN
 -	m_aGuard.swap();
-+	DataRepresentation ().m_aGuard.swap();
++    DataRepresentation ().m_aGuard.swap();
  
  	sal_uInt16 i, n = capacityCount (rDescr);
  	for (i = 0; i < n; i++)
 -		m_pData[i] = OSL_SWAPDWORD(m_pData[i]);
-+		DataRepresentation ().m_pData[i] = OSL_SWAPDWORD(DataRepresentation ().m_pData[i]);
++        DataRepresentation ().m_pData[i] = OSL_SWAPDWORD(DataRepresentation ().m_pData[i]);
  #endif /* OSL_BIGENDIAN */
  }
  
@@ -1427,7 +1427,7 @@
  
  	// Obtain data page location.
 -	sal_uInt32 nAddr = m_rPage.m_pData[nSingle];
-+	sal_uInt32 nAddr = m_rPage.DataRepresentation ().m_pData[nSingle];
++    sal_uInt32 nAddr = m_rPage.DataRepresentation ().m_pData[nSingle];
  	if (nAddr == STORE_PAGE_NULL)
  		STORE_METHOD_LEAVE(pMutex, store_E_NotExists);
  
@@ -1436,21 +1436,21 @@
  
  	// Check single indirect page location.
 -	if (m_rPage.m_pData[nDouble] == STORE_PAGE_NULL)
-+	if (m_rPage.DataRepresentation ().m_pData[nDouble] == STORE_PAGE_NULL)
++    if (m_rPage.DataRepresentation ().m_pData[nDouble] == STORE_PAGE_NULL)
  		STORE_METHOD_LEAVE(pMutex, store_E_NotExists);
  
  	// Check single indirect page buffer.
  	if (rpSingle == NULL)
  	{
 -		sal_uInt16 nPageSize = m_rPage.m_aDescr.m_nSize;
-+		sal_uInt16 nPageSize = m_rPage.PageHeader ().m_aDescr.m_nSize;
++        sal_uInt16 nPageSize = m_rPage.PageHeader ().m_aDescr.m_nSize;
  		rpSingle = new(nPageSize) page(nPageSize);
  	}
  
  	// Load single indirect page.
  	OStoreIndirectionPageObject aSingle (*rpSingle);
 -	aSingle.location (m_rPage.m_pData[nDouble]);
-+	aSingle.location (m_rPage.DataRepresentation ().m_pData[nDouble]);
++    aSingle.location (m_rPage.DataRepresentation ().m_pData[nDouble]);
  
  	storeError eErrCode = rBIOS.load (aSingle);
  	if (eErrCode != store_E_None)
@@ -1459,21 +1459,21 @@
  
  	// Check double indirect page location.
 -	if (m_rPage.m_pData[nTriple] == STORE_PAGE_NULL)
-+	if (m_rPage.DataRepresentation ().m_pData[nTriple] == STORE_PAGE_NULL)
++    if (m_rPage.DataRepresentation ().m_pData[nTriple] == STORE_PAGE_NULL)
  		STORE_METHOD_LEAVE(pMutex, store_E_NotExists);
  
  	// Check double indirect page buffer.
  	if (rpDouble == NULL)
  	{
 -		sal_uInt16 nPageSize = m_rPage.m_aDescr.m_nSize;
-+		sal_uInt16 nPageSize = m_rPage.PageHeader ().m_aDescr.m_nSize;
++        sal_uInt16 nPageSize = m_rPage.PageHeader ().m_aDescr.m_nSize;
  		rpDouble = new(nPageSize) page(nPageSize);
  	}
  
  	// Load double indirect page.
  	OStoreIndirectionPageObject aDouble (*rpDouble);
 -	aDouble.location (m_rPage.m_pData[nTriple]);
-+	aDouble.location (m_rPage.DataRepresentation ().m_pData[nTriple]);
++    aDouble.location (m_rPage.DataRepresentation ().m_pData[nTriple]);
  
  	storeError eErrCode = rBIOS.load (aDouble);
  	if (eErrCode != store_E_None)
@@ -1482,7 +1482,7 @@
  
  	// Obtain data page location.
 -	rData.location (m_rPage.m_pData[nSingle]);
-+	rData.location (m_rPage.DataRepresentation ().m_pData[nSingle]);
++    rData.location (m_rPage.DataRepresentation ().m_pData[nSingle]);
  	if (rData.location() == STORE_PAGE_NULL)
  	{
  		// Allocate data page.
@@ -1491,7 +1491,7 @@
  
  		// Save data page location.
 -		m_rPage.m_pData[nSingle] = rData.location();
-+		m_rPage.DataRepresentation ().m_pData[nSingle] = rData.location();
++        m_rPage.DataRepresentation ().m_pData[nSingle] = rData.location();
  		touch();
  
  		// Save this page.
@@ -1500,14 +1500,14 @@
  	if (rpSingle == NULL)
  	{
 -		sal_uInt16 nPageSize = m_rPage.m_aDescr.m_nSize;
-+		sal_uInt16 nPageSize = m_rPage.PageHeader ().m_aDescr.m_nSize;
++        sal_uInt16 nPageSize = m_rPage.PageHeader ().m_aDescr.m_nSize;
  		rpSingle = new(nPageSize) page(nPageSize);
  	}
  
  	// Obtain single indirect page location.
  	OStoreIndirectionPageObject aSingle (*rpSingle);
 -	aSingle.location (m_rPage.m_pData[nDouble]);
-+	aSingle.location (m_rPage.DataRepresentation ().m_pData[nDouble]);
++    aSingle.location (m_rPage.DataRepresentation ().m_pData[nDouble]);
  	if (aSingle.location() == STORE_PAGE_NULL)
  	{
  		// Initialize single indirect page buffer.
@@ -1516,7 +1516,7 @@
  
  		// Save single indirect page location.
 -		m_rPage.m_pData[nDouble] = aSingle.location();
-+		m_rPage.DataRepresentation ().m_pData[nDouble] = aSingle.location();
++        m_rPage.DataRepresentation ().m_pData[nDouble] = aSingle.location();
  		touch();
  
  		// Save this page.
@@ -1525,14 +1525,14 @@
  	if (rpDouble == NULL)
  	{
 -		sal_uInt16 nPageSize = m_rPage.m_aDescr.m_nSize;
-+		sal_uInt16 nPageSize = m_rPage.PageHeader ().m_aDescr.m_nSize;
++        sal_uInt16 nPageSize = m_rPage.PageHeader ().m_aDescr.m_nSize;
  		rpDouble = new(nPageSize) page(nPageSize);
  	}
  
  	// Obtain double indirect page location.
  	OStoreIndirectionPageObject aDouble (*rpDouble);
 -	aDouble.location (m_rPage.m_pData[nTriple]);
-+	aDouble.location (m_rPage.DataRepresentation ().m_pData[nTriple]);
++    aDouble.location (m_rPage.DataRepresentation ().m_pData[nTriple]);
  	if (aDouble.location() == STORE_PAGE_NULL)
  	{
  		// Initialize double indirect page buffer.
@@ -1541,7 +1541,7 @@
  
  		// Save double indirect page location.
 -		m_rPage.m_pData[nTriple] = aDouble.location();
-+		m_rPage.DataRepresentation ().m_pData[nTriple] = aDouble.location();
++        m_rPage.DataRepresentation ().m_pData[nTriple] = aDouble.location();
  		touch();
  
  		// Save this page.
@@ -1550,7 +1550,7 @@
  
  	// Save PageDescriptor.
 -	D aDescr (m_rPage.m_aDescr);
-+	D aDescr (m_rPage.PageHeader ().m_aDescr);
++    D aDescr (m_rPage.PageHeader ().m_aDescr);
  
  	// Acquire Lock.
  	storeError eErrCode = rBIOS.acquireLock (aDescr.m_nAddr, aDescr.m_nSize);
@@ -1559,7 +1559,7 @@
  	{
  		// Obtain data page location.
 -		sal_uInt32 nAddr = m_rPage.m_pData[i - 1];
-+		sal_uInt32 nAddr = m_rPage.DataRepresentation ().m_pData[i - 1];
++        sal_uInt32 nAddr = m_rPage.DataRepresentation ().m_pData[i - 1];
  		if (nAddr == STORE_PAGE_NULL) continue;
  
  		// Free data page.
@@ -1568,7 +1568,7 @@
  
  		// Clear pointer to data page.
 -		m_rPage.m_pData[i - 1] = STORE_PAGE_NULL;
-+		m_rPage.DataRepresentation ().m_pData[i - 1] = STORE_PAGE_NULL;
++        m_rPage.DataRepresentation ().m_pData[i - 1] = STORE_PAGE_NULL;
  		touch();
  	}
  
@@ -1577,7 +1577,7 @@
  
  	// Save PageDescriptor.
 -	D aDescr (m_rPage.m_aDescr);
-+	D aDescr (m_rPage.PageHeader ().m_aDescr);
++    D aDescr (m_rPage.PageHeader ().m_aDescr);
  
  	// Acquire Lock.
  	storeError eErrCode = rBIOS.acquireLock (aDescr.m_nAddr, aDescr.m_nSize);
@@ -1586,14 +1586,14 @@
  	{
  		// Obtain single indirect page location.
 -		sal_uInt32 nAddr = m_rPage.m_pData[i - 1];
-+		sal_uInt32 nAddr = m_rPage.DataRepresentation ().m_pData[i - 1];
++        sal_uInt32 nAddr = m_rPage.DataRepresentation ().m_pData[i - 1];
  		if (nAddr == STORE_PAGE_NULL) continue;
  
  		// Check single indirect page buffer.
  		if (rpSingle == NULL)
  		{
 -			sal_uInt16 nPageSize = m_rPage.m_aDescr.m_nSize;
-+			sal_uInt16 nPageSize = m_rPage.PageHeader ().m_aDescr.m_nSize;
++            sal_uInt16 nPageSize = m_rPage.PageHeader ().m_aDescr.m_nSize;
  			rpSingle = new(nPageSize) page(nPageSize);
  		}
  
@@ -1602,20 +1602,20 @@
  
  		// Clear pointer to single indirect page.
 -		m_rPage.m_pData[i - 1] = STORE_PAGE_NULL;
-+		m_rPage.DataRepresentation ().m_pData[i - 1] = STORE_PAGE_NULL;
++        m_rPage.DataRepresentation ().m_pData[i - 1] = STORE_PAGE_NULL;
  		touch();
  	}
  
  	// Obtain last single indirect page location.
 -	sal_uInt32 nAddr = m_rPage.m_pData[nDouble];
-+	sal_uInt32 nAddr = m_rPage.DataRepresentation ().m_pData[nDouble];
++    sal_uInt32 nAddr = m_rPage.DataRepresentation ().m_pData[nDouble];
  	if (nAddr != STORE_PAGE_NULL)
  	{
  		// Check single indirect page buffer.
  		if (rpSingle == NULL)
  		{
 -			sal_uInt16 nPageSize = m_rPage.m_aDescr.m_nSize;
-+			sal_uInt16 nPageSize = m_rPage.PageHeader ().m_aDescr.m_nSize;
++            sal_uInt16 nPageSize = m_rPage.PageHeader ().m_aDescr.m_nSize;
  			rpSingle = new(nPageSize) page(nPageSize);
  		}
  
@@ -1624,7 +1624,7 @@
  
  			// Clear pointer to last single indirect page.
 -			m_rPage.m_pData[nDouble] = STORE_PAGE_NULL;
-+			m_rPage.DataRepresentation ().m_pData[nDouble] = STORE_PAGE_NULL;
++            m_rPage.DataRepresentation ().m_pData[nDouble] = STORE_PAGE_NULL;
  			touch();
  		}
  	}
@@ -1633,7 +1633,7 @@
  
  	// Save PageDescriptor.
 -	D aDescr (m_rPage.m_aDescr);
-+	D aDescr (m_rPage.PageHeader ().m_aDescr);
++    D aDescr (m_rPage.PageHeader ().m_aDescr);
  
  	// Acquire Lock.
  	storeError eErrCode = rBIOS.acquireLock (aDescr.m_nAddr, aDescr.m_nSize);
@@ -1642,14 +1642,14 @@
  	{
  		// Obtain double indirect page location.
 -		sal_uInt32 nAddr = m_rPage.m_pData[i - 1];
-+		sal_uInt32 nAddr = m_rPage.DataRepresentation ().m_pData[i - 1];
++        sal_uInt32 nAddr = m_rPage.DataRepresentation ().m_pData[i - 1];
  		if (nAddr == STORE_PAGE_NULL) continue;
  
  		// Check double indirect page buffer.
  		if (rpDouble == NULL)
  		{
 -			sal_uInt16 nPageSize = m_rPage.m_aDescr.m_nSize;
-+			sal_uInt16 nPageSize = m_rPage.PageHeader ().m_aDescr.m_nSize;
++            sal_uInt16 nPageSize = m_rPage.PageHeader ().m_aDescr.m_nSize;
  			rpDouble = new(nPageSize) page(nPageSize);
  		}
  
@@ -1658,20 +1658,20 @@
  
  		// Clear pointer to double indirect page.
 -		m_rPage.m_pData[i - 1] = STORE_PAGE_NULL;
-+		m_rPage.DataRepresentation ().m_pData[i - 1] = STORE_PAGE_NULL;
++        m_rPage.DataRepresentation ().m_pData[i - 1] = STORE_PAGE_NULL;
  		touch();
  	}
  
  	// Obtain last double indirect page location.
 -	sal_uInt32 nAddr = m_rPage.m_pData[nTriple];
-+	sal_uInt32 nAddr = m_rPage.DataRepresentation ().m_pData[nTriple];
++    sal_uInt32 nAddr = m_rPage.DataRepresentation ().m_pData[nTriple];
  	if (nAddr != STORE_PAGE_NULL)
  	{
  		// Check double indirect page buffer.
  		if (rpDouble == NULL)
  		{
 -			sal_uInt16 nPageSize = m_rPage.m_aDescr.m_nSize;
-+			sal_uInt16 nPageSize = m_rPage.PageHeader ().m_aDescr.m_nSize;
++            sal_uInt16 nPageSize = m_rPage.PageHeader ().m_aDescr.m_nSize;
  			rpDouble = new(nPageSize) page(nPageSize);
  		}
  
@@ -1680,7 +1680,7 @@
  
  			// Clear pointer to last double indirect page.
 -			m_rPage.m_pData[nTriple] = STORE_PAGE_NULL;
-+			m_rPage.DataRepresentation ().m_pData[nTriple] = STORE_PAGE_NULL;
++            m_rPage.DataRepresentation ().m_pData[nTriple] = STORE_PAGE_NULL;
  			touch();
  		}
  	}
@@ -1709,16 +1709,16 @@
  {
  	sal_Int32 i;
 -	for (i = 0; i < STORE_LIMIT_DATAPAGE_DIRECT; i++)
-+	for (i = 0; i < STORE_LIMIT_DATAPAGE_DIRECT_V1; i++)
++    for (i = 0; i < STORE_LIMIT_DATAPAGE_DIRECT_V1; i++)
  		m_pDirect[i] = STORE_PAGE_NULL;
 -	for (i = 0; i < STORE_LIMIT_DATAPAGE_SINGLE; i++)
-+	for (i = 0; i < STORE_LIMIT_DATAPAGE_SINGLE_V1; i++)
++    for (i = 0; i < STORE_LIMIT_DATAPAGE_SINGLE_V1; i++)
  		m_pSingle[i] = STORE_PAGE_NULL;
 -	for (i = 0; i < STORE_LIMIT_DATAPAGE_DOUBLE; i++)
-+	for (i = 0; i < STORE_LIMIT_DATAPAGE_DOUBLE_V1; i++)
++    for (i = 0; i < STORE_LIMIT_DATAPAGE_DOUBLE_V1; i++)
  		m_pDouble[i] = STORE_PAGE_NULL;
 -	for (i = 0; i < STORE_LIMIT_DATAPAGE_TRIPLE; i++)
-+	for (i = 0; i < STORE_LIMIT_DATAPAGE_TRIPLE_V1; i++)
++    for (i = 0; i < STORE_LIMIT_DATAPAGE_TRIPLE_V1; i++)
  		m_pTriple[i] = STORE_PAGE_NULL;
  }
  
@@ -1731,16 +1731,16 @@
  #ifdef OSL_BIGENDIAN
  	sal_Int32 i;
 -	for (i = 0; i < STORE_LIMIT_DATAPAGE_DIRECT; i++)
-+	for (i = 0; i < STORE_LIMIT_DATAPAGE_DIRECT_V1; i++)
++    for (i = 0; i < STORE_LIMIT_DATAPAGE_DIRECT_V1; i++)
  		m_pDirect[i] = OSL_SWAPDWORD(m_pDirect[i]);
 -	for (i = 0; i < STORE_LIMIT_DATAPAGE_SINGLE; i++)
-+	for (i = 0; i < STORE_LIMIT_DATAPAGE_SINGLE_V1; i++)
++    for (i = 0; i < STORE_LIMIT_DATAPAGE_SINGLE_V1; i++)
  		m_pSingle[i] = OSL_SWAPDWORD(m_pSingle[i]);
 -	for (i = 0; i < STORE_LIMIT_DATAPAGE_DOUBLE; i++)
-+	for (i = 0; i < STORE_LIMIT_DATAPAGE_DOUBLE_V1; i++)
++    for (i = 0; i < STORE_LIMIT_DATAPAGE_DOUBLE_V1; i++)
  		m_pDouble[i] = OSL_SWAPDWORD(m_pDouble[i]);
 -	for (i = 0; i < STORE_LIMIT_DATAPAGE_TRIPLE; i++)
-+	for (i = 0; i < STORE_LIMIT_DATAPAGE_TRIPLE_V1; i++)
++    for (i = 0; i < STORE_LIMIT_DATAPAGE_TRIPLE_V1; i++)
  		m_pTriple[i] = OSL_SWAPDWORD(m_pTriple[i]);
  #endif /* OSL_BIGENDIAN */
  }
@@ -1755,7 +1755,7 @@
 + */
 +OStoreDirectoryDataBlockV2::LinkTable::LinkTable (void)
 +{
-+	initialize();
++    initialize();
 +}
 +
 +/*
@@ -1763,15 +1763,15 @@
 + */
 +void OStoreDirectoryDataBlockV2::LinkTable::initialize (void)
 +{
-+	sal_Int32 i;
-+	for (i = 0; i < STORE_LIMIT_DATAPAGE_DIRECT_V2; i++)
-+		m_pDirect[i] = STORE_PAGE_NULL;
-+	for (i = 0; i < STORE_LIMIT_DATAPAGE_SINGLE_V2; i++)
-+		m_pSingle[i] = STORE_PAGE_NULL;
-+	for (i = 0; i < STORE_LIMIT_DATAPAGE_DOUBLE_V2; i++)
-+		m_pDouble[i] = STORE_PAGE_NULL;
-+	for (i = 0; i < STORE_LIMIT_DATAPAGE_TRIPLE_V2; i++)
-+		m_pTriple[i] = STORE_PAGE_NULL;
++    sal_Int32 i;
++    for (i = 0; i < STORE_LIMIT_DATAPAGE_DIRECT_V2; i++)
++        m_pDirect[i] = STORE_PAGE_NULL;
++    for (i = 0; i < STORE_LIMIT_DATAPAGE_SINGLE_V2; i++)
++        m_pSingle[i] = STORE_PAGE_NULL;
++    for (i = 0; i < STORE_LIMIT_DATAPAGE_DOUBLE_V2; i++)
++        m_pDouble[i] = STORE_PAGE_NULL;
++    for (i = 0; i < STORE_LIMIT_DATAPAGE_TRIPLE_V2; i++)
++        m_pTriple[i] = STORE_PAGE_NULL;
 +}
 +
 +/*
@@ -1780,15 +1780,15 @@
 +void OStoreDirectoryDataBlockV2::LinkTable::swap (void)
 +{
 +#ifdef OSL_BIGENDIAN
-+	sal_Int32 i;
-+	for (i = 0; i < STORE_LIMIT_DATAPAGE_DIRECT_V2; i++)
-+		m_pDirect[i] = OSL_SWAPDWORD(m_pDirect[i]);
-+	for (i = 0; i < STORE_LIMIT_DATAPAGE_SINGLE_V2; i++)
-+		m_pSingle[i] = OSL_SWAPDWORD(m_pSingle[i]);
-+	for (i = 0; i < STORE_LIMIT_DATAPAGE_DOUBLE_V2; i++)
-+		m_pDouble[i] = OSL_SWAPDWORD(m_pDouble[i]);
-+	for (i = 0; i < STORE_LIMIT_DATAPAGE_TRIPLE_V2; i++)
-+		m_pTriple[i] = OSL_SWAPDWORD(m_pTriple[i]);
++    sal_Int32 i;
++    for (i = 0; i < STORE_LIMIT_DATAPAGE_DIRECT_V2; i++)
++        m_pDirect[i] = OSL_SWAPDWORD(m_pDirect[i]);
++    for (i = 0; i < STORE_LIMIT_DATAPAGE_SINGLE_V2; i++)
++        m_pSingle[i] = OSL_SWAPDWORD(m_pSingle[i]);
++    for (i = 0; i < STORE_LIMIT_DATAPAGE_DOUBLE_V2; i++)
++        m_pDouble[i] = OSL_SWAPDWORD(m_pDouble[i]);
++    for (i = 0; i < STORE_LIMIT_DATAPAGE_TRIPLE_V2; i++)
++        m_pTriple[i] = OSL_SWAPDWORD(m_pTriple[i]);
 +#endif /* OSL_BIGENDIAN */
 +}
 +
@@ -1803,14 +1803,14 @@
  OStoreDirectoryPageObject::scope (
  	sal_uInt32                       nPage,
 -	page::DataBlock::LinkDescriptor &rDescr) const
-+	page::DataBlockT::LinkDescriptor &rDescr) const
++    page::DataBlockT::LinkDescriptor &rDescr) const
  {
  	typedef OStoreIndirectionPageData indrct;
  	sal_uInt32 index0, index1, index2, index3;
  
  	// direct.
 -	sal_uInt32 nCount = m_rPage.m_aDataBlock.directCount();
-+	sal_uInt32 nCount = m_rPage.DataBlock ().directCount();
++    sal_uInt32 nCount = m_rPage.DataBlock ().directCount();
  	sal_uInt32 nLimit = nCount;
  	if (nPage < nLimit)
  	{
@@ -1820,8 +1820,8 @@
  	// single indirect.
 -	sal_uInt32 nCapacity = indrct::capacityCount(m_rPage.m_aDescr);
 -	nCount = m_rPage.m_aDataBlock.singleCount();
-+	sal_uInt32 nCapacity = indrct::capacityCount(m_rPage.PageHeader ().m_aDescr);
-+	nCount = m_rPage.DataBlock ().singleCount();
++    sal_uInt32 nCapacity = indrct::capacityCount(m_rPage.PageHeader ().m_aDescr);
++    nCount = m_rPage.DataBlock ().singleCount();
  	nLimit = nCount * nCapacity;
  	if (nPage < nLimit)
  	{
@@ -1830,7 +1830,7 @@
  
  	// double indirect.
 -	nCount = m_rPage.m_aDataBlock.doubleCount();
-+	nCount = m_rPage.DataBlock ().doubleCount();
++    nCount = m_rPage.DataBlock ().doubleCount();
  	nLimit = nCount * nCapacity * nCapacity;
  	if (nPage < nLimit)
  	{
@@ -1839,7 +1839,7 @@
  
  	// triple indirect.
 -	nCount = m_rPage.m_aDataBlock.tripleCount();
-+	nCount = m_rPage.DataBlock ().tripleCount();
++    nCount = m_rPage.DataBlock ().tripleCount();
  	nLimit = nCount * nCapacity * nCapacity * nCapacity;
  	if (nPage < nLimit)
  	{
@@ -1848,7 +1848,7 @@
  
  	// Determine scope and link indices.
 -	page::DataBlock::LinkDescriptor aLink;
-+	page::DataBlockT::LinkDescriptor aLink;
++    page::DataBlockT::LinkDescriptor aLink;
  	page::ChunkScope eScope = scope (nPage, aLink);
  
  	storeError eErrCode = store_E_None;
@@ -1857,7 +1857,7 @@
  		if (rpSingle == NULL)
  		{
 -			sal_uInt16 nPageSize = m_rPage.m_aDescr.m_nSize;
-+			sal_uInt16 nPageSize = m_rPage.PageHeader ().m_aDescr.m_nSize;
++            sal_uInt16 nPageSize = m_rPage.PageHeader ().m_aDescr.m_nSize;
  			rpSingle = new(nPageSize) indirect(nPageSize);
  		}
  
@@ -1866,7 +1866,7 @@
  		if (rpDouble == NULL)
  		{
 -			sal_uInt16 nPageSize = m_rPage.m_aDescr.m_nSize;
-+			sal_uInt16 nPageSize = m_rPage.PageHeader ().m_aDescr.m_nSize;
++            sal_uInt16 nPageSize = m_rPage.PageHeader ().m_aDescr.m_nSize;
  			rpDouble = new(nPageSize) indirect(nPageSize);
  		}
  
@@ -1875,7 +1875,7 @@
  		if (rpTriple == NULL)
  		{
 -			sal_uInt16 nPageSize = m_rPage.m_aDescr.m_nSize;
-+			sal_uInt16 nPageSize = m_rPage.PageHeader ().m_aDescr.m_nSize;
++            sal_uInt16 nPageSize = m_rPage.PageHeader ().m_aDescr.m_nSize;
  			rpTriple = new(nPageSize) indirect(nPageSize);
  		}
  
@@ -1884,7 +1884,7 @@
  
  	// Determine scope and link indices.
 -	page::DataBlock::LinkDescriptor aLink;
-+	page::DataBlockT::LinkDescriptor aLink;
++    page::DataBlockT::LinkDescriptor aLink;
  	page::ChunkScope eScope = scope (nPage, aLink);
  
  	storeError eErrCode = store_E_None;
@@ -1893,7 +1893,7 @@
  		if (rpSingle == NULL)
  		{
 -			sal_uInt16 nPageSize = m_rPage.m_aDescr.m_nSize;
-+			sal_uInt16 nPageSize = m_rPage.PageHeader ().m_aDescr.m_nSize;
++            sal_uInt16 nPageSize = m_rPage.PageHeader ().m_aDescr.m_nSize;
  			rpSingle = new(nPageSize) indirect(nPageSize);
  		}
  
@@ -1902,7 +1902,7 @@
  		if (rpDouble == NULL)
  		{
 -			sal_uInt16 nPageSize = m_rPage.m_aDescr.m_nSize;
-+			sal_uInt16 nPageSize = m_rPage.PageHeader ().m_aDescr.m_nSize;
++            sal_uInt16 nPageSize = m_rPage.PageHeader ().m_aDescr.m_nSize;
  			rpDouble = new(nPageSize) indirect(nPageSize);
  		}
  
@@ -1911,7 +1911,7 @@
  		if (rpTriple == NULL)
  		{
 -			sal_uInt16 nPageSize = m_rPage.m_aDescr.m_nSize;
-+			sal_uInt16 nPageSize = m_rPage.PageHeader ().m_aDescr.m_nSize;
++            sal_uInt16 nPageSize = m_rPage.PageHeader ().m_aDescr.m_nSize;
  			rpTriple = new(nPageSize) indirect(nPageSize);
  		}
  
@@ -1920,7 +1920,7 @@
  
  	// Determine scope and link indices.
 -	page::DataBlock::LinkDescriptor aLink;
-+	page::DataBlockT::LinkDescriptor aLink;
++    page::DataBlockT::LinkDescriptor aLink;
  	page::ChunkScope eScope = scope (nPage, aLink);
  
  	storeError eErrCode = store_E_None;
@@ -1929,7 +1929,7 @@
  			if (rpSingle == NULL)
  			{
 -				sal_uInt16 nPageSize = m_rPage.m_aDescr.m_nSize;
-+				sal_uInt16 nPageSize = m_rPage.PageHeader ().m_aDescr.m_nSize;
++                sal_uInt16 nPageSize = m_rPage.PageHeader ().m_aDescr.m_nSize;
  				rpSingle = new(nPageSize) indirect(nPageSize);
  			}
  
@@ -1938,7 +1938,7 @@
  			if (rpDouble == NULL)
  			{
 -				sal_uInt16 nPageSize = m_rPage.m_aDescr.m_nSize;
-+				sal_uInt16 nPageSize = m_rPage.PageHeader ().m_aDescr.m_nSize;
++                sal_uInt16 nPageSize = m_rPage.PageHeader ().m_aDescr.m_nSize;
  				rpDouble = new(nPageSize) indirect(nPageSize);
  			}
  
@@ -1947,7 +1947,7 @@
  			if (rpTriple == NULL)
  			{
 -				sal_uInt16 nPageSize = m_rPage.m_aDescr.m_nSize;
-+				sal_uInt16 nPageSize = m_rPage.PageHeader ().m_aDescr.m_nSize;
++                sal_uInt16 nPageSize = m_rPage.PageHeader ().m_aDescr.m_nSize;
  				rpTriple = new(nPageSize) indirect(nPageSize);
  			}
  
@@ -1956,7 +1956,7 @@
  	{
  		// Truncate direct data pages.
 -		sal_uInt16 i, n = m_rPage.m_aDataBlock.directCount();
-+		sal_uInt16 i, n = m_rPage.DataBlock ().directCount();
++        sal_uInt16 i, n = m_rPage.DataBlock ().directCount();
  		for (i = n; i > nRemain; i--)
  		{
  			// Obtain data page location.
@@ -1965,7 +1965,7 @@
  	{
  		// Truncate single indirect pages.
 -		sal_uInt16 i, n = m_rPage.m_aDataBlock.singleCount();
-+		sal_uInt16 i, n = m_rPage.DataBlock ().singleCount();
++        sal_uInt16 i, n = m_rPage.DataBlock ().singleCount();
  		for (i = n; i > nRemain; i--)
  		{
  			// Obtain single indirect page location.
@@ -1974,7 +1974,7 @@
  			if (rpSingle == NULL)
  			{
 -				sal_uInt16 nPageSize = m_rPage.m_aDescr.m_nSize;
-+				sal_uInt16 nPageSize = m_rPage.PageHeader ().m_aDescr.m_nSize;
++                sal_uInt16 nPageSize = m_rPage.PageHeader ().m_aDescr.m_nSize;
  				rpSingle = new(nPageSize) indirect(nPageSize);
  			}
  
@@ -1983,7 +1983,7 @@
  	{
  		// Truncate double indirect pages.
 -		sal_uInt16 i, n = m_rPage.m_aDataBlock.doubleCount();
-+		sal_uInt16 i, n = m_rPage.DataBlock ().doubleCount();
++        sal_uInt16 i, n = m_rPage.DataBlock ().doubleCount();
  		for (i = n; i > nRemain; i--)
  		{
  			// Obtain double indirect page location.
@@ -1992,7 +1992,7 @@
  			if (rpDouble == NULL)
  			{
 -				sal_uInt16 nPageSize = m_rPage.m_aDescr.m_nSize;
-+				sal_uInt16 nPageSize = m_rPage.PageHeader ().m_aDescr.m_nSize;
++                sal_uInt16 nPageSize = m_rPage.PageHeader ().m_aDescr.m_nSize;
  				rpDouble = new(nPageSize) indirect(nPageSize);
  			}
  
@@ -2001,7 +2001,7 @@
  	{
  		// Truncate triple indirect pages.
 -		sal_uInt16 i, n = m_rPage.m_aDataBlock.tripleCount();
-+		sal_uInt16 i, n = m_rPage.DataBlock ().tripleCount();
++        sal_uInt16 i, n = m_rPage.DataBlock ().tripleCount();
  		for (i = n; i > nRemain; i--)
  		{
  			// Obtain triple indirect page location.
@@ -2010,7 +2010,7 @@
  			if (rpTriple == NULL)
  			{
 -				sal_uInt16 nPageSize = m_rPage.m_aDescr.m_nSize;
-+				sal_uInt16 nPageSize = m_rPage.PageHeader ().m_aDescr.m_nSize;
++                sal_uInt16 nPageSize = m_rPage.PageHeader ().m_aDescr.m_nSize;
  				rpTriple = new(nPageSize) indirect(nPageSize);
  			}
  
@@ -2044,7 +2044,7 @@
  	sal_uInt16 capacity (void) const
  	{
 -		return self::capacity (base::m_aDescr);
-+		return self::capacity (base::PageHeader ().m_aDescr);
++        return self::capacity (base::PageHeader ().m_aDescr);
  	}
  
  	/** usage.
@@ -2053,7 +2053,7 @@
  	sal_uInt16 usage (void) const
  	{
 -		return self::usage (base::m_aDescr);
-+		return self::usage (base::PageHeader ().m_aDescr);
++        return self::usage (base::PageHeader ().m_aDescr);
  	}
  
  	/** initialize.
@@ -2064,17 +2064,17 @@
 -		base::m_aDescr.m_nUsed = sal::static_int_cast< sal_uInt16 >(
 -            base::m_aDescr.m_nUsed + self::size());
 -		rtl_zeroMemory (m_pData, capacity());
-+		base::PageHeader ().m_aGuard.m_nMagic = STORE_MAGIC_DATAPAGE;
-+		base::PageHeader ().m_aDescr.m_nUsed = sal::static_int_cast< sal_uInt16 >(
++        base::PageHeader ().m_aGuard.m_nMagic = STORE_MAGIC_DATAPAGE;
++        base::PageHeader ().m_aDescr.m_nUsed = sal::static_int_cast< sal_uInt16 >(
 +            base::PageHeader ().m_aDescr.m_nUsed + self::size());
-+		rtl_zeroMemory (RepresentationData (), capacity());
++        rtl_zeroMemory (RepresentationData (), capacity());
  	}
  
  	/** Construction.
  	*/
  	OStoreDataPageData (sal_uInt16 nPageSize)
 -		: base (nPageSize)
-+		: base (nPageSize, sizeof (self))
++        : base (nPageSize, sizeof (self))
  	{
  		initialize();
  	}
@@ -2101,7 +2101,7 @@
  	sal_uInt16 capacity (void) const
  	{
 -		return self::capacity (base::m_aDescr);
-+		return self::capacity (base::PageHeader ().m_aDescr);
++        return self::capacity (base::PageHeader ().m_aDescr);
  	}
  
  	/** capacityCount.
@@ -2110,7 +2110,7 @@
  	sal_Bool operator== (const OStoreIndirectionPageData& rOther) const
  	{
 -		return (base::operator==(rOther) && (m_aGuard == rOther.m_aGuard));
-+		return (base::operator==(rOther) && (DataRepresentation ().m_aGuard == rOther.DataRepresentation ().m_aGuard));
++        return (base::operator==(rOther) && (DataRepresentation ().m_aGuard == rOther.DataRepresentation ().m_aGuard));
  	}
  
  	/** swap (internal and external representation).
@@ -2120,13 +2120,13 @@
  		sal_uInt32 nCRC32 = 0;
 -		nCRC32 = G::crc32 (nCRC32, &m_aGuard.m_nMagic, sizeof(sal_uInt32));
 -		nCRC32 = G::crc32 (nCRC32, m_pData, capacity(rDescr));
-+		nCRC32 = G::crc32 (nCRC32, &DataRepresentation ().m_aGuard.m_nMagic, sizeof(sal_uInt32));
-+		nCRC32 = G::crc32 (nCRC32, DataRepresentation ().m_pData, capacity(rDescr));
++        nCRC32 = G::crc32 (nCRC32, &DataRepresentation ().m_aGuard.m_nMagic, sizeof(sal_uInt32));
++        nCRC32 = G::crc32 (nCRC32, DataRepresentation ().m_pData, capacity(rDescr));
  #ifdef OSL_BIGENDIAN
  		nCRC32 = OSL_SWAPDWORD(nCRC32);
  #endif /* OSL_BIGENDIAN */
 -		m_aGuard.m_nCRC32 = nCRC32;
-+		DataRepresentation ().m_aGuard.m_nCRC32 = nCRC32;
++        DataRepresentation ().m_aGuard.m_nCRC32 = nCRC32;
  	}
  
  	/** verify (external representation).
@@ -2136,13 +2136,13 @@
  		sal_uInt32 nCRC32 = 0;
 -		nCRC32 = G::crc32 (nCRC32, &m_aGuard.m_nMagic, sizeof(sal_uInt32));
 -		nCRC32 = G::crc32 (nCRC32, m_pData, capacity(rDescr));
-+		nCRC32 = G::crc32 (nCRC32, &DataRepresentation ().m_aGuard.m_nMagic, sizeof(sal_uInt32));
-+		nCRC32 = G::crc32 (nCRC32, DataRepresentation ().m_pData, capacity(rDescr));
++        nCRC32 = G::crc32 (nCRC32, &DataRepresentation ().m_aGuard.m_nMagic, sizeof(sal_uInt32));
++        nCRC32 = G::crc32 (nCRC32, DataRepresentation ().m_pData, capacity(rDescr));
  #ifdef OSL_BIGENDIAN
  		nCRC32 = OSL_SWAPDWORD(nCRC32);
  #endif /* OSL_BIGENDIAN */
 -		if (m_aGuard.m_nCRC32 != nCRC32)
-+		if (DataRepresentation ().m_aGuard.m_nCRC32 != nCRC32)
++        if (DataRepresentation ().m_aGuard.m_nCRC32 != nCRC32)
  			return store_E_InvalidChecksum;
  		else
  			return store_E_None;
@@ -2173,20 +2173,20 @@
  		{}
  	};
  
-+	/** initialize.
-+	*/
-+	virtual void initialize (void) = 0;
++    /** initialize.
++    */
++    virtual void initialize (void) = 0;
 +
-+	/** Comparison.
-+	*/
-+	sal_Bool operator== (const OStoreDirectoryDataBlockA& rOther) const
-+	{
-+		return (Guard () == rOther.Guard ());
-+	}
++    /** Comparison.
++    */
++    sal_Bool operator== (const OStoreDirectoryDataBlockA& rOther) const
++    {
++        return (Guard () == rOther.Guard ());
++    }
 +
-+	/** size.
-+	*/
-+	virtual sal_uInt16 size (void) = 0;
++    /** size.
++    */
++    virtual sal_uInt16 size (void) = 0;
 +
 +    /** Properties.
 +     */
@@ -2199,46 +2199,46 @@
 +//  	*/
 +//  	virtual sal_Bool operator== (const OStoreDirectoryDataBlockV2& rOther) const = 0;
 +
-+	/** swap (internal and external representation).
-+	*/
-+	virtual void swap (void) = 0;
++    /** swap (internal and external representation).
++    */
++    virtual void swap (void) = 0;
 +
-+	/** guard (external representation).
-+	*/
-+	virtual void guard (void) = 0;
++    /** guard (external representation).
++    */
++    virtual void guard (void) = 0;
 +
-+	/** verify (external representation).
-+	*/
-+	virtual storeError verify (void) = 0;
++    /** verify (external representation).
++    */
++    virtual storeError verify (void) = 0;
 +
-+	/** direct.
-+	*/
-+	virtual sal_uInt16 directCount (void) const = 0;
-+	virtual sal_uInt32 directLink (sal_uInt16 nIndex) const = 0;
-+	virtual void directLink (sal_uInt16 nIndex, sal_uInt32 nAddr) = 0;
++    /** direct.
++    */
++    virtual sal_uInt16 directCount (void) const = 0;
++    virtual sal_uInt32 directLink (sal_uInt16 nIndex) const = 0;
++    virtual void directLink (sal_uInt16 nIndex, sal_uInt32 nAddr) = 0;
 +
-+	/** single.
-+	*/
-+	virtual sal_uInt16 singleCount (void) const = 0;
-+	virtual sal_uInt32 singleLink (sal_uInt16 nIndex) const = 0;
-+	virtual void singleLink (sal_uInt16 nIndex, sal_uInt32 nAddr) = 0;
++    /** single.
++    */
++    virtual sal_uInt16 singleCount (void) const = 0;
++    virtual sal_uInt32 singleLink (sal_uInt16 nIndex) const = 0;
++    virtual void singleLink (sal_uInt16 nIndex, sal_uInt32 nAddr) = 0;
 +
-+	/** double.
-+	*/
-+	virtual sal_uInt16 doubleCount (void) const = 0;
-+	virtual sal_uInt32 doubleLink (sal_uInt16 nIndex) const = 0;
-+	virtual void doubleLink (sal_uInt16 nIndex, sal_uInt32 nAddr) = 0;
++    /** double.
++    */
++    virtual sal_uInt16 doubleCount (void) const = 0;
++    virtual sal_uInt32 doubleLink (sal_uInt16 nIndex) const = 0;
++    virtual void doubleLink (sal_uInt16 nIndex, sal_uInt32 nAddr) = 0;
 +
-+	/** triple.
-+	*/
-+	virtual sal_uInt16 tripleCount (void) const = 0;
-+	virtual sal_uInt32 tripleLink (sal_uInt16 nIndex) const = 0;
-+	virtual void tripleLink (sal_uInt16 nIndex, sal_uInt32 nAddr) = 0;
++    /** triple.
++    */
++    virtual sal_uInt16 tripleCount (void) const = 0;
++    virtual sal_uInt32 tripleLink (sal_uInt16 nIndex) const = 0;
++    virtual void tripleLink (sal_uInt16 nIndex, sal_uInt32 nAddr) = 0;
 +};
 +
 +struct OStoreDirectoryDataBlockV1 : OStoreDirectoryDataBlockA
 +{
-+	typedef OStorePageGuard G;
++    typedef OStorePageGuard G;
 +
  	/** LinkTable.
  	*/
@@ -2250,10 +2250,10 @@
 -		sal_uInt32 m_pSingle[STORE_LIMIT_DATAPAGE_SINGLE];
 -		sal_uInt32 m_pDouble[STORE_LIMIT_DATAPAGE_DOUBLE];
 -		sal_uInt32 m_pTriple[STORE_LIMIT_DATAPAGE_TRIPLE];
-+		sal_uInt32 m_pDirect[STORE_LIMIT_DATAPAGE_DIRECT_V1];
-+		sal_uInt32 m_pSingle[STORE_LIMIT_DATAPAGE_SINGLE_V1];
-+		sal_uInt32 m_pDouble[STORE_LIMIT_DATAPAGE_DOUBLE_V1];
-+		sal_uInt32 m_pTriple[STORE_LIMIT_DATAPAGE_TRIPLE_V1];
++        sal_uInt32 m_pDirect[STORE_LIMIT_DATAPAGE_DIRECT_V1];
++        sal_uInt32 m_pSingle[STORE_LIMIT_DATAPAGE_SINGLE_V1];
++        sal_uInt32 m_pDouble[STORE_LIMIT_DATAPAGE_DOUBLE_V1];
++        sal_uInt32 m_pTriple[STORE_LIMIT_DATAPAGE_TRIPLE_V1];
  
  		/** Construction.
  		*/
@@ -2270,32 +2270,32 @@
 +
 +    Representation* m_pRepresentation;
 +
-+	/** size.
++    /** size.
  	*/
 -	G          m_aGuard;
 -	LinkTable  m_aTable;
 -	sal_uInt32 m_nDataLen;
-+	sal_uInt16 size (void)
-+	{
-+		return sal_uInt16(sizeof(G) + sizeof(LinkTable) + sizeof(sal_uInt32));
-+	}
++    sal_uInt16 size (void)
++    {
++        return sal_uInt16(sizeof(G) + sizeof(LinkTable) + sizeof(sal_uInt32));
++    }
 +
-+	/** initialize.
-+	*/
-+	void initialize (void)
-+	{
++    /** initialize.
++    */
++    void initialize (void)
++    {
 +        if (m_pRepresentation) {
 +            m_pRepresentation->m_aGuard = G();
 +            m_pRepresentation->m_aTable.initialize();
 +            m_pRepresentation->m_nDataLen = 0;
 +        }
-+	}
++    }
 +
-+	/** Construction.
-+	*/
-+	OStoreDirectoryDataBlockV1 (sal_uInt8 *data)
-+		: m_pRepresentation ((Representation *) data)
-+	{
++    /** Construction.
++    */
++    OStoreDirectoryDataBlockV1 (sal_uInt8 *data)
++        : m_pRepresentation ((Representation *) data)
++    {
 +        initialize ();
 +    }
 +
@@ -2320,23 +2320,23 @@
 +            m_pRepresentation->m_nDataLen = len;
 +    }
 +
-+	/** Comparison.
-+	*/
-+	sal_Bool operator== (const OStoreDirectoryDataBlockV1& rOther) const
-+	{
++    /** Comparison.
++    */
++    sal_Bool operator== (const OStoreDirectoryDataBlockV1& rOther) const
++    {
 +        if (m_pRepresentation == NULL && rOther.m_pRepresentation == NULL)
 +            return sal_True;
 +
 +        if (m_pRepresentation == NULL || rOther.m_pRepresentation == NULL)
 +            return sal_False;
 +
-+		return (m_pRepresentation->m_aGuard == rOther.m_pRepresentation->m_aGuard);
-+	}
++        return (m_pRepresentation->m_aGuard == rOther.m_pRepresentation->m_aGuard);
++    }
 +
-+	/** swap (internal and external representation).
-+	*/
-+	void swap (void)
-+	{
++    /** swap (internal and external representation).
++    */
++    void swap (void)
++    {
 +#ifdef OSL_BIGENDIAN
 +        if (m_pRepresentation) {
 +            m_pRepresentation->m_aGuard.swap();
@@ -2344,144 +2344,144 @@
 +            m_pRepresentation->m_nDataLen = OSL_SWAPDWORD(m_pRepresentation->m_nDataLen);
 +        }
 +#endif /* OSL_BIGENDIAN */
-+	}
++    }
 +
-+	/** guard (external representation).
-+	*/
-+	void guard (void)
-+	{
++    /** guard (external representation).
++    */
++    void guard (void)
++    {
 +        if (!m_pRepresentation)
 +            return;
 +
-+		sal_uInt32 nCRC32 = 0;
-+		nCRC32 = G::crc32 (nCRC32, &m_pRepresentation->m_aGuard.m_nMagic, sizeof(sal_uInt32));
-+		nCRC32 = G::crc32 (nCRC32, &m_pRepresentation->m_aTable, size() - sizeof(G));
++        sal_uInt32 nCRC32 = 0;
++        nCRC32 = G::crc32 (nCRC32, &m_pRepresentation->m_aGuard.m_nMagic, sizeof(sal_uInt32));
++        nCRC32 = G::crc32 (nCRC32, &m_pRepresentation->m_aTable, size() - sizeof(G));
 +#ifdef OSL_BIGENDIAN
-+		nCRC32 = OSL_SWAPDWORD(nCRC32);
++        nCRC32 = OSL_SWAPDWORD(nCRC32);
 +#endif /* OSL_BIGENDIAN */
-+		m_pRepresentation->m_aGuard.m_nCRC32 = nCRC32;
-+	}
++        m_pRepresentation->m_aGuard.m_nCRC32 = nCRC32;
++    }
 +
-+	/** verify (external representation).
-+	*/
-+	storeError verify (void)
-+	{
++    /** verify (external representation).
++    */
++    storeError verify (void)
++    {
 +        if (!m_pRepresentation)
 +            return store_E_NotExists;
 +
-+		sal_uInt32 nCRC32 = 0;
-+		nCRC32 = G::crc32 (nCRC32, &m_pRepresentation->m_aGuard.m_nMagic, sizeof(sal_uInt32));
-+		nCRC32 = G::crc32 (nCRC32, &m_pRepresentation->m_aTable, size() - sizeof(G));
++        sal_uInt32 nCRC32 = 0;
++        nCRC32 = G::crc32 (nCRC32, &m_pRepresentation->m_aGuard.m_nMagic, sizeof(sal_uInt32));
++        nCRC32 = G::crc32 (nCRC32, &m_pRepresentation->m_aTable, size() - sizeof(G));
 +#ifdef OSL_BIGENDIAN
-+		nCRC32 = OSL_SWAPDWORD(nCRC32);
++        nCRC32 = OSL_SWAPDWORD(nCRC32);
 +#endif /* OSL_BIGENDIAN */
-+		if (m_pRepresentation->m_aGuard.m_nCRC32 != nCRC32)
-+			return store_E_InvalidChecksum;
-+		else
-+			return store_E_None;
-+	}
++        if (m_pRepresentation->m_aGuard.m_nCRC32 != nCRC32)
++            return store_E_InvalidChecksum;
++        else
++            return store_E_None;
++    }
 +
-+	/** direct.
-+	*/
-+	virtual sal_uInt16 directCount (void) const
-+	{
-+		return ((sal_uInt16)(STORE_LIMIT_DATAPAGE_DIRECT_V1));
-+	}
-+	virtual sal_uInt32 directLink (sal_uInt16 nIndex) const
-+	{
-+		if (m_pRepresentation && nIndex < directCount())
-+			return m_pRepresentation->m_aTable.m_pDirect[nIndex];
-+		else
-+			return STORE_PAGE_NULL;
-+	}
-+	virtual void directLink (sal_uInt16 nIndex, sal_uInt32 nAddr)
-+	{
-+		if (m_pRepresentation && nIndex < directCount())
-+			m_pRepresentation->m_aTable.m_pDirect[nIndex] = nAddr;
-+	}
++    /** direct.
++    */
++    virtual sal_uInt16 directCount (void) const
++    {
++        return ((sal_uInt16)(STORE_LIMIT_DATAPAGE_DIRECT_V1));
++    }
++    virtual sal_uInt32 directLink (sal_uInt16 nIndex) const
++    {
++        if (m_pRepresentation && nIndex < directCount())
++            return m_pRepresentation->m_aTable.m_pDirect[nIndex];
++        else
++            return STORE_PAGE_NULL;
++    }
++    virtual void directLink (sal_uInt16 nIndex, sal_uInt32 nAddr)
++    {
++        if (m_pRepresentation && nIndex < directCount())
++            m_pRepresentation->m_aTable.m_pDirect[nIndex] = nAddr;
++    }
 +
-+	/** single.
-+	*/
++    /** single.
++    */
 +    virtual  sal_uInt16 singleCount (void) const
-+	{
-+		return ((sal_uInt16)(STORE_LIMIT_DATAPAGE_SINGLE_V1));
-+	}
-+	virtual sal_uInt32 singleLink (sal_uInt16 nIndex) const
-+	{
-+		if (m_pRepresentation && nIndex < singleCount())
-+			return m_pRepresentation->m_aTable.m_pSingle[nIndex];
-+		else
-+			return STORE_PAGE_NULL;
-+	}
-+	virtual void singleLink (sal_uInt16 nIndex, sal_uInt32 nAddr)
-+	{
-+		if (m_pRepresentation && nIndex < singleCount())
-+			m_pRepresentation->m_aTable.m_pSingle[nIndex] = nAddr;
-+	}
++    {
++        return ((sal_uInt16)(STORE_LIMIT_DATAPAGE_SINGLE_V1));
++    }
++    virtual sal_uInt32 singleLink (sal_uInt16 nIndex) const
++    {
++        if (m_pRepresentation && nIndex < singleCount())
++            return m_pRepresentation->m_aTable.m_pSingle[nIndex];
++        else
++            return STORE_PAGE_NULL;
++    }
++    virtual void singleLink (sal_uInt16 nIndex, sal_uInt32 nAddr)
++    {
++        if (m_pRepresentation && nIndex < singleCount())
++            m_pRepresentation->m_aTable.m_pSingle[nIndex] = nAddr;
++    }
 +
-+	/** double.
-+	*/
-+	virtual sal_uInt16 doubleCount (void) const
-+	{
-+		return ((sal_uInt16)(STORE_LIMIT_DATAPAGE_DOUBLE_V1));
-+	}
-+	virtual sal_uInt32 doubleLink (sal_uInt16 nIndex) const
-+	{
-+		if (m_pRepresentation && nIndex < doubleCount())
-+			return m_pRepresentation->m_aTable.m_pDouble[nIndex];
-+		else
-+			return STORE_PAGE_NULL;
-+	}
-+	virtual void doubleLink (sal_uInt16 nIndex, sal_uInt32 nAddr)
-+	{
-+		if (m_pRepresentation && nIndex < doubleCount())
-+			m_pRepresentation->m_aTable.m_pDouble[nIndex] = nAddr;
-+	}
++    /** double.
++    */
++    virtual sal_uInt16 doubleCount (void) const
++    {
++        return ((sal_uInt16)(STORE_LIMIT_DATAPAGE_DOUBLE_V1));
++    }
++    virtual sal_uInt32 doubleLink (sal_uInt16 nIndex) const
++    {
++        if (m_pRepresentation && nIndex < doubleCount())
++            return m_pRepresentation->m_aTable.m_pDouble[nIndex];
++        else
++            return STORE_PAGE_NULL;
++    }
++    virtual void doubleLink (sal_uInt16 nIndex, sal_uInt32 nAddr)
++    {
++        if (m_pRepresentation && nIndex < doubleCount())
++            m_pRepresentation->m_aTable.m_pDouble[nIndex] = nAddr;
++    }
 +
-+	/** triple.
-+	*/
-+	virtual sal_uInt16 tripleCount (void) const
-+	{
-+		return ((sal_uInt16)(STORE_LIMIT_DATAPAGE_TRIPLE_V1));
-+	}
-+	virtual sal_uInt32 tripleLink (sal_uInt16 nIndex) const
-+	{
-+		if (m_pRepresentation && nIndex < tripleCount())
-+			return m_pRepresentation->m_aTable.m_pTriple[nIndex];
-+		else
-+			return STORE_PAGE_NULL;
-+	}
-+	virtual void tripleLink (sal_uInt16 nIndex, sal_uInt32 nAddr)
-+	{
-+		if (m_pRepresentation && nIndex < tripleCount())
-+			m_pRepresentation->m_aTable.m_pTriple[nIndex] = nAddr;
-+	}
++    /** triple.
++    */
++    virtual sal_uInt16 tripleCount (void) const
++    {
++        return ((sal_uInt16)(STORE_LIMIT_DATAPAGE_TRIPLE_V1));
++    }
++    virtual sal_uInt32 tripleLink (sal_uInt16 nIndex) const
++    {
++        if (m_pRepresentation && nIndex < tripleCount())
++            return m_pRepresentation->m_aTable.m_pTriple[nIndex];
++        else
++            return STORE_PAGE_NULL;
++    }
++    virtual void tripleLink (sal_uInt16 nIndex, sal_uInt32 nAddr)
++    {
++        if (m_pRepresentation && nIndex < tripleCount())
++            m_pRepresentation->m_aTable.m_pTriple[nIndex] = nAddr;
++    }
 +};
 +
 +struct OStoreDirectoryDataBlockV2 : OStoreDirectoryDataBlockA
 +{
-+	typedef OStorePageGuard G;
++    typedef OStorePageGuard G;
 +
-+	/** LinkTable.
-+	*/
-+	struct LinkTable
-+	{
-+		/** Representation.
-+		*/
-+		sal_uInt32 m_pDirect[STORE_LIMIT_DATAPAGE_DIRECT_V2];
-+		sal_uInt32 m_pSingle[STORE_LIMIT_DATAPAGE_SINGLE_V2];
-+		sal_uInt32 m_pDouble[STORE_LIMIT_DATAPAGE_DOUBLE_V2];
-+		sal_uInt32 m_pTriple[STORE_LIMIT_DATAPAGE_TRIPLE_V2];
++    /** LinkTable.
++    */
++    struct LinkTable
++    {
++        /** Representation.
++        */
++        sal_uInt32 m_pDirect[STORE_LIMIT_DATAPAGE_DIRECT_V2];
++        sal_uInt32 m_pSingle[STORE_LIMIT_DATAPAGE_SINGLE_V2];
++        sal_uInt32 m_pDouble[STORE_LIMIT_DATAPAGE_DOUBLE_V2];
++        sal_uInt32 m_pTriple[STORE_LIMIT_DATAPAGE_TRIPLE_V2];
 +
-+		/** Construction.
-+		*/
-+		LinkTable (void);
-+		void initialize (void);
++        /** Construction.
++        */
++        LinkTable (void);
++        void initialize (void);
 +
-+		/** swap (internal and external representation).
-+		*/
-+		void swap (void);
-+	};
++        /** swap (internal and external representation).
++        */
++        void swap (void);
++    };
 +
 +    struct Representation {
 +        G          m_aGuard;
@@ -2494,7 +2494,7 @@
  	/** size.
  	*/
 -	static sal_uInt16 size (void)
-+	sal_uInt16 size (void)
++    sal_uInt16 size (void)
  	{
  		return sal_uInt16(sizeof(G) + sizeof(LinkTable) + sizeof(sal_uInt32));
  	}
@@ -2517,9 +2517,9 @@
 -	OStoreDirectoryDataBlock (void)
 -		: m_nDataLen (0)
 -	{}
-+	OStoreDirectoryDataBlockV2 (sal_uInt8 *data)
-+		: m_pRepresentation ((Representation *) data)
-+	{
++    OStoreDirectoryDataBlockV2 (sal_uInt8 *data)
++        : m_pRepresentation ((Representation *) data)
++    {
 +        initialize ();
 +    }
 +
@@ -2547,7 +2547,7 @@
  	/** Comparison.
  	*/
 -	sal_Bool operator== (const OStoreDirectoryDataBlock& rOther) const
-+	sal_Bool operator== (const OStoreDirectoryDataBlockV2& rOther) const
++    sal_Bool operator== (const OStoreDirectoryDataBlockV2& rOther) const
  	{
 -		return (m_aGuard == rOther.m_aGuard);
 +        if (m_pRepresentation == NULL && rOther.m_pRepresentation == NULL)
@@ -2556,7 +2556,7 @@
 +        if (m_pRepresentation == NULL || rOther.m_pRepresentation == NULL)
 +            return sal_False;
 +
-+		return (m_pRepresentation->m_aGuard == rOther.m_pRepresentation->m_aGuard);
++        return (m_pRepresentation->m_aGuard == rOther.m_pRepresentation->m_aGuard);
  	}
  
  	/** swap (internal and external representation).
@@ -2585,13 +2585,13 @@
  		sal_uInt32 nCRC32 = 0;
 -		nCRC32 = G::crc32 (nCRC32, &m_aGuard.m_nMagic, sizeof(sal_uInt32));
 -		nCRC32 = G::crc32 (nCRC32, &m_aTable, size() - sizeof(G));
-+		nCRC32 = G::crc32 (nCRC32, &m_pRepresentation->m_aGuard.m_nMagic, sizeof(sal_uInt32));
-+		nCRC32 = G::crc32 (nCRC32, &m_pRepresentation->m_aTable, size() - sizeof(G));
++        nCRC32 = G::crc32 (nCRC32, &m_pRepresentation->m_aGuard.m_nMagic, sizeof(sal_uInt32));
++        nCRC32 = G::crc32 (nCRC32, &m_pRepresentation->m_aTable, size() - sizeof(G));
  #ifdef OSL_BIGENDIAN
  		nCRC32 = OSL_SWAPDWORD(nCRC32);
  #endif /* OSL_BIGENDIAN */
 -		m_aGuard.m_nCRC32 = nCRC32;
-+		m_pRepresentation->m_aGuard.m_nCRC32 = nCRC32;
++        m_pRepresentation->m_aGuard.m_nCRC32 = nCRC32;
  	}
  
  	/** verify (external representation).
@@ -2604,13 +2604,13 @@
  		sal_uInt32 nCRC32 = 0;
 -		nCRC32 = G::crc32 (nCRC32, &m_aGuard.m_nMagic, sizeof(sal_uInt32));
 -		nCRC32 = G::crc32 (nCRC32, &m_aTable, size() - sizeof(G));
-+		nCRC32 = G::crc32 (nCRC32, &m_pRepresentation->m_aGuard.m_nMagic, sizeof(sal_uInt32));
-+		nCRC32 = G::crc32 (nCRC32, &m_pRepresentation->m_aTable, size() - sizeof(G));
++        nCRC32 = G::crc32 (nCRC32, &m_pRepresentation->m_aGuard.m_nMagic, sizeof(sal_uInt32));
++        nCRC32 = G::crc32 (nCRC32, &m_pRepresentation->m_aTable, size() - sizeof(G));
  #ifdef OSL_BIGENDIAN
  		nCRC32 = OSL_SWAPDWORD(nCRC32);
  #endif /* OSL_BIGENDIAN */
 -		if (m_aGuard.m_nCRC32 != nCRC32)
-+		if (m_pRepresentation->m_aGuard.m_nCRC32 != nCRC32)
++        if (m_pRepresentation->m_aGuard.m_nCRC32 != nCRC32)
  			return store_E_InvalidChecksum;
  		else
  			return store_E_None;
@@ -2619,28 +2619,28 @@
  	/** direct.
  	*/
 -	static sal_uInt16 directCount (void)
-+	virtual sal_uInt16 directCount (void) const
++    virtual sal_uInt16 directCount (void) const
  	{
 -		return ((sal_uInt16)(STORE_LIMIT_DATAPAGE_DIRECT));
-+		return ((sal_uInt16)(STORE_LIMIT_DATAPAGE_DIRECT_V2));
++        return ((sal_uInt16)(STORE_LIMIT_DATAPAGE_DIRECT_V2));
  	}
 -	sal_uInt32 directLink (sal_uInt16 nIndex) const
-+	virtual sal_uInt32 directLink (sal_uInt16 nIndex) const
++    virtual sal_uInt32 directLink (sal_uInt16 nIndex) const
  	{
 -		if (nIndex < directCount())
 -			return m_aTable.m_pDirect[nIndex];
-+		if (m_pRepresentation && nIndex < directCount())
-+			return m_pRepresentation->m_aTable.m_pDirect[nIndex];
++        if (m_pRepresentation && nIndex < directCount())
++            return m_pRepresentation->m_aTable.m_pDirect[nIndex];
  		else
  			return STORE_PAGE_NULL;
  	}
 -	void directLink (sal_uInt16 nIndex, sal_uInt32 nAddr)
-+	virtual void directLink (sal_uInt16 nIndex, sal_uInt32 nAddr)
++    virtual void directLink (sal_uInt16 nIndex, sal_uInt32 nAddr)
  	{
 -		if (nIndex < directCount())
 -			m_aTable.m_pDirect[nIndex] = nAddr;
-+		if (m_pRepresentation && nIndex < directCount())
-+			m_pRepresentation->m_aTable.m_pDirect[nIndex] = nAddr;
++        if (m_pRepresentation && nIndex < directCount())
++            m_pRepresentation->m_aTable.m_pDirect[nIndex] = nAddr;
  	}
  
  	/** single.
@@ -2649,79 +2649,79 @@
 +    virtual  sal_uInt16 singleCount (void) const
  	{
 -		return ((sal_uInt16)(STORE_LIMIT_DATAPAGE_SINGLE));
-+		return ((sal_uInt16)(STORE_LIMIT_DATAPAGE_SINGLE_V2));
++        return ((sal_uInt16)(STORE_LIMIT_DATAPAGE_SINGLE_V2));
  	}
 -	sal_uInt32 singleLink (sal_uInt16 nIndex) const
-+	virtual sal_uInt32 singleLink (sal_uInt16 nIndex) const
++    virtual sal_uInt32 singleLink (sal_uInt16 nIndex) const
  	{
 -		if (nIndex < singleCount())
 -			return m_aTable.m_pSingle[nIndex];
-+		if (m_pRepresentation && nIndex < singleCount())
-+			return m_pRepresentation->m_aTable.m_pSingle[nIndex];
++        if (m_pRepresentation && nIndex < singleCount())
++            return m_pRepresentation->m_aTable.m_pSingle[nIndex];
  		else
  			return STORE_PAGE_NULL;
  	}
 -	void singleLink (sal_uInt16 nIndex, sal_uInt32 nAddr)
-+	virtual void singleLink (sal_uInt16 nIndex, sal_uInt32 nAddr)
++    virtual void singleLink (sal_uInt16 nIndex, sal_uInt32 nAddr)
  	{
 -		if (nIndex < singleCount())
 -			m_aTable.m_pSingle[nIndex] = nAddr;
-+		if (m_pRepresentation && nIndex < singleCount())
-+			m_pRepresentation->m_aTable.m_pSingle[nIndex] = nAddr;
++        if (m_pRepresentation && nIndex < singleCount())
++            m_pRepresentation->m_aTable.m_pSingle[nIndex] = nAddr;
  	}
  
  	/** double.
  	*/
 -	static sal_uInt16 doubleCount (void)
-+	virtual sal_uInt16 doubleCount (void) const
++    virtual sal_uInt16 doubleCount (void) const
  	{
 -		return ((sal_uInt16)(STORE_LIMIT_DATAPAGE_DOUBLE));
-+		return ((sal_uInt16)(STORE_LIMIT_DATAPAGE_DOUBLE_V2));
++        return ((sal_uInt16)(STORE_LIMIT_DATAPAGE_DOUBLE_V2));
  	}
 -	sal_uInt32 doubleLink (sal_uInt16 nIndex) const
-+	virtual sal_uInt32 doubleLink (sal_uInt16 nIndex) const
++    virtual sal_uInt32 doubleLink (sal_uInt16 nIndex) const
  	{
 -		if (nIndex < doubleCount())
 -			return m_aTable.m_pDouble[nIndex];
-+		if (m_pRepresentation && nIndex < doubleCount())
-+			return m_pRepresentation->m_aTable.m_pDouble[nIndex];
++        if (m_pRepresentation && nIndex < doubleCount())
++            return m_pRepresentation->m_aTable.m_pDouble[nIndex];
  		else
  			return STORE_PAGE_NULL;
  	}
 -	void doubleLink (sal_uInt16 nIndex, sal_uInt32 nAddr)
-+	virtual void doubleLink (sal_uInt16 nIndex, sal_uInt32 nAddr)
++    virtual void doubleLink (sal_uInt16 nIndex, sal_uInt32 nAddr)
  	{
 -		if (nIndex < doubleCount())
 -			m_aTable.m_pDouble[nIndex] = nAddr;
-+		if (m_pRepresentation && nIndex < doubleCount())
-+			m_pRepresentation->m_aTable.m_pDouble[nIndex] = nAddr;
++        if (m_pRepresentation && nIndex < doubleCount())
++            m_pRepresentation->m_aTable.m_pDouble[nIndex] = nAddr;
  	}
  
  	/** triple.
  	*/
 -	static sal_uInt16 tripleCount (void)
-+	virtual sal_uInt16 tripleCount (void) const
++    virtual sal_uInt16 tripleCount (void) const
  	{
 -		return ((sal_uInt16)(STORE_LIMIT_DATAPAGE_TRIPLE));
-+		return ((sal_uInt16)(STORE_LIMIT_DATAPAGE_TRIPLE_V2));
++        return ((sal_uInt16)(STORE_LIMIT_DATAPAGE_TRIPLE_V2));
  	}
 -	sal_uInt32 tripleLink (sal_uInt16 nIndex) const
-+	virtual sal_uInt32 tripleLink (sal_uInt16 nIndex) const
++    virtual sal_uInt32 tripleLink (sal_uInt16 nIndex) const
  	{
 -		if (nIndex < tripleCount())
 -			return m_aTable.m_pTriple[nIndex];
-+		if (m_pRepresentation && nIndex < tripleCount())
-+			return m_pRepresentation->m_aTable.m_pTriple[nIndex];
++        if (m_pRepresentation && nIndex < tripleCount())
++            return m_pRepresentation->m_aTable.m_pTriple[nIndex];
  		else
  			return STORE_PAGE_NULL;
  	}
 -	void tripleLink (sal_uInt16 nIndex, sal_uInt32 nAddr)
-+	virtual void tripleLink (sal_uInt16 nIndex, sal_uInt32 nAddr)
++    virtual void tripleLink (sal_uInt16 nIndex, sal_uInt32 nAddr)
  	{
 -		if (nIndex < tripleCount())
 -			m_aTable.m_pTriple[nIndex] = nAddr;
-+		if (m_pRepresentation && nIndex < tripleCount())
-+			m_pRepresentation->m_aTable.m_pTriple[nIndex] = nAddr;
++        if (m_pRepresentation && nIndex < tripleCount())
++            m_pRepresentation->m_aTable.m_pTriple[nIndex] = nAddr;
  	}
  };
  
@@ -2732,9 +2732,9 @@
 -	typedef OStorePageDescriptor     D;
 -	typedef OStorePageNameBlock      NameBlock;
 -	typedef OStoreDirectoryDataBlock DataBlock;
-+	typedef OStorePageDescriptor      D;
-+	typedef OStorePageNameBlockA      NameBlockT;
-+	typedef OStoreDirectoryDataBlockA DataBlockT;
++    typedef OStorePageDescriptor      D;
++    typedef OStorePageNameBlockA      NameBlockT;
++    typedef OStoreDirectoryDataBlockA DataBlockT;
  
  	/** Representation.
  	*/
@@ -2748,38 +2748,38 @@
  	/** size.
  	*/
 -	static sal_uInt16 size (void)
-+	sal_uInt16 size () const
++    sal_uInt16 size () const
  	{
 -		return (NameBlock::size() + DataBlock::size());
-+		return m_pNameBlock->size () + m_pDataBlock->size ();
++        return m_pNameBlock->size () + m_pDataBlock->size ();
  	}
  
  	/** capacity.
  	*/
 -	static sal_uInt16 capacity (const D& rDescr)
-+	sal_uInt16 capacity (const D& rDescr) const
++    sal_uInt16 capacity (const D& rDescr) const
  	{
 -		return (rDescr.m_nSize - (base::size() + self::size()));
-+		return (rDescr.m_nSize - (base::size() + size()));
++        return (rDescr.m_nSize - (base::size() + size()));
  	}
  	sal_uInt16 capacity (void) const
  	{
 -		return self::capacity (base::m_aDescr);
-+		return capacity (base::PageHeader ().m_aDescr);
++        return capacity (base::PageHeader ().m_aDescr);
  	}
  
  	/** usage.
  	*/
 -	static sal_uInt16 usage (const D& rDescr)
-+	sal_uInt16 usage (const D& rDescr) const
++    sal_uInt16 usage (const D& rDescr) const
  	{
 -		return (rDescr.m_nUsed - (base::size() + self::size()));
-+		return (rDescr.m_nUsed - (base::size() + size()));
++        return (rDescr.m_nUsed - (base::size() + size()));
  	}
  	sal_uInt16 usage (void) const
  	{
 -		return self::usage (base::m_aDescr);
-+		return usage (base::PageHeader ().m_aDescr);
++        return usage (base::PageHeader ().m_aDescr);
  	}
  
  	/** initialize.
@@ -2788,8 +2788,8 @@
  	{
 -		base::m_aGuard.m_nMagic = STORE_MAGIC_DIRECTORYPAGE;
 -		base::m_aDescr.m_nUsed  = base::size() + self::size();
-+		base::PageHeader ().m_aGuard.m_nMagic = STORE_MAGIC_DIRECTORYPAGE;
-+		base::PageHeader ().m_aDescr.m_nUsed  = base::size() + self::size();
++        base::PageHeader ().m_aGuard.m_nMagic = STORE_MAGIC_DIRECTORYPAGE;
++        base::PageHeader ().m_aDescr.m_nUsed  = base::size() + self::size();
  
 -		m_aNameBlock.initialize();
 -		m_aDataBlock.initialize();
@@ -2804,13 +2804,13 @@
  	*/
 -	OStoreDirectoryPageData (sal_uInt16 nPageSize)
 -		: base (nPageSize)
-+	OStoreDirectoryPageData (sal_uInt16 nPageSize, OStorePageBIOS* pBIOS)
-+		: base (nPageSize, sizeof (self))
++    OStoreDirectoryPageData (sal_uInt16 nPageSize, OStorePageBIOS* pBIOS)
++        : base (nPageSize, sizeof (self))
  	{
 -		base::m_aGuard.m_nMagic = STORE_MAGIC_DIRECTORYPAGE;
 -		base::m_aDescr.m_nUsed = sal::static_int_cast< sal_uInt16 >(
 -            base::m_aDescr.m_nUsed + self::size());
-+		base::PageHeader ().m_aGuard.m_nMagic = STORE_MAGIC_DIRECTORYPAGE;
++        base::PageHeader ().m_aGuard.m_nMagic = STORE_MAGIC_DIRECTORYPAGE;
 +
 +        sal_uInt8* pMem = ((sal_uInt8*) this) + sizeof (self) + base::size ();
 +
@@ -2871,8 +2871,8 @@
  		return ((base::operator==(rOther)           ) &&
 -				(m_aNameBlock == rOther.m_aNameBlock) &&
 -				(m_aDataBlock == rOther.m_aDataBlock)    );
-+				(NameBlock () == rOther.NameBlock ()) &&
-+				(DataBlock () == rOther.DataBlock ()));
++                (NameBlock () == rOther.NameBlock ()) &&
++                (DataBlock () == rOther.DataBlock ()));
  	}
  
  	/** swap (internal and external representation).
@@ -2882,8 +2882,8 @@
  #ifdef OSL_BIGENDIAN
 -		m_aNameBlock.swap();
 -		m_aDataBlock.swap();
-+		NameBlock ().swap();
-+		DataBlock ().swap();
++        NameBlock ().swap();
++        DataBlock ().swap();
  #endif /* OSL_BIGENDIAN */
  	}
  
@@ -2893,8 +2893,8 @@
  	{
 -		m_aNameBlock.guard();
 -		m_aDataBlock.guard();
-+		m_pNameBlock->guard();
-+		m_pDataBlock->guard();
++        m_pNameBlock->guard();
++        m_pDataBlock->guard();
  	}
  
  	/** verify (external representation).
@@ -2902,10 +2902,10 @@
  	storeError verify ()
  	{
 -		storeError eErrCode = m_aNameBlock.verify();
-+		storeError eErrCode = m_pNameBlock->verify();
++        storeError eErrCode = m_pNameBlock->verify();
  		if (eErrCode == store_E_None)
 -			eErrCode = m_aDataBlock.verify();
-+			eErrCode = m_pDataBlock->verify();
++            eErrCode = m_pDataBlock->verify();
  		return eErrCode;
  	}
  
@@ -2914,12 +2914,12 @@
  	sal_uInt32 attrib (void) const
  	{
 -		return m_rPage.m_aNameBlock.m_nAttrib;
-+		return m_rPage.NameBlock ().Attrib ();
++        return m_rPage.NameBlock ().Attrib ();
  	}
  	void attrib (sal_uInt32 nAttrib)
  	{
 -		m_rPage.m_aNameBlock.m_nAttrib = nAttrib;
-+		m_rPage.NameBlock ().SetAttrib (nAttrib);
++        m_rPage.NameBlock ().SetAttrib (nAttrib);
  		touch();
  	}
  
@@ -2928,12 +2928,12 @@
  	sal_uInt32 dataLength (void) const
  	{
 -		return m_rPage.m_aDataBlock.m_nDataLen;
-+		return m_rPage.DataBlock ().DataLen ();
++        return m_rPage.DataBlock ().DataLen ();
  	}
  	void dataLength (sal_uInt32 nLength)
  	{
 -		m_rPage.m_aDataBlock.m_nDataLen = nLength;
-+		m_rPage.DataBlock ().SetDataLen (nLength);
++        m_rPage.DataBlock ().SetDataLen (nLength);
  		touch();
  	}
  
@@ -2942,12 +2942,12 @@
  	sal_uInt32 directLink (sal_uInt16 nIndex) const
  	{
 -		return m_rPage.m_aDataBlock.directLink (nIndex);
-+		return m_rPage.DataBlock ().directLink (nIndex);
++        return m_rPage.DataBlock ().directLink (nIndex);
  	}
  	void directLink (sal_uInt16 nIndex, sal_uInt32 nAddr)
  	{
 -		m_rPage.m_aDataBlock.directLink (nIndex, nAddr);
-+		m_rPage.DataBlock ().directLink (nIndex, nAddr);
++        m_rPage.DataBlock ().directLink (nIndex, nAddr);
  		touch();
  	}
  
@@ -2956,12 +2956,12 @@
  	sal_uInt32 singleLink (sal_uInt16 nIndex) const
  	{
 -		return m_rPage.m_aDataBlock.singleLink (nIndex);
-+		return m_rPage.DataBlock ().singleLink (nIndex);
++        return m_rPage.DataBlock ().singleLink (nIndex);
  	}
  	void singleLink (sal_uInt16 nIndex, sal_uInt32 nAddr)
  	{
 -		m_rPage.m_aDataBlock.singleLink (nIndex, nAddr);
-+		m_rPage.DataBlock ().singleLink (nIndex, nAddr);
++        m_rPage.DataBlock ().singleLink (nIndex, nAddr);
  		touch();
  	}
  
@@ -2970,12 +2970,12 @@
  	sal_uInt32 doubleLink (sal_uInt16 nIndex) const
  	{
 -		return m_rPage.m_aDataBlock.doubleLink (nIndex);
-+		return m_rPage.DataBlock ().doubleLink (nIndex);
++        return m_rPage.DataBlock ().doubleLink (nIndex);
  	}
  	void doubleLink (sal_uInt16 nIndex, sal_uInt32 nAddr)
  	{
 -		m_rPage.m_aDataBlock.doubleLink (nIndex, nAddr);
-+		m_rPage.DataBlock ().doubleLink (nIndex, nAddr);
++        m_rPage.DataBlock ().doubleLink (nIndex, nAddr);
  		touch();
  	}
  
@@ -2984,12 +2984,12 @@
  	sal_uInt32 tripleLink (sal_uInt16 nIndex) const
  	{
 -		return m_rPage.m_aDataBlock.tripleLink (nIndex);
-+		return m_rPage.DataBlock ().tripleLink (nIndex);
++        return m_rPage.DataBlock ().tripleLink (nIndex);
  	}
  	void tripleLink (sal_uInt16 nIndex, sal_uInt32 nAddr)
  	{
 -		m_rPage.m_aDataBlock.tripleLink (nIndex, nAddr);
-+		m_rPage.DataBlock ().tripleLink (nIndex, nAddr);
++        m_rPage.DataBlock ().tripleLink (nIndex, nAddr);
  		touch();
  	}
  
@@ -2998,7 +2998,7 @@
  	page::ChunkScope scope (
  		sal_uInt32                       nPage,
 -		page::DataBlock::LinkDescriptor &rDescr) const;
-+		page::DataBlockT::LinkDescriptor &rDescr) const;
++        page::DataBlockT::LinkDescriptor &rDescr) const;
  
  	/** get (external data page).
  	*/
@@ -3009,7 +3009,7 @@
  
  	storeError eErrCode = xManager->initializeManager (
 -		&*xLockBytes, store_AccessCreate, nPageSize);
-+		&*xLockBytes, store_AccessCreate, nPageSize, STORE_FORMAT_V2);
++        &*xLockBytes, store_AccessCreate, nPageSize, STORE_FORMAT_V2);
  	if (eErrCode != store_E_None)
  		return eErrCode;
  
@@ -3018,7 +3018,7 @@
  	storeAccessMode  eAccessMode,
  	sal_uInt16       nPageSize,
 -	storeFileHandle *phFile
-+	storeFileHandle *phFile,
++    storeFileHandle *phFile,
 +    sal_uInt16       nFormatVersion
  ) SAL_THROW_EXTERN_C()
  {
@@ -3037,7 +3037,7 @@
  	OStorePageKey aKey;
  
 -	eErrCode = OStorePageNameBlock::namei (aPath.pData, aName.pData, aKey);
-+	eErrCode = OStorePageNameBlockA::namei (aPath.pData, aName.pData, aKey);
++    eErrCode = OStorePageNameBlockA::namei (aPath.pData, aName.pData, aKey);
  	if (eErrCode != store_E_None)
  		return eErrCode;
  
@@ -3046,7 +3046,7 @@
  	OStorePageKey aSrcKey;
  
 -	eErrCode = OStorePageNameBlock::namei (
-+	eErrCode = OStorePageNameBlockA::namei (
++    eErrCode = OStorePageNameBlockA::namei (
  		aSrcPath.pData, aSrcName.pData, aSrcKey);
  	if (eErrCode != store_E_None)
  		return eErrCode;
@@ -3055,7 +3055,7 @@
  	OStorePageKey aDstKey;
  
 -	eErrCode = OStorePageNameBlock::namei (
-+	eErrCode = OStorePageNameBlockA::namei (
++    eErrCode = OStorePageNameBlockA::namei (
  		aDstPath.pData, aDstName.pData, aDstKey);
  	if (eErrCode != store_E_None)
  		return eErrCode;
@@ -3064,7 +3064,7 @@
  	OStorePageKey aDstKey;
  
 -	eErrCode = OStorePageNameBlock::namei (
-+	eErrCode = OStorePageNameBlockA::namei (
++    eErrCode = OStorePageNameBlockA::namei (
  		aDstPath.pData, aDstName.pData, aDstKey);
  	if (eErrCode != store_E_None)
  		return eErrCode;
@@ -3073,7 +3073,7 @@
  	OStorePageKey aSrcKey;
  
 -	eErrCode = OStorePageNameBlock::namei (
-+	eErrCode = OStorePageNameBlockA::namei (
++    eErrCode = OStorePageNameBlockA::namei (
  		aSrcPath.pData, aSrcName.pData, aSrcKey);
  	if (eErrCode != store_E_None)
  		return eErrCode;
@@ -3082,7 +3082,7 @@
  	OStorePageKey aKey;
  
 -	eErrCode = OStorePageNameBlock::namei (aPath.pData, aName.pData, aKey);
-+	eErrCode = OStorePageNameBlockA::namei (aPath.pData, aName.pData, aKey);
++    eErrCode = OStorePageNameBlockA::namei (aPath.pData, aName.pData, aKey);
  	if (eErrCode != store_E_None)
  		return eErrCode;
  
@@ -3093,7 +3093,7 @@
  	// Setup inode page key.
  	OStorePageKey aKey;
 -	storeError eErrCode = OStorePageNameBlock::namei (pPath, pName, aKey);
-+	storeError eErrCode = OStorePageNameBlockA::namei (pPath, pName, aKey);
++    storeError eErrCode = OStorePageNameBlockA::namei (pPath, pName, aKey);
  	if (eErrCode != store_E_None)
  		return eErrCode;
  
@@ -3107,9 +3107,9 @@
 -		rtl_copyMemory (
 -			&rNode.m_aNameBlock.m_pData[0],
 -			pName->buffer, pName->length);
-+		rNode.NameBlock ().SetKey (aKey);
-+		rNode.NameBlock ().SetAttrib (nAttrib);
-+		rNode.NameBlock ().SetName (pName, rManager);
++        rNode.NameBlock ().SetKey (aKey);
++        rNode.NameBlock ().SetAttrib (nAttrib);
++        rNode.NameBlock ().SetName (pName, rManager);
  
  		// Save inode page.
  		eErrCode = rManager.save (aKey, aPage);
@@ -3118,7 +3118,7 @@
  		// Obtain 'Destination' page key.
  		OStorePageKey aDstKey;
 -		rtl_copyMemory (&aDstKey, &rNode.m_pData[0], sizeof(aDstKey));
-+		rtl_copyMemory (&aDstKey, rNode.Data (), sizeof(aDstKey));
++        rtl_copyMemory (&aDstKey, rNode.Data (), sizeof(aDstKey));
  
  #ifdef OSL_BIGENDIAN
  		// Swap to internal representation.
@@ -3127,7 +3127,7 @@
  
  	delete m_pNode;
 -	m_pNode = new(m_aDescr.m_nSize) inode(m_aDescr.m_nSize);
-+	m_pNode = new(m_aDescr.m_nSize) inode(m_aDescr.m_nSize, pManager);
++    m_pNode = new(m_aDescr.m_nSize) inode(m_aDescr.m_nSize, pManager);
  	if (!m_pNode)
  		return store_E_OutOfMemory;
  
@@ -3136,28 +3136,28 @@
  		return eErrCode;
  
 -	sal_uInt32 nAttrib = m_pNode->m_aNameBlock.m_nAttrib;
-+	sal_uInt32 nAttrib = m_pNode->NameBlock ().Attrib ();
++    sal_uInt32 nAttrib = m_pNode->NameBlock ().Attrib ();
  	if (!(nAttrib & STORE_ATTRIB_ISDIR))
  		return store_E_NotDirectory;
  
 -	m_aDescr = m_pNode->m_aDescr;
-+	m_aDescr = m_pNode->PageHeader ().m_aDescr;
++    m_aDescr = m_pNode->PageHeader ().m_aDescr;
  	eErrCode = xManager->acquirePage (m_aDescr, store_AccessReadOnly);
  	if (eErrCode == store_E_None)
  	{
  		// Evaluate iteration path from NameBlock.
  		typedef OStorePageGuard G;
 -		sal_Char *pszName = m_pNode->m_aNameBlock.m_pData;
-+		rtl_String *pItemName = NULL;
-+		if ((eErrCode = m_pNode->NameBlock ().Name (&pItemName, *pManager)) != store_E_None)
-+			return eErrCode;
++        rtl_String *pItemName = NULL;
++        if ((eErrCode = m_pNode->NameBlock ().Name (&pItemName, *pManager)) != store_E_None)
++            return eErrCode;
  
 -		m_nPath = m_pNode->m_aNameBlock.m_aKey.m_nHigh;
 -		m_nPath = G::crc32 (m_nPath, pszName, rtl_str_getLength(pszName));
-+		m_nPath = m_pNode->NameBlock ().Key ().m_nHigh;
-+		m_nPath = G::crc32 (m_nPath, pItemName->buffer, pItemName->length);
++        m_nPath = m_pNode->NameBlock ().Key ().m_nHigh;
++        m_nPath = G::crc32 (m_nPath, pItemName->buffer, pItemName->length);
  		m_nPath = G::crc32 (m_nPath, "/", 1);
-+		rtl_string_release (pItemName);
++        rtl_string_release (pItemName);
  
  		// Accept page manager.
  		m_xManager = xManager;
@@ -3181,7 +3181,7 @@
  					k = (k - n) * sizeof(sal_Unicode);
  					rtl_zeroMemory (&rFindData.m_pszName[n], k);
  				}
-+				rtl_string_release (pItemName);
++                rtl_string_release (pItemName);
  
  				rFindData.m_nLength  = n;
  				rFindData.m_nAttrib |= aPage.attrib();
@@ -3190,7 +3190,7 @@
  		if (m_pNode)
  		{
 -			OStorePageDescriptor aDescr (m_pNode->m_aDescr);
-+			OStorePageDescriptor aDescr (m_pNode->PageHeader ().m_aDescr);
++            OStorePageDescriptor aDescr (m_pNode->PageHeader ().m_aDescr);
              m_xManager->releasePage (aDescr);
  		}
  	}
@@ -3199,7 +3199,7 @@
  
  	delete m_pNode;
 -	m_pNode = new(m_nPageSize) inode(m_nPageSize);
-+	m_pNode = new(m_nPageSize) inode(m_nPageSize, pManager);
++    m_pNode = new(m_nPageSize) inode(m_nPageSize, pManager);
  	if (!m_pNode)
  		return store_E_OutOfMemory;
  
@@ -3208,7 +3208,7 @@
  		return eErrCode;
  
 -	sal_uInt32 nAttrib = m_pNode->m_aNameBlock.m_nAttrib;
-+	sal_uInt32 nAttrib = m_pNode->NameBlock ().Attrib ();
++    sal_uInt32 nAttrib = m_pNode->NameBlock ().Attrib ();
  	if (!(nAttrib & STORE_ATTRIB_ISFILE))
  	{
  		// No ISFILE in older versions (backward compatibility).
@@ -3217,7 +3217,7 @@
  
  	// ...
 -	OStorePageDescriptor aDescr (m_pNode->m_aDescr);
-+	OStorePageDescriptor aDescr (m_pNode->PageHeader ().m_aDescr);
++    OStorePageDescriptor aDescr (m_pNode->PageHeader ().m_aDescr);
  	if (eMode != store_AccessReadOnly)
  		eErrCode = xManager->acquirePage (aDescr, store_AccessReadWrite);
  	else
@@ -3226,7 +3226,7 @@
  			rtl_copyMemory (
  				&pData[rnDone],
 -				&m_pNode->m_pData[aDescr.m_nOffset],
-+				m_pNode->Data () + aDescr.m_nOffset,
++                m_pNode->Data () + aDescr.m_nOffset,
  				nLength);
  
  			// Adjust counters.
@@ -3235,7 +3235,7 @@
  				rtl_copyMemory (
  					&pData[rnDone],
 -					&m_pData->m_pData[aDescr.m_nOffset],
-+					&m_pData->RepresentationData ()[aDescr.m_nOffset],
++                    &m_pData->RepresentationData ()[aDescr.m_nOffset],
  					nLength);
  			}
  
@@ -3244,7 +3244,7 @@
  
  			rtl_copyMemory (
 -				&m_pNode->m_pData[aDescr.m_nOffset],
-+				m_pNode->Data () + aDescr.m_nOffset,
++                m_pNode->Data () + aDescr.m_nOffset,
  				&pData[rnDone], nLength);
  
  			// Mark inode dirty.
@@ -3253,7 +3253,7 @@
  
  					rtl_zeroMemory (
 -						&m_pData->m_pData[0],
-+						m_pData->RepresentationData (),
++                        m_pData->RepresentationData (),
  						m_pData->capacity());
  				}
  			}
@@ -3262,7 +3262,7 @@
  
  			rtl_copyMemory (
 -				&m_pData->m_pData[aDescr.m_nOffset],
-+				m_pData->RepresentationData () + aDescr.m_nOffset,
++                m_pData->RepresentationData () + aDescr.m_nOffset,
  				&pData[rnDone], nLength);
  
  			// Save data page.
@@ -3271,7 +3271,7 @@
  			inode::ChunkDescriptor aDescr (nSize, m_pNode->capacity());
  			rtl_zeroMemory (
 -				&m_pNode->m_pData[aDescr.m_nOffset],
-+				m_pNode->Data () + aDescr.m_nOffset,
++                m_pNode->Data () + aDescr.m_nOffset,
  				aDescr.m_nLength);
  		}
  		else
@@ -3280,7 +3280,7 @@
  		return store_E_InvalidAccess;
  
 -	rnSize = m_pNode->m_aDataBlock.m_nDataLen;
-+	rnSize = m_pNode->DataBlock ().DataLen ();
++    rnSize = m_pNode->DataBlock ().DataLen ();
  	return store_E_None;
  }
  
@@ -3291,7 +3291,7 @@
  	ILockBytes      *pLockBytes,
  	storeAccessMode  eAccessMode,
 -	sal_uInt16       nPageSize)
-+	sal_uInt16       nPageSize,
++    sal_uInt16       nPageSize,
 +    sal_uInt16       nFormatVersion)
  {
  	// Acquire exclusive access.
@@ -3301,7 +3301,7 @@
  
  		// Create.
 -		eErrCode = base::create (nPageSize);
-+		eErrCode = base::create (nPageSize, nFormatVersion);
++        eErrCode = base::create (nPageSize, nFormatVersion);
  		if (eErrCode != store_E_None)
  			return eErrCode;
  	}
@@ -3310,11 +3310,11 @@
  	// Check for cacheable page.
  	OStorePageData &rData = rPage.getData();
 -	if (rData.m_aGuard.m_nMagic == STORE_MAGIC_BTREENODE)
-+	if (rData.PageHeader ().m_aGuard.m_nMagic == STORE_MAGIC_BTREENODE)
++    if (rData.PageHeader ().m_aGuard.m_nMagic == STORE_MAGIC_BTREENODE)
  	{
  		// Invalidate cache entry.
 -		storeError eErrCode = m_pCache->invalidate (rData.m_aDescr);
-+		storeError eErrCode = m_pCache->invalidate (rData.PageHeader ().m_aDescr);
++        storeError eErrCode = m_pCache->invalidate (rData.PageHeader ().m_aDescr);
  		if (eErrCode != store_E_None)
  			return eErrCode;
  	}
@@ -3323,11 +3323,11 @@
  	// Check for cacheable page.
  	OStorePageData &rData = rPage.getData();
 -	if (rData.m_aGuard.m_nMagic == STORE_MAGIC_BTREENODE)
-+	if (rData.PageHeader ().m_aGuard.m_nMagic == STORE_MAGIC_BTREENODE)
++    if (rData.PageHeader ().m_aGuard.m_nMagic == STORE_MAGIC_BTREENODE)
  	{
  		// Save PageDescriptor.
 -		OStorePageDescriptor aDescr (rData.m_aDescr);
-+		OStorePageDescriptor aDescr (rData.PageHeader ().m_aDescr);
++        OStorePageDescriptor aDescr (rData.PageHeader ().m_aDescr);
  
  		// Load (cached) page.
  		storeError eErrCode = m_pCache->load (aDescr, rData, *this);
@@ -3336,11 +3336,11 @@
  	// Check for cacheable page.
  	OStorePageData &rData = rPage.getData();
 -	if (rData.m_aGuard.m_nMagic == STORE_MAGIC_BTREENODE)
-+	if (rData.PageHeader ().m_aGuard.m_nMagic == STORE_MAGIC_BTREENODE)
++    if (rData.PageHeader ().m_aGuard.m_nMagic == STORE_MAGIC_BTREENODE)
  	{
  		// Save PageDescriptor.
 -		OStorePageDescriptor aDescr (rData.m_aDescr);
-+		OStorePageDescriptor aDescr (rData.PageHeader ().m_aDescr);
++        OStorePageDescriptor aDescr (rData.PageHeader ().m_aDescr);
  
  #ifdef OSL_BIGENDIAN
  		// Swap to external representation.
@@ -3349,7 +3349,7 @@
  
  		// Check address.
 -		sal_uInt32 nAddr = rPage.m_pData[i].m_aLink.m_nAddr;
-+		sal_uInt32 nAddr = rPage.DataRepresentation ().m_pData[i].m_aLink.m_nAddr;
++        sal_uInt32 nAddr = rPage.DataRepresentation ().m_pData[i].m_aLink.m_nAddr;
  		if (nAddr == STORE_PAGE_NULL)
  		{
  			// Path to entry not exists (Must not happen(?)).
@@ -3358,7 +3358,7 @@
  		// Pre-allocate left most entry (ugly, but we can't insert to left).
  		rPage.insert (0, entry());
 -		rPage.m_pData[0].m_aKey.m_nLow = OStorePageGuard::crc32 (0, "/", 1);
-+		rPage.DataRepresentation ().m_pData[0].m_aKey.m_nLow = OStorePageGuard::crc32 (0, "/", 1);
++        rPage.DataRepresentation ().m_pData[0].m_aKey.m_nLow = OStorePageGuard::crc32 (0, "/", 1);
  
  		// Allocate RootNode.
  		eErrCode = base::allocate (aRoot, ALLOCATE_EOF);
@@ -3367,7 +3367,7 @@
  
  		// Check address.
 -		sal_uInt32 nAddr = rPage.m_pData[i].m_aLink.m_nAddr;
-+		sal_uInt32 nAddr = rPage.DataRepresentation ().m_pData[i].m_aLink.m_nAddr;
++        sal_uInt32 nAddr = rPage.DataRepresentation ().m_pData[i].m_aLink.m_nAddr;
  		if (nAddr == STORE_PAGE_NULL)
  		{
  			// Path to entry not exists (Must not happen(?)).
@@ -3376,14 +3376,14 @@
  
  	// Compare entry.
 -	entry::CompareResult result = rEntry.compare (rPage.m_pData[i]);
-+	entry::CompareResult result = rEntry.compare (rPage.DataRepresentation ().m_pData[i]);
++    entry::CompareResult result = rEntry.compare (rPage.DataRepresentation ().m_pData[i]);
  
  	// Iterate down until equal match.
  	while ((result == entry::COMPARE_GREATER) && (rPage.depth() > 0))
  	{
  		// Check link address.
 -		sal_uInt32 nAddr = rPage.m_pData[i].m_aLink.m_nAddr;
-+		sal_uInt32 nAddr = rPage.DataRepresentation ().m_pData[i].m_aLink.m_nAddr;
++        sal_uInt32 nAddr = rPage.DataRepresentation ().m_pData[i].m_aLink.m_nAddr;
  		if (nAddr == STORE_PAGE_NULL)
  		{
  			// Path to entry not exists (Must not happen(?)).
@@ -3392,7 +3392,7 @@
  
  		// Compare entry.
 -		result = rEntry.compare (rPage.m_pData[i]);
-+		result = rEntry.compare (rPage.DataRepresentation ().m_pData[i]);
++        result = rEntry.compare (rPage.DataRepresentation ().m_pData[i]);
  	}
  
  	OSL_POSTCOND(
@@ -3401,7 +3401,7 @@
  
  	// Check for exact match.
 -	if (!(e.compare (m_pNode[0]->m_pData[i]) == entry::COMPARE_EQUAL))
-+	if (!(e.compare (m_pNode[0]->DataRepresentation ().m_pData[i]) == entry::COMPARE_EQUAL))
++    if (!(e.compare (m_pNode[0]->DataRepresentation ().m_pData[i]) == entry::COMPARE_EQUAL))
  	{
  		// Page not present.
  		return store_E_NotExists;
@@ -3409,7 +3409,7 @@
  		
  	// Existing entry. Check address.
 -	sal_uInt32 nAddr = m_pNode[0]->m_pData[i].m_aLink.m_nAddr;
-+	sal_uInt32 nAddr = m_pNode[0]->DataRepresentation ().m_pData[i].m_aLink.m_nAddr;
++    sal_uInt32 nAddr = m_pNode[0]->DataRepresentation ().m_pData[i].m_aLink.m_nAddr;
  	if (nAddr == STORE_PAGE_NULL)
  	{
  		// Page not present.
@@ -3418,7 +3418,7 @@
  	{
  		// Compare entry.
 -		entry::CompareResult result = e.compare (m_pNode[0]->m_pData[i]);
-+		entry::CompareResult result = e.compare (m_pNode[0]->DataRepresentation ().m_pData[i]);
++        entry::CompareResult result = e.compare (m_pNode[0]->DataRepresentation ().m_pData[i]);
  		OSL_POSTCOND(
  			result != entry::COMPARE_LESS,
  			"OStorePageManager::save(): find failed");
@@ -3427,7 +3427,7 @@
  		{
  			// Existing entry. Check address.
 -			sal_uInt32 nAddr = m_pNode[0]->m_pData[i].m_aLink.m_nAddr;
-+			sal_uInt32 nAddr = m_pNode[0]->DataRepresentation ().m_pData[i].m_aLink.m_nAddr;
++            sal_uInt32 nAddr = m_pNode[0]->DataRepresentation ().m_pData[i].m_aLink.m_nAddr;
  			if (nAddr == STORE_PAGE_NULL)
  			{
  				// Allocate page.
@@ -3436,7 +3436,7 @@
  
  				// Modify page address.
 -				m_pNode[0]->m_pData[i].m_aLink.m_nAddr = rPage.location();
-+				m_pNode[0]->DataRepresentation ().m_pData[i].m_aLink.m_nAddr = rPage.location();
++                m_pNode[0]->DataRepresentation ().m_pData[i].m_aLink.m_nAddr = rPage.location();
  
  				// Save modified NodePage.
  				node aNode (*m_pNode[0]);
@@ -3445,7 +3445,7 @@
  
  	// Check for exact match.
 -	if (!(e.compare (m_pNode[0]->m_pData[i]) == entry::COMPARE_EQUAL))
-+	if (!(e.compare (m_pNode[0]->DataRepresentation ().m_pData[i]) == entry::COMPARE_EQUAL))
++    if (!(e.compare (m_pNode[0]->DataRepresentation ().m_pData[i]) == entry::COMPARE_EQUAL))
  	{
  		// Page not present.
  		return store_E_NotExists;
@@ -3453,7 +3453,7 @@
  		
  	// Existing entry.
 -	e = m_pNode[0]->m_pData[i];
-+	e = m_pNode[0]->DataRepresentation ().m_pData[i];
++    e = m_pNode[0]->DataRepresentation ().m_pData[i];
  	if (nMask1 != nMask2)
  	{
  		// Evaluate new attributes.
@@ -3462,7 +3462,7 @@
  				// Set new attributes.
  				e.m_nAttrib = nAttrib;
 -				m_pNode[0]->m_pData[i] = e;
-+				m_pNode[0]->DataRepresentation ().m_pData[i] = e;
++                m_pNode[0]->DataRepresentation ().m_pData[i] = e;
  
  				// Save modified NodePage.
  				node aNode (*m_pNode[0]);
@@ -3471,7 +3471,7 @@
  
  	// Check for exact match.
 -	if (!(e.compare (m_pNode[0]->m_pData[i]) == entry::COMPARE_EQUAL))
-+	if (!(e.compare (m_pNode[0]->DataRepresentation ().m_pData[i]) == entry::COMPARE_EQUAL))
++    if (!(e.compare (m_pNode[0]->DataRepresentation ().m_pData[i]) == entry::COMPARE_EQUAL))
  	{
  		// Page not present.
  		return store_E_NotExists;
@@ -3479,7 +3479,7 @@
  		
  	// Existing entry. Check address.
 -	e = m_pNode[0]->m_pData[i];
-+	e = m_pNode[0]->DataRepresentation ().m_pData[i];
++    e = m_pNode[0]->DataRepresentation ().m_pData[i];
  	if (e.m_aLink.m_nAddr == STORE_PAGE_NULL)
  	{
  		// Page not present.
@@ -3488,7 +3488,7 @@
  	{
  		// Compare entry.
 -		entry::CompareResult result = e.compare (m_pNode[0]->m_pData[i]);
-+		entry::CompareResult result = e.compare (m_pNode[0]->DataRepresentation ().m_pData[i]);
++        entry::CompareResult result = e.compare (m_pNode[0]->DataRepresentation ().m_pData[i]);
  		OSL_POSTCOND(
  			result != entry::COMPARE_LESS,
  			"OStorePageManager::link(): find failed");
@@ -3497,7 +3497,7 @@
  	// Setup 'Source' page key.
  	OStorePageKey aSrcKey;
 -	eErrCode = OStorePageNameBlock::namei (pSrcPath, pSrcName, aSrcKey);
-+	eErrCode = OStorePageNameBlockA::namei (pSrcPath, pSrcName, aSrcKey);
++    eErrCode = OStorePageNameBlockA::namei (pSrcPath, pSrcName, aSrcKey);
  	if (eErrCode != store_E_None)
  		return eErrCode;
  
@@ -3506,7 +3506,7 @@
  	{
  		// Compare entry.
 -		entry::CompareResult result = e.compare (m_pNode[0]->m_pData[i]);
-+		entry::CompareResult result = e.compare (m_pNode[0]->DataRepresentation ().m_pData[i]);
++        entry::CompareResult result = e.compare (m_pNode[0]->DataRepresentation ().m_pData[i]);
  		OSL_POSTCOND(
  			result != entry::COMPARE_LESS,
  			"OStorePageManager::symlink(): find failed");
@@ -3515,7 +3515,7 @@
  		m_pDirect->initialize();
  	if (!m_pDirect)
 -		m_pDirect = new(m_nPageSize) inode(m_nPageSize);
-+		m_pDirect = new(m_nPageSize) inode(m_nPageSize, this);
++        m_pDirect = new(m_nPageSize) inode(m_nPageSize, this);
  	if (!m_pDirect)
  		return store_E_OutOfMemory;
  
@@ -3524,8 +3524,8 @@
 -	rtl_copyMemory (
 -		&m_pDirect->m_aNameBlock.m_pData[0],
 -		pSrcName->buffer, pSrcName->length);
-+	m_pDirect->NameBlock ().SetKey (aSrcKey);
-+	m_pDirect->NameBlock ().SetName (pSrcName, *this);
++    m_pDirect->NameBlock ().SetKey (aSrcKey);
++    m_pDirect->NameBlock ().SetName (pSrcName, *this);
  
  	// Store 'Destination' page key.
  	OStorePageKey aDstKey (rDstKey);
@@ -3533,7 +3533,7 @@
  	aDstKey.swap(); // Swap to external representation.
  #endif /* OSL_BIGENDIAN */
 -	rtl_copyMemory (&m_pDirect->m_pData[0], &aDstKey, sizeof(aDstKey));
-+	rtl_copyMemory (m_pDirect->Data (), &aDstKey, sizeof(aDstKey));
++    rtl_copyMemory (m_pDirect->Data (), &aDstKey, sizeof(aDstKey));
  
  	// Mark 'Source' as symbolic link to 'Destination'.
  	OStoreDirectoryPageObject aPage (*m_pDirect);
@@ -3542,7 +3542,7 @@
  	// Setup 'Destination' page key.
  	OStorePageKey aDstKey;
 -	eErrCode = OStorePageNameBlock::namei (pDstPath, pDstName, aDstKey);
-+	eErrCode = OStorePageNameBlockA::namei (pDstPath, pDstName, aDstKey);
++    eErrCode = OStorePageNameBlockA::namei (pDstPath, pDstName, aDstKey);
  	if (eErrCode != store_E_None)
  		return eErrCode;
  
@@ -3551,7 +3551,7 @@
  
  	// Check for exact match.
 -	if (!(e.compare (m_pNode[0]->m_pData[i]) == entry::COMPARE_EQUAL))
-+	if (!(e.compare (m_pNode[0]->DataRepresentation ().m_pData[i]) == entry::COMPARE_EQUAL))
++    if (!(e.compare (m_pNode[0]->DataRepresentation ().m_pData[i]) == entry::COMPARE_EQUAL))
  	{
  		// Page not present.
  		return store_E_NotExists;
@@ -3559,7 +3559,7 @@
  
  	// Existing 'Source' entry. Check address.
 -	e = m_pNode[0]->m_pData[i];
-+	e = m_pNode[0]->DataRepresentation ().m_pData[i];
++    e = m_pNode[0]->DataRepresentation ().m_pData[i];
  	if (e.m_aLink.m_nAddr == STORE_PAGE_NULL)
  	{
  		// Page not present.
@@ -3568,7 +3568,7 @@
  		// Check directory page buffer.
  		if (!m_pDirect)
 -			m_pDirect = new(m_nPageSize) inode(m_nPageSize);
-+			m_pDirect = new(m_nPageSize) inode(m_nPageSize, this);
++            m_pDirect = new(m_nPageSize) inode(m_nPageSize, this);
  		if (!m_pDirect)
  			return store_E_OutOfMemory;
  
@@ -3577,7 +3577,7 @@
  	{
  		// Compare entry.
 -		entry::CompareResult result = e.compare (m_pNode[0]->m_pData[i]);
-+		entry::CompareResult result = e.compare (m_pNode[0]->DataRepresentation ().m_pData[i]);
++        entry::CompareResult result = e.compare (m_pNode[0]->DataRepresentation ().m_pData[i]);
  		OSL_POSTCOND(
  			result != entry::COMPARE_LESS,
  			"OStorePageManager::rename(): find failed");
@@ -3593,8 +3593,8 @@
 -			&m_pDirect->m_aNameBlock.m_pData[nDstLen],
 -			STORE_MAXIMUM_NAMESIZE - nDstLen);
 -		m_pDirect->m_aNameBlock.m_aKey = e.m_aKey;
-+		m_pDirect->NameBlock ().SetName (pDstName, *this);
-+		m_pDirect->NameBlock ().SetKey (e.m_aKey);
++        m_pDirect->NameBlock ().SetName (pDstName, *this);
++        m_pDirect->NameBlock ().SetKey (e.m_aKey);
  
  		// Save directory page.
  		OStoreDirectoryPageObject aPage (*m_pDirect);
@@ -3603,7 +3603,7 @@
  
  	// Check for exact match.
 -	if (!(e.compare (m_pNode[0]->m_pData[i]) == entry::COMPARE_EQUAL))
-+	if (!(e.compare (m_pNode[0]->DataRepresentation ().m_pData[i]) == entry::COMPARE_EQUAL))
++    if (!(e.compare (m_pNode[0]->DataRepresentation ().m_pData[i]) == entry::COMPARE_EQUAL))
  	{
  		// Page not present.
  		return store_E_NotExists;
@@ -3611,7 +3611,7 @@
  
  	// Existing entry. Check address.
 -	e = m_pNode[0]->m_pData[i];
-+	e = m_pNode[0]->DataRepresentation ().m_pData[i];
++    e = m_pNode[0]->DataRepresentation ().m_pData[i];
  	if (e.m_aLink.m_nAddr == STORE_PAGE_NULL)
  	{
  		// Page not present.
@@ -3620,7 +3620,7 @@
  		// Check directory page buffer.
  		if (!m_pDirect)
 -			m_pDirect = new(m_nPageSize) inode(m_nPageSize);
-+			m_pDirect = new(m_nPageSize) inode(m_nPageSize, this);
++            m_pDirect = new(m_nPageSize) inode(m_nPageSize, this);
  		if (!m_pDirect)
  			return store_E_OutOfMemory;
  
@@ -3629,7 +3629,7 @@
  
  		// Acquire page write access.
 -		OStorePageDescriptor aDescr (m_pDirect->m_aDescr);
-+		OStorePageDescriptor aDescr (m_pDirect->PageHeader ().m_aDescr);
++        OStorePageDescriptor aDescr (m_pDirect->PageHeader ().m_aDescr);
  		eErrCode = base::acquirePage (aDescr, store_AccessReadWrite);
  		if (eErrCode != store_E_None)
  			return eErrCode;
@@ -3638,7 +3638,7 @@
  
  			// Truncate internal data page.
 -			rtl_zeroMemory (&m_pDirect->m_pData[0], m_pDirect->capacity());
-+			rtl_zeroMemory (m_pDirect->Data (), m_pDirect->capacity());
++            rtl_zeroMemory (m_pDirect->Data (), m_pDirect->capacity());
  			aPage.dataLength (0);
  		}
  
@@ -3647,7 +3647,7 @@
  		
  	// Compare entry.
 -	entry::CompareResult result = e.compare (m_pNode[0]->m_pData[i]);
-+	entry::CompareResult result = e.compare (m_pNode[0]->DataRepresentation ().m_pData[i]);
++    entry::CompareResult result = e.compare (m_pNode[0]->DataRepresentation ().m_pData[i]);
  	OSL_POSTCOND(
  		result != entry::COMPARE_LESS,
  		"OStorePageManager::iterate(): find failed");
@@ -3656,7 +3656,7 @@
  
  	// GreaterEqual. Found next entry.
 -	e = m_pNode[0]->m_pData[i];
-+	e = m_pNode[0]->DataRepresentation ().m_pData[i];
++    e = m_pNode[0]->DataRepresentation ().m_pData[i];
  
  	// Setup result.
  	rKey    = e.m_aKey;
@@ -3665,14 +3665,14 @@
  
  	// Initialize as 'Destination' with 'Source' page size.
 -	eErrCode = self::initializeManager (pDstLB, store_AccessCreate, nPageSize);
-+	eErrCode = self::initializeManager (pDstLB, store_AccessCreate, nPageSize, version ());
++    eErrCode = self::initializeManager (pDstLB, store_AccessCreate, nPageSize, version ());
  	if (eErrCode != store_E_None)
  		return eErrCode;
  
  	// Initialize directory and data page buffers.
  	if (!m_pDirect)
 -		m_pDirect = new(m_nPageSize) inode(m_nPageSize);
-+		m_pDirect = new(m_nPageSize) inode(m_nPageSize, this);
++        m_pDirect = new(m_nPageSize) inode(m_nPageSize, this);
  	if (!m_pData)
  		m_pData = new(m_nPageSize) data(m_nPageSize);
  	if (!(m_pDirect && m_pData))
@@ -3680,7 +3680,7 @@
  
  	// Initialize 'Source' directory page.
 -	inode *pDirect = new(m_nPageSize) inode(m_nPageSize);
-+	inode *pDirect = new(m_nPageSize) inode(m_nPageSize, this);
++    inode *pDirect = new(m_nPageSize) inode(m_nPageSize, this);
  	if (!pDirect)
  		return store_E_OutOfMemory;
  
@@ -3690,8 +3690,8 @@
  		// Obtain page key and data length.
 -		OStorePageKey aKey (pDirect->m_aNameBlock.m_aKey);
 -		sal_uInt32 nDataLen = pDirect->m_aDataBlock.m_nDataLen;
-+		OStorePageKey aKey (pDirect->NameBlock ().Key ());
-+		sal_uInt32 nDataLen = pDirect->DataBlock ().DataLen ();
++        OStorePageKey aKey (pDirect->NameBlock ().Key ());
++        sal_uInt32 nDataLen = pDirect->DataBlock ().DataLen ();
  
  		// Determine data page scope.
  		inode::ChunkScope eScope = pDirect->scope (nDataLen);
@@ -3701,8 +3701,8 @@
  
 -			m_pDirect->m_aDataBlock.initialize();
 -			m_pDirect->m_aDataBlock.m_nDataLen = m_pDirect->capacity();
-+			m_pDirect->DataBlock ().initialize();
-+			m_pDirect->DataBlock ().SetDataLen (m_pDirect->capacity());
++            m_pDirect->DataBlock ().initialize();
++            m_pDirect->DataBlock ().SetDataLen (m_pDirect->capacity());
  
  			// Insert 'Destination' directory page.
  			eErrCode = save (aKey, aDstPage);
@@ -3711,7 +3711,7 @@
  			{
  				// Re-initialize data page size.
 -				m_pData->m_aDescr.m_nSize = m_nPageSize;
-+				m_pData->PageHeader ().m_aDescr.m_nSize = m_nPageSize;
++                m_pData->PageHeader ().m_aDescr.m_nSize = m_nPageSize;
  
  				// Read 'Source' data page.
  				OStorePageBIOS &rBIOS  = *(aCtx.m_xBIOS);
@@ -3720,7 +3720,7 @@
  
  			// Update 'Destination' directory page.
 -			m_pDirect->m_aDataBlock.m_nDataLen = nDataLen;
-+			m_pDirect->DataBlock ().SetDataLen (nDataLen);
++            m_pDirect->DataBlock ().SetDataLen (nDataLen);
  			eErrCode = base::save (aDstPage);
  		}
  	}
@@ -3729,19 +3729,19 @@
  			for (i = 0; i < n; i++)
  			{
 -				e = pNode->m_pData[i];
-+				e = pNode->DataRepresentation ().m_pData[i];
++                e = pNode->DataRepresentation ().m_pData[i];
  				if (e.m_nAttrib & STORE_ATTRIB_ISLINK)
  				{
  					// Hard link.
  					aSrcPage.location (e.m_aLink.m_nAddr);
 -					pDirect->m_aDescr.m_nSize = m_nPageSize;
-+					pDirect->PageHeader ().m_aDescr.m_nSize = m_nPageSize;
++                    pDirect->PageHeader ().m_aDescr.m_nSize = m_nPageSize;
  
  					eErrCode = aCtx.m_xBIOS->load (aSrcPage);
  					if (eErrCode == store_E_None)
  					{
 -						OStorePageKey aDstKey (pDirect->m_aNameBlock.m_aKey);
-+						OStorePageKey aDstKey (pDirect->NameBlock ().Key ());
++                        OStorePageKey aDstKey (pDirect->NameBlock ().Key ());
  						eErrCode = link (e.m_aKey, aDstKey);
  					}
  					e.m_nAttrib &= ~STORE_ATTRIB_ISLINK;
@@ -3752,7 +3752,7 @@
  		ILockBytes      *pLockBytes,
  		storeAccessMode  eAccessMode,
 -		sal_uInt16       nPageSize);
-+		sal_uInt16       nPageSize,
++        sal_uInt16       nPageSize,
 +        sal_uInt16       nFormatVersion);
  
  	/** isValid.
@@ -3764,7 +3764,7 @@
   */
  OStoreBTreeNodeData::OStoreBTreeNodeData (sal_uInt16 nPageSize)
 -	: OStorePageData (nPageSize)
-+	: OStorePageData (nPageSize, sizeof (self))
++    : OStorePageData (nPageSize, sizeof (self))
  {
  	initialize();
  }
@@ -3775,16 +3775,16 @@
 -	base::m_aGuard.m_nMagic = STORE_MAGIC_BTREENODE;
 -	base::m_aDescr.m_nUsed  = base::size() + self::size();
 -	self::m_aGuard.m_nMagic = 0;
-+	base::PageHeader ().m_aGuard.m_nMagic = STORE_MAGIC_BTREENODE;
-+	base::PageHeader ().m_aDescr.m_nUsed  = base::size() + self::size();
-+	self::PageHeader ().m_aGuard.m_nMagic = 0;
++    base::PageHeader ().m_aGuard.m_nMagic = STORE_MAGIC_BTREENODE;
++    base::PageHeader ().m_aDescr.m_nUsed  = base::size() + self::size();
++    self::PageHeader ().m_aGuard.m_nMagic = 0;
  
  	sal_uInt16 i, n = capacityCount();
  	T          t;
  
  	for (i = 1; i < n; i++)
 -		m_pData[i] = t;
-+		DataRepresentation ().m_pData[i] = t;
++        DataRepresentation ().m_pData[i] = t;
  }
  
  /*
@@ -3793,12 +3793,12 @@
  {
  #ifdef OSL_BIGENDIAN
 -	m_aGuard.swap();
-+	DataRepresentation ().m_aGuard.swap();
++    DataRepresentation ().m_aGuard.swap();
  
  	sal_uInt16 i, n = sal_uInt16(capacity(rDescr) / sizeof(T));
  	for (i = 0; i < n; i++)
 -		m_pData[i].swap();
-+		DataRepresentation ().m_pData[i].swap();
++        DataRepresentation ().m_pData[i].swap();
  #endif /* OSL_BIGENDIAN */
  }
  
@@ -3807,10 +3807,10 @@
  		register sal_Int32 m = ((l + r) >> 1);
  
 -		if (t.m_aKey == m_pData[m].m_aKey)
-+		if (t.m_aKey == DataRepresentation ().m_pData[m].m_aKey)
++        if (t.m_aKey == DataRepresentation ().m_pData[m].m_aKey)
  			return ((sal_uInt16)(m));
 -		if (t.m_aKey < m_pData[m].m_aKey)
-+		if (t.m_aKey < DataRepresentation ().m_pData[m].m_aKey)
++        if (t.m_aKey < DataRepresentation ().m_pData[m].m_aKey)
  			r = m - 1;
  		else
  			l = m + 1;
@@ -3818,7 +3818,7 @@
  
  	sal_uInt16 k = ((sal_uInt16)(r));
 -	if ((k < capacityCount()) && (t.m_aKey < m_pData[k].m_aKey))
-+	if ((k < capacityCount()) && (t.m_aKey < DataRepresentation ().m_pData[k].m_aKey))
++    if ((k < capacityCount()) && (t.m_aKey < DataRepresentation ().m_pData[k].m_aKey))
  		return(k - 1);
  	else
  		return(k);
@@ -3827,13 +3827,13 @@
  	{
  		// shift right.
 -		rtl_moveMemory (&m_pData[i + 1], &m_pData[i], (n - i) * sizeof(T));
-+		rtl_moveMemory (&DataRepresentation ().m_pData[i + 1], &DataRepresentation ().m_pData[i], (n - i) * sizeof(T));
++        rtl_moveMemory (&DataRepresentation ().m_pData[i + 1], &DataRepresentation ().m_pData[i], (n - i) * sizeof(T));
  
  		// insert.
 -		m_pData[i] = t;
 -		base::m_aDescr.m_nUsed += sal_uInt16(sizeof(T));
-+		DataRepresentation ().m_pData[i] = t;
-+		base::PageHeader ().m_aDescr.m_nUsed += sal_uInt16(sizeof(T));
++        DataRepresentation ().m_pData[i] = t;
++        base::PageHeader ().m_aDescr.m_nUsed += sal_uInt16(sizeof(T));
  	}
  }
  
@@ -3842,13 +3842,13 @@
  		// shift left.
  		rtl_moveMemory (
 -			&m_pData[i], &m_pData[i + 1], (n - i - 1) * sizeof(T));
-+			&DataRepresentation ().m_pData[i], &DataRepresentation ().m_pData[i + 1], (n - i - 1) * sizeof(T));
++            &DataRepresentation ().m_pData[i], &DataRepresentation ().m_pData[i + 1], (n - i - 1) * sizeof(T));
  
  		// truncate.
 -		m_pData[n - 1] = T();
 -		base::m_aDescr.m_nUsed -= sal_uInt16(sizeof(T));
-+		DataRepresentation ().m_pData[n - 1] = T();
-+		base::PageHeader ().m_aDescr.m_nUsed -= sal_uInt16(sizeof(T));
++        DataRepresentation ().m_pData[n - 1] = T();
++        base::PageHeader ().m_aDescr.m_nUsed -= sal_uInt16(sizeof(T));
  	}
  }
  
@@ -3857,7 +3857,7 @@
  		sal_uInt16 n = usageCount();
  		sal_uInt16 m = rPageR.usageCount();
 -		rtl_copyMemory (&m_pData[n], &rPageR.m_pData[0], m * sizeof(T));
-+		rtl_copyMemory (&DataRepresentation ().m_pData[n], &rPageR.DataRepresentation ().m_pData[0], m * sizeof(T));
++        rtl_copyMemory (&DataRepresentation ().m_pData[n], &rPageR.DataRepresentation ().m_pData[0], m * sizeof(T));
  		usageCount (n + m);
  	}
  }
@@ -3866,7 +3866,7 @@
  {
  	sal_uInt16 h = capacityCount() / 2;
 -	rtl_copyMemory (&m_pData[0], &rPageL.m_pData[h], h * sizeof(T));
-+	rtl_copyMemory (&DataRepresentation ().m_pData[0], &rPageL.DataRepresentation ().m_pData[h], h * sizeof(T));
++    rtl_copyMemory (&DataRepresentation ().m_pData[0], &rPageL.DataRepresentation ().m_pData[h], h * sizeof(T));
  	truncate (h);
  }
  
@@ -3875,7 +3875,7 @@
  
  	for (sal_uInt16 i = n; i < m; i++)
 -		m_pData[i] = t;
-+		DataRepresentation ().m_pData[i] = t;
++        DataRepresentation ().m_pData[i] = t;
  	usageCount (n);
  }
  
@@ -3884,7 +3884,7 @@
  
  	// Save PageDescriptor.
 -	D aDescr (m_rPage.m_aDescr);
-+	D aDescr (m_rPage.PageHeader ().m_aDescr);
++    D aDescr (m_rPage.PageHeader ().m_aDescr);
  
  	// Acquire Lock.
  	storeError eErrCode = rBIOS.acquireLock (aDescr.m_nAddr, aDescr.m_nSize);
@@ -3893,7 +3893,7 @@
  	// Insert right page.
  	T entry;
 -	entry.m_aKey          = rPageR.m_pData[0].m_aKey;
-+	entry.m_aKey          = rPageR.DataRepresentation ().m_pData[0].m_aKey;
++    entry.m_aKey          = rPageR.DataRepresentation ().m_pData[0].m_aKey;
  	entry.m_aLink.m_nAddr = rPageR.location();
  
  	m_rPage.insert (nIndexL + 1, entry);
@@ -3902,7 +3902,7 @@
  
  	// Save PageDescriptor.
 -	D aDescr (m_rPage.m_aDescr);
-+	D aDescr (m_rPage.PageHeader ().m_aDescr);
++    D aDescr (m_rPage.PageHeader ().m_aDescr);
  
  	// Acquire Lock.
  	storeError eErrCode = rBIOS.acquireLock (aDescr.m_nAddr, aDescr.m_nSize);
@@ -3911,7 +3911,7 @@
  	{
  		// Check link entry.
 -		if (!(rEntryL.compare (m_rPage.m_pData[nIndexL]) == T::COMPARE_EQUAL))
-+		if (!(rEntryL.compare (m_rPage.DataRepresentation ().m_pData[nIndexL]) == T::COMPARE_EQUAL))
++        if (!(rEntryL.compare (m_rPage.DataRepresentation ().m_pData[nIndexL]) == T::COMPARE_EQUAL))
  		{
  			rBIOS.releaseLock (aDescr.m_nAddr, aDescr.m_nSize);
  			STORE_METHOD_LEAVE(pMutex, store_E_InvalidAccess);
@@ -3920,7 +3920,7 @@
  		// Load link node.
  		self aNodeL (rPageL);
 -		aNodeL.location (m_rPage.m_pData[nIndexL].m_aLink.m_nAddr);
-+		aNodeL.location (m_rPage.DataRepresentation ().m_pData[nIndexL].m_aLink.m_nAddr);
++        aNodeL.location (m_rPage.DataRepresentation ().m_pData[nIndexL].m_aLink.m_nAddr);
  
  		eErrCode = rBIOS.load (aNodeL);
  		if (eErrCode != store_E_None)
@@ -3929,7 +3929,7 @@
  
  			// Relink.
 -			m_rPage.m_pData[nIndexL].m_aKey = rPageL.m_pData[0].m_aKey;
-+			m_rPage.DataRepresentation ().m_pData[nIndexL].m_aKey = rPageL.DataRepresentation ().m_pData[0].m_aKey;
++            m_rPage.DataRepresentation ().m_pData[nIndexL].m_aKey = rPageL.DataRepresentation ().m_pData[0].m_aKey;
  			touch();
  		}
  	}
@@ -3937,7 +3937,7 @@
  	{
  		// Check leaf entry.
 -		if (!(rEntryL.compare (m_rPage.m_pData[nIndexL]) == T::COMPARE_EQUAL))
-+		if (!(rEntryL.compare (m_rPage.DataRepresentation ().m_pData[nIndexL]) == T::COMPARE_EQUAL))
++        if (!(rEntryL.compare (m_rPage.DataRepresentation ().m_pData[nIndexL]) == T::COMPARE_EQUAL))
  		{
  			rBIOS.releaseLock (aDescr.m_nAddr, aDescr.m_nSize);
  			STORE_METHOD_LEAVE(pMutex, store_E_NotExists);
@@ -3945,7 +3945,7 @@
  
  		// Save leaf entry.
 -		rEntryL = m_rPage.m_pData[nIndexL];
-+		rEntryL = m_rPage.DataRepresentation ().m_pData[nIndexL];
++        rEntryL = m_rPage.DataRepresentation ().m_pData[nIndexL];
  
  		// Remove leaf index.
  		m_rPage.remove (nIndexL);
@@ -3954,7 +3954,7 @@
  
  	// Save PageDescriptor.
 -	OStorePageDescriptor aDescr (m_rPage.m_aDescr);
-+	OStorePageDescriptor aDescr (m_rPage.PageHeader ().m_aDescr);
++    OStorePageDescriptor aDescr (m_rPage.PageHeader ().m_aDescr);
  
  	// Acquire Lock.
  	storeError eErrCode = rBIOS.acquireLock (aDescr.m_nAddr, aDescr.m_nSize);
@@ -3964,8 +3964,8 @@
  
 -	m_rPage.m_pData[0].m_aKey = rPageL.m_pData[0].m_aKey;
 -	m_rPage.m_pData[0].m_aLink.m_nAddr = rPageL.location();
-+	m_rPage.DataRepresentation ().m_pData[0].m_aKey = rPageL.DataRepresentation ().m_pData[0].m_aKey;
-+	m_rPage.DataRepresentation ().m_pData[0].m_aLink.m_nAddr = rPageL.location();
++    m_rPage.DataRepresentation ().m_pData[0].m_aKey = rPageL.DataRepresentation ().m_pData[0].m_aKey;
++    m_rPage.DataRepresentation ().m_pData[0].m_aLink.m_nAddr = rPageL.location();
  
  	m_rPage.truncate (1);
  	m_rPage.depth (m_rPage.depth() + 1);
@@ -3994,7 +3994,7 @@
  	sal_uInt16 capacity (void) const
  	{
 -		return self::capacity (base::m_aDescr);
-+		return self::capacity (base::PageHeader ().m_aDescr);
++        return self::capacity (base::PageHeader ().m_aDescr);
  	}
  
  	/** capacityCount (must be even).
@@ -4003,7 +4003,7 @@
  	sal_uInt16 usage (void) const
  	{
 -		return self::usage (base::m_aDescr);
-+		return self::usage (base::PageHeader ().m_aDescr);
++        return self::usage (base::PageHeader ().m_aDescr);
  	}
  
  	/** usageCount.
@@ -4012,7 +4012,7 @@
  	void usageCount (sal_uInt16 nCount)
  	{
 -		base::m_aDescr.m_nUsed = base::size() + self::size() +
-+		base::PageHeader ().m_aDescr.m_nUsed = base::size() + self::size() +
++        base::PageHeader ().m_aDescr.m_nUsed = base::size() + self::size() +
              sal_uInt16(nCount * sizeof(T));
  	}
  
@@ -4022,8 +4022,8 @@
  
 -			m_aGuard = rOther.m_aGuard;
 -			rtl_copyMemory (m_pData, rOther.m_pData, capacity());
-+			DataRepresentation ().m_aGuard = rOther.DataRepresentation ().m_aGuard;
-+			rtl_copyMemory (DataRepresentation ().m_pData, rOther.DataRepresentation ().m_pData, capacity());
++            DataRepresentation ().m_aGuard = rOther.DataRepresentation ().m_aGuard;
++            rtl_copyMemory (DataRepresentation ().m_pData, rOther.DataRepresentation ().m_pData, capacity());
  		}
  		return *this;
  	}
@@ -4032,7 +4032,7 @@
  	sal_Bool operator== (const self& rOther) const
  	{
 -		return (base::operator==(rOther) && (m_aGuard == rOther.m_aGuard));
-+		return (base::operator==(rOther) && (DataRepresentation ().m_aGuard == rOther.DataRepresentation ().m_aGuard));
++        return (base::operator==(rOther) && (DataRepresentation ().m_aGuard == rOther.DataRepresentation ().m_aGuard));
  	}
  
  	/** swap (external and internal representation).
@@ -4042,13 +4042,13 @@
  		sal_uInt32 nCRC32 = 0;
 -		nCRC32 = G::crc32 (nCRC32, &m_aGuard.m_nMagic, sizeof(sal_uInt32));
 -		nCRC32 = G::crc32 (nCRC32, m_pData, capacity(rDescr));
-+		nCRC32 = G::crc32 (nCRC32, &DataRepresentation ().m_aGuard.m_nMagic, sizeof(sal_uInt32));
-+		nCRC32 = G::crc32 (nCRC32, DataRepresentation ().m_pData, capacity(rDescr));
++        nCRC32 = G::crc32 (nCRC32, &DataRepresentation ().m_aGuard.m_nMagic, sizeof(sal_uInt32));
++        nCRC32 = G::crc32 (nCRC32, DataRepresentation ().m_pData, capacity(rDescr));
  #ifdef OSL_BIGENDIAN
  		nCRC32 = OSL_SWAPDWORD(nCRC32);
  #endif /* OSL_BIGENDIAN */
 -		m_aGuard.m_nCRC32 = nCRC32;
-+		DataRepresentation ().m_aGuard.m_nCRC32 = nCRC32;
++        DataRepresentation ().m_aGuard.m_nCRC32 = nCRC32;
  	}
  
  	/** verify (external representation).
@@ -4058,13 +4058,13 @@
  		sal_uInt32 nCRC32 = 0;
 -		nCRC32 = G::crc32 (nCRC32, &m_aGuard.m_nMagic, sizeof(sal_uInt32));
 -		nCRC32 = G::crc32 (nCRC32, m_pData, capacity(rDescr));
-+		nCRC32 = G::crc32 (nCRC32, &DataRepresentation ().m_aGuard.m_nMagic, sizeof(sal_uInt32));
-+		nCRC32 = G::crc32 (nCRC32, DataRepresentation ().m_pData, capacity(rDescr));
++        nCRC32 = G::crc32 (nCRC32, &DataRepresentation ().m_aGuard.m_nMagic, sizeof(sal_uInt32));
++        nCRC32 = G::crc32 (nCRC32, DataRepresentation ().m_pData, capacity(rDescr));
  #ifdef OSL_BIGENDIAN
  		nCRC32 = OSL_SWAPDWORD(nCRC32);
  #endif /* OSL_BIGENDIAN */
 -		if (m_aGuard.m_nCRC32 != nCRC32)
-+		if (DataRepresentation ().m_aGuard.m_nCRC32 != nCRC32)
++        if (DataRepresentation ().m_aGuard.m_nCRC32 != nCRC32)
  			return store_E_InvalidChecksum;
  		else
  			return store_E_None;
@@ -4073,12 +4073,12 @@
  	sal_uInt32 depth (void) const
  	{
 -		return self::m_aGuard.m_nMagic;
-+		return self::DataRepresentation ().m_aGuard.m_nMagic;
++        return self::DataRepresentation ().m_aGuard.m_nMagic;
  	}
  	void depth (sal_uInt32 nDepth)
  	{
 -		self::m_aGuard.m_nMagic = nDepth;
-+		self::DataRepresentation ().m_aGuard.m_nMagic = nDepth;
++        self::DataRepresentation ().m_aGuard.m_nMagic = nDepth;
  	}
  
  	/** queryMerge.
@@ -4089,15 +4089,15 @@
  	t_file.cxx	\
  	t_base.cxx	\
 -	t_store.cxx
-+	t_store.cxx	\
-+	t_shell.cxx
++    t_store.cxx	\
++    t_shell.cxx
  
  OBJFILES=	\
  	$(OBJ)$/t_file.obj	\
  	$(OBJ)$/t_base.obj	\
 -	$(OBJ)$/t_store.obj
-+	$(OBJ)$/t_store.obj	\
-+	$(OBJ)$/t_shell.obj
++    $(OBJ)$/t_store.obj	\
++    $(OBJ)$/t_shell.obj
  
  APP1TARGET=		t_file
  APP1OBJS=		$(OBJ)$/t_file.obj
@@ -4110,8 +4110,8 @@
 +APP4STDLIBS=	$(STORELIB)
 +APP4STDLIBS+=	$(SALLIB)
 +APP4DEPN=	\
-+	$(SLB)$/store.lib	\
-+	$(L)$/isal.lib
++    $(SLB)$/store.lib	\
++    $(L)$/isal.lib
 +
  # --- Targets ---
  
