@@ -1,6 +1,22 @@
---- cppcanvas/source/inc/implrenderer.hxx.old	2009-04-02 11:06:59.000000000 +0000
-+++ cppcanvas/source/inc/implrenderer.hxx	2009-04-06 16:42:16.000000000 +0000
-@@ -50,6 +50,11 @@ class Gradient;
+From 3340d71e0ea2cb0eeb213af255ad069f78509c90 Mon Sep 17 00:00:00 2001
+From: Jan Holesovsky <kendy@suse.cz>
+Date: Fri, 14 May 2010 17:04:01 +0200
+Subject: [PATCH 600/878] emf+-cppcanvas-emfplus.diff
+
+---
+ cppcanvas/source/inc/implrenderer.hxx         |  134 +++
+ cppcanvas/source/mtfrenderer/emfplus.cxx      | 1357 +++++++++++++++++++++++++
+ cppcanvas/source/mtfrenderer/implrenderer.cxx |   32 +
+ cppcanvas/source/mtfrenderer/makefile.mk      |    1 +
+ cppcanvas/util/makefile.mk                    |    2 +-
+ 5 files changed, 1525 insertions(+), 1 deletions(-)
+ create mode 100644 cppcanvas/source/mtfrenderer/emfplus.cxx
+
+diff --git a/cppcanvas/source/inc/implrenderer.hxx b/cppcanvas/source/inc/implrenderer.hxx
+index dc1488b..116418d 100644
+--- a/cppcanvas/source/inc/implrenderer.hxx
++++ b/cppcanvas/source/inc/implrenderer.hxx
+@@ -47,6 +47,11 @@ class Gradient;
  class BitmapEx;
  class MapMode;
  class Size;
@@ -12,7 +28,7 @@
  
  namespace basegfx {
      class B2DPolyPolygon;
-@@ -63,11 +68,110 @@ namespace cppcanvas
+@@ -60,11 +65,110 @@ namespace cppcanvas
      {
          struct OutDevState;
          struct ActionFactoryParameters;
@@ -106,7 +122,7 @@
 +                {
 +#ifdef OSL_BIGENDIAN
 +                    rXForm.eM11 = GetSwapFloat( rIn );
-+                    rXForm.eM12 = GetSwapFloat( rIn ); 
++                    rXForm.eM12 = GetSwapFloat( rIn );
 +                    rXForm.eM21 = GetSwapFloat( rIn );
 +                    rXForm.eM22 = GetSwapFloat( rIn );
 +                    rXForm.eDx = GetSwapFloat( rIn );
@@ -123,7 +139,7 @@
          class ImplRenderer : public virtual Renderer, protected CanvasGraphicHelper
          {
          public:
-@@ -106,6 +210,14 @@ namespace cppcanvas
+@@ -103,6 +207,14 @@ namespace cppcanvas
              // (externally not visible)
              typedef ::std::vector< MtfAction > 		ActionVector;
  
@@ -138,7 +154,7 @@
  
          private:
              // default: disabled copy/assignment
-@@ -158,8 +270,30 @@ namespace cppcanvas
+@@ -155,8 +267,30 @@ namespace cppcanvas
                                     ActionVector::const_iterator& o_rRangeBegin,
                                     ActionVector::const_iterator& o_rRangeEnd ) const;
  
@@ -169,84 +185,11 @@
          };
  
  
---- cppcanvas/util/makefile.mk
-+++ cppcanvas/util/makefile.mk
-@@ -55,7 +55,7 @@
- 
- SHL1TARGET= 	$(TARGET)$(DLLPOSTFIX)
- SHL1IMPLIB= 	i$(TARGET)
--SHL1STDLIBS=	$(TOOLSLIB) $(CPPULIB) $(SALLIB) $(VCLLIB) $(COMPHELPERLIB) $(CANVASTOOLSLIB) $(CPPUHELPERLIB) $(BASEGFXLIB) $(I18NISOLANGLIB)
-+SHL1STDLIBS=	$(TOOLSLIB) $(CPPULIB) $(SALLIB) $(VCLLIB) $(COMPHELPERLIB) $(CANVASTOOLSLIB) $(CPPUHELPERLIB) $(BASEGFXLIB)  $(I18NISOLANGLIB) $(SVTOOLLIB)
- 
- .IF "$(debug)$(dbgutil)"!=""
- SHL1STDLIBS += $(CPPUHELPERLIB)
---- cppcanvas/source/mtfrenderer/makefile.mk.old	2009-04-02 11:06:59.000000000 +0000
-+++ cppcanvas/source/mtfrenderer/makefile.mk	2009-04-06 16:42:16.000000000 +0000
-@@ -48,6 +48,7 @@ CDEFS+= -DVERBOSE
- 
- SLOFILES =	$(SLO)$/cachedprimitivebase.obj \
- 			$(SLO)$/bitmapaction.obj \
-+            $(SLO)$/emfplus.obj \
- 			$(SLO)$/implrenderer.obj \
- 			$(SLO)$/lineaction.obj \
- 			$(SLO)$/pointaction.obj \
---- cppcanvas/source/mtfrenderer/implrenderer.cxx.old	2009-04-02 11:06:59.000000000 +0000
-+++ cppcanvas/source/mtfrenderer/implrenderer.cxx	2009-04-06 16:42:16.000000000 +0000
-@@ -105,6 +105,8 @@
- #include "mtftools.hxx"
- #include "outdevstate.hxx"
- 
-+#define EMFP_DEBUG(x)
-+//#define EMFP_DEBUG(x) x
- 
- using namespace ::com::sun::star;
- 
-@@ -1902,6 +1904,33 @@ namespace cppcanvas
-                                 }
-                             }
-                         }
-+                        // Handle drawing layer fills
-+                        else if( pAct->GetComment().Equals( "EMF_PLUS" ) ) {
-+                            static int count = -1, limit = 0x7fffffff;
-+                            if (count == -1) {
-+                                count = 0;
-+                                char *env;
-+                                if (env = getenv ("EMF_PLUS_LIMIT")) {
-+                                    limit = atoi (env);
-+                                }
-+                            }
-+                            EMFP_DEBUG (printf ("EMF+ passed to canvas mtf renderer, size: %d\n", pAct->GetDataSize ()));
-+                            if (count < limit)
-+                            processEMFPlus( pAct, rFactoryParms, getState( rStates ), rCanvas );
-+                            count ++;
-+                        } else if( pAct->GetComment().Equals( "EMF_PLUS_HEADER_INFO" ) ) {
-+                            EMFP_DEBUG (printf ("EMF+ passed to canvas mtf renderer - header info, size: %d\n", pAct->GetDataSize ()));
-+
-+                            SvMemoryStream rMF ((void*) pAct->GetData (), pAct->GetDataSize (), STREAM_READ);
-+
-+                            rMF >> nFrameLeft >> nFrameTop >> nFrameRight >> nFrameBottom;
-+                            EMFP_DEBUG (printf ("EMF+ picture frame: %d,%d - %d,%d\n", nFrameLeft, nFrameTop, nFrameRight, nFrameBottom));
-+                            rMF >> nPixX >> nPixY >> nMmX >> nMmY;
-+                            EMFP_DEBUG (printf ("EMF+ ref device pixel size: %dx%d mm size: %dx%d\n", nPixX, nPixY, nMmX, nMmY));
-+
-+                            rMF >> aBaseTransform;
-+                            //aWorldTransform.Set (aBaseTransform);
-+                        }
-                     }
-                     break;
- 
-@@ -3070,6 +3099,9 @@ namespace cppcanvas
-                                            aParms );
-             }
- 
-+            /* EMF+ */
-+            memset (aObjects, 0, sizeof (aObjects));
-+
-             createActions( const_cast<GDIMetaFile&>(rMtf), // HACK(Q2):
- 								                           // we're
-                         		                           // changing
---- cppcanvas/source/mtfrenderer/emfplus.cxx.old	1970-01-01 00:00:00.000000000 +0000
-+++ cppcanvas/source/mtfrenderer/emfplus.cxx	2009-04-06 16:42:16.000000000 +0000
+diff --git a/cppcanvas/source/mtfrenderer/emfplus.cxx b/cppcanvas/source/mtfrenderer/emfplus.cxx
+new file mode 100644
+index 0000000..ef1e76a
+--- /dev/null
++++ b/cppcanvas/source/mtfrenderer/emfplus.cxx
 @@ -0,0 +1,1357 @@
 +#include <tools/stream.hxx>
 +#include <vcl/metaact.hxx>
@@ -595,7 +538,7 @@
 +
 +                        s >> areaX >> areaY;
 +                        EMFP_DEBUG (printf ("EMF+\tcenter point: %f,%f\n", areaX, areaY));
-+                        
++
 +                        s >> surroundColorsNumber;
 +                        EMFP_DEBUG (printf ("EMF+\tsurround colors: %d\n", surroundColorsNumber));
 +
@@ -690,7 +633,7 @@
 +                        s >> areaX >> areaY >> areaWidth >> areaHeight;
 +
 +                        EMFP_DEBUG (printf ("EMF+\tarea: %f,%f - %fx%f\n", areaX, areaY, areaWidth, areaHeight));
-+                
++
 +                        UINT32 color;
 +
 +                        s >> color;
@@ -880,7 +823,7 @@
 +            sal_Int32 stride;
 +            sal_Int32 pixelFormat;
 +            Graphic graphic;
-+    
++
 +
 +            void Read (SvStream &s)
 +            {
@@ -1047,7 +990,7 @@
 +                rendering::Texture aTexture;
 +                double nRotation( 0.0 );
 +                const ::basegfx::B2DRectangle aBounds( ::basegfx::tools::getRange( localPolygon ) );
-+                const double nScale( ::basegfx::pruneScaleValue( fabs( aBounds.getHeight()*sin(nRotation) ) + 
++                const double nScale( ::basegfx::pruneScaleValue( fabs( aBounds.getHeight()*sin(nRotation) ) +
 +                                                                 fabs( aBounds.getWidth()*cos(nRotation) )));
 +
 +                aWorldTransformation.set (0, 0, aWorldTransform.eM11);
@@ -1169,7 +1112,7 @@
 +                    }
 +                }
 +
-+                ::basegfx::unotools::affineMatrixFromHomMatrix( aTexture.AffineTransform, 
++                ::basegfx::unotools::affineMatrixFromHomMatrix( aTexture.AffineTransform,
 +                                                                aTextureTransformation );
 +
 +                pPolyAction =
@@ -1188,7 +1131,7 @@
 +                    MtfAction(
 +                        pPolyAction,
 +                        rParms.mrCurrActionIndex ) );
-+                
++
 +                rParms.mrCurrActionIndex += pPolyAction->getActionCount()-1;
 +            }
 +        }
@@ -1217,7 +1160,7 @@
 +                    UINT32 header, version;
 +
 +                    rMF >> header >> version >> nHDPI >> nVDPI;
-+ 
++
 +                    EMFP_DEBUG (printf ("EMF+ Header\n"));
 +                    EMFP_DEBUG (printf ("EMF+\theader: 0x%08x version: %d horizontal DPI: %d vertical DPI: %d dual: %d\n", header, version, nHDPI, nVDPI, flags & 1));
 +
@@ -1271,14 +1214,14 @@
 +                            EMFPPath *path;
 +                            aObjects [index] = path = new EMFPPath (points);
 +                            path->Read (rMF, pathFlags, *this);
-+                    
++
 +                            break;
 +                        case EmfPlusObjectTypeRegion: {
 +                            EMFPRegion *region;
 +
 +                            aObjects [index] = region = new EMFPRegion ();
 +                            region->Read (rMF);
-+                            
++
 +                            break;
 +                        }
 +                        case EmfPlusObjectTypeImage:
@@ -1402,7 +1345,7 @@
 +
 +                        pen->SetStrokeAttributes (aStrokeAttributes, *this, rState);
 +
-+            ActionSharedPtr pPolyAction( 
++            ActionSharedPtr pPolyAction(
 +                internal::PolyPolyActionFactory::createPolyPolyAction(
 +                    polygon, rFactoryParms.mrCanvas, rState, aStrokeAttributes ) );
 +
@@ -1412,7 +1355,7 @@
 +                    MtfAction(
 +                        pPolyAction,
 +                        rFactoryParms.mrCurrActionIndex ) );
-+                
++
 +                rFactoryParms.mrCurrActionIndex += pPolyAction->getActionCount()-1;
 +            }
 +
@@ -1441,7 +1384,7 @@
 +
 +                        pen->SetStrokeAttributes (aStrokeAttributes, *this, rState);
 +
-+            ActionSharedPtr pPolyAction( 
++            ActionSharedPtr pPolyAction(
 +                internal::PolyPolyActionFactory::createPolyPolyAction(
 +                    polygon, rFactoryParms.mrCanvas, rState, aStrokeAttributes ) );
 +
@@ -1451,7 +1394,7 @@
 +                    MtfAction(
 +                        pPolyAction,
 +                        rFactoryParms.mrCurrActionIndex ) );
-+                
++
 +                rFactoryParms.mrCurrActionIndex += pPolyAction->getActionCount()-1;
 +            }
 +                        break;
@@ -1501,7 +1444,7 @@
 +                                if( pBmpAction ) {
 +                                    maActions.push_back( MtfAction( pBmpAction,
 +                                                                    rFactoryParms.mrCurrActionIndex ) );
-+                            
++
 +                                    rFactoryParms.mrCurrActionIndex += pBmpAction->getActionCount()-1;
 +                                }
 +                            } else
@@ -1605,3 +1548,88 @@
 +        }
 +    }
 +}
+diff --git a/cppcanvas/source/mtfrenderer/implrenderer.cxx b/cppcanvas/source/mtfrenderer/implrenderer.cxx
+index 2d2505a..bd9866b 100644
+--- a/cppcanvas/source/mtfrenderer/implrenderer.cxx
++++ b/cppcanvas/source/mtfrenderer/implrenderer.cxx
+@@ -103,6 +103,8 @@
+ #include "mtftools.hxx"
+ #include "outdevstate.hxx"
+ 
++#define EMFP_DEBUG(x)
++//#define EMFP_DEBUG(x) x
+ 
+ using namespace ::com::sun::star;
+ 
+@@ -1911,6 +1913,33 @@ namespace cppcanvas
+                                 }
+                             }
+                         }
++                        // Handle drawing layer fills
++                        else if( pAct->GetComment().Equals( "EMF_PLUS" ) ) {
++                            static int count = -1, limit = 0x7fffffff;
++                            if (count == -1) {
++                                count = 0;
++                                char *env;
++                                if (env = getenv ("EMF_PLUS_LIMIT")) {
++                                    limit = atoi (env);
++                                }
++                            }
++                            EMFP_DEBUG (printf ("EMF+ passed to canvas mtf renderer, size: %d\n", pAct->GetDataSize ()));
++                            if (count < limit)
++                            processEMFPlus( pAct, rFactoryParms, getState( rStates ), rCanvas );
++                            count ++;
++                        } else if( pAct->GetComment().Equals( "EMF_PLUS_HEADER_INFO" ) ) {
++                            EMFP_DEBUG (printf ("EMF+ passed to canvas mtf renderer - header info, size: %d\n", pAct->GetDataSize ()));
++
++                            SvMemoryStream rMF ((void*) pAct->GetData (), pAct->GetDataSize (), STREAM_READ);
++
++                            rMF >> nFrameLeft >> nFrameTop >> nFrameRight >> nFrameBottom;
++                            EMFP_DEBUG (printf ("EMF+ picture frame: %d,%d - %d,%d\n", nFrameLeft, nFrameTop, nFrameRight, nFrameBottom));
++                            rMF >> nPixX >> nPixY >> nMmX >> nMmY;
++                            EMFP_DEBUG (printf ("EMF+ ref device pixel size: %dx%d mm size: %dx%d\n", nPixX, nPixY, nMmX, nMmY));
++
++                            rMF >> aBaseTransform;
++                            //aWorldTransform.Set (aBaseTransform);
++                        }
+                     }
+                     break;
+ 
+@@ -3079,6 +3108,9 @@ namespace cppcanvas
+                                            aParms );
+             }
+ 
++            /* EMF+ */
++            memset (aObjects, 0, sizeof (aObjects));
++
+             createActions( const_cast<GDIMetaFile&>(rMtf), // HACK(Q2):
+                                                            // we're
+                                                            // changing
+diff --git a/cppcanvas/source/mtfrenderer/makefile.mk b/cppcanvas/source/mtfrenderer/makefile.mk
+index d142731..cc49184 100644
+--- a/cppcanvas/source/mtfrenderer/makefile.mk
++++ b/cppcanvas/source/mtfrenderer/makefile.mk
+@@ -44,6 +44,7 @@ CDEFS+= -DVERBOSE
+ 
+ SLOFILES =	$(SLO)$/cachedprimitivebase.obj \
+             $(SLO)$/bitmapaction.obj \
++            $(SLO)$/emfplus.obj \
+             $(SLO)$/implrenderer.obj \
+             $(SLO)$/lineaction.obj \
+             $(SLO)$/pointaction.obj \
+diff --git a/cppcanvas/util/makefile.mk b/cppcanvas/util/makefile.mk
+index f81bb31..10e7222 100644
+--- a/cppcanvas/util/makefile.mk
++++ b/cppcanvas/util/makefile.mk
+@@ -46,7 +46,7 @@ LIB1FILES=\
+ 
+ SHL1TARGET= 	$(TARGET)$(DLLPOSTFIX)
+ SHL1IMPLIB= 	i$(TARGET)
+-SHL1STDLIBS=	$(TOOLSLIB) $(CPPULIB) $(SALLIB) $(VCLLIB) $(COMPHELPERLIB) $(CANVASTOOLSLIB) $(CPPUHELPERLIB) $(BASEGFXLIB) $(I18NISOLANGLIB)
++SHL1STDLIBS=	$(TOOLSLIB) $(CPPULIB) $(SALLIB) $(VCLLIB) $(COMPHELPERLIB) $(CANVASTOOLSLIB) $(CPPUHELPERLIB) $(BASEGFXLIB)  $(I18NISOLANGLIB) $(SVTOOLLIB)
+ 
+ .IF "$(debug)$(dbgutil)"!=""
+ SHL1STDLIBS += $(CPPUHELPERLIB)
+-- 
+1.7.0.1
+

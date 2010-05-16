@@ -1,11 +1,17 @@
-Index: sal/rtl/source/alloc.c
-===================================================================
-RCS file: /cvs/porting/sal/rtl/source/alloc.c,v
-retrieving revision 1.14
-diff -u -3 -p -r1.14 alloc.c
---- sal/rtl/source/alloc.c	17 Dec 2003 17:10:01 -0000	1.14
-+++ sal/rtl/source/alloc.c	29 Feb 2004 17:50:41 -0000
-@@ -227,6 +227,39 @@ static sal_uInt32 __rtl_memory_vmpagesiz
+From 78ccddd18f3d159b1cdce74dfe6fc168cc673e56 Mon Sep 17 00:00:00 2001
+From: Jan Holesovsky <kendy@suse.cz>
+Date: Fri, 14 May 2010 16:58:15 +0200
+Subject: [PATCH 306/878] valgrind-alloc.diff
+
+---
+ sal/rtl/source/alloc.c |  158 ++++++++++++++++++++++++++++++++++++++++--------
+ 1 files changed, 133 insertions(+), 25 deletions(-)
+
+diff --git a/sal/rtl/source/alloc.c b/sal/rtl/source/alloc.c
+index 256a1b6..c529777 100644
+--- a/sal/rtl/source/alloc.c
++++ b/sal/rtl/source/alloc.c
+@@ -287,6 +287,39 @@ static sal_Size __rtl_memory_vmpagesize (void)
  
  /*===========================================================================
   *
@@ -17,8 +23,8 @@ diff -u -3 -p -r1.14 alloc.c
 +#include <stdlib.h>   /* getenv */
 +#include <stdio.h>    /* stderr */
 +
-+typedef 
-+   enum { AMode_CUSTOM, AMode_SYSTEM, AMode_UNSET } 
++typedef
++   enum { AMode_CUSTOM, AMode_SYSTEM, AMode_UNSET }
 +   AllocMode;
 +
 +static AllocMode alloc_mode = AMode_UNSET;
@@ -45,7 +51,7 @@ diff -u -3 -p -r1.14 alloc.c
   * rtl_memory (global) internals.
   *
   *=========================================================================*/
-@@ -1165,8 +1165,8 @@ static void __rtl_memory_enqueue (memory
+@@ -1233,8 +1266,8 @@ static void __rtl_memory_enqueue (memory_type **ppMemory)
  /*
   * rtl_reallocateMemory.
   */
@@ -54,11 +60,11 @@ diff -u -3 -p -r1.14 alloc.c
 +static
 +void* SAL_CALL rtl_reallocateMemory_CUSTOM (void * p, sal_Size n) SAL_THROW_EXTERN_C()
  {
- 	memory_type * memory;
- 	if (!(!p || !n))
-@@ -1322,18 +1322,33 @@ void* SAL_CALL rtl_reallocateMemory (voi
- 	}
- 	return (p);
+     memory_type * memory;
+     if (!(!p || !n))
+@@ -1390,18 +1423,33 @@ void* SAL_CALL rtl_reallocateMemory (void * p, sal_Size n) SAL_THROW_EXTERN_C()
+     }
+     return (p);
  }
 -#else  /* FORCE_SYSALLOC */
 -void* SAL_CALL rtl_reallocateMemory (void * p, sal_Size n) SAL_THROW_EXTERN_C()
@@ -66,7 +72,7 @@ diff -u -3 -p -r1.14 alloc.c
 +static
 +void* SAL_CALL rtl_reallocateMemory_SYSTEM (void * p, sal_Size n) SAL_THROW_EXTERN_C()
  {
- 	return realloc(p, (sal_Size)(n));
+     return realloc(p, (sal_Size)(n));
  }
 -#endif /* FORCE_SYSALLOC */
 +
@@ -93,11 +99,11 @@ diff -u -3 -p -r1.14 alloc.c
 +static
 +void* SAL_CALL rtl_allocateMemory_CUSTOM (sal_Size n) SAL_THROW_EXTERN_C()
  {
- 	void * p = 0;
- 	if (n > 0)
-@@ -1355,18 +1355,33 @@ void* SAL_CALL rtl_allocateMemory (sal_u
- 	}
- 	return (p);
+     void * p = 0;
+     if (n > 0)
+@@ -1423,18 +1471,33 @@ void* SAL_CALL rtl_allocateMemory (sal_Size n) SAL_THROW_EXTERN_C()
+     }
+     return (p);
  }
 -#else  /* FORCE_SYSALLOC */
 -void* SAL_CALL rtl_allocateMemory (sal_Size n) SAL_THROW_EXTERN_C()
@@ -105,7 +111,7 @@ diff -u -3 -p -r1.14 alloc.c
 +static
 +void* SAL_CALL rtl_allocateMemory_SYSTEM (sal_Size n) SAL_THROW_EXTERN_C()
  {
- 	return malloc((sal_Size)(n));
+     return malloc((sal_Size)(n));
  }
 -#endif /* FORCE_SYSALLOC */
 +
@@ -132,11 +138,11 @@ diff -u -3 -p -r1.14 alloc.c
 +static
 +void SAL_CALL rtl_freeMemory_CUSTOM (void * p) SAL_THROW_EXTERN_C()
  {
- 	if (p)
- 	{
-@@ -1387,18 +1387,34 @@ void SAL_CALL rtl_freeMemory (void * p) 
- 		RTL_MEMORY_LEAVE();
- 	}
+     if (p)
+     {
+@@ -1455,18 +1518,34 @@ void SAL_CALL rtl_freeMemory (void * p) SAL_THROW_EXTERN_C()
+         RTL_MEMORY_LEAVE();
+     }
  }
 -#else  /* FORCE_SYSALLOC */
 -void SAL_CALL rtl_freeMemory (void * p) SAL_THROW_EXTERN_C()
@@ -144,7 +150,7 @@ diff -u -3 -p -r1.14 alloc.c
 +static
 +void SAL_CALL rtl_freeMemory_SYSTEM (void * p) SAL_THROW_EXTERN_C()
  {
- 	free(p);
+     free(p);
  }
 -#endif /* FORCE_SYSALLOC */
 +
@@ -172,11 +178,11 @@ diff -u -3 -p -r1.14 alloc.c
 +static
 +void* SAL_CALL rtl_allocateZeroMemory_CUSTOM (sal_Size n) SAL_THROW_EXTERN_C()
  {
- 	void * p = 0;
- 	if (n > 0)
-@@ -1421,18 +1421,32 @@ void* SAL_CALL rtl_allocateZeroMemory (s
- 	}
- 	return (p);
+     void * p = 0;
+     if (n > 0)
+@@ -1489,18 +1568,32 @@ void* SAL_CALL rtl_allocateZeroMemory (sal_Size n) SAL_THROW_EXTERN_C()
+     }
+     return (p);
  }
 -#else  /* FORCE_SYSALLOC */
 -void* SAL_CALL rtl_allocateZeroMemory (sal_Size n) SAL_THROW_EXTERN_C()
@@ -184,7 +190,7 @@ diff -u -3 -p -r1.14 alloc.c
 +static
 +void* SAL_CALL rtl_allocateZeroMemory_SYSTEM (sal_Size n) SAL_THROW_EXTERN_C()
  {
- 	return calloc((sal_Size)(n), 1);
+     return calloc((sal_Size)(n), 1);
  }
 -#endif /* FORCE_SYSALLOC */
 +
@@ -211,10 +217,10 @@ diff -u -3 -p -r1.14 alloc.c
 +void SAL_CALL rtl_freeZeroMemory_CUSTOM (void * p, sal_Size n) SAL_THROW_EXTERN_C()
  {
      (void) n; /* unused */
- 	if (p)
-@@ -1454,8 +1454,9 @@ void SAL_CALL rtl_freeZeroMemory (void *
- 		RTL_MEMORY_LEAVE();
- 	}
+     if (p)
+@@ -1523,8 +1616,9 @@ void SAL_CALL rtl_freeZeroMemory (void * p, sal_Size n) SAL_THROW_EXTERN_C()
+         RTL_MEMORY_LEAVE();
+     }
  }
 -#else  /* FORCE_SYSALLOC */
 -void SAL_CALL rtl_freeZeroMemory (void * p, sal_Size n) SAL_THROW_EXTERN_C()
@@ -222,11 +228,11 @@ diff -u -3 -p -r1.14 alloc.c
 +static
 +void SAL_CALL rtl_freeZeroMemory_SYSTEM (void * p, sal_Size n) SAL_THROW_EXTERN_C()
  {
- 	if (p)
- 	{
-@@ -1463,7 +1463,21 @@ void SAL_CALL rtl_freeZeroMemory (void *
- 		free(p);
- 	}
+     if (p)
+     {
+@@ -1532,7 +1626,21 @@ void SAL_CALL rtl_freeZeroMemory (void * p, sal_Size n) SAL_THROW_EXTERN_C()
+         free(p);
+     }
  }
 -#endif /* FORCE_SYSALLOC */
 +
@@ -247,4 +253,6 @@ diff -u -3 -p -r1.14 alloc.c
  
  /*===========================================================================
   *
+-- 
+1.7.0.1
 

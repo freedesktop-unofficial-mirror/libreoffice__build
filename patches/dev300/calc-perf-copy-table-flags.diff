@@ -1,8 +1,17 @@
-diff --git sc/source/core/data/table2.cxx sc/source/core/data/table2.cxx
-index 889510f..0857312 100644
---- sc/source/core/data/table2.cxx
-+++ sc/source/core/data/table2.cxx
-@@ -663,6 +663,8 @@ void ScTable::CopyToTable(SCCOL nCol1, SCROW nRow1, SCCOL nCol2, SCROW nRow2,
+From 2fb27cf36ca169eefc6eb2ee53193a1aa2aa846f Mon Sep 17 00:00:00 2001
+From: Jan Holesovsky <kendy@suse.cz>
+Date: Fri, 14 May 2010 16:56:56 +0200
+Subject: [PATCH 235/878] calc-perf-copy-table-flags.diff
+
+---
+ sc/source/core/data/table2.cxx |   68 +++++++++++++++++++++++++++++----------
+ 1 files changed, 50 insertions(+), 18 deletions(-)
+
+diff --git a/sc/source/core/data/table2.cxx b/sc/source/core/data/table2.cxx
+index c3c43d7..cbe46ee 100644
+--- a/sc/source/core/data/table2.cxx
++++ b/sc/source/core/data/table2.cxx
+@@ -653,6 +653,8 @@ void ScTable::CopyToTable(SCCOL nCol1, SCROW nRow1, SCCOL nCol2, SCROW nRow2,
              //	Charts muessen beim Ein-/Ausblenden angepasst werden
              ScChartListenerCollection* pCharts = pDestTab->pDocument->GetChartListenerCollection();
  
@@ -11,7 +20,7 @@ index 889510f..0857312 100644
              BOOL bWidth  = (nRow1==0 && nRow2==MAXROW && pColWidth && pDestTab->pColWidth);
              BOOL bHeight = (nCol1==0 && nCol2==MAXCOL && pRowHeight && pDestTab->pRowHeight);
  
-@@ -673,18 +675,18 @@ void ScTable::CopyToTable(SCCOL nCol1, SCROW nRow1, SCCOL nCol2, SCROW nRow2,
+@@ -663,18 +665,18 @@ void ScTable::CopyToTable(SCCOL nCol1, SCROW nRow1, SCCOL nCol2, SCROW nRow2,
                  if (bWidth)
                      for (SCCOL i=nCol1; i<=nCol2; i++)
                      {
@@ -19,31 +28,35 @@ index 889510f..0857312 100644
 -                    bool bHiddenChange = (pDestTab->ColHidden(i) != bThisHidden);
 +                        bool bThisHidden = ColHidden(i);
 +                        bool bHiddenChange = (pDestTab->ColHidden(i) != bThisHidden);
- 						bool bChange = bHiddenChange || (pDestTab->pColWidth[i] != pColWidth[i]);
+                         bool bChange = bHiddenChange || (pDestTab->pColWidth[i] != pColWidth[i]);
                          pDestTab->pColWidth[i] = pColWidth[i];
                          pDestTab->pColFlags[i] = pColFlags[i];
 -                    pDestTab->SetColHidden(i, i, bThisHidden);
 +                        pDestTab->SetColHidden(i, i, bThisHidden);
                          //!	Aenderungen zusammenfassen?
- 						if (bHiddenChange && pCharts) 
+                         if (bHiddenChange && pCharts)
                              pCharts->SetRangeDirty(ScRange( i, 0, nTab, i, MAXROW, nTab ));
  
- 						if (bChange)
--							pDestTab->InvalidatePageBreaks();
+                         if (bChange)
+-                            pDestTab->InvalidatePageBreaks();
 +                            bFlagChange = true;
                      }
  
                  if (bHeight)
-@@ -692,28 +694,58 @@ void ScTable::CopyToTable(SCCOL nCol1, SCROW nRow1, SCCOL nCol2, SCROW nRow2,
- 					bool bChange = pDestTab->pRowHeight->SumValues(nRow1, nRow2) != pRowHeight->SumValues(nRow1, nRow2);
+@@ -682,28 +684,58 @@ void ScTable::CopyToTable(SCCOL nCol1, SCROW nRow1, SCCOL nCol2, SCROW nRow2,
+                     bool bChange = pDestTab->pRowHeight->SumValues(nRow1, nRow2) != pRowHeight->SumValues(nRow1, nRow2);
  
- 					if (bChange)
--						pDestTab->InvalidatePageBreaks();
+                     if (bChange)
+-                        pDestTab->InvalidatePageBreaks();
 +                        bFlagChange = true;
  
                      pDestTab->pRowHeight->CopyFrom( *pRowHeight, nRow1, nRow2);
 -                    for (SCROW i=nRow1; i<=nRow2; i++)
--                    {
++                    pDestTab->pRowFlags->CopyFrom(*pRowFlags, nRow1, nRow2);
++
++                    // Hidden flags.
++                    for (SCROW i = nRow1; i <= nRow2; ++i)
+                     {
 -                        // TODO: might need some performance improvement, block
 -                        // operations instead of single GetValue()/SetValue() calls.
 -                        BYTE nThisRowFlags = pRowFlags->GetValue(i);
@@ -52,25 +65,20 @@ index 889510f..0857312 100644
 -                        pDestTab->pRowFlags->SetValue( i, nThisRowFlags );
 -                    pDestTab->SetRowHidden(i, i, bThisHidden);
 -                        //!	Aenderungen zusammenfassen?
--						if (bHiddenChange && pCharts)
+-                        if (bHiddenChange && pCharts)
 -                            pCharts->SetRangeDirty(ScRange( 0, i, nTab, MAXCOL, i, nTab ));
-+                    pDestTab->pRowFlags->CopyFrom(*pRowFlags, nRow1, nRow2);
- 
--						if (bHiddenChange)
--							pDestTab->InvalidatePageBreaks();
-+                    // Hidden flags.
-+                    for (SCROW i = nRow1; i <= nRow2; ++i)
-+                    {
 +                        SCROW nThisLastRow, nDestLastRow;
 +                        bool bThisHidden = RowHidden(i, NULL, &nThisLastRow);
 +                        bool bDestHidden = pDestTab->RowHidden(i, NULL, &nDestLastRow);
-+    
+ 
+-                        if (bHiddenChange)
+-                            pDestTab->InvalidatePageBreaks();
 +                        // If the segment sizes differ, we take the shorter segment of the two.
 +                        SCROW nLastRow = ::std::min(nThisLastRow, nDestLastRow);
 +                        if (nLastRow >= nRow2)
 +                            // the last row shouldn't exceed the upper bound the caller specified.
 +                            nLastRow = nRow2;
-+    
++
 +                        pDestTab->SetRowHidden(i, nLastRow, bThisHidden);
 +
 +                        bool bThisHiddenChange = (bThisHidden != bDestHidden);
@@ -79,14 +87,14 @@ index 889510f..0857312 100644
 +                            // Hidden flags differ.
 +                            pCharts->SetRangeDirty(ScRange(0, i, nTab, MAXCOL, nLastRow, nTab));
 +                        }
-+    
++
 +                        if (bThisHiddenChange)
 +                            bFlagChange = true;
-+    
++
 +                        // Jump to the last row of the identical flag segment.
 +                        i = nLastRow;
-                     }
-+                
++                    }
++
 +                    // Filtered flags.
 +                    for (SCROW i = nRow1; i <= nRow2; ++i)
 +                    {
@@ -97,7 +105,7 @@ index 889510f..0857312 100644
 +                            nLastRow = nRow2;
 +                        pDestTab->SetRowFiltered(i, nLastRow, bFiltered);
 +                        i = nLastRow;
-+                    }
+                     }
                  }
                  pDestTab->DecRecalcLevel();
              }
@@ -108,3 +116,6 @@ index 889510f..0857312 100644
              pDestTab->SetOutlineTable( pOutlineTable );		// auch nur wenn bColRowFlags
          }
      }
+-- 
+1.7.0.1
+

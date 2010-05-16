@@ -1,6 +1,18 @@
-diff -rup ../ooo320-m15-orig/oox-orig-1/inc/oox/ppt/pptshape.hxx oox/inc/oox/ppt/pptshape.hxx
---- ../ooo320-m15-orig/oox-orig-1/inc/oox/ppt/pptshape.hxx	2010-04-22 09:55:23.000000000 +0200
-+++ oox/inc/oox/ppt/pptshape.hxx	2010-04-22 10:49:51.000000000 +0200
+From 336229217c346202d1cb964ed997dc6eae38b2d8 Mon Sep 17 00:00:00 2001
+From: Jan Holesovsky <kendy@suse.cz>
+Date: Fri, 14 May 2010 17:06:31 +0200
+Subject: [PATCH 716/878] oox-pptx-import-fix-placeholder-text-style.diff
+
+---
+ oox/inc/oox/ppt/pptshape.hxx       |    4 ++
+ oox/source/ppt/pptshape.cxx        |   60 ++++++++++++++++++++++++++++++++++++
+ oox/source/ppt/pptshapecontext.cxx |   59 ++---------------------------------
+ 3 files changed, 68 insertions(+), 55 deletions(-)
+
+diff --git a/oox/inc/oox/ppt/pptshape.hxx b/oox/inc/oox/ppt/pptshape.hxx
+index 31b2f14..094e16d 100644
+--- a/oox/inc/oox/ppt/pptshape.hxx
++++ b/oox/inc/oox/ppt/pptshape.hxx
 @@ -63,6 +63,10 @@ public:
      void setReferenced( sal_Bool bReferenced ){ mbReferenced = bReferenced; };
          void setPlaceholder( oox::drawingml::ShapePtr pPlaceholder ) { mpPlaceholder = pPlaceholder; }
@@ -12,96 +24,10 @@ diff -rup ../ooo320-m15-orig/oox-orig-1/inc/oox/ppt/pptshape.hxx oox/inc/oox/ppt
  protected:
  
          oox::drawingml::ShapePtr mpPlaceholder;
-diff -rup ../ooo320-m15-orig/oox-orig-1/source/ppt/pptshapecontext.cxx oox/source/ppt/pptshapecontext.cxx
---- ../ooo320-m15-orig/oox-orig-1/source/ppt/pptshapecontext.cxx	2010-04-22 09:55:23.000000000 +0200
-+++ oox/source/ppt/pptshapecontext.cxx	2010-04-22 10:58:38.000000000 +0200
-@@ -63,57 +63,6 @@ PPTShapeContext::PPTShapeContext( Contex
- {
- }
- 
--oox::drawingml::ShapePtr findPlaceholder( const sal_Int32 nMasterPlaceholder, sal_Int32 nSubTypeIndex, std::vector< oox::drawingml::ShapePtr >& rShapes )
--{
--    oox::drawingml::ShapePtr aShapePtr;
--    std::vector< oox::drawingml::ShapePtr >::reverse_iterator aRevIter( rShapes.rbegin() );
--    while( aRevIter != rShapes.rend() )
--    {
--        if ( (*aRevIter)->getSubType() == nMasterPlaceholder )
--        {
--            if ( ( nSubTypeIndex == -1 ) || ( nSubTypeIndex == (*aRevIter)->getSubTypeIndex() ) )
--            {
--                aShapePtr = *aRevIter;
--                break;
--            }
--        }
--        std::vector< oox::drawingml::ShapePtr >& rChildren = (*aRevIter)->getChildren();
--        aShapePtr = findPlaceholder( nMasterPlaceholder, nSubTypeIndex, rChildren );
--        if ( aShapePtr.get() )
--            break;
--        aRevIter++;
--    }
--    return aShapePtr;
--}
--
--oox::drawingml::ShapePtr findPlaceholderByIndex( const sal_Int32 nIdx, std::vector< oox::drawingml::ShapePtr >& rShapes )
--{
--	oox::drawingml::ShapePtr aShapePtr;
--	std::vector< oox::drawingml::ShapePtr >::reverse_iterator aRevIter( rShapes.rbegin() );
--	while( aRevIter != rShapes.rend() )
--	{
--		if ( (*aRevIter)->getSubTypeIndex() == nIdx )
--		{
--			aShapePtr = *aRevIter;
--			break;
--		}
--		std::vector< oox::drawingml::ShapePtr >& rChildren = (*aRevIter)->getChildren();
--		aShapePtr = findPlaceholderByIndex( nIdx, rChildren );
--		if ( aShapePtr.get() )
--		    break;
--		aRevIter++;
--	}
--	return aShapePtr;
--}
--
--// if nFirstPlaceholder can't be found, it will be searched for nSecondPlaceholder
--oox::drawingml::ShapePtr findPlaceholder( sal_Int32 nFirstPlaceholder, sal_Int32 nSecondPlaceholder,
--    sal_Int32 nSubTypeIndex, std::vector< oox::drawingml::ShapePtr >& rShapes )
--{
--    oox::drawingml::ShapePtr pPlaceholder = findPlaceholder( nFirstPlaceholder, nSubTypeIndex, rShapes );
--    return !nSecondPlaceholder || pPlaceholder.get() ? pPlaceholder : findPlaceholder( nSecondPlaceholder, nSubTypeIndex, rShapes );
--}
--
- Reference< XFastContextHandler > PPTShapeContext::createFastChildContext( sal_Int32 aElementToken, const Reference< XFastAttributeList >& xAttribs ) throw (SAXException, RuntimeException)
- {
-     Reference< XFastContextHandler > xRet;
-@@ -149,7 +98,7 @@ Reference< XFastContextHandler > PPTShap
- 		    // TODO: use id to shape map
- 		  SlidePersistPtr pMasterPersist( mpSlidePersistPtr->getMasterPersist() );
- 		  if ( pMasterPersist.get() )
--		      pPlaceholder = findPlaceholderByIndex( nIdx, pMasterPersist->getShapes()->getChildren() );
-+            pPlaceholder = PPTShape::findPlaceholderByIndex( nIdx, pMasterPersist->getShapes()->getChildren() );
- 		}
- 		if ( !pPlaceholder.get() && ( ( eShapeLocation == Slide ) || ( eShapeLocation == Layout ) ) )
-                 {
-@@ -191,13 +140,13 @@ Reference< XFastContextHandler > PPTShap
-                     if ( nFirstPlaceholder )
-                     {
-                         if ( eShapeLocation == Layout )		// for layout objects the referenced object can be found within the same shape tree
--                            pPlaceholder = findPlaceholder( nFirstPlaceholder, nSecondPlaceholder, -1, mpSlidePersistPtr->getShapes()->getChildren() );
-+              pPlaceholder = PPTShape::findPlaceholder( nFirstPlaceholder, nSecondPlaceholder, -1, mpSlidePersistPtr->getShapes()->getChildren() );
-                         else if ( eShapeLocation == Slide )	// normal slide shapes have to search within the corresponding master tree for referenced objects
-                         {
-                             SlidePersistPtr pMasterPersist( mpSlidePersistPtr->getMasterPersist() );
-                             if ( pMasterPersist.get() )
--                                pPlaceholder = findPlaceholder( nFirstPlaceholder, nSecondPlaceholder,
--                                    pPPTShapePtr->getSubTypeIndex(), pMasterPersist->getShapes()->getChildren() );
-+                                pPlaceholder = PPTShape::findPlaceholder( nFirstPlaceholder, nSecondPlaceholder, pPPTShapePtr->getSubTypeIndex(),
-+                                    pMasterPersist->getShapes()->getChildren() );
-                         }
-                     }
-                 }
-diff -rup ../ooo320-m15-orig/oox-orig-1/source/ppt/pptshape.cxx oox/source/ppt/pptshape.cxx
---- ../ooo320-m15-orig/oox-orig-1/source/ppt/pptshape.cxx	2010-04-22 09:55:23.000000000 +0200
-+++ oox/source/ppt/pptshape.cxx	2010-04-22 10:53:56.000000000 +0200
+diff --git a/oox/source/ppt/pptshape.cxx b/oox/source/ppt/pptshape.cxx
+index 1102995..0586639 100644
+--- a/oox/source/ppt/pptshape.cxx
++++ b/oox/source/ppt/pptshape.cxx
 @@ -171,6 +171,17 @@ void PPTShape::addShape(
  
              if ( sServiceName.getLength() )
@@ -111,16 +37,16 @@ diff -rup ../ooo320-m15-orig/oox-orig-1/source/ppt/pptshape.cxx oox/source/ppt/p
 +            oox::drawingml::ShapePtr pPlaceholder = PPTShape::findPlaceholderByIndex( getSubTypeIndex(), rSlidePersist.getMasterPersist()->getShapes()->getChildren() );
 +            if( pPlaceholder.get() && pPlaceholder->getTextBody() ) {
 +                TextListStylePtr pNewTextListStyle (new TextListStyle());
-+                
++
 +            pNewTextListStyle->apply( pPlaceholder->getTextBody()->getTextListStyle() );
 +            aMasterTextListStyle = pNewTextListStyle;
 +            }
 +        }
 +
- 			// use style from master slide for placeholders only, otherwise use slide's style, which might be the default style from presentation
+             // use style from master slide for placeholders only, otherwise use slide's style, which might be the default style from presentation
                  if ( !aMasterTextListStyle.get() )
- 			        aMasterTextListStyle = ( mnSubType && rSlidePersist.getMasterPersist().get() ) ? rSlidePersist.getMasterPersist()->getOtherTextStyle() : rSlidePersist.getOtherTextStyle();
-@@ -228,4 +239,53 @@ void PPTShape::applyShapeReference( cons
+                     aMasterTextListStyle = ( mnSubType && rSlidePersist.getMasterPersist().get() ) ? rSlidePersist.getMasterPersist()->getOtherTextStyle() : rSlidePersist.getOtherTextStyle();
+@@ -228,4 +239,53 @@ void PPTShape::applyShapeReference( const oox::drawingml::Shape& rReferencedShap
      Shape::applyShapeReference( rReferencedShape );
  }
  
@@ -174,3 +100,94 @@ diff -rup ../ooo320-m15-orig/oox-orig-1/source/ppt/pptshape.cxx oox/source/ppt/p
 +}
 +
  } }
+diff --git a/oox/source/ppt/pptshapecontext.cxx b/oox/source/ppt/pptshapecontext.cxx
+index ee57d85..0dd07f0 100644
+--- a/oox/source/ppt/pptshapecontext.cxx
++++ b/oox/source/ppt/pptshapecontext.cxx
+@@ -63,57 +63,6 @@ PPTShapeContext::PPTShapeContext( ContextHandler& rParent, const SlidePersistPtr
+ {
+ }
+ 
+-oox::drawingml::ShapePtr findPlaceholder( const sal_Int32 nMasterPlaceholder, sal_Int32 nSubTypeIndex, std::vector< oox::drawingml::ShapePtr >& rShapes )
+-{
+-    oox::drawingml::ShapePtr aShapePtr;
+-    std::vector< oox::drawingml::ShapePtr >::reverse_iterator aRevIter( rShapes.rbegin() );
+-    while( aRevIter != rShapes.rend() )
+-    {
+-        if ( (*aRevIter)->getSubType() == nMasterPlaceholder )
+-        {
+-            if ( ( nSubTypeIndex == -1 ) || ( nSubTypeIndex == (*aRevIter)->getSubTypeIndex() ) )
+-            {
+-                aShapePtr = *aRevIter;
+-                break;
+-            }
+-        }
+-        std::vector< oox::drawingml::ShapePtr >& rChildren = (*aRevIter)->getChildren();
+-        aShapePtr = findPlaceholder( nMasterPlaceholder, nSubTypeIndex, rChildren );
+-        if ( aShapePtr.get() )
+-            break;
+-        aRevIter++;
+-    }
+-    return aShapePtr;
+-}
+-
+-oox::drawingml::ShapePtr findPlaceholderByIndex( const sal_Int32 nIdx, std::vector< oox::drawingml::ShapePtr >& rShapes )
+-{
+-    oox::drawingml::ShapePtr aShapePtr;
+-    std::vector< oox::drawingml::ShapePtr >::reverse_iterator aRevIter( rShapes.rbegin() );
+-    while( aRevIter != rShapes.rend() )
+-    {
+-        if ( (*aRevIter)->getSubTypeIndex() == nIdx )
+-        {
+-            aShapePtr = *aRevIter;
+-            break;
+-        }
+-        std::vector< oox::drawingml::ShapePtr >& rChildren = (*aRevIter)->getChildren();
+-        aShapePtr = findPlaceholderByIndex( nIdx, rChildren );
+-        if ( aShapePtr.get() )
+-            break;
+-        aRevIter++;
+-    }
+-    return aShapePtr;
+-}
+-
+-// if nFirstPlaceholder can't be found, it will be searched for nSecondPlaceholder
+-oox::drawingml::ShapePtr findPlaceholder( sal_Int32 nFirstPlaceholder, sal_Int32 nSecondPlaceholder,
+-    sal_Int32 nSubTypeIndex, std::vector< oox::drawingml::ShapePtr >& rShapes )
+-{
+-    oox::drawingml::ShapePtr pPlaceholder = findPlaceholder( nFirstPlaceholder, nSubTypeIndex, rShapes );
+-    return !nSecondPlaceholder || pPlaceholder.get() ? pPlaceholder : findPlaceholder( nSecondPlaceholder, nSubTypeIndex, rShapes );
+-}
+-
+ Reference< XFastContextHandler > PPTShapeContext::createFastChildContext( sal_Int32 aElementToken, const Reference< XFastAttributeList >& xAttribs ) throw (SAXException, RuntimeException)
+ {
+     Reference< XFastContextHandler > xRet;
+@@ -149,7 +98,7 @@ Reference< XFastContextHandler > PPTShapeContext::createFastChildContext( sal_In
+             // TODO: use id to shape map
+           SlidePersistPtr pMasterPersist( mpSlidePersistPtr->getMasterPersist() );
+           if ( pMasterPersist.get() )
+-              pPlaceholder = findPlaceholderByIndex( nIdx, pMasterPersist->getShapes()->getChildren() );
++            pPlaceholder = PPTShape::findPlaceholderByIndex( nIdx, pMasterPersist->getShapes()->getChildren() );
+         }
+         if ( !pPlaceholder.get() && ( ( eShapeLocation == Slide ) || ( eShapeLocation == Layout ) ) )
+                 {
+@@ -191,13 +140,13 @@ Reference< XFastContextHandler > PPTShapeContext::createFastChildContext( sal_In
+                     if ( nFirstPlaceholder )
+                     {
+                         if ( eShapeLocation == Layout )		// for layout objects the referenced object can be found within the same shape tree
+-                            pPlaceholder = findPlaceholder( nFirstPlaceholder, nSecondPlaceholder, -1, mpSlidePersistPtr->getShapes()->getChildren() );
++              pPlaceholder = PPTShape::findPlaceholder( nFirstPlaceholder, nSecondPlaceholder, -1, mpSlidePersistPtr->getShapes()->getChildren() );
+                         else if ( eShapeLocation == Slide )	// normal slide shapes have to search within the corresponding master tree for referenced objects
+                         {
+                             SlidePersistPtr pMasterPersist( mpSlidePersistPtr->getMasterPersist() );
+                             if ( pMasterPersist.get() )
+-                                pPlaceholder = findPlaceholder( nFirstPlaceholder, nSecondPlaceholder,
+-                                    pPPTShapePtr->getSubTypeIndex(), pMasterPersist->getShapes()->getChildren() );
++                                pPlaceholder = PPTShape::findPlaceholder( nFirstPlaceholder, nSecondPlaceholder, pPPTShapePtr->getSubTypeIndex(),
++                                    pMasterPersist->getShapes()->getChildren() );
+                         }
+                     }
+                 }
+-- 
+1.7.0.1
+

@@ -1,97 +1,20 @@
-diff -rup sd-orig/source/filter/pptx/epptooxml.hxx sd/source/filter/pptx/epptooxml.hxx
---- sd-orig/source/filter/pptx/epptooxml.hxx	2009-07-14 15:44:07.000000000 +0200
-+++ sd/source/filter/pptx/epptooxml.hxx	2009-07-14 17:21:34.000000000 +0200
-@@ -3,7 +3,7 @@
- 
- #include <oox/core/xmlfilterbase.hxx>
- #include <oox/helper/zipstorage.hxx>
--
-+#include <oox/export/shapes.hxx>
- #include "epptbase.hxx"
- 
- namespace com { namespace sun { namespace star {
-@@ -125,6 +125,8 @@ private:
-     sal_Bool mbCreateNotes;
- 
-     static sal_Int32 nStyleLevelToken[5];
-+
-+    ::oox::drawingml::ShapeExport::ShapeHashMap maShapeMap;
- };
- 
- }
-diff -rup sd-orig/source/filter/pptx/pptx-epptooxml.cxx sd/source/filter/pptx/pptx-epptooxml.cxx
---- sd-orig/source/filter/pptx/pptx-epptooxml.cxx	2009-07-14 15:44:07.000000000 +0200
-+++ sd/source/filter/pptx/pptx-epptooxml.cxx	2009-07-14 17:27:36.000000000 +0200
-@@ -79,7 +79,7 @@ class PowerPointShapeExport : public Sha
-     PageType            mePageType;
-     sal_Bool            mbMaster;
- public:
--                        PowerPointShapeExport( FSHelperPtr pFS, PowerPointExport* pFB );
-+    PowerPointShapeExport( FSHelperPtr pFS, ShapeHashMap* pShapeMap, PowerPointExport* pFB );
-     void                SetMaster( sal_Bool bMaster );
-     void                SetPageType( PageType ePageType );
-     ShapeExport&        WriteNonVisualProperties( Reference< XShape > xShape );
-@@ -92,8 +92,8 @@ public:
-     sal_Bool WritePlaceholder( Reference< XShape > xShape, PlaceholderType ePlaceholder, sal_Bool bMaster );
- };
- 
--PowerPointShapeExport::PowerPointShapeExport( FSHelperPtr pFS, PowerPointExport* pFB )
--    : ShapeExport( XML_p, pFS, pFB )
-+    PowerPointShapeExport::PowerPointShapeExport( FSHelperPtr pFS, ShapeHashMap* pShapeMap, PowerPointExport* pFB )
-+        : ShapeExport( XML_p, pFS, pShapeMap, pFB )
-     , mrExport( *pFB )
- {
- }
-@@ -218,6 +218,7 @@ bool PowerPointExport::importDocument()
- bool PowerPointExport::exportDocument() throw()
- {
-     DrawingML::ResetCounters();
-+    maShapeMap.clear ();
- 
-     addRelation( US( "http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" ), S( "ppt/presentation.xml" ) );
- 
-@@ -250,7 +251,9 @@ bool PowerPointExport::exportDocument()
- 
-     commit();
- 
--	return true;
-+    maShapeMap.clear ();
-+
-+    return true;
- }
- 
- //------------------------------------------------------------------------------------------------------------------------------------------------------------------
-@@ -274,7 +277,7 @@ void PowerPointExport::ImplWriteBackgrou
-     pFS->startElementNS( XML_p, XML_bg, FSEND );
-     pFS->startElementNS( XML_p, XML_bgPr, FSEND );
- 
--    PowerPointShapeExport( pFS, this ).WriteFill( rXPropSet );
-+    PowerPointShapeExport( pFS, &maShapeMap, this ).WriteFill( rXPropSet );
- 
-     pFS->endElementNS( XML_p, XML_bgPr );
-     pFS->endElementNS( XML_p, XML_bg );
-@@ -631,7 +634,7 @@ void PowerPointExport::WriteAnimationTar
-     if( rXShape.is() ) {
- 	pFS->startElementNS( XML_p, XML_tgtEl, FSEND );
- 	pFS->singleElementNS( XML_p, XML_spTgt,
--			      XML_spid, I32S( ShapeExport::GetShapeID( rXShape ) ),
-+                  XML_spid, I32S( ShapeExport::GetShapeID( rXShape, &maShapeMap ) ),
- 			      FSEND );
- 	pFS->endElementNS( XML_p, XML_tgtEl );
-     }
-@@ -1440,7 +1443,7 @@ void PowerPointExport::ImplWriteLayout(
- 
- void PowerPointExport::WriteShapeTree( FSHelperPtr pFS, PageType ePageType, sal_Bool bMaster )
- {
--    PowerPointShapeExport aDML( pFS, this );
-+    PowerPointShapeExport aDML( pFS, &maShapeMap, this );
-     aDML.SetMaster( bMaster );
-     aDML.SetPageType( ePageType );
-     sal_uInt32 nShapes;
-diff -rup oox-orig/inc/oox/export/shapes.hxx oox/inc/oox/export/shapes.hxx
---- oox-orig/inc/oox/export/shapes.hxx	2009-07-14 15:43:57.000000000 +0200
-+++ oox/inc/oox/export/shapes.hxx	2009-07-14 17:27:03.000000000 +0200
-@@ -52,16 +52,7 @@ namespace oox { namespace drawingml {
+From 45e436ad2065f52d513b6eae7e68eff7c5f0dbbf Mon Sep 17 00:00:00 2001
+From: Jan Holesovsky <kendy@suse.cz>
+Date: Fri, 14 May 2010 17:06:38 +0200
+Subject: [PATCH 723/878] oox-drawingml-fix-shapes-map-crash.diff
+
+---
+ oox/inc/oox/export/shapes.hxx            |   32 +++++++++++++++++------------
+ oox/source/export/shapes.cxx             |   16 +++++++++-----
+ sd/source/filter/pptx/epptooxml.hxx      |    4 ++-
+ sd/source/filter/pptx/pptx-epptooxml.cxx |   15 ++++++++-----
+ 4 files changed, 41 insertions(+), 26 deletions(-)
+
+diff --git a/oox/inc/oox/export/shapes.hxx b/oox/inc/oox/export/shapes.hxx
+index 1a574a3..6fcde2c 100644
+--- a/oox/inc/oox/export/shapes.hxx
++++ b/oox/inc/oox/export/shapes.hxx
+@@ -49,16 +49,7 @@ namespace oox { namespace drawingml {
  
  class OOX_DLLPUBLIC ShapeExport : public DrawingML {
  
@@ -108,7 +31,7 @@ diff -rup oox-orig/inc/oox/export/shapes.hxx oox/inc/oox/export/shapes.hxx
      struct ShapeCheck
      {
          bool operator()( const ::com::sun::star::uno::Reference< ::com::sun::star::drawing::XShape> s1, const ::com::sun::star::uno::Reference< ::com::sun::star::drawing::XShape> s2 ) const
-@@ -77,11 +68,25 @@ private:
+@@ -74,11 +65,25 @@ private:
          size_t operator()( const ::com::sun::star::uno::Reference < ::com::sun::star::drawing::XShape > ) const;
      };
  
@@ -136,7 +59,7 @@ diff -rup oox-orig/inc/oox/export/shapes.hxx oox/inc/oox/export/shapes.hxx
      virtual ~ShapeExport() {}
  
      sal_Int32           GetXmlNamespace() const;
-@@ -160,8 +165,9 @@ public:
+@@ -157,8 +162,9 @@ public:
                          WriteUnknownShape( ::com::sun::star::uno::Reference< ::com::sun::star::drawing::XShape > xShape );
  
      sal_Int32 GetNewShapeID( const ::com::sun::star::uno::Reference< ::com::sun::star::drawing::XShape > rShape );
@@ -148,10 +71,11 @@ diff -rup oox-orig/inc/oox/export/shapes.hxx oox/inc/oox/export/shapes.hxx
  };
  
  }}
-diff -rup oox-orig/source/export/shapes.cxx oox/source/export/shapes.cxx
---- oox-orig/source/export/shapes.cxx	2009-07-14 15:44:00.000000000 +0200
-+++ oox/source/export/shapes.cxx	2009-07-14 17:26:27.000000000 +0200
-@@ -361,7 +361,7 @@ namespace oox { namespace drawingml {
+diff --git a/oox/source/export/shapes.cxx b/oox/source/export/shapes.cxx
+index f93f76c..75107ca 100644
+--- a/oox/source/export/shapes.cxx
++++ b/oox/source/export/shapes.cxx
+@@ -358,7 +358,7 @@ namespace oox { namespace drawingml {
      if ( GETA(propName) ) \
          mAny >>= variable;
  
@@ -160,7 +84,7 @@ diff -rup oox-orig/source/export/shapes.cxx oox/source/export/shapes.cxx
      : DrawingML( pFS, pFB, eDocumentType )
      , mnShapeIdMax( 1 )
      , mnPictureIdMax( 1 )
-@@ -369,6 +369,7 @@ ShapeExport::ShapeExport( sal_Int32 nXml
+@@ -366,6 +366,7 @@ ShapeExport::ShapeExport( sal_Int32 nXmlNamespace, FSHelperPtr pFS, XmlFilterBas
      , maFraction( 1, 576 )
      , maMapModeSrc( MAP_100TH_MM )
      , maMapModeDest( MAP_INCH, Point(), maFraction, maFraction )
@@ -168,7 +92,7 @@ diff -rup oox-orig/source/export/shapes.cxx oox/source/export/shapes.cxx
  {
  }
  
-@@ -989,24 +990,27 @@ sal_Int32 ShapeExport::GetNewShapeID( co
+@@ -986,24 +987,27 @@ sal_Int32 ShapeExport::GetNewShapeID( const Reference< XShape > rXShape, XmlFilt
  
      sal_Int32 nID = pFB->GetUniqueId();
  
@@ -201,3 +125,96 @@ diff -rup oox-orig/source/export/shapes.cxx oox/source/export/shapes.cxx
 -ShapeExport::ShapeHashMap ShapeExport::saShapeMap;
 -
  } }
+diff --git a/sd/source/filter/pptx/epptooxml.hxx b/sd/source/filter/pptx/epptooxml.hxx
+index 2c850bd..02d3930 100644
+--- a/sd/source/filter/pptx/epptooxml.hxx
++++ b/sd/source/filter/pptx/epptooxml.hxx
+@@ -3,7 +3,7 @@
+ 
+ #include <oox/core/xmlfilterbase.hxx>
+ #include <oox/helper/zipstorage.hxx>
+-
++#include <oox/export/shapes.hxx>
+ #include "epptbase.hxx"
+ 
+ namespace com { namespace sun { namespace star {
+@@ -125,6 +125,8 @@ private:
+     sal_Bool mbCreateNotes;
+ 
+     static sal_Int32 nStyleLevelToken[5];
++
++    ::oox::drawingml::ShapeExport::ShapeHashMap maShapeMap;
+ };
+ 
+ }
+diff --git a/sd/source/filter/pptx/pptx-epptooxml.cxx b/sd/source/filter/pptx/pptx-epptooxml.cxx
+index 8c2fedb..1534c9b 100644
+--- a/sd/source/filter/pptx/pptx-epptooxml.cxx
++++ b/sd/source/filter/pptx/pptx-epptooxml.cxx
+@@ -79,7 +79,7 @@ class PowerPointShapeExport : public ShapeExport
+     PageType            mePageType;
+     sal_Bool            mbMaster;
+ public:
+-                        PowerPointShapeExport( FSHelperPtr pFS, PowerPointExport* pFB );
++    PowerPointShapeExport( FSHelperPtr pFS, ShapeHashMap* pShapeMap, PowerPointExport* pFB );
+     void                SetMaster( sal_Bool bMaster );
+     void                SetPageType( PageType ePageType );
+     ShapeExport&        WriteNonVisualProperties( Reference< XShape > xShape );
+@@ -92,8 +92,8 @@ public:
+     sal_Bool WritePlaceholder( Reference< XShape > xShape, PlaceholderType ePlaceholder, sal_Bool bMaster );
+ };
+ 
+-PowerPointShapeExport::PowerPointShapeExport( FSHelperPtr pFS, PowerPointExport* pFB )
+-    : ShapeExport( XML_p, pFS, pFB )
++    PowerPointShapeExport::PowerPointShapeExport( FSHelperPtr pFS, ShapeHashMap* pShapeMap, PowerPointExport* pFB )
++        : ShapeExport( XML_p, pFS, pShapeMap, pFB )
+     , mrExport( *pFB )
+ {
+ }
+@@ -218,6 +218,7 @@ bool PowerPointExport::importDocument() throw()
+ bool PowerPointExport::exportDocument() throw()
+ {
+     DrawingML::ResetCounters();
++    maShapeMap.clear ();
+ 
+     addRelation( US( "http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" ), S( "ppt/presentation.xml" ) );
+ 
+@@ -250,6 +251,8 @@ bool PowerPointExport::exportDocument() throw()
+ 
+     commit();
+ 
++    maShapeMap.clear ();
++
+     return true;
+ }
+ 
+@@ -274,7 +277,7 @@ void PowerPointExport::ImplWriteBackground( FSHelperPtr pFS, Reference< XPropert
+     pFS->startElementNS( XML_p, XML_bg, FSEND );
+     pFS->startElementNS( XML_p, XML_bgPr, FSEND );
+ 
+-    PowerPointShapeExport( pFS, this ).WriteFill( rXPropSet );
++    PowerPointShapeExport( pFS, &maShapeMap, this ).WriteFill( rXPropSet );
+ 
+     pFS->endElementNS( XML_p, XML_bgPr );
+     pFS->endElementNS( XML_p, XML_bg );
+@@ -631,7 +634,7 @@ void PowerPointExport::WriteAnimationTarget( FSHelperPtr pFS, Any aTarget )
+     if( rXShape.is() ) {
+     pFS->startElementNS( XML_p, XML_tgtEl, FSEND );
+     pFS->singleElementNS( XML_p, XML_spTgt,
+-                  XML_spid, I32S( ShapeExport::GetShapeID( rXShape ) ),
++                  XML_spid, I32S( ShapeExport::GetShapeID( rXShape, &maShapeMap ) ),
+                   FSEND );
+     pFS->endElementNS( XML_p, XML_tgtEl );
+     }
+@@ -1440,7 +1443,7 @@ void PowerPointExport::ImplWriteLayout( sal_Int32 nOffset, sal_uInt32 nMasterNum
+ 
+ void PowerPointExport::WriteShapeTree( FSHelperPtr pFS, PageType ePageType, sal_Bool bMaster )
+ {
+-    PowerPointShapeExport aDML( pFS, this );
++    PowerPointShapeExport aDML( pFS, &maShapeMap, this );
+     aDML.SetMaster( bMaster );
+     aDML.SetPageType( ePageType );
+     sal_uInt32 nShapes;
+-- 
+1.7.0.1
+

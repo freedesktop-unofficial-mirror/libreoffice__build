@@ -1,5 +1,19 @@
---- desktop/source/app/app.cxx.old	2010-04-13 14:30:50.000000000 +0200
-+++ desktop/source/app/app.cxx	2010-04-13 15:30:18.000000000 +0200
+From 291dbbf51cb1d3b9b1f6654600dac3721841fb97 Mon Sep 17 00:00:00 2001
+From: Jan Holesovsky <kendy@suse.cz>
+Date: Fri, 14 May 2010 16:57:31 +0200
+Subject: [PATCH 266/878] desktop-config-migration.diff
+
+---
+ desktop/source/app/app.cxx                         |    3 +
+ desktop/source/migration/migration.cxx             |  347 +++++++++++++++++---
+ desktop/source/migration/migration_impl.hxx        |   20 +-
+ officecfg/registry/schema/org/openoffice/Setup.xcs |    8 +
+ 4 files changed, 328 insertions(+), 50 deletions(-)
+
+diff --git a/desktop/source/app/app.cxx b/desktop/source/app/app.cxx
+index 54ff0ab..78b6265 100644
+--- a/desktop/source/app/app.cxx
++++ b/desktop/source/app/app.cxx
 @@ -1457,6 +1457,9 @@ void Desktop::Main()
          }
  #endif
@@ -7,11 +21,13 @@
 +        if (Migration::checkMigration())
 +            Migration::doMigration();
 +
- 		// keep a language options instance...
- 		pLanguageOptions.reset( new SvtLanguageOptions(sal_True));
+         // keep a language options instance...
+         pLanguageOptions.reset( new SvtLanguageOptions(sal_True));
  
---- desktop/source/migration/migration.cxx.old	2010-04-14 17:20:22.000000000 +0200
-+++ desktop/source/migration/migration.cxx	2010-04-26 15:00:50.000000000 +0200
+diff --git a/desktop/source/migration/migration.cxx b/desktop/source/migration/migration.cxx
+index 6dabc70..762a7e9 100644
+--- a/desktop/source/migration/migration.cxx
++++ b/desktop/source/migration/migration.cxx
 @@ -55,6 +55,10 @@
  #include <com/sun/star/util/XRefreshable.hpp>
  #include <com/sun/star/util/XChangesBatch.hpp>
@@ -23,7 +39,7 @@
  
  using namespace rtl;
  using namespace osl;
-@@ -69,6 +73,9 @@ using namespace com::sun::star::configur
+@@ -69,6 +73,9 @@ using namespace com::sun::star::configuration::backend;
  using com::sun::star::uno::Exception;
  using namespace com::sun::star;
  
@@ -54,10 +70,7 @@
  
 -sal_Bool MigrationImpl::checkMigration()
 +static bool splitVersionString(const OUString& rVer, MigrationImpl::VersionNumber& rVerNum)
- {
--    if (m_aInfo.userdata.getLength() > 0 && ! checkMigrationCompleted())
--        return sal_True;
--    else
++{
 +    rVerNum.mnMajor = 0;
 +    rVerNum.mnMinor = 0;
 +    rVerNum.mnMicro = 0;
@@ -102,9 +115,10 @@
 +
 +/** returns -1 if rVer1 < rVer2, 0 if rVer1 == rVer2, or 1 if rVer1 >
 +    rVer2. */
-+static short compareVersion(const MigrationImpl::VersionNumber& rVer1, 
++static short compareVersion(const MigrationImpl::VersionNumber& rVer1,
 +                            const MigrationImpl::VersionNumber& rVer2)
-+{
+ {
+-    if (m_aInfo.userdata.getLength() > 0 && ! checkMigrationCompleted())
 +    // major version
 +    if (rVer1.mnMajor < rVer2.mnMajor)
 +        return -1;
@@ -126,35 +140,36 @@
 +    return 0;
 +}
 +
-+static sal_Bool isMigrationNeeded(const OUString& rConfVerStr, const OUString& rAppVerStr, 
-+                                  MigrationImpl::VersionNumber& rConfVerNum, 
++static sal_Bool isMigrationNeeded(const OUString& rConfVerStr, const OUString& rAppVerStr,
++                                  MigrationImpl::VersionNumber& rConfVerNum,
 +                                  MigrationImpl::VersionNumber& rAppVerNum)
 +{
 +    if (!splitVersionString(rConfVerStr, rConfVerNum))
-         return sal_False;
++        return sal_False;
 +
 +    if (!splitVersionString(rAppVerStr, rAppVerNum))
 +        return sal_False;
 +
 +#if OSL_DEBUG_LEVEL > 0
-+    fprintf(stdout, "desktop::isMigrationNeeded: config ver = %d.%d.%d\n", 
++    fprintf(stdout, "desktop::isMigrationNeeded: config ver = %d.%d.%d\n",
 +            rConfVerNum.mnMajor,rConfVerNum.mnMinor,rConfVerNum.mnMicro);
 +
-+    fprintf(stdout, "desktop::isMigrationNeeded: app ver = %d.%d.%d\n", 
++    fprintf(stdout, "desktop::isMigrationNeeded: app ver = %d.%d.%d\n",
 +            rAppVerNum.mnMajor,rAppVerNum.mnMinor,rAppVerNum.mnMicro);
-+#endif    
++#endif
 +
 +    if (compareVersion(rConfVerNum, rAppVerNum) < 0)
-+        return sal_True;
+         return sal_True;
+-    else
 +
 +    return sal_False;
- }
- 
++}
++
 +sal_Bool MigrationImpl::checkMigration()
 +{
 +    if (m_bMigrationCompleted)
 +        // migration is already complete.
-+        return sal_False;
+         return sal_False;
 +
 +    try
 +    {
@@ -164,7 +179,7 @@
 +            // Current version unknown.  Don't do migration (this should not happen).
 +            return sal_False;
 +
-+        aPropSet.set(getConfigAccess("org.openoffice.Setup/Configuration"), uno::UNO_QUERY_THROW);    
++        aPropSet.set(getConfigAccess("org.openoffice.Setup/Configuration"), uno::UNO_QUERY_THROW);
 +        any = aPropSet->getPropertyValue(ascii("ooLastVersionTouched"));
 +        OUString aLastVersion;
 +        if (!(any >>= aLastVersion))
@@ -183,8 +198,8 @@
 +    {
 +    }
 +    return sal_True;
-+}
-+ 
+ }
+ 
  MigrationImpl::MigrationImpl(const uno::Reference< XMultiServiceFactory >& xFactory)
 -    : m_vrVersions(new strings_v)
 +    : m_vrVersions(NULL)
@@ -205,20 +220,7 @@
 -    // compile file and service list for migration
 -    m_vrFileList    = compileFileList();
 -    m_vrServiceList = compileServiceList();
-+#if OSL_DEBUG_LEVEL > 0
-+    fprintf( stderr, "Migrating user configuration to newer OOo version.\n" );
-+#endif
-+
-+    sal_Bool result = sal_True;
-+
-+    if (compareVersion(m_aConfigVerNum, VersionNumber(3,0,0)) < 0)
-+    {
-+        try
-+        {
-+            if (initDirectoryMigration())
-+            {
-+                copyFiles();
-     
+-    
 -    sal_Bool result = sal_False;
 -    try{
 -        copyFiles();
@@ -227,24 +229,35 @@
 -        // and refresh the cache
 -        copyConfig();
 -        refresh();
--
++#if OSL_DEBUG_LEVEL > 0
++    fprintf( stderr, "Migrating user configuration to newer OOo version.\n" );
++#endif
+ 
 -        // execute custom migration services from Setup.xcu
 -        // and refresh the cache
 -        runServices();
 -        refresh();
--
++    sal_Bool result = sal_True;
+ 
 -        result = sal_True;
 -    } catch (...)
--    {
++    if (compareVersion(m_aConfigVerNum, VersionNumber(3,0,0)) < 0)
+     {
 -        OString aMsg("An unexpected exception was thrown during migration");
 -        aMsg += "\nOldVersion: " + OUStringToOString(m_aInfo.productname, RTL_TEXTENCODING_ASCII_US);
 -        aMsg += "\nDataPath  : " + OUStringToOString(m_aInfo.userdata, RTL_TEXTENCODING_ASCII_US);
 -        OSL_ENSURE(sal_False, aMsg.getStr());
++        try
++        {
++            if (initDirectoryMigration())
++            {
++                copyFiles();
++    
 +                // execute the migration items from Setup.xcu
 +                // and refresh the cache
 +                copyConfig();
 +                refresh();
-+    
++
 +                // execute custom migration services from Setup.xcu
 +                // and refresh the cache
 +                runServices();
@@ -306,29 +319,29 @@
 +        uno::Reference< XModuleUIConfigurationManagerSupplier > xModuleCfgSupplier(
 +            m_xFactory->createInstance(
 +                ascii("com.sun.star.ui.ModuleUIConfigurationManagerSupplier")), uno::UNO_QUERY_THROW);
-+    
++
 +        // Grab the Calc configuration.
-+        uno::Reference< XUIConfigurationManager > xConfigMgr = 
++        uno::Reference< XUIConfigurationManager > xConfigMgr =
 +            xModuleCfgSupplier->getUIConfigurationManager(
 +                ascii("com.sun.star.sheet.SpreadsheetDocument"));
-+    
++
 +        if (xConfigMgr.is())
 +        {
 +            uno::Reference< XAcceleratorConfiguration > xScAccel(
 +                xConfigMgr->getShortCutManager(), uno::UNO_QUERY_THROW);
-+        
++
 +            // Backsapce key
 +            awt::KeyEvent aBackEv;
 +            aBackEv.KeyCode = awt::Key::BACKSPACE;
 +            aBackEv.Modifiers = 0;
 +            xScAccel->setKeyEvent(aBackEv, ascii(".uno:Delete"));
-+        
++
 +            // Delete key
 +            awt::KeyEvent aDeleteEv;
 +            aDeleteEv.KeyCode = awt::Key::DELETE;
 +            aDeleteEv.Modifiers = 0;
 +            xScAccel->setKeyEvent(aDeleteEv, ascii(".uno:ClearContents"));
-+        
++
 +            xScAccel->store();
 +        }
      }
@@ -345,7 +358,7 @@
 -            OUString::createFromAscii("MigrationCompleted")) >>= bMigrationCompleted;
 -    } catch (Exception&) {
 -        // just return false...
-+    // Overwrite the character set value for CSV import to -1 (unset) on every 
++    // Overwrite the character set value for CSV import to -1 (unset) on every
 +    // upgrade, to prevent it from being incorrectly set to Unicode. (n#376473)
 +
 +    uno::Reference< XPropertySet > aPropSet;
@@ -395,7 +408,7 @@
 +        }
 +
 +        m_bMigrationCompleted = true;
-+    } 
++    }
 +    catch (const Exception&)
 +    {
 +    }
@@ -419,9 +432,11 @@
  static void insertSorted(migrations_available& rAvailableMigrations, supported_migration& aSupportedMigration)
  {
      bool                           bInserted( false );
---- desktop/source/migration/migration_impl.hxx.old	2010-04-01 16:31:14.000000000 +0200
-+++ desktop/source/migration/migration_impl.hxx	2010-04-13 15:30:18.000000000 +0200
-@@ -83,6 +83,16 @@ typedef std::vector< supported_migration
+diff --git a/desktop/source/migration/migration_impl.hxx b/desktop/source/migration/migration_impl.hxx
+index b1971c9..e004c2d 100644
+--- a/desktop/source/migration/migration_impl.hxx
++++ b/desktop/source/migration/migration_impl.hxx
+@@ -83,6 +83,16 @@ typedef std::vector< supported_migration > migrations_available;
  
  class MigrationImpl
  {
@@ -464,8 +479,10 @@
      
  public:
      MigrationImpl(const NS_UNO::Reference< NS_CSS::lang::XMultiServiceFactory >&);
---- officecfg/registry/schema/org/openoffice/Setup.xcs.old	2010-04-01 16:35:33.000000000 +0200
-+++ officecfg/registry/schema/org/openoffice/Setup.xcs	2010-04-13 15:30:18.000000000 +0200
+diff --git a/officecfg/registry/schema/org/openoffice/Setup.xcs b/officecfg/registry/schema/org/openoffice/Setup.xcs
+index ab0ccec..eeae89f 100644
+--- a/officecfg/registry/schema/org/openoffice/Setup.xcs
++++ b/officecfg/registry/schema/org/openoffice/Setup.xcs
 @@ -446,6 +446,14 @@
            <desc>Deprecated</desc>
  				</info>
@@ -473,11 +490,14 @@
 +            <prop oor:name="ooLastVersionTouched" oor:type="xs:string">
 +                <info>
 +                    <author>Kohei Yoshida</author>
-+                    <desc>Specifies the version of OOo that touched the configration for the last time.  The format must 
-+                    be in the form of major.minor.micro (e.g. 2.3.1).  Note that this value may not always be present if the 
++                    <desc>Specifies the version of OOo that touched the configration for the last time.  The format must
++                    be in the form of major.minor.micro (e.g. 2.3.1).  Note that this value may not always be present if the
 +                    last touched version is very old.</desc>
 +                </info>
 +            </prop>
  		</group>
      <group oor:name="Migration">
        <info>
+-- 
+1.7.0.1
+

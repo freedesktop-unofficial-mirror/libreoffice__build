@@ -1,69 +1,19 @@
---- tools/inc/tools/urlobj.hxx	2006-07-20 18:09:51.000000000 +0200
-+++ tools/inc/tools/urlobj.hxx	2007-06-14 11:36:58.000000000 +0200
-@@ -1557,6 +1557,9 @@ private:
- 
-     TOOLS_DLLPRIVATE static bool scanIPv6reference(
-         sal_Unicode const *& rBegin, sal_Unicode const * pEnd);
-+
-+private:
-+    void changeScheme(INetProtocol eTargetScheme);
- };
- 
- // static
---- tools/source/fsys/urlobj.cxx.old	2006-09-17 02:54:24.000000000 +0200
-+++ tools/source/fsys/urlobj.cxx	2007-06-14 11:36:58.000000000 +0200
-@@ -1460,10 +1460,48 @@ bool INetURLObject::setAbsURIRef(rtl::OU
- 
- 	m_aAbsURIRef = aSynAbsURIRef;
- 
-+    // At this point references of type "\\server\paths" have
-+    // been converted to file:://server/path".
-+#ifdef LINUX
-+    if (m_eScheme==INET_PROT_FILE && !m_aHost.isEmpty()) {
-+        // Change "file:://server/path" URIs to "smb:://server/path" on
-+        // Linux
-+        // Leave "file::path" URIs unchanged.
-+        changeScheme(INET_PROT_SMB);	   
-+    }
-+#endif
-+
-+#ifdef WIN
-+    if (m_eScheme==INET_PROT_SMB) {
-+        // Change "smb://server/path" URIs to "file://server/path"
-+        // URIs on Windows, since Windows doesn't understand the
-+        // SMB scheme.
-+        changeScheme(INET_PROT_FILE);
-+    }
-+#endif
-+
- 	return true;
- }
- 
- //============================================================================
-+void INetURLObject::changeScheme(INetProtocol eTargetScheme) {
-+    ::rtl::OUString aTmpStr=m_aAbsURIRef.makeStringAndClear();
-+    int oldSchemeLen=strlen(getSchemeInfo().m_pScheme);
-+    m_eScheme=eTargetScheme;	   	   
-+    int newSchemeLen=strlen(getSchemeInfo().m_pScheme);
-+    m_aAbsURIRef.appendAscii(getSchemeInfo().m_pScheme);
-+    m_aAbsURIRef.append(aTmpStr.getStr()+oldSchemeLen);
-+    int delta=newSchemeLen-oldSchemeLen;
-+    m_aUser+=delta;
-+    m_aAuth+=delta;
-+    m_aHost+=delta;
-+    m_aPort+=delta;
-+    m_aPath+=delta;
-+    m_aQuery+=delta;
-+    m_aFragment+=delta;
-+}
-+
-+//============================================================================
- bool INetURLObject::convertRelToAbs(rtl::OUString const & rTheRelURIRef,
- 									bool bOctets,
- 									INetURLObject & rTheAbsURIRef,
---- sw/source/filter/ww8/wrtw8nds.cxx	26 Jun 2007 10:44:02 -0000	1.100
-+++ sw/source/filter/ww8/wrtw8nds.cxx	8 Oct 2007 10:18:08 -0000
-@@ -913,7 +913,7 @@
+From 7a5af003ac221b0ccff8cc6c1e7496a4cd443f4a Mon Sep 17 00:00:00 2001
+From: Jan Holesovsky <kendy@suse.cz>
+Date: Fri, 14 May 2010 16:54:33 +0200
+Subject: [PATCH 111/878] tools-urlobj-smb-scheme-patch.diff
+
+---
+ sw/source/filter/ww8/wrtw8nds.cxx |   13 ++++++++++-
+ tools/inc/tools/urlobj.hxx        |    3 ++
+ tools/source/fsys/urlobj.cxx      |   38 +++++++++++++++++++++++++++++++++++++
+ 3 files changed, 52 insertions(+), 2 deletions(-)
+
+diff --git a/sw/source/filter/ww8/wrtw8nds.cxx b/sw/source/filter/ww8/wrtw8nds.cxx
+index 85a7159..b8d44b7 100644
+--- a/sw/source/filter/ww8/wrtw8nds.cxx
++++ b/sw/source/filter/ww8/wrtw8nds.cxx
+@@ -912,7 +912,7 @@ bool WW8AttributeOutput::StartURL( const String &rUrl, const String &rTarget )
      SwWW8Writer::WriteLong( *m_rWW8Export.pDataStrm, nFlag );
  
      INetProtocol eProto = aURL.GetProtocol();
@@ -72,7 +22,7 @@
      {
          // version 1 (for a document)
  
-@@ -931,7 +931,7 @@
+@@ -930,7 +930,7 @@ bool WW8AttributeOutput::StartURL( const String &rUrl, const String &rTarget )
  
          // save the links to files as relative
          sURL = URIHelper::simpleNormalizedMakeRelative( m_rWW8Export.GetWriter().GetBaseURL(), sURL );
@@ -81,7 +31,7 @@
              sURL = aURL.PathToFileName();
  
          // special case for the absolute windows names
-@@ -945,6 +945,15 @@
+@@ -944,6 +944,15 @@ bool WW8AttributeOutput::StartURL( const String &rUrl, const String &rTarget )
              sURL.SearchAndReplaceAll( '/', '\\' );
          }
  
@@ -97,3 +47,73 @@
          m_rWW8Export.pDataStrm->Write( MAGIC_C, sizeof(MAGIC_C) );
          SwWW8Writer::WriteLong( *m_rWW8Export.pDataStrm, sURL.Len()+1 );
          SwWW8Writer::WriteString8( *m_rWW8Export.pDataStrm, sURL, true,
+diff --git a/tools/inc/tools/urlobj.hxx b/tools/inc/tools/urlobj.hxx
+index 5977357..c24c68c 100644
+--- a/tools/inc/tools/urlobj.hxx
++++ b/tools/inc/tools/urlobj.hxx
+@@ -1533,6 +1533,9 @@ private:
+ 
+     TOOLS_DLLPRIVATE static bool scanIPv6reference(
+         sal_Unicode const *& rBegin, sal_Unicode const * pEnd);
++
++private:
++    void changeScheme(INetProtocol eTargetScheme);
+ };
+ 
+ // static
+diff --git a/tools/source/fsys/urlobj.cxx b/tools/source/fsys/urlobj.cxx
+index dd07033..623eb1a 100644
+--- a/tools/source/fsys/urlobj.cxx
++++ b/tools/source/fsys/urlobj.cxx
+@@ -1452,10 +1452,48 @@ bool INetURLObject::setAbsURIRef(rtl::OUString const & rTheAbsURIRef,
+ 
+     m_aAbsURIRef = aSynAbsURIRef;
+ 
++    // At this point references of type "\\server\paths" have
++    // been converted to file:://server/path".
++#ifdef LINUX
++    if (m_eScheme==INET_PROT_FILE && !m_aHost.isEmpty()) {
++        // Change "file:://server/path" URIs to "smb:://server/path" on
++        // Linux
++        // Leave "file::path" URIs unchanged.
++        changeScheme(INET_PROT_SMB);
++    }
++#endif
++
++#ifdef WIN
++    if (m_eScheme==INET_PROT_SMB) {
++        // Change "smb://server/path" URIs to "file://server/path"
++        // URIs on Windows, since Windows doesn't understand the
++        // SMB scheme.
++        changeScheme(INET_PROT_FILE);
++    }
++#endif
++
+     return true;
+ }
+ 
+ //============================================================================
++void INetURLObject::changeScheme(INetProtocol eTargetScheme) {
++    ::rtl::OUString aTmpStr=m_aAbsURIRef.makeStringAndClear();
++    int oldSchemeLen=strlen(getSchemeInfo().m_pScheme);
++    m_eScheme=eTargetScheme;
++    int newSchemeLen=strlen(getSchemeInfo().m_pScheme);
++    m_aAbsURIRef.appendAscii(getSchemeInfo().m_pScheme);
++    m_aAbsURIRef.append(aTmpStr.getStr()+oldSchemeLen);
++    int delta=newSchemeLen-oldSchemeLen;
++    m_aUser+=delta;
++    m_aAuth+=delta;
++    m_aHost+=delta;
++    m_aPort+=delta;
++    m_aPath+=delta;
++    m_aQuery+=delta;
++    m_aFragment+=delta;
++}
++
++//============================================================================
+ bool INetURLObject::convertRelToAbs(rtl::OUString const & rTheRelURIRef,
+                                     bool bOctets,
+                                     INetURLObject & rTheAbsURIRef,
+-- 
+1.7.0.1
+

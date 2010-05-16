@@ -1,6 +1,37 @@
---- sfx2/source/doc/objstor.cxx.old	2010-03-03 16:59:21.000000000 +0100
-+++ sfx2/source/doc/objstor.cxx	2010-03-03 16:59:42.000000000 +0100
-@@ -109,6 +109,9 @@
+From 467a9c7930b71a72106aa961f26e70a88f3eb391 Mon Sep 17 00:00:00 2001
+From: Jan Holesovsky <kendy@suse.cz>
+Date: Fri, 14 May 2010 17:00:30 +0200
+Subject: [PATCH 410/878] sfx2-pre-and-postprocess-during-save-load.diff
+
+---
+ package/source/xstor/xstorage.cxx |    8 +-
+ sfx2/source/doc/objstor.cxx       |  257 ++++++++++++++++++++++++++++++++++++-
+ 2 files changed, 251 insertions(+), 14 deletions(-)
+
+diff --git a/package/source/xstor/xstorage.cxx b/package/source/xstor/xstorage.cxx
+index b4be3ef..254de2f 100644
+--- a/package/source/xstor/xstorage.cxx
++++ b/package/source/xstor/xstorage.cxx
+@@ -4457,13 +4457,7 @@ sal_Bool SAL_CALL OStorage::hasByName( const ::rtl::OUString& aName )
+     catch ( uno::Exception& aException )
+     {
+            m_pImpl->AddLog( aException.Message );
+-           m_pImpl->AddLog( ::rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( OSL_LOG_PREFIX "Rethrow" ) ) );
+-
+-           uno::Any aCaught( ::cppu::getCaughtException() );
+-        throw lang::WrappedTargetRuntimeException( ::rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( OSL_LOG_PREFIX "Can not open storage!\n" ) ),
+-                                            uno::Reference< uno::XInterface >(  static_cast< OWeakObject* >( this ),
+-                                                                                uno::UNO_QUERY ),
+-                                            aCaught );
++           m_pImpl->AddLog( ::rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( OSL_LOG_PREFIX "Ignored...ok!?" ) ) );
+     }
+ 
+     return ( pElement != NULL );
+diff --git a/sfx2/source/doc/objstor.cxx b/sfx2/source/doc/objstor.cxx
+index 9950a8d..38f9836 100644
+--- a/sfx2/source/doc/objstor.cxx
++++ b/sfx2/source/doc/objstor.cxx
+@@ -106,6 +106,9 @@
  #include <rtl/logfile.hxx>
  #include <basic/modsizeexceeded.hxx>
  #include <osl/file.hxx>
@@ -10,7 +41,7 @@
  
  #include <sfx2/signaturestate.hxx>
  #include <sfx2/app.hxx>
-@@ -160,6 +163,126 @@ using namespace ::cppu;
+@@ -157,6 +160,126 @@ using namespace ::cppu;
  
  namespace css = ::com::sun::star;
  
@@ -23,7 +54,7 @@
 +
 +    StatusThread(oslFileHandle handle) :
 +    osl::Thread(), m_handle(handle), progressTicks(0)
-+    {	    
++    {
 +    }
 +
 +
@@ -39,7 +70,7 @@
 +        progressTicks++;
 +    }
 +    }
-+    
++
 +};
 +
 +static sal_Bool invokeExternalApp(String aAppName, ::rtl::OUString sourceParam, ::rtl::OUString targetParam, uno::Reference< ::com::sun::star::task::XStatusIndicator > xStatusIndicator)
@@ -95,7 +126,7 @@
 +            NULL,
 +            &handle,
 +            NULL
-+            );	
++            );
 +
 +        if (error==osl_Process_E_None) {
 +            static const int MAXBARTICKS=1000;
@@ -137,7 +168,7 @@
  //=========================================================================
  void impl_addToModelCollection(const css::uno::Reference< css::frame::XModel >& xModel)
  {
-@@ -662,8 +785,14 @@ sal_Bool SfxObjectShell::DoLoad( SfxMedi
+@@ -659,8 +782,14 @@ sal_Bool SfxObjectShell::DoLoad( SfxMedium *pMed )
  
                  // treat the package as broken if the mediatype was retrieved as a fallback
                  uno::Reference< beans::XPropertySet > xStorProps( xStorage, uno::UNO_QUERY_THROW );
@@ -154,7 +185,7 @@
  
                  if ( pRepairPackageItem && pRepairPackageItem->GetValue() )
                  {
-@@ -675,8 +804,17 @@ sal_Bool SfxObjectShell::DoLoad( SfxMedi
+@@ -672,8 +801,17 @@ sal_Bool SfxObjectShell::DoLoad( SfxMedium *pMed )
                      bWarnMediaTypeFallback = sal_False;
                  }
  
@@ -174,7 +205,7 @@
              }
              catch( uno::Exception& )
              {
-@@ -689,7 +827,51 @@ sal_Bool SfxObjectShell::DoLoad( SfxMedi
+@@ -686,7 +824,51 @@ sal_Bool SfxObjectShell::DoLoad( SfxMedium *pMed )
              {
                  pImp->nLoadedFlags = 0;
                  pImp->bModelInitialized = sal_False;
@@ -227,7 +258,7 @@
                  if ( bOk )
                  {
                      // the document loaded from template has no name
-@@ -1122,6 +1304,7 @@ void Lock_Impl( SfxObjectShell* pDoc, BO
+@@ -1119,6 +1301,7 @@ void Lock_Impl( SfxObjectShell* pDoc, BOOL bLock )
  
  }
  
@@ -235,7 +266,7 @@
  //-------------------------------------------------------------------------
  
  sal_Bool SfxObjectShell::SaveTo_Impl
-@@ -1602,6 +1785,59 @@ sal_Bool SfxObjectShell::SaveTo_Impl
+@@ -1599,6 +1782,59 @@ sal_Bool SfxObjectShell::SaveTo_Impl
              bOk = SaveChildren( TRUE );
      }
  
@@ -262,7 +293,7 @@
 +            {
 +                pItem->GetValue() >>= xStatusIndicator;
 +            }
-+            
++
 +            // create copy
 +            ::rtl::OUString aTmpVersionURL = CreateTempCopyOfStorage_Impl( rMedium.GetStorage() );
 +            rMedium.CloseAndRelease();
@@ -295,7 +326,7 @@
      if ( bOk )
      {
          // if ODF version of oasis format changes on saving the signature should not be preserved
-@@ -1709,11 +1945,11 @@ sal_Bool SfxObjectShell::SaveTo_Impl
+@@ -1706,11 +1942,11 @@ sal_Bool SfxObjectShell::SaveTo_Impl
          // transfer data to its destinated location
          // the medium commits the storage or the stream it is based on
          RegisterTransfer( rMedium );
@@ -308,7 +339,7 @@
  
              // if the target medium is an alien format and the "old" medium was an own format and the "old" medium
              // has a name, the object storage must be exchanged, because now we need a new temporary storage
-@@ -3574,7 +3810,14 @@ sal_Bool SfxObjectShell::CopyStoragesOfU
+@@ -3573,7 +3809,14 @@ sal_Bool SfxObjectShell::CopyStoragesOfUnknownMediaType( const uno::Reference< e
  
      try
      {
@@ -324,20 +355,6 @@
          for ( sal_Int32 nInd = 0; nInd < aSubElements.getLength(); nInd++ )
          {
              if ( aSubElements[nInd].equals( ::rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( "Configurations" ) ) ) )
---- package/source/xstor/xstorage.cxx.old	2009-10-21 11:50:33.000000000 +0200
-+++ package/source/xstor/xstorage.cxx	2010-03-03 16:59:42.000000000 +0100
-@@ -4460,13 +4460,7 @@ sal_Bool SAL_CALL OStorage::hasByName( c
-     catch ( uno::Exception& aException )
-     {
-            m_pImpl->AddLog( aException.Message );
--           m_pImpl->AddLog( ::rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( OSL_LOG_PREFIX "Rethrow" ) ) );
--
--           uno::Any aCaught( ::cppu::getCaughtException() );
--        throw lang::WrappedTargetRuntimeException( ::rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( OSL_LOG_PREFIX "Can not open storage!\n" ) ),
--                                            uno::Reference< uno::XInterface >(  static_cast< OWeakObject* >( this ),
--                                                                                uno::UNO_QUERY ),
--                                            aCaught );
-+           m_pImpl->AddLog( ::rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( OSL_LOG_PREFIX "Ignored...ok!?" ) ) );
-     }
- 
-     return ( pElement != NULL );
+-- 
+1.7.0.1
+

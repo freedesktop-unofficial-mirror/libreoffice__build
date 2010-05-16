@@ -1,13 +1,22 @@
-# For the purpose of the 3.1 release, instead of sharing the binary and ooxml
-# export, we introduce a separate sd/source/filter/pptx that creates libxlsx -
-# a filter for the PPTX files.  After the release, the changes will be
-# reverted so that the binary and ooxml are shared again.
-# The changes include:
-#   sd/source/filter/eppt/* -> sd/source/filter/pptx/pptx-*
-diff --git oox/inc/oox/export/drawingml.hxx oox/inc/oox/export/drawingml.hxx
-index 3c89b99..80cb271 100644
---- oox/inc/oox/export/drawingml.hxx
-+++ oox/inc/oox/export/drawingml.hxx
+From 08548f732361e4b3c157a68f3027ffc808f2ee3b Mon Sep 17 00:00:00 2001
+From: Jan Holesovsky <kendy@suse.cz>
+Date: Fri, 14 May 2010 17:05:45 +0200
+Subject: [PATCH 687/878] pptx-the-rest-from-git.diff
+
+---
+ oox/inc/oox/export/drawingml.hxx               |    7 +-
+ oox/inc/oox/export/shapes.hxx                  |   10 +-
+ oox/source/export/shapes.cxx                   |   20 +-
+ sd/source/filter/pptx/epptooxml.hxx            |   31 +-
+ sd/source/filter/pptx/pptexanimations.hxx      |   12 +-
+ sd/source/filter/pptx/pptx-epptooxml.cxx       |  750 +++++++++++++++++++++---
+ sd/source/filter/pptx/pptx-pptexanimations.cxx |  195 ++++---
+ 7 files changed, 823 insertions(+), 202 deletions(-)
+
+diff --git a/oox/inc/oox/export/drawingml.hxx b/oox/inc/oox/export/drawingml.hxx
+index 0859b15..da5865a 100644
+--- a/oox/inc/oox/export/drawingml.hxx
++++ b/oox/inc/oox/export/drawingml.hxx
 @@ -38,9 +38,6 @@ public:
      enum DocumentType { DOCUMENT_DOCX, DOCUMENT_PPTX, DOCUMENT_XLSX };
  
@@ -36,11 +45,11 @@ index 3c89b99..80cb271 100644
      void SetFS( ::sax_fastparser::FSHelperPtr pFS ) { mpFS = pFS; }
      ::sax_fastparser::FSHelperPtr GetFS() { return mpFS; }
      ::oox::core::XmlFilterBase* GetFB() { return mpFB; }
-diff --git oox/inc/oox/export/shapes.hxx oox/inc/oox/export/shapes.hxx
-index c9acc81..d7fd9e9 100644
---- oox/inc/oox/export/shapes.hxx
-+++ oox/inc/oox/export/shapes.hxx
-@@ -21,9 +21,12 @@ namespace drawing {
+diff --git a/oox/inc/oox/export/shapes.hxx b/oox/inc/oox/export/shapes.hxx
+index ed9cf5b..1a574a3 100644
+--- a/oox/inc/oox/export/shapes.hxx
++++ b/oox/inc/oox/export/shapes.hxx
+@@ -48,9 +48,12 @@ namespace drawing {
  namespace oox { namespace drawingml {
  
  class OOX_DLLPUBLIC ShapeExport : public DrawingML {
@@ -54,7 +63,7 @@ index c9acc81..d7fd9e9 100644
      Fraction            maFraction;
      MapMode             maMapModeSrc, maMapModeDest;
  
-@@ -45,7 +48,7 @@ private:
+@@ -72,7 +75,7 @@ private:
      };
  
      typedef std::hash_map< const ::com::sun::star::uno::Reference< ::com::sun::star::drawing::XShape>, sal_Int32, ShapeHash, ShapeCheck> ShapeHashMap;
@@ -63,7 +72,7 @@ index c9acc81..d7fd9e9 100644
  
  public:
      ShapeExport( sal_Int32 nXmlNamespace, ::sax_fastparser::FSHelperPtr pFS, ::oox::core::XmlFilterBase* pFB = NULL, DocumentType eDocumentType = DOCUMENT_PPTX );
-@@ -126,7 +129,8 @@ public:
+@@ -154,7 +157,8 @@ public:
                          WriteUnknownShape( ::com::sun::star::uno::Reference< ::com::sun::star::drawing::XShape > xShape );
  
      sal_Int32 GetNewShapeID( const ::com::sun::star::uno::Reference< ::com::sun::star::drawing::XShape > rShape );
@@ -73,11 +82,11 @@ index c9acc81..d7fd9e9 100644
  };
  
  }}
-diff --git oox/source/export/shapes.cxx oox/source/export/shapes.cxx
-index 0eff7ad..95c44d3 100644
---- oox/source/export/shapes.cxx
-+++ oox/source/export/shapes.cxx
-@@ -61,6 +61,7 @@ using ::com::sun::star::text::XText;
+diff --git a/oox/source/export/shapes.cxx b/oox/source/export/shapes.cxx
+index 918aeae..defbac6 100644
+--- a/oox/source/export/shapes.cxx
++++ b/oox/source/export/shapes.cxx
+@@ -89,6 +89,7 @@ using ::com::sun::star::text::XText;
  using ::com::sun::star::text::XTextContent;
  using ::com::sun::star::text::XTextField;
  using ::com::sun::star::text::XTextRange;
@@ -85,7 +94,7 @@ index 0eff7ad..95c44d3 100644
  using ::rtl::OString;
  using ::rtl::OStringBuffer;
  using ::rtl::OUString;
-@@ -329,11 +330,11 @@ namespace oox { namespace drawingml {
+@@ -357,11 +358,11 @@ namespace oox { namespace drawingml {
      if ( GETA(propName) ) \
          mAny >>= variable;
  
@@ -99,7 +108,7 @@ index 0eff7ad..95c44d3 100644
      , maFraction( 1, 576 )
      , maMapModeSrc( MAP_100TH_MM )
      , maMapModeDest( MAP_INCH, Point(), maFraction, maFraction )
-@@ -947,21 +948,28 @@ size_t ShapeExport::ShapeHash::operator()( const ::com::sun::star::uno::Referenc
+@@ -975,21 +976,28 @@ size_t ShapeExport::ShapeHash::operator()( const ::com::sun::star::uno::Referenc
  
  sal_Int32 ShapeExport::GetNewShapeID( const Reference< XShape > rXShape )
  {
@@ -124,7 +133,7 @@ index 0eff7ad..95c44d3 100644
  
 -    if( aIter == maShapeMap.end() )
 +    if( aIter == saShapeMap.end() )
- 	return -1;
+         return -1;
  
      return aIter->second;
  }
@@ -132,10 +141,114 @@ index 0eff7ad..95c44d3 100644
 +ShapeExport::ShapeHashMap ShapeExport::saShapeMap;
 +
  } }
-diff --git sd/source/filter/eppt/epptooxml.cxx sd/source/filter/eppt/epptooxml.cxx
-index f8e0790..40b318d 100644
---- sd/source/filter/pptx/pptx-epptooxml.cxx
-+++ sd/source/filter/pptx/pptx-epptooxml.cxx
+diff --git a/sd/source/filter/pptx/epptooxml.hxx b/sd/source/filter/pptx/epptooxml.hxx
+index 2a49d1f..2c850bd 100644
+--- a/sd/source/filter/pptx/epptooxml.hxx
++++ b/sd/source/filter/pptx/epptooxml.hxx
+@@ -6,6 +6,13 @@
+ 
+ #include "epptbase.hxx"
+ 
++namespace com { namespace sun { namespace star {
++    namespace animations {
++        class XAnimate;
++        class XAnimationNode;
++    }
++}}}
++
+ namespace oox {
+     namespace drawingml {
+         class ShapeExport;
+@@ -70,22 +77,30 @@ protected:
+ 
+     sal_Bool WriteNotesMaster();
+ 
++    void WriteAnimateTo( ::sax_fastparser::FSHelperPtr pFS, const ::com::sun::star::uno::Any aValue, const ::rtl::OUString& rAttributeName );
++    void WriteAnimateValues( ::sax_fastparser::FSHelperPtr pFS, const ::com::sun::star::uno::Reference< ::com::sun::star::animations::XAnimate >& rXAnimate );
++    void WriteAnimationCondition( ::sax_fastparser::FSHelperPtr pFS, ::com::sun::star::uno::Any& rAny, sal_Bool bWriteEvent, sal_Bool bMainSeqChild );
++    void WriteAnimationCondition( ::sax_fastparser::FSHelperPtr pFS, const char* pDelay, const char* pEvent, double fDelay, sal_Bool bHasFDelay );
++    void WriteAnimations( ::sax_fastparser::FSHelperPtr pFS );
++    void WriteAnimationAttributeName( ::sax_fastparser::FSHelperPtr pFS, const ::rtl::OUString& rAttributeName );
++    void WriteAnimationNode( ::sax_fastparser::FSHelperPtr pFS, const ::com::sun::star::uno::Reference< ::com::sun::star::animations::XAnimationNode >& rXNode, sal_Bool bMainSeqChild );
++    void WriteAnimationNodeAnimate( ::sax_fastparser::FSHelperPtr pFS, const ::com::sun::star::uno::Reference< ::com::sun::star::animations::XAnimationNode >& rXNode, sal_Int32 nXmlNodeType, sal_Bool bMainSeqChild );
++    void WriteAnimationNodeSeq( ::sax_fastparser::FSHelperPtr pFS, const ::com::sun::star::uno::Reference< ::com::sun::star::animations::XAnimationNode >& rXNode, sal_Int32 nXmlNodeType, sal_Bool bMainSeqChild );
++    void WriteAnimationNodeCommonPropsStart( ::sax_fastparser::FSHelperPtr pFS, const ::com::sun::star::uno::Reference< ::com::sun::star::animations::XAnimationNode >& rXNode, sal_Bool bSingle, sal_Bool bMainSeqChild );
++    void WriteAnimationNodeCommonPropsEnd( ::sax_fastparser::FSHelperPtr pFS );
++    void WriteAnimationProperty( ::sax_fastparser::FSHelperPtr pFS, const ::com::sun::star::uno::Any& rAny );
++    void WriteAnimationTarget( ::sax_fastparser::FSHelperPtr pFS, ::com::sun::star::uno::Any aTarget );
+     void WriteTextStyles( ::sax_fastparser::FSHelperPtr pFS );
+     void WriteTextStyle( ::sax_fastparser::FSHelperPtr pFS, int nInstance, sal_Int32 xmlToken );
+     void WriteTextStyleLevel( ::sax_fastparser::FSHelperPtr pFS, int nInstance, int nLevel );
+     void ImplWriteBackground( ::sax_fastparser::FSHelperPtr pFS, ::com::sun::star::uno::Reference< ::com::sun::star::beans::XPropertySet > aXBackgroundPropSet );
++    void WriteTransition( ::sax_fastparser::FSHelperPtr pFS );
+ 
+     sal_Int32 GetLayoutFileId( sal_Int32 nOffset, sal_uInt32 nMasterNum );
+ 
+     // shapes
+     void WriteShapeTree( ::sax_fastparser::FSHelperPtr pFS, PageType ePageType, sal_Bool bMaster );
+ 
+-    void WritePlaceholderShape( ::sax_fastparser::FSHelperPtr pFS, drawingml::ShapeExport& rDML, PlaceholderType ePlaceholder );
+-    void WritePageShape( ::sax_fastparser::FSHelperPtr pFS, drawingml::ShapeExport& rDML, PageType ePageType );
+-
+-    // helper parts
+-    sal_Bool WritePlaceholder( ::sax_fastparser::FSHelperPtr pFS, drawingml::ShapeExport& rDML, PlaceholderType ePlaceholder, sal_Bool bMaster );
+-
+     sal_uInt32 GetNewSlideId() { return mnSlideIdMax ++; }
+     sal_uInt32 GetNewSlideMasterId() { return mnSlideMasterIdMax ++; }
+ 
+@@ -105,9 +120,7 @@ private:
+ 
+     sal_uInt32 mnSlideIdMax;
+     sal_uInt32 mnSlideMasterIdMax;
+-
+-    sal_Int32 mnShapeIdMax;
+-    sal_Int32 mnPictureIdMax;
++    sal_uInt32 mnAnimationNodeIdMax;
+ 
+     sal_Bool mbCreateNotes;
+ 
+diff --git a/sd/source/filter/pptx/pptexanimations.hxx b/sd/source/filter/pptx/pptexanimations.hxx
+index c56c73a..b208468 100644
+--- a/sd/source/filter/pptx/pptexanimations.hxx
++++ b/sd/source/filter/pptx/pptexanimations.hxx
+@@ -34,6 +34,7 @@
+ #include <com/sun/star/animations/XTimeContainer.hpp>
+ #include <com/sun/star/drawing/XDrawPage.hpp>
+ #include <com/sun/star/animations/XAnimate.hpp>
++#include <com/sun/star/beans/NamedValue.hpp>
+ #ifndef _SD_PPTANIMATIONS_HXX
+ #include "../ppt/pptanimations.hxx"
+ #endif
+@@ -87,7 +88,6 @@ class AnimationExporter
+     void writeZString( SvStream& rStrm, const rtl::OUString& rVal );
+     sal_Bool getColorAny( const ::com::sun::star::uno::Any& rAny, const sal_Int16 nColorSpace, sal_Int32& rMode, sal_Int32& rA, sal_Int32& rB, sal_Int32& rC ) const;
+     sal_Bool exportAnimProperty( SvStream& rStrm, const sal_uInt16 nPropertyId, const ::com::sun::star::uno::Any& rAny, const TranslateMode eTranslateMode );
+-    ::com::sun::star::uno::Any convertAnimateValue( const ::com::sun::star::uno::Any& rSource, const rtl::OUString& rAttributeName ) const;
+     void exportAnimPropertyString( SvStream& rStrm, const sal_uInt16 nPropertyId, const rtl::OUString& rVal, const TranslateMode eTranslateMode );
+     void exportAnimPropertyFloat( SvStream& rStrm, const sal_uInt16 nPropertyId, const double& rVal, const TranslateMode eTranslateMode );
+     void exportAnimPropertyuInt32( SvStream& rStrm, const sal_uInt16 nPropertyId, const sal_uInt32 nVal, const TranslateMode eTranslateMode );
+@@ -133,8 +133,16 @@ public:
+     void doexport( const ::com::sun::star::uno::Reference< ::com::sun::star::drawing::XDrawPage >& xPage, SvStream& rStrm );
+ 
+     sal_Int32 mnCurrentGroup;
+-};
+ 
++        // helper methods also used in ooxml export
++    static ::com::sun::star::uno::Any convertAnimateValue( const ::com::sun::star::uno::Any& rSource, const rtl::OUString& rAttributeName );
++        static sal_Bool GetNodeType( const ::com::sun::star::uno::Reference< ::com::sun::star::animations::XAnimationNode >& xNode, sal_Int16& nType );
++        static sal_Int16 GetFillMode( const ::com::sun::star::uno::Reference< ::com::sun::star::animations::XAnimationNode >& xNode, const sal_Int16 nFillDefault );
++        static void GetUserData( const ::com::sun::star::uno::Sequence< ::com::sun::star::beans::NamedValue >& rUserData, const ::com::sun::star::uno::Any ** pAny, sal_Size nLen );
++        static sal_uInt32 TranslatePresetSubType( const sal_uInt32 nPresetClass, const sal_uInt32 nPresetId, const rtl::OUString& rPresetSubType );
++        static sal_uInt32 GetPresetID( const rtl::OUString& rPreset, sal_uInt32 nAPIPresetClass, sal_Bool& bPresetId );
++        static sal_uInt32 GetValueTypeForAttributeName( const rtl::OUString& rAttributeName );
++};
+ } // namespace ppt
+ 
+ #endif
+diff --git a/sd/source/filter/pptx/pptx-epptooxml.cxx b/sd/source/filter/pptx/pptx-epptooxml.cxx
+index 5e5c81b..d5e1f32 100644
+--- a/sd/source/filter/pptx/pptx-epptooxml.cxx
++++ b/sd/source/filter/pptx/pptx-epptooxml.cxx
 @@ -12,15 +12,32 @@
  #include <svx/escherex.hxx>
  #include <tools/poly.hxx>
@@ -302,7 +415,7 @@ index f8e0790..40b318d 100644
 -                                      XML_id, I32S( GetNewSlideId() ),
 -                                      FSNS( XML_r, XML_id ), USS( sRelId ),
 -                                      FSEND );
--    
+-
 -    if( nPageNum == mnPages - 1 )
 -        mPresentationFS->endElementNS( XML_p, XML_sldIdLst );
 -
@@ -314,7 +427,7 @@ index f8e0790..40b318d 100644
 -                                                      US( "application/vnd.openxmlformats-officedocument.presentationml.slide+xml" ) );
 -
 -    if( mpSlidesFSArray.size() < mnPages )
--	mpSlidesFSArray.resize( mnPages );
+-    mpSlidesFSArray.resize( mnPages );
 -    mpSlidesFSArray[ nPageNum ] = pFS;
 -
 -    pFS->startElementNS( XML_p, XML_sld, PNMSS, FSEND );
@@ -335,7 +448,7 @@ index f8e0790..40b318d 100644
  
 @@ -561,6 +538,593 @@ void PowerPointExport::ImplWriteSlide( sal_uInt32 nPageNum, sal_uInt32 nMasterNu
  
- 	pFS->endElementNS( XML_p, XML_transition );
+     pFS->endElementNS( XML_p, XML_transition );
      }
 +}
 +
@@ -459,7 +572,7 @@ index f8e0790..40b318d 100644
 +        pCalcMode = "lin";
 +        break;
 +    }
-+    
++
 +    switch( AnimationExporter::GetValueTypeForAttributeName( rXAnimate->getAttributeName() ) ) {
 +        case AnimationValueType::STRING:
 +        pValueType = "str";
@@ -523,7 +636,7 @@ index f8e0790..40b318d 100644
 +        pFS->startElementNS( XML_p, XML_tgtEl, FSEND );
 +        pFS->singleElementNS( XML_p, XML_sldTgt, FSEND );
 +        pFS->endElementNS( XML_p, XML_tgtEl );
-+        
++
 +        pFS->endElementNS( XML_p, XML_cond );
 +    }
 +    }
@@ -691,7 +804,7 @@ index f8e0790..40b318d 100644
 +        }
 +    }
 +    }
-+    
++
 +    sal_uInt32 nPresetId;
 +    sal_Bool bPresetId = FALSE;
 +    if ( pAny[ DFF_ANIM_PRESET_ID ] ) {
@@ -894,7 +1007,7 @@ index f8e0790..40b318d 100644
 +                                      XML_id, I32S( GetNewSlideId() ),
 +                                      FSNS( XML_r, XML_id ), USS( sRelId ),
 +                                      FSEND );
-+    
++
 +    if( nPageNum == mnPages - 1 )
 +        mPresentationFS->endElementNS( XML_p, XML_sldIdLst );
 +
@@ -940,9 +1053,9 @@ index f8e0790..40b318d 100644
 +ShapeExport& PowerPointShapeExport::WritePageShape( Reference< XShape > xShape, PageType ePageType, sal_Bool bPresObj )
  {
 -    if( ePageType == NOTICE && mbPresObj )
--	WritePlaceholderShape( pFS, rDML, SlideImage );
+-    WritePlaceholderShape( pFS, rDML, SlideImage );
 -    else
--	rDML.WriteTextShape( mXShape );
+-    rDML.WriteTextShape( mXShape );
 +    if( ePageType == NOTICE && bPresObj )
 +    return WritePlaceholderShape( xShape, SlideImage );
 +
@@ -953,11 +1066,11 @@ index f8e0790..40b318d 100644
 +sal_Bool PowerPointShapeExport::WritePlaceholder( Reference< XShape > xShape, PlaceholderType ePlaceholder, sal_Bool bMaster )
  {
 -    if( bMaster && ShapeExport::NonEmptyText( mXShape ) ) {
--	WritePlaceholderShape( pFS, rDML, ePlaceholder );
+-    WritePlaceholderShape( pFS, rDML, ePlaceholder );
 +    if( bMaster && ShapeExport::NonEmptyText( xShape ) ) {
 +    WritePlaceholderShape( xShape, ePlaceholder );
  
- 	return TRUE;
+     return TRUE;
      }
 @@ -910,17 +1474,17 @@ sal_Bool PowerPointExport::WritePlaceholder( FSHelperPtr pFS, ShapeExport& rDML,
      return FALSE;
@@ -985,8 +1098,8 @@ index f8e0790..40b318d 100644
      const char* pType = NULL;
      switch( ePlaceholder ) {
 @@ -954,20 +1518,24 @@ void PowerPointExport::WritePlaceholderShape( FSHelperPtr pFS, ShapeExport& rDML
- 	default:
- 	    DBG(printf("warning: unhandled placeholder type: %d\n", ePlaceholder));
+     default:
+         DBG(printf("warning: unhandled placeholder type: %d\n", ePlaceholder));
      }
 -    pFS->singleElementNS( XML_p, XML_ph, XML_type, pType, FSEND );
 -    pFS->endElementNS( XML_p, XML_nvPr );
@@ -1018,76 +1131,10 @@ index f8e0790..40b318d 100644
  }
  
  //------------------------------------------------------------------------------------------------------------------------------------------------------------------
-diff --git sd/source/filter/eppt/epptooxml.hxx sd/source/filter/eppt/epptooxml.hxx
-index 2a49d1f..2c850bd 100644
---- sd/source/filter/pptx/epptooxml.hxx
-+++ sd/source/filter/pptx/epptooxml.hxx
-@@ -6,6 +6,13 @@
- 
- #include "epptbase.hxx"
- 
-+namespace com { namespace sun { namespace star {
-+    namespace animations {
-+        class XAnimate;
-+        class XAnimationNode;
-+    }
-+}}}
-+
- namespace oox {
-     namespace drawingml {
-         class ShapeExport;
-@@ -70,22 +77,30 @@ protected:
- 
-     sal_Bool WriteNotesMaster();
- 
-+    void WriteAnimateTo( ::sax_fastparser::FSHelperPtr pFS, const ::com::sun::star::uno::Any aValue, const ::rtl::OUString& rAttributeName );
-+    void WriteAnimateValues( ::sax_fastparser::FSHelperPtr pFS, const ::com::sun::star::uno::Reference< ::com::sun::star::animations::XAnimate >& rXAnimate );
-+    void WriteAnimationCondition( ::sax_fastparser::FSHelperPtr pFS, ::com::sun::star::uno::Any& rAny, sal_Bool bWriteEvent, sal_Bool bMainSeqChild );
-+    void WriteAnimationCondition( ::sax_fastparser::FSHelperPtr pFS, const char* pDelay, const char* pEvent, double fDelay, sal_Bool bHasFDelay );
-+    void WriteAnimations( ::sax_fastparser::FSHelperPtr pFS );
-+    void WriteAnimationAttributeName( ::sax_fastparser::FSHelperPtr pFS, const ::rtl::OUString& rAttributeName );
-+    void WriteAnimationNode( ::sax_fastparser::FSHelperPtr pFS, const ::com::sun::star::uno::Reference< ::com::sun::star::animations::XAnimationNode >& rXNode, sal_Bool bMainSeqChild );
-+    void WriteAnimationNodeAnimate( ::sax_fastparser::FSHelperPtr pFS, const ::com::sun::star::uno::Reference< ::com::sun::star::animations::XAnimationNode >& rXNode, sal_Int32 nXmlNodeType, sal_Bool bMainSeqChild );
-+    void WriteAnimationNodeSeq( ::sax_fastparser::FSHelperPtr pFS, const ::com::sun::star::uno::Reference< ::com::sun::star::animations::XAnimationNode >& rXNode, sal_Int32 nXmlNodeType, sal_Bool bMainSeqChild );
-+    void WriteAnimationNodeCommonPropsStart( ::sax_fastparser::FSHelperPtr pFS, const ::com::sun::star::uno::Reference< ::com::sun::star::animations::XAnimationNode >& rXNode, sal_Bool bSingle, sal_Bool bMainSeqChild );
-+    void WriteAnimationNodeCommonPropsEnd( ::sax_fastparser::FSHelperPtr pFS );
-+    void WriteAnimationProperty( ::sax_fastparser::FSHelperPtr pFS, const ::com::sun::star::uno::Any& rAny );
-+    void WriteAnimationTarget( ::sax_fastparser::FSHelperPtr pFS, ::com::sun::star::uno::Any aTarget );
-     void WriteTextStyles( ::sax_fastparser::FSHelperPtr pFS );
-     void WriteTextStyle( ::sax_fastparser::FSHelperPtr pFS, int nInstance, sal_Int32 xmlToken );
-     void WriteTextStyleLevel( ::sax_fastparser::FSHelperPtr pFS, int nInstance, int nLevel );
-     void ImplWriteBackground( ::sax_fastparser::FSHelperPtr pFS, ::com::sun::star::uno::Reference< ::com::sun::star::beans::XPropertySet > aXBackgroundPropSet );
-+    void WriteTransition( ::sax_fastparser::FSHelperPtr pFS );
- 
-     sal_Int32 GetLayoutFileId( sal_Int32 nOffset, sal_uInt32 nMasterNum );
- 
-     // shapes
-     void WriteShapeTree( ::sax_fastparser::FSHelperPtr pFS, PageType ePageType, sal_Bool bMaster );
- 
--    void WritePlaceholderShape( ::sax_fastparser::FSHelperPtr pFS, drawingml::ShapeExport& rDML, PlaceholderType ePlaceholder );
--    void WritePageShape( ::sax_fastparser::FSHelperPtr pFS, drawingml::ShapeExport& rDML, PageType ePageType );
--
--    // helper parts
--    sal_Bool WritePlaceholder( ::sax_fastparser::FSHelperPtr pFS, drawingml::ShapeExport& rDML, PlaceholderType ePlaceholder, sal_Bool bMaster );
--
-     sal_uInt32 GetNewSlideId() { return mnSlideIdMax ++; }
-     sal_uInt32 GetNewSlideMasterId() { return mnSlideMasterIdMax ++; }
- 
-@@ -105,9 +120,7 @@ private:
- 
-     sal_uInt32 mnSlideIdMax;
-     sal_uInt32 mnSlideMasterIdMax;
--
--    sal_Int32 mnShapeIdMax;
--    sal_Int32 mnPictureIdMax;
-+    sal_uInt32 mnAnimationNodeIdMax;
- 
-     sal_Bool mbCreateNotes;
- 
-diff --git sd/source/filter/eppt/pptexanimations.cxx sd/source/filter/eppt/pptexanimations.cxx
-index 5f8a0bd..26f0761 100644
---- sd/source/filter/pptx/pptx-pptexanimations.cxx
-+++ sd/source/filter/pptx/pptx-pptexanimations.cxx
+diff --git a/sd/source/filter/pptx/pptx-pptexanimations.cxx b/sd/source/filter/pptx/pptx-pptexanimations.cxx
+index c0869c4..e2d8593 100644
+--- a/sd/source/filter/pptx/pptx-pptexanimations.cxx
++++ b/sd/source/filter/pptx/pptx-pptexanimations.cxx
 @@ -55,7 +55,6 @@
  #include <com/sun/star/animations/TransitionSubType.hpp>
  #include <com/sun/star/animations/ValuePair.hpp>
@@ -1097,15 +1144,15 @@ index 5f8a0bd..26f0761 100644
  #include <com/sun/star/drawing/LineStyle.hpp>
  #include <com/sun/star/awt/FontWeight.hpp>
 @@ -164,7 +163,7 @@ void ImplTranslateAttribute( rtl::OUString& rString, const TranslateMode eTransl
- 	}
+     }
  }
  
 -sal_uInt32 ImplTranslatePresetSubType( const sal_uInt32 nPresetClass, const sal_uInt32 nPresetId, const rtl::OUString& rPresetSubType )
 +sal_uInt32 AnimationExporter::TranslatePresetSubType( const sal_uInt32 nPresetClass, const sal_uInt32 nPresetId, const rtl::OUString& rPresetSubType )
  {
- 	sal_uInt32	nPresetSubType = 0;
- 	sal_Bool	bTranslated = sal_False;
-@@ -291,7 +290,7 @@ AnimationExporter::AnimationExporter( const EscherSolverContainer& rSolverContai
+     sal_uInt32	nPresetSubType = 0;
+     sal_Bool	bTranslated = sal_False;
+@@ -294,7 +293,7 @@ AnimationExporter::AnimationExporter( const EscherSolverContainer& rSolverContai
  
  // --------------------------------------------------------------------
  
@@ -1113,9 +1160,9 @@ index 5f8a0bd..26f0761 100644
 +sal_Int16 AnimationExporter::GetFillMode( const Reference< XAnimationNode >& xNode, const sal_Int16 nFillDefault )
  {
      sal_Int16 nFill = xNode->getFill();
- 	if ( ( nFill == AnimationFill::DEFAULT ) ||
-@@ -788,6 +787,27 @@ Reference< XAnimationNode > AnimationExporter::createAfterEffectNodeClone( const
- 	return xNode;
+     if ( ( nFill == AnimationFill::DEFAULT ) ||
+@@ -791,6 +790,27 @@ Reference< XAnimationNode > AnimationExporter::createAfterEffectNodeClone( const
+     return xNode;
  }
  
 +sal_Bool AnimationExporter::GetNodeType( const Reference< XAnimationNode >& xNode, sal_Int16& nType )
@@ -1127,7 +1174,7 @@ index 5f8a0bd..26f0761 100644
 +    const NamedValue* p = aUserData.getConstArray();
 +    sal_Int32 nLength = aUserData.getLength();
 +    while( nLength-- )
-+    {	
++    {
 +        if( p->Name.equalsAsciiL( RTL_CONSTASCII_STRINGPARAM( "node-type" ) ) )
 +        {
 +        if ( p->Value >>= nType )
@@ -1140,55 +1187,55 @@ index 5f8a0bd..26f0761 100644
 +}
 +
  void AnimationExporter::exportAnimNode( SvStream& rStrm, const Reference< XAnimationNode >& xNode,
- 		const ::com::sun::star::uno::Reference< ::com::sun::star::animations::XAnimationNode >*, const sal_Int32, const sal_Int16 nFillDefault )
+         const ::com::sun::star::uno::Reference< ::com::sun::star::animations::XAnimationNode >*, const sal_Int32, const sal_Int16 nFillDefault )
  {
-@@ -840,23 +860,12 @@ void AnimationExporter::exportAnimNode( SvStream& rStrm, const Reference< XAnima
- 			aAnim.mnGroupType = mso_Anim_GroupType_PAR;
- 		case AnimationNodeType::SEQ :
- 		{
--			// trying to get the nodetype
--			Sequence< NamedValue > aUserData = xNode->getUserData();
--			if ( aUserData.getLength() )
+@@ -843,23 +863,12 @@ void AnimationExporter::exportAnimNode( SvStream& rStrm, const Reference< XAnima
+             aAnim.mnGroupType = mso_Anim_GroupType_PAR;
+         case AnimationNodeType::SEQ :
+         {
+-            // trying to get the nodetype
+-            Sequence< NamedValue > aUserData = xNode->getUserData();
+-            if ( aUserData.getLength() )
 +            sal_Int16 nType = 0;
 +            if( GetNodeType( xNode, nType ) )
 +            switch( nType )
- 			{
--				const NamedValue* p = aUserData.getConstArray();
--				sal_Int32 nLength = aUserData.getLength();
--				while( nLength-- )
--				{	
--					if( p->Name.equalsAsciiL( RTL_CONSTASCII_STRINGPARAM( "node-type" ) ) )
--					{
--						sal_Int16 nType = 0;
--						if ( p->Value >>= nType )
--						{
--							switch( nType )
--							{
--								case ::com::sun::star::presentation::EffectNodeType::TIMING_ROOT : aAnim.mnNodeType = 0x12; break;
--								case ::com::sun::star::presentation::EffectNodeType::MAIN_SEQUENCE : aAnim.mnNodeType = 0x18; break;
+             {
+-                const NamedValue* p = aUserData.getConstArray();
+-                sal_Int32 nLength = aUserData.getLength();
+-                while( nLength-- )
+-                {
+-                    if( p->Name.equalsAsciiL( RTL_CONSTASCII_STRINGPARAM( "node-type" ) ) )
+-                    {
+-                        sal_Int16 nType = 0;
+-                        if ( p->Value >>= nType )
+-                        {
+-                            switch( nType )
+-                            {
+-                                case ::com::sun::star::presentation::EffectNodeType::TIMING_ROOT : aAnim.mnNodeType = 0x12; break;
+-                                case ::com::sun::star::presentation::EffectNodeType::MAIN_SEQUENCE : aAnim.mnNodeType = 0x18; break;
 +                case ::com::sun::star::presentation::EffectNodeType::TIMING_ROOT : aAnim.mnNodeType = 0x12; break;
 +                case ::com::sun::star::presentation::EffectNodeType::MAIN_SEQUENCE : aAnim.mnNodeType = 0x18; break;
- 		/*
- 								case ::com::sun::star::presentation::EffectNodeType::ON_CLICK :
- 								case ::com::sun::star::presentation::EffectNodeType::WITH_PREVIOUS :
-@@ -864,11 +873,6 @@ void AnimationExporter::exportAnimNode( SvStream& rStrm, const Reference< XAnima
- 								case ::com::sun::star::presentation::EffectNodeType::INTERACTIVE_SEQUENCE :
- 								default:
- 		*/
--								}
--						}
--						break;
--					}
--				}
- 			}
- 		}
- 		break;
-@@ -901,54 +905,94 @@ void AnimationExporter::exportAnimNode( SvStream& rStrm, const Reference< XAnima
- 		}
- 		break;
- 	}
+         /*
+                                 case ::com::sun::star::presentation::EffectNodeType::ON_CLICK :
+                                 case ::com::sun::star::presentation::EffectNodeType::WITH_PREVIOUS :
+@@ -867,11 +876,6 @@ void AnimationExporter::exportAnimNode( SvStream& rStrm, const Reference< XAnima
+                                 case ::com::sun::star::presentation::EffectNodeType::INTERACTIVE_SEQUENCE :
+                                 default:
+         */
+-                                }
+-                        }
+-                        break;
+-                    }
+-                }
+             }
+         }
+         break;
+@@ -904,54 +908,94 @@ void AnimationExporter::exportAnimNode( SvStream& rStrm, const Reference< XAnima
+         }
+         break;
+     }
 +
- 	rStrm << aAnim;
+     rStrm << aAnim;
  }
  
 +void AnimationExporter::GetUserData( const Sequence< NamedValue >& rUserData, const Any ** pAny, sal_Size nLen )
@@ -1200,7 +1247,7 @@ index 5f8a0bd..26f0761 100644
 +    const NamedValue* p = rUserData.getConstArray();
 +    sal_Int32 nLength = rUserData.getLength();
 +    while( nLength-- )
-+    {	
++    {
 +        if( p->Name.equalsAsciiL( RTL_CONSTASCII_STRINGPARAM( "node-type" ) ) )
 +        {
 +        pAny[ DFF_ANIM_NODE_TYPE ] = &(p->Value);
@@ -1259,50 +1306,50 @@ index 5f8a0bd..26f0761 100644
 +
  sal_Int16 AnimationExporter::exportAnimPropertySet( SvStream& rStrm, const Reference< XAnimationNode >& xNode )
  {
- 	sal_Int16 nNodeType = ::com::sun::star::presentation::EffectNodeType::DEFAULT;
+     sal_Int16 nNodeType = ::com::sun::star::presentation::EffectNodeType::DEFAULT;
  
- 	EscherExContainer aAnimPropertySet( rStrm, DFF_msofbtAnimPropertySet );
--	const ::com::sun::star::uno::Any* pAny[ DFF_ANIM_PROPERTY_ID_COUNT ];
--	rtl_zeroMemory( pAny, sizeof( pAny ) );
+     EscherExContainer aAnimPropertySet( rStrm, DFF_msofbtAnimPropertySet );
+-    const ::com::sun::star::uno::Any* pAny[ DFF_ANIM_PROPERTY_ID_COUNT ];
+-    rtl_zeroMemory( pAny, sizeof( pAny ) );
  
- 	Reference< XAnimationNode > xMaster;
+     Reference< XAnimationNode > xMaster;
  
--	const Any aTrue( makeAny( (sal_Bool)sal_True ) );
+-    const Any aTrue( makeAny( (sal_Bool)sal_True ) );
 +    //const Any aTrue( makeAny( (sal_Bool)sal_True ) );
- 	Any aMasterRel, aOverride, aRunTimeContext;
+     Any aMasterRel, aOverride, aRunTimeContext;
  
- 	// storing user data into pAny, to allow direct access later
--	Sequence< NamedValue > aUserData = xNode->getUserData();
--	if ( aUserData.getLength() )
--	{
--		const NamedValue* p = aUserData.getConstArray();
--		sal_Int32 nLength = aUserData.getLength();
--		while( nLength-- )
--		{	
--			if( p->Name.equalsAsciiL( RTL_CONSTASCII_STRINGPARAM( "node-type" ) ) )
--			{
--				pAny[ DFF_ANIM_NODE_TYPE ] = &(p->Value);
--			}
--			else if ( p->Name.equalsAsciiL( RTL_CONSTASCII_STRINGPARAM( "preset-class" ) ) )
--			{
--				pAny[ DFF_ANIM_PRESET_CLASS ] = &(p->Value);
--			}
--			else if ( p->Name.equalsAsciiL( RTL_CONSTASCII_STRINGPARAM( "preset-id" ) ) )
--			{
--				pAny[ DFF_ANIM_PRESET_ID ] = &(p->Value);
--			}
--			else if ( p->Name.equalsAsciiL( RTL_CONSTASCII_STRINGPARAM( "preset-sub-type" ) ) )
--			{
--				pAny[ DFF_ANIM_PRESET_SUB_TYPE ] = &(p->Value);
--			}
--			else if ( p->Name.equalsAsciiL( RTL_CONSTASCII_STRINGPARAM( "master-element" ) ) )
--			{
--				pAny[ DFF_ANIM_AFTEREFFECT ] = &aTrue;
--				p->Value >>= xMaster;
--			}
--			p++;
--		}
--	}
+     // storing user data into pAny, to allow direct access later
+-    Sequence< NamedValue > aUserData = xNode->getUserData();
+-    if ( aUserData.getLength() )
+-    {
+-        const NamedValue* p = aUserData.getConstArray();
+-        sal_Int32 nLength = aUserData.getLength();
+-        while( nLength-- )
+-        {
+-            if( p->Name.equalsAsciiL( RTL_CONSTASCII_STRINGPARAM( "node-type" ) ) )
+-            {
+-                pAny[ DFF_ANIM_NODE_TYPE ] = &(p->Value);
+-            }
+-            else if ( p->Name.equalsAsciiL( RTL_CONSTASCII_STRINGPARAM( "preset-class" ) ) )
+-            {
+-                pAny[ DFF_ANIM_PRESET_CLASS ] = &(p->Value);
+-            }
+-            else if ( p->Name.equalsAsciiL( RTL_CONSTASCII_STRINGPARAM( "preset-id" ) ) )
+-            {
+-                pAny[ DFF_ANIM_PRESET_ID ] = &(p->Value);
+-            }
+-            else if ( p->Name.equalsAsciiL( RTL_CONSTASCII_STRINGPARAM( "preset-sub-type" ) ) )
+-            {
+-                pAny[ DFF_ANIM_PRESET_SUB_TYPE ] = &(p->Value);
+-            }
+-            else if ( p->Name.equalsAsciiL( RTL_CONSTASCII_STRINGPARAM( "master-element" ) ) )
+-            {
+-                pAny[ DFF_ANIM_AFTEREFFECT ] = &aTrue;
+-                p->Value >>= xMaster;
+-            }
+-            p++;
+-        }
+-    }
 +    const Sequence< NamedValue > aUserData = xNode->getUserData();
 +    const ::com::sun::star::uno::Any* pAny[ DFF_ANIM_PROPERTY_ID_COUNT ];
 +    GetUserData( aUserData, pAny, sizeof( pAny ) );
@@ -1310,118 +1357,82 @@ index 5f8a0bd..26f0761 100644
 +    if( pAny[ DFF_ANIM_AFTEREFFECT ] )
 +        ( *pAny[ DFF_ANIM_AFTEREFFECT ] ) >>= xMaster;
  
- 	// calculate master-rel
- 	if( xMaster.is() )
-@@ -988,12 +1032,12 @@ sal_Int16 AnimationExporter::exportAnimPropertySet( SvStream& rStrm, const Refer
- 			exportAnimPropertyuInt32( rStrm, DFF_ANIM_NODE_TYPE, nPPTNodeType, TRANSLATE_NONE );
- 		}
- 	}
--	sal_uInt32 nPresetId = 0;
--    sal_uInt32 nPresetSubType = 0;
+     // calculate master-rel
+     if( xMaster.is() )
+@@ -991,12 +1035,12 @@ sal_Int16 AnimationExporter::exportAnimPropertySet( SvStream& rStrm, const Refer
+             exportAnimPropertyuInt32( rStrm, DFF_ANIM_NODE_TYPE, nPPTNodeType, TRANSLATE_NONE );
+         }
+     }
+-    sal_uInt32 nPresetId = 0;
 +    sal_uInt32 nPresetId;
-+    sal_uInt32 nPresetSubType = 0;
- 	sal_uInt32 nAPIPresetClass = EffectPresetClass::CUSTOM;
- 	sal_uInt32 nPresetClass = DFF_ANIM_PRESS_CLASS_USER_DEFINED;
- 	sal_Bool bPresetClass, bPresetId, bPresetSubType;
--	bPresetClass = bPresetId = bPresetSubType = sal_False;
+     sal_uInt32 nPresetSubType = 0;
+     sal_uInt32 nAPIPresetClass = EffectPresetClass::CUSTOM;
+     sal_uInt32 nPresetClass = DFF_ANIM_PRESS_CLASS_USER_DEFINED;
+     sal_Bool bPresetClass, bPresetId, bPresetSubType;
+-    bPresetClass = bPresetId = bPresetSubType = sal_False;
 +    bPresetId = bPresetClass = bPresetSubType = sal_False;
  
- 	if ( pAny[ DFF_ANIM_PRESET_CLASS ] )
- 	{
-@@ -1019,30 +1063,7 @@ sal_Int16 AnimationExporter::exportAnimPropertySet( SvStream& rStrm, const Refer
- 	{
- 		rtl::OUString sPreset;
- 		if ( *pAny[ DFF_ANIM_PRESET_ID ] >>= sPreset )
--		{
--			if ( sPreset.match( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( "ppt_" ) ), 0 ) )
--			{
--				sal_Int32 nLast = sPreset.lastIndexOf( '_' );
--				if ( ( nLast != -1 ) && ( ( nLast + 1 ) < sPreset.getLength() ) )
--				{
--					rtl::OUString aNumber( sPreset.copy( nLast + 1 ) );
--					nPresetId = aNumber.toInt32();
--					bPresetId = sal_True;
--				}
--   			}
--			else
--			{
--				const preset_maping* p = gPresetMaping;
--				while( p->mpStrPresetId && ((p->mnPresetClass != (sal_Int32)nAPIPresetClass) || !sPreset.equalsAscii( p->mpStrPresetId )) )
--					p++;
--
--				if( p->mpStrPresetId )
--				{
--					nPresetId = p->mnPresetId;
--					bPresetId = sal_True;
--				}
+     if ( pAny[ DFF_ANIM_PRESET_CLASS ] )
+     {
+@@ -1022,30 +1066,7 @@ sal_Int16 AnimationExporter::exportAnimPropertySet( SvStream& rStrm, const Refer
+     {
+         rtl::OUString sPreset;
+         if ( *pAny[ DFF_ANIM_PRESET_ID ] >>= sPreset )
+-        {
+-            if ( sPreset.match( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( "ppt_" ) ), 0 ) )
+-            {
+-                sal_Int32 nLast = sPreset.lastIndexOf( '_' );
+-                if ( ( nLast != -1 ) && ( ( nLast + 1 ) < sPreset.getLength() ) )
+-                {
+-                    rtl::OUString aNumber( sPreset.copy( nLast + 1 ) );
+-                    nPresetId = aNumber.toInt32();
+-                    bPresetId = sal_True;
+-                }
 -			}
--		}
+-            else
+-            {
+-                const preset_maping* p = gPresetMaping;
+-                while( p->mpStrPresetId && ((p->mnPresetClass != (sal_Int32)nAPIPresetClass) || !sPreset.equalsAscii( p->mpStrPresetId )) )
+-                    p++;
+-
+-                if( p->mpStrPresetId )
+-                {
+-                    nPresetId = p->mnPresetId;
+-                    bPresetId = sal_True;
+-                }
+-            }
+-        }
 +            nPresetId = GetPresetID( sPreset, nAPIPresetClass, bPresetId );
- 	}
+     }
  
- 	if ( pAny[ DFF_ANIM_PRESET_SUB_TYPE ] )
-@@ -1050,7 +1071,7 @@ sal_Int16 AnimationExporter::exportAnimPropertySet( SvStream& rStrm, const Refer
- 		rtl::OUString sPresetSubType;
- 		if ( *pAny[ DFF_ANIM_PRESET_SUB_TYPE ] >>= sPresetSubType )
- 		{
--			nPresetSubType = ImplTranslatePresetSubType( nPresetClass, nPresetId, sPresetSubType );
+     if ( pAny[ DFF_ANIM_PRESET_SUB_TYPE ] )
+@@ -1053,7 +1074,7 @@ sal_Int16 AnimationExporter::exportAnimPropertySet( SvStream& rStrm, const Refer
+         rtl::OUString sPresetSubType;
+         if ( *pAny[ DFF_ANIM_PRESET_SUB_TYPE ] >>= sPresetSubType )
+         {
+-            nPresetSubType = ImplTranslatePresetSubType( nPresetClass, nPresetId, sPresetSubType );
 +            nPresetSubType = TranslatePresetSubType( nPresetClass, nPresetId, sPresetSubType );
- 			bPresetSubType = sal_True;
- 		}
- 	}
-@@ -1413,7 +1434,7 @@ void AnimationExporter::exportAnimEvent( SvStream& rStrm, const Reference< XAnim
- 	}
+             bPresetSubType = sal_True;
+         }
+     }
+@@ -1416,7 +1437,7 @@ void AnimationExporter::exportAnimEvent( SvStream& rStrm, const Reference< XAnim
+     }
  }
  
 -Any AnimationExporter::convertAnimateValue( const Any& rSourceValue, const rtl::OUString& rAttributeName ) const
 +Any AnimationExporter::convertAnimateValue( const Any& rSourceValue, const rtl::OUString& rAttributeName )
  {
- 	rtl::OUString aDest;
- 	if ( rAttributeName.equalsAsciiL( RTL_CONSTASCII_STRINGPARAM( "X" ) )
-@@ -1562,7 +1583,7 @@ void AnimationExporter::exportAnimateSet( SvStream& rStrm, const Reference< XAni
- 	}
+     rtl::OUString aDest;
+     if ( rAttributeName.equalsAsciiL( RTL_CONSTASCII_STRINGPARAM( "X" ) )
+@@ -1565,7 +1586,7 @@ void AnimationExporter::exportAnimateSet( SvStream& rStrm, const Reference< XAni
+     }
  }
  
 -sal_uInt32 GetValueTypeForAttributeName( const rtl::OUString& rAttributeName )
 +sal_uInt32 AnimationExporter::GetValueTypeForAttributeName( const rtl::OUString& rAttributeName )
  {
- 	sal_uInt32 nValueType = 0;
+     sal_uInt32 nValueType = 0;
  
-diff --git sd/source/filter/eppt/pptexanimations.hxx sd/source/filter/eppt/pptexanimations.hxx
-index 5099900..45e116b 100644
---- sd/source/filter/pptx/pptexanimations.hxx
-+++ sd/source/filter/pptx/pptexanimations.hxx
-@@ -34,6 +34,7 @@
- #include <com/sun/star/animations/XTimeContainer.hpp>
- #include <com/sun/star/drawing/XDrawPage.hpp>
- #include <com/sun/star/animations/XAnimate.hpp>
-+#include <com/sun/star/beans/NamedValue.hpp>
- #ifndef _SD_PPTANIMATIONS_HXX
- #include "../ppt/pptanimations.hxx"
- #endif
-@@ -87,7 +88,6 @@ class AnimationExporter
- 	void writeZString( SvStream& rStrm, const rtl::OUString& rVal );
- 	sal_Bool getColorAny( const ::com::sun::star::uno::Any& rAny, const sal_Int16 nColorSpace, sal_Int32& rMode, sal_Int32& rA, sal_Int32& rB, sal_Int32& rC ) const;
- 	sal_Bool exportAnimProperty( SvStream& rStrm, const sal_uInt16 nPropertyId, const ::com::sun::star::uno::Any& rAny, const TranslateMode eTranslateMode );
--	::com::sun::star::uno::Any convertAnimateValue( const ::com::sun::star::uno::Any& rSource, const rtl::OUString& rAttributeName ) const;
- 	void exportAnimPropertyString( SvStream& rStrm, const sal_uInt16 nPropertyId, const rtl::OUString& rVal, const TranslateMode eTranslateMode );
- 	void exportAnimPropertyFloat( SvStream& rStrm, const sal_uInt16 nPropertyId, const double& rVal, const TranslateMode eTranslateMode );
- 	void exportAnimPropertyuInt32( SvStream& rStrm, const sal_uInt16 nPropertyId, const sal_uInt32 nVal, const TranslateMode eTranslateMode );
-@@ -133,8 +133,16 @@ public:
- 	void doexport( const ::com::sun::star::uno::Reference< ::com::sun::star::drawing::XDrawPage >& xPage, SvStream& rStrm );
- 
- 	sal_Int32 mnCurrentGroup;
--};
- 
-+        // helper methods also used in ooxml export
-+    static ::com::sun::star::uno::Any convertAnimateValue( const ::com::sun::star::uno::Any& rSource, const rtl::OUString& rAttributeName );
-+        static sal_Bool GetNodeType( const ::com::sun::star::uno::Reference< ::com::sun::star::animations::XAnimationNode >& xNode, sal_Int16& nType );
-+        static sal_Int16 GetFillMode( const ::com::sun::star::uno::Reference< ::com::sun::star::animations::XAnimationNode >& xNode, const sal_Int16 nFillDefault );
-+        static void GetUserData( const ::com::sun::star::uno::Sequence< ::com::sun::star::beans::NamedValue >& rUserData, const ::com::sun::star::uno::Any ** pAny, sal_Size nLen );
-+        static sal_uInt32 TranslatePresetSubType( const sal_uInt32 nPresetClass, const sal_uInt32 nPresetId, const rtl::OUString& rPresetSubType );
-+        static sal_uInt32 GetPresetID( const rtl::OUString& rPreset, sal_uInt32 nAPIPresetClass, sal_Bool& bPresetId );
-+        static sal_uInt32 GetValueTypeForAttributeName( const rtl::OUString& rAttributeName );
-+};
- } // namespace ppt
- 
- #endif
+-- 
+1.7.0.1
+

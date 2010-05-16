@@ -1,35 +1,47 @@
-diff --git sc/inc/document.hxx sc/inc/document.hxx
-index e6b98c0..f0e2932 100644
---- sc/inc/document.hxx
-+++ sc/inc/document.hxx
-@@ -914,6 +914,11 @@ public:
+From cd2326d944394421a736918f68cc1de8a276c490 Mon Sep 17 00:00:00 2001
+From: Jan Holesovsky <kendy@suse.cz>
+Date: Fri, 14 May 2010 17:07:53 +0200
+Subject: [PATCH 786/878] calc-perf-extend-print-area.diff
+
+---
+ sc/inc/document.hxx             |    5 +
+ sc/inc/table.hxx                |   49 +++++++
+ sc/source/core/data/column2.cxx |    4 +-
+ sc/source/core/data/table1.cxx  |  284 +++++++++++++++++++++++++++++----------
+ 4 files changed, 268 insertions(+), 74 deletions(-)
+
+diff --git a/sc/inc/document.hxx b/sc/inc/document.hxx
+index 1c46c41..c3acf49 100644
+--- a/sc/inc/document.hxx
++++ b/sc/inc/document.hxx
+@@ -910,6 +910,11 @@ public:
  
      SC_DLLPUBLIC BOOL			GetDataStart( SCTAB nTab, SCCOL& rStartCol, SCROW& rStartRow ) const;
  
-+    /** 
-+     * Find the maximum column position that contains printable data for the 
-+     * specified row range.  The final column position must be equal or less 
-+     * than the initial value of rEndCol. 
++    /**
++     * Find the maximum column position that contains printable data for the
++     * specified row range.  The final column position must be equal or less
++     * than the initial value of rEndCol.
 +     */
      void			ExtendPrintArea( OutputDevice* pDev, SCTAB nTab,
                                      SCCOL nStartCol, SCROW nStartRow,
                                      SCCOL& rEndCol, SCROW nEndRow );
-diff --git sc/inc/table.hxx sc/inc/table.hxx
-index ebaf2c7..b4bdd7e 100644
---- sc/inc/table.hxx
-+++ sc/inc/table.hxx
-@@ -875,6 +875,55 @@ private:
+diff --git a/sc/inc/table.hxx b/sc/inc/table.hxx
+index 2209888..7741b49 100644
+--- a/sc/inc/table.hxx
++++ b/sc/inc/table.hxx
+@@ -872,6 +872,55 @@ private:
                                       BOOL bNumFormatChanged, BOOL bBroadcast );
  
      void        SkipFilteredRows(SCROW& rRow, SCROW& rLastNonFilteredRow, bool bForward);
 +
-+    /** 
-+     * In case the cell text goes beyond the column width, move the max column 
++    /**
++     * In case the cell text goes beyond the column width, move the max column
 +     * position to the right.  This is called from ExtendPrintArea.
 +     */
 +    void        MaybeAddExtraColumn(SCCOL& rCol, SCROW nRow, OutputDevice* pDev, double nPPTX, double nPPTY);
 +
-+    /** 
++    /**
 +     * Use this to iterate through non-empty visible cells in a single column.
 +     */
 +    class VisibleDataCellIterator
@@ -40,26 +52,26 @@ index ebaf2c7..b4bdd7e 100644
 +        explicit VisibleDataCellIterator(ScFlatBoolRowSegments& rRowSegs, ScColumn& rColumn);
 +        ~VisibleDataCellIterator();
 +
-+        /** 
++        /**
 +         * Set the start row position.  In case there is not visible data cell
-+         * at the specified row position, it will move to the position of the 
-+         * first visible data cell below that point. 
-+         *  
++         * at the specified row position, it will move to the position of the
++         * first visible data cell below that point.
++         *
 +         * @return First visible data cell if found, or NULL otherwise.
-+         */ 
++         */
 +        ScBaseCell* reset(SCROW nRow);
 +
-+        /** 
-+         * Find the next visible data cell position. 
-+         * 
++        /**
++         * Find the next visible data cell position.
++         *
 +         * @return Next visible data cell if found, or NULL otherwise.
 +         */
 +        ScBaseCell* next();
 +
-+        /** 
++        /**
 +         * Get the current row position.
-+         * 
-+         * @return Current row position, or ROW_NOT_FOUND if the iterator 
++         *
++         * @return Current row position, or ROW_NOT_FOUND if the iterator
 +         *         doesn't point to a valid data cell position.
 +         */
 +        SCROW getRow() const;
@@ -74,11 +86,11 @@ index ebaf2c7..b4bdd7e 100644
  };
  
  
-diff --git sc/source/core/data/column2.cxx sc/source/core/data/column2.cxx
-index 10a3dd5..2faf495 100644
---- sc/source/core/data/column2.cxx
-+++ sc/source/core/data/column2.cxx
-@@ -1437,11 +1437,11 @@ BOOL ScColumn::GetPrevDataPos(SCROW& rRow) const
+diff --git a/sc/source/core/data/column2.cxx b/sc/source/core/data/column2.cxx
+index 9ac2d50..fbda756 100644
+--- a/sc/source/core/data/column2.cxx
++++ b/sc/source/core/data/column2.cxx
+@@ -1438,11 +1438,11 @@ BOOL ScColumn::GetPrevDataPos(SCROW& rRow) const
      return bFound;
  }
  
@@ -92,11 +104,11 @@ index 10a3dd5..2faf495 100644
  
      BOOL bMore = ( nIndex < nCount );
      if ( bMore )
-diff --git sc/source/core/data/table1.cxx sc/source/core/data/table1.cxx
-index e55582b..614a9b5 100644
---- sc/source/core/data/table1.cxx
-+++ sc/source/core/data/table1.cxx
-@@ -1369,88 +1369,131 @@ void ScTable::ExtendPrintArea( OutputDevice* pDev,
+diff --git a/sc/source/core/data/table1.cxx b/sc/source/core/data/table1.cxx
+index fb07548..a70c338 100644
+--- a/sc/source/core/data/table1.cxx
++++ b/sc/source/core/data/table1.cxx
+@@ -1366,88 +1366,131 @@ void ScTable::ExtendPrintArea( OutputDevice* pDev,
      double nPPTX = aPix1000.X() / 1000.0;
      double nPPTY = aPix1000.Y() / 1000.0;
  
@@ -113,19 +125,19 @@ index e55582b..614a9b5 100644
 +    aSkipCols.setFalse(0, MAXCOL);
 +    for (SCCOL i = 0; i <= MAXCOL; ++i)
      {
--		if (!RowHidden(nRow))
+-        if (!RowHidden(nRow))
 +        SCCOL nLastCol = i;
 +        if (ColHidden(i, NULL, &nLastCol))
++        {
++            // Columns are hidden in this range.
++            aSkipCols.setTrue(i, nLastCol);
++        }
++        else
          {
 -            SCCOL nDataCol = rEndCol;
 -            while (nDataCol > 0 && ( bEmpty[nDataCol] || !aCol[nDataCol].Search(nRow,nIndex) ) )
 -                --nDataCol;
 -            if (!ColHidden(nDataCol))
-+            // Columns are hidden in this range.
-+            aSkipCols.setTrue(i, nLastCol);
-+        }
-+        else
-+        {
 +            // These columns are visible.  Check for empty columns.
 +            for (SCCOL j = i; j <= nLastCol; ++j)
              {
@@ -300,7 +312,7 @@ index e55582b..614a9b5 100644
  }
  
  void ScTable::DoColResize( SCCOL nCol1, SCCOL nCol2, SCSIZE nAdd )
-@@ -1541,7 +1584,104 @@ void ScTable::RestorePrintRanges( const ScPrintSaverTab& rSaveTab )
+@@ -1538,7 +1581,104 @@ void ScTable::RestorePrintRanges( const ScPrintSaverTab& rSaveTab )
      UpdatePageBreaks(NULL);
  }
  
@@ -310,11 +322,11 @@ index e55582b..614a9b5 100644
 +    mrRowSegs(rRowSegs),
 +    mrColumn(rColumn),
 +    mpCell(NULL),
-+    mnCurRow(ROW_NOT_FOUND), 
++    mnCurRow(ROW_NOT_FOUND),
 +    mnUBound(ROW_NOT_FOUND)
 +{
 +}
-+
+ 
 +ScTable::VisibleDataCellIterator::~VisibleDataCellIterator()
 +{
 +}
@@ -322,20 +334,20 @@ index e55582b..614a9b5 100644
 +ScBaseCell* ScTable::VisibleDataCellIterator::reset(SCROW nRow)
 +{
 +    if (nRow > MAXROW)
-+    {    
-+        mnCurRow = ROW_NOT_FOUND;
-+        return NULL;
-+    }
-+
-+    ScFlatBoolRowSegments::RangeData aData;
-+    if (!mrRowSegs.getRangeData(nRow, aData))
-+    {    
++    {
 +        mnCurRow = ROW_NOT_FOUND;
 +        return NULL;
 +    }
  
++    ScFlatBoolRowSegments::RangeData aData;
++    if (!mrRowSegs.getRangeData(nRow, aData))
++    {
++        mnCurRow = ROW_NOT_FOUND;
++        return NULL;
++    }
++
 +    if (!aData.mbValue)
-+    {    
++    {
 +        // specified row is visible.  Take it.
 +        mnCurRow = nRow;
 +        mnUBound = aData.mnRow2;
@@ -347,7 +359,7 @@ index e55582b..614a9b5 100644
 +        mnCurRow = aData.mnRow2 + 1;
 +        mnUBound = mnCurRow; // get range data on the next iteration.
 +        if (mnCurRow > MAXROW)
-+        {    
++        {
 +            // Make sure the row doesn't exceed our current limit.
 +            mnCurRow = ROW_NOT_FOUND;
 +            return NULL;
@@ -358,7 +370,7 @@ index e55582b..614a9b5 100644
 +    if (mpCell)
 +        // First visible cell found.
 +        return mpCell;
- 
++
 +    // Find a first visible cell below this row (if any).
 +    return next();
 +}
@@ -397,7 +409,7 @@ index e55582b..614a9b5 100644
 +            return mpCell;
 +    }
 +    mnCurRow = ROW_NOT_FOUND;
-+    return NULL;    
++    return NULL;
 +}
 +
 +SCROW ScTable::VisibleDataCellIterator::getRow() const
@@ -405,3 +417,6 @@ index e55582b..614a9b5 100644
 +    return mnCurRow;
 +}
  
+-- 
+1.7.0.1
+

@@ -1,6 +1,35 @@
---- sc/inc/attarray.hxx.old	2009-10-08 16:17:08.000000000 +0200
-+++ sc/inc/attarray.hxx	2010-03-03 16:59:11.000000000 +0100
-@@ -35,6 +35,7 @@
+From e32de4a076f9dde22f4b87e716f5d803f3392b9a Mon Sep 17 00:00:00 2001
+From: Jan Holesovsky <kendy@suse.cz>
+Date: Fri, 14 May 2010 16:55:29 +0200
+Subject: [PATCH 160/878] sc-overwrite-char-font-attrs.diff
+
+---
+ sc/inc/attarray.hxx              |   10 +++-
+ sc/inc/cell.hxx                  |   51 ++++++++++++++++++++
+ sc/inc/column.hxx                |    6 ++-
+ sc/inc/document.hxx              |    9 +++-
+ sc/inc/table.hxx                 |    6 ++-
+ sc/source/core/data/attarray.cxx |   38 ++++++++++++++--
+ sc/source/core/data/cell2.cxx    |   94 ++++++++++++++++++++++++++++++++++++++
+ sc/source/core/data/column.cxx   |    9 ++--
+ sc/source/core/data/documen2.cxx |    1 +
+ sc/source/core/data/documen9.cxx |   10 ++++
+ sc/source/core/data/document.cxx |   11 ++--
+ sc/source/core/data/table2.cxx   |    9 ++--
+ sc/source/ui/docshell/docsh.cxx  |   26 ++++++++++-
+ sc/source/ui/inc/undoblk.hxx     |    7 +++
+ sc/source/ui/inc/undocell.hxx    |   11 ++++-
+ sc/source/ui/undo/makefile.mk    |    1 +
+ sc/source/ui/undo/undoblk3.cxx   |   26 ++++++++++
+ sc/source/ui/undo/undocell.cxx   |   24 ++++++++--
+ sc/source/ui/view/viewfunc.cxx   |   37 ++++++++++-----
+ 19 files changed, 342 insertions(+), 44 deletions(-)
+
+diff --git a/sc/inc/attarray.hxx b/sc/inc/attarray.hxx
+index d8fd97f..65e9491 100644
+--- a/sc/inc/attarray.hxx
++++ b/sc/inc/attarray.hxx
+@@ -32,6 +32,7 @@
  #include "attrib.hxx"
  
  class ScDocument;
@@ -8,33 +37,35 @@
  class ScMarkArray;
  class ScPatternAttr;
  class ScStyleSheet;
-@@ -104,6 +105,9 @@ friend void lcl_IterGetNumberFormat( ULO
+@@ -101,6 +102,9 @@ friend void lcl_IterGetNumberFormat( ULONG& nFormat,
                              SCROW nStartRow, SCROW nEndRow,
                              BOOL bLeft, SCCOL nDistRight, BOOL bTop, SCROW nDistBottom );
  
-+    void RemoveCellCharAttribs( SCROW nStartRow, SCROW nEndRow, 
++    void RemoveCellCharAttribs( SCROW nStartRow, SCROW nEndRow,
 +                              const ScPatternAttr* pPattern, ScEditDataArray* pDataArray );
 +
  public:
              ScAttrArray( SCCOL nNewCol, SCTAB nNewTab, ScDocument* pDoc );
              ~ScAttrArray();
-@@ -126,9 +130,11 @@ public:
+@@ -123,9 +127,11 @@ public:
                              SCROW nStartRow, SCROW nEndRow, BOOL bLeft, SCCOL nDistRight );
  
      void	SetPattern( SCROW nRow, const ScPatternAttr* pPattern, BOOL bPutToPool = FALSE );
 -    void	SetPatternArea( SCROW nStartRow, SCROW nEndRow, const ScPatternAttr* pPattern, BOOL bPutToPool = FALSE);
-+    void	SetPatternArea( SCROW nStartRow, SCROW nEndRow, const ScPatternAttr* pPattern, 
++    void	SetPatternArea( SCROW nStartRow, SCROW nEndRow, const ScPatternAttr* pPattern,
 +                            BOOL bPutToPool = FALSE, ScEditDataArray* pDataArray = NULL );
      void	ApplyStyleArea( SCROW nStartRow, SCROW nEndRow, ScStyleSheet* pStyle );
 -    void	ApplyCacheArea( SCROW nStartRow, SCROW nEndRow, SfxItemPoolCache* pCache );
-+    void	ApplyCacheArea( SCROW nStartRow, SCROW nEndRow, SfxItemPoolCache* pCache, 
++    void	ApplyCacheArea( SCROW nStartRow, SCROW nEndRow, SfxItemPoolCache* pCache,
 +                            ScEditDataArray* pDataArray = NULL );
      void	ApplyLineStyleArea( SCROW nStartRow, SCROW nEndRow,
                                  const SvxBorderLine* pLine, BOOL bColorOnly );
  
---- sc/inc/cell.hxx.old	2009-10-08 16:17:08.000000000 +0200
-+++ sc/inc/cell.hxx	2010-03-03 16:59:11.000000000 +0100
-@@ -34,6 +34,9 @@
+diff --git a/sc/inc/cell.hxx b/sc/inc/cell.hxx
+index 773b2c4..32d7d52 100644
+--- a/sc/inc/cell.hxx
++++ b/sc/inc/cell.hxx
+@@ -31,6 +31,9 @@
  #include <stddef.h>
  
  #include <set>
@@ -44,7 +75,7 @@
  #include <tools/mempool.hxx>
  #include <svtools/listener.hxx>
  #include "global.hxx"
-@@ -59,6 +62,7 @@ class SvtBroadcaster;
+@@ -56,6 +59,7 @@ class SvtBroadcaster;
  class ScCodeArray;
  class ScProgress;
  class ScPostIt;
@@ -52,7 +83,7 @@
  
  // ============================================================================
  
-@@ -279,6 +283,53 @@ public:
+@@ -276,6 +280,53 @@ public:
      void			GetString( String& rString ) const;
  
      const EditTextObject* GetData() const	{ return pData; }
@@ -69,7 +100,7 @@
 +    class Item
 +    {
 +    public:
-+        explicit Item(SCTAB nTab, SCCOL nCol, SCROW nRow, 
++        explicit Item(SCTAB nTab, SCCOL nCol, SCROW nRow,
 +                      EditTextObject* pOldData, EditTextObject* pNewData);
 +        ~Item();
 +
@@ -94,7 +125,7 @@
 +    ScEditDataArray();
 +    ~ScEditDataArray();
 +
-+    void AddItem(SCTAB nTab, SCCOL nCol, SCROW nRow, 
++    void AddItem(SCTAB nTab, SCCOL nCol, SCROW nRow,
 +                 EditTextObject* pOldData, EditTextObject* pNewData);
 +
 +    const Item* First();
@@ -106,9 +137,11 @@
  };
  
  // ============================================================================
---- sc/inc/column.hxx.old	2010-03-03 16:44:03.000000000 +0100
-+++ sc/inc/column.hxx	2010-03-03 16:59:11.000000000 +0100
-@@ -57,6 +57,7 @@ class ScAttrIterator;
+diff --git a/sc/inc/column.hxx b/sc/inc/column.hxx
+index a118c14..b9c2259 100644
+--- a/sc/inc/column.hxx
++++ b/sc/inc/column.hxx
+@@ -54,6 +54,7 @@ class ScAttrIterator;
  class ScAttrArray;
  class ScBaseCell;
  class ScDocument;
@@ -116,17 +149,17 @@
  class ScFormulaCell;
  class ScMarkData;
  class ScPatternAttr;
-@@ -316,7 +317,8 @@ public:
+@@ -312,7 +313,8 @@ public:
  
      void		ApplyAttr( SCROW nRow, const SfxPoolItem& rAttr );
      void		ApplyPattern( SCROW nRow, const ScPatternAttr& rPatAttr );
 -    void		ApplyPatternArea( SCROW nStartRow, SCROW nEndRow, const ScPatternAttr& rPatAttr );
-+    void		ApplyPatternArea( SCROW nStartRow, SCROW nEndRow, const ScPatternAttr& rPatAttr, 
++    void		ApplyPatternArea( SCROW nStartRow, SCROW nEndRow, const ScPatternAttr& rPatAttr,
 +                                  ScEditDataArray* pDataArray = NULL );
      void		SetPattern( SCROW nRow, const ScPatternAttr& rPatAttr, BOOL bPutToPool = FALSE );
      void		SetPatternArea( SCROW nStartRow, SCROW nEndRow,
                                  const ScPatternAttr& rPatAttr, BOOL bPutToPool = FALSE );
-@@ -348,7 +350,7 @@ public:
+@@ -344,7 +346,7 @@ public:
  
      void		RemoveProtected( SCROW nStartRow, SCROW nEndRow );
  
@@ -135,9 +168,11 @@
      void        DeleteSelection( USHORT nDelFlag, const ScMarkData& rMark );
  
      void		ClearSelectionItems( const USHORT* pWhich, const ScMarkData& rMark );
---- sc/inc/document.hxx.old	2010-03-03 16:59:09.000000000 +0100
-+++ sc/inc/document.hxx	2010-03-03 16:59:11.000000000 +0100
-@@ -369,6 +369,7 @@ private:
+diff --git a/sc/inc/document.hxx b/sc/inc/document.hxx
+index d7437e7..6419c96 100644
+--- a/sc/inc/document.hxx
++++ b/sc/inc/document.hxx
+@@ -366,6 +366,7 @@ private:
      // kein Broadcast, keine Listener aufbauen waehrend aus einem anderen
      // Doc (per Filter o.ae.) inserted wird, erst bei CompileAll / CalcAfterLoad
      BOOL				bInsertingFromOtherDoc;
@@ -145,7 +180,7 @@
      BOOL				bImportingXML;		// special handling of formula text
      BOOL                bXMLFromWrapper;    // distinguish ScXMLImportWrapper from external component
      BOOL				bCalcingAfterLoad;				// in CalcAfterLoad TRUE
-@@ -1146,7 +1147,8 @@ public:
+@@ -1144,7 +1145,8 @@ public:
                                      const ScPatternAttr& rAttr );
      SC_DLLPUBLIC void			ApplyPatternArea( SCCOL nStartCol, SCROW nStartRow,
                                          SCCOL nEndCol, SCROW nEndRow,
@@ -155,17 +190,17 @@
      SC_DLLPUBLIC void			ApplyPatternAreaTab( SCCOL nStartCol, SCROW nStartRow,
                                              SCCOL nEndCol, SCROW nEndRow, SCTAB nTab,
                                              const ScPatternAttr& rAttr );
-@@ -1208,7 +1210,8 @@ public:
+@@ -1206,7 +1208,8 @@ public:
                              SCCOL nVCol, SCROW nVRow, SCTAB nVTab,
                              const String& sValStr, double& nX);
  
 -    void			ApplySelectionPattern( const ScPatternAttr& rAttr, const ScMarkData& rMark );
-+    void			ApplySelectionPattern( const ScPatternAttr& rAttr, const ScMarkData& rMark, 
++    void			ApplySelectionPattern( const ScPatternAttr& rAttr, const ScMarkData& rMark,
 +                                           ScEditDataArray* pDataArray = NULL );
      void            DeleteSelection( USHORT nDelFlag, const ScMarkData& rMark );
      void			DeleteSelectionTab( SCTAB nTab, USHORT nDelFlag, const ScMarkData& rMark );
  
-@@ -1458,6 +1461,8 @@ public:
+@@ -1456,6 +1459,8 @@ public:
      BOOL			GetNoSetDirty() const { return bNoSetDirty; }
      void			SetInsertingFromOtherDoc( BOOL bVal ) { bInsertingFromOtherDoc = bVal; }
      BOOL			IsInsertingFromOtherDoc() const { return bInsertingFromOtherDoc; }
@@ -174,9 +209,11 @@
      void			SetImportingXML( BOOL bVal );
      BOOL			IsImportingXML() const { return bImportingXML; }
      void			SetXMLFromWrapper( BOOL bVal );
---- sc/inc/table.hxx.old	2010-03-03 16:44:03.000000000 +0100
-+++ sc/inc/table.hxx	2010-03-03 16:59:11.000000000 +0100
-@@ -59,6 +59,7 @@ class ScAutoFormatData;
+diff --git a/sc/inc/table.hxx b/sc/inc/table.hxx
+index 510bd05..5d4ec5c 100644
+--- a/sc/inc/table.hxx
++++ b/sc/inc/table.hxx
+@@ -56,6 +56,7 @@ class ScAutoFormatData;
  class ScBaseCell;
  class ScDocument;
  class ScDrawLayer;
@@ -184,17 +221,17 @@
  class ScFormulaCell;
  class ScOutlineTable;
  class ScPostIt;
-@@ -498,7 +499,8 @@ public:
+@@ -494,7 +495,8 @@ public:
  
      void		ApplyAttr( SCCOL nCol, SCROW nRow, const SfxPoolItem& rAttr );
      void		ApplyPattern( SCCOL nCol, SCROW nRow, const ScPatternAttr& rAttr );
 -    void		ApplyPatternArea( SCCOL nStartCol, SCROW nStartRow, SCCOL nEndCol, SCROW nEndRow, const ScPatternAttr& rAttr );
-+    void		ApplyPatternArea( SCCOL nStartCol, SCROW nStartRow, SCCOL nEndCol, SCROW nEndRow, 
++    void		ApplyPatternArea( SCCOL nStartCol, SCROW nStartRow, SCCOL nEndCol, SCROW nEndRow,
 +                                  const ScPatternAttr& rAttr, ScEditDataArray* pDataArray = NULL );
      void		SetPattern( const ScAddress& rPos, const ScPatternAttr& rAttr, BOOL bPutToPool = FALSE )
                      {
                          if (ValidColRow(rPos.Col(),rPos.Row()))
-@@ -529,7 +531,7 @@ public:
+@@ -525,7 +527,7 @@ public:
      BOOL		ApplyFlags( SCCOL nStartCol, SCROW nStartRow, SCCOL nEndCol, SCROW nEndRow, INT16 nFlags );
      BOOL		RemoveFlags( SCCOL nStartCol, SCROW nStartRow, SCCOL nEndCol, SCROW nEndRow, INT16 nFlags );
  
@@ -203,9 +240,11 @@
      void        DeleteSelection( USHORT nDelFlag, const ScMarkData& rMark );
  
      void		ClearSelectionItems( const USHORT* pWhich, const ScMarkData& rMark );
---- sc/source/core/data/attarray.cxx.old	2010-01-26 16:48:38.000000000 +0100
-+++ sc/source/core/data/attarray.cxx	2010-03-03 16:59:11.000000000 +0100
-@@ -41,6 +41,7 @@
+diff --git a/sc/source/core/data/attarray.cxx b/sc/source/core/data/attarray.cxx
+index 8c28567..6aa258c 100644
+--- a/sc/source/core/data/attarray.cxx
++++ b/sc/source/core/data/attarray.cxx
+@@ -38,6 +38,7 @@
  #include <svx/bolnitem.hxx>
  #include <svx/frmdiritem.hxx>
  #include <svx/shaditem.hxx>
@@ -213,7 +252,7 @@
  #include <svtools/poolcach.hxx>
  #include <svx/fontitem.hxx>
  #include <vcl/fontcvt.hxx>
-@@ -55,7 +56,7 @@
+@@ -52,7 +53,7 @@
  #include "markarr.hxx"
  #include "rechead.hxx"
  #include "globstr.hrc"
@@ -222,11 +261,11 @@
  
  #undef DBG_INVALIDATE
  #define DBGOUTPUT(s) \
-@@ -302,8 +303,31 @@ void ScAttrArray::SetPattern( SCROW nRow
+@@ -299,8 +300,31 @@ void ScAttrArray::SetPattern( SCROW nRow, const ScPatternAttr* pPattern, BOOL bP
      SetPatternArea( nRow, nRow, pPattern, bPutToPool );
  }
  
-+void ScAttrArray::RemoveCellCharAttribs( SCROW nStartRow, SCROW nEndRow, 
++void ScAttrArray::RemoveCellCharAttribs( SCROW nStartRow, SCROW nEndRow,
 +                                       const ScPatternAttr* pPattern, ScEditDataArray* pDataArray )
 +{
 +    for (SCROW nRow = nStartRow; nRow <= nEndRow; ++nRow)
@@ -250,12 +289,12 @@
 +}
  
 -void ScAttrArray::SetPatternArea(SCROW nStartRow, SCROW nEndRow, const ScPatternAttr *pPattern, BOOL bPutToPool )
-+void ScAttrArray::SetPatternArea(SCROW nStartRow, SCROW nEndRow, const ScPatternAttr *pPattern, 
++void ScAttrArray::SetPatternArea(SCROW nStartRow, SCROW nEndRow, const ScPatternAttr *pPattern,
 +                                 BOOL bPutToPool, ScEditDataArray* pDataArray )
  {
      if (ValidRow(nStartRow) && ValidRow(nEndRow))
      {
-@@ -473,6 +497,12 @@ void ScAttrArray::SetPatternArea(SCROW n
+@@ -470,6 +494,12 @@ void ScAttrArray::SetPatternArea(SCROW nStartRow, SCROW nEndRow, const ScPattern
                      pData[nInsert-1].nRow = nStartRow - 1;
                  pData[nInsert].nRow = nEndRow;
                  pData[nInsert].pPattern = pPattern;
@@ -268,7 +307,7 @@
                  nCount++;
              }
  
-@@ -714,7 +745,7 @@ void ScAttrArray::ApplyLineStyleArea( SC
+@@ -711,7 +741,7 @@ void ScAttrArray::ApplyLineStyleArea( SCROW nStartRow, SCROW nEndRow,
  #undef SET_LINE
  
  
@@ -277,7 +316,7 @@
  {
  #ifdef DBG_UTIL
      TestData();
-@@ -749,7 +780,7 @@ void ScAttrArray::ApplyCacheArea( SCROW
+@@ -746,7 +776,7 @@ void ScAttrArray::ApplyCacheArea( SCROW nStartRow, SCROW nEndRow, SfxItemPoolCac
                  {
                      if (nY1 < nStartRow) nY1=nStartRow;
                      if (nY2 > nEndRow) nY2=nEndRow;
@@ -286,25 +325,27 @@
                      Search( nStart, nPos );
                  }
                  else
---- sc/source/core/data/cell2.cxx.old	2010-01-21 00:59:54.000000000 +0100
-+++ sc/source/core/data/cell2.cxx	2010-03-03 16:59:11.000000000 +0100
-@@ -54,6 +54,8 @@
+diff --git a/sc/source/core/data/cell2.cxx b/sc/source/core/data/cell2.cxx
+index 8434668..af475a0 100644
+--- a/sc/source/core/data/cell2.cxx
++++ b/sc/source/core/data/cell2.cxx
+@@ -51,6 +51,8 @@
  #include "editutil.hxx"
  #include "chgtrack.hxx"
  #include "externalrefmgr.hxx"
-+#include "scitems.hxx" 
-+#include "patattr.hxx" 
++#include "scitems.hxx"
++#include "patattr.hxx"
  
  using namespace formula;
  
-@@ -142,6 +144,28 @@ void ScEditCell::GetString( String& rStr
+@@ -139,6 +141,28 @@ void ScEditCell::GetString( String& rString ) const
          rString.Erase();
  }
  
 +void ScEditCell::RemoveCharAttribs( const ScPatternAttr& rAttr )
 +{
 +    const struct {
-+        USHORT nAttrType; 
++        USHORT nAttrType;
 +        USHORT nCharType;
 +    } AttrTypeMap[] = {
 +        { ATTR_FONT,        EE_CHAR_FONTINFO },
@@ -326,7 +367,7 @@
  void ScEditCell::SetTextObject( const EditTextObject* pObject,
              const SfxItemPool* pFromPool )
  {
-@@ -177,6 +201,76 @@ void ScEditCell::SetTextObject( const Ed
+@@ -174,6 +198,76 @@ void ScEditCell::SetTextObject( const EditTextObject* pObject,
          pData = NULL;
  }
  
@@ -338,7 +379,7 @@
 +{
 +}
 +
-+void ScEditDataArray::AddItem(SCTAB nTab, SCCOL nCol, SCROW nRow, 
++void ScEditDataArray::AddItem(SCTAB nTab, SCCOL nCol, SCROW nRow,
 +                              EditTextObject* pOldData, EditTextObject* pNewData)
 +{
 +    maArray.push_back(Item(nTab, nCol, nRow, pOldData, pNewData));
@@ -361,7 +402,7 @@
 +
 +// ============================================================================
 +
-+ScEditDataArray::Item::Item(SCTAB nTab, SCCOL nCol, SCROW nRow, 
++ScEditDataArray::Item::Item(SCTAB nTab, SCCOL nCol, SCROW nRow,
 +                            EditTextObject* pOldData, EditTextObject* pNewData) :
 +    mnTab(nTab),
 +    mnCol(nCol),
@@ -403,9 +444,11 @@
  // ============================================================================
  
  namespace
---- sc/source/core/data/column.cxx.old	2009-10-08 16:17:08.000000000 +0200
-+++ sc/source/core/data/column.cxx	2010-03-03 16:59:11.000000000 +0100
-@@ -364,7 +364,7 @@ ULONG ScColumn::GetNumberFormat( SCROW n
+diff --git a/sc/source/core/data/column.cxx b/sc/source/core/data/column.cxx
+index c55935a..33e5322 100644
+--- a/sc/source/core/data/column.cxx
++++ b/sc/source/core/data/column.cxx
+@@ -361,7 +361,7 @@ ULONG ScColumn::GetNumberFormat( SCROW nRow ) const
  }
  
  
@@ -414,7 +457,7 @@
  {
      SCROW nTop = 0;
      SCROW nBottom = 0;
-@@ -375,7 +375,7 @@ SCsROW ScColumn::ApplySelectionCache( Sf
+@@ -372,7 +372,7 @@ SCsROW ScColumn::ApplySelectionCache( SfxItemPoolCache* pCache, const ScMarkData
          ScMarkArrayIter aMarkIter( rMark.GetArray() + nCol );
          while (aMarkIter.Next( nTop, nBottom ))
          {
@@ -423,12 +466,12 @@
              bFound = TRUE;
          }
      }
-@@ -449,11 +449,12 @@ void ScColumn::ApplyPattern( SCROW nRow,
+@@ -446,11 +446,12 @@ void ScColumn::ApplyPattern( SCROW nRow, const ScPatternAttr& rPatAttr )
  }
  
  
 -void ScColumn::ApplyPatternArea( SCROW nStartRow, SCROW nEndRow, const ScPatternAttr& rPatAttr )
-+void ScColumn::ApplyPatternArea( SCROW nStartRow, SCROW nEndRow, const ScPatternAttr& rPatAttr, 
++void ScColumn::ApplyPatternArea( SCROW nStartRow, SCROW nEndRow, const ScPatternAttr& rPatAttr,
 +                                 ScEditDataArray* pDataArray )
  {
      const SfxItemSet* pSet = &rPatAttr.GetItemSet();
@@ -438,9 +481,11 @@
  }
  
  
---- sc/source/core/data/documen2.cxx.old	2009-10-08 16:17:08.000000000 +0200
-+++ sc/source/core/data/documen2.cxx	2010-03-03 16:59:11.000000000 +0100
-@@ -190,6 +190,7 @@ ScDocument::ScDocument( ScDocumentMode	e
+diff --git a/sc/source/core/data/documen2.cxx b/sc/source/core/data/documen2.cxx
+index 26bb0c9..cb32fa0 100644
+--- a/sc/source/core/data/documen2.cxx
++++ b/sc/source/core/data/documen2.cxx
+@@ -187,6 +187,7 @@ ScDocument::ScDocument( ScDocumentMode	eMode,
  //		bNoSetDirty( TRUE ),
          bNoSetDirty( FALSE ),
          bInsertingFromOtherDoc( FALSE ),
@@ -448,9 +493,11 @@
          bImportingXML( FALSE ),
          bXMLFromWrapper( FALSE ),
          bCalcingAfterLoad( FALSE ),
---- sc/source/core/data/documen9.cxx.old	2009-10-08 16:17:08.000000000 +0200
-+++ sc/source/core/data/documen9.cxx	2010-03-03 16:59:11.000000000 +0100
-@@ -799,6 +799,16 @@ void ScDocument::UpdateFontCharSet()
+diff --git a/sc/source/core/data/documen9.cxx b/sc/source/core/data/documen9.cxx
+index c786aa8..443fde7 100644
+--- a/sc/source/core/data/documen9.cxx
++++ b/sc/source/core/data/documen9.cxx
+@@ -796,6 +796,16 @@ void ScDocument::UpdateFontCharSet()
      }
  }
  
@@ -467,9 +514,11 @@
  void ScDocument::SetImportingXML( BOOL bVal )
  {
      bImportingXML = bVal;
---- sc/source/core/data/document.cxx.old	2010-03-03 16:44:02.000000000 +0100
-+++ sc/source/core/data/document.cxx	2010-03-03 16:59:11.000000000 +0100
-@@ -3556,12 +3556,13 @@ void ScDocument::ApplyPattern( SCCOL nCo
+diff --git a/sc/source/core/data/document.cxx b/sc/source/core/data/document.cxx
+index 6cba1ee..82d9af2 100644
+--- a/sc/source/core/data/document.cxx
++++ b/sc/source/core/data/document.cxx
+@@ -3547,12 +3547,13 @@ void ScDocument::ApplyPattern( SCCOL nCol, SCROW nRow, SCTAB nTab, const ScPatte
  void ScDocument::ApplyPatternArea( SCCOL nStartCol, SCROW nStartRow,
                          SCCOL nEndCol, SCROW nEndRow,
                          const ScMarkData& rMark,
@@ -485,7 +534,7 @@
  }
  
  
-@@ -4496,7 +4497,7 @@ void ScDocument::ApplyFrameAreaTab( cons
+@@ -4487,7 +4488,7 @@ void ScDocument::ApplyFrameAreaTab( const ScRange& rRange,
  }
  
  
@@ -494,7 +543,7 @@
  {
      const SfxItemSet* pSet = &rAttr.GetItemSet();
      BOOL bSet = FALSE;
-@@ -4513,7 +4514,7 @@ void ScDocument::ApplySelectionPattern(
+@@ -4504,7 +4505,7 @@ void ScDocument::ApplySelectionPattern( const ScPatternAttr& rAttr, const ScMark
              ScRange aRange;
              rMark.GetMarkArea( aRange );
              ApplyPatternArea( aRange.aStart.Col(), aRange.aStart.Row(),
@@ -503,7 +552,7 @@
          }
          else
          {
-@@ -4521,7 +4522,7 @@ void ScDocument::ApplySelectionPattern(
+@@ -4512,7 +4513,7 @@ void ScDocument::ApplySelectionPattern( const ScPatternAttr& rAttr, const ScMark
              for (SCTAB nTab=0; nTab<=MAXTAB; nTab++)
                  if (pTab[nTab])
                      if (rMark.GetTableSelect(nTab))
@@ -512,9 +561,11 @@
          }
      }
  }
---- sc/source/core/data/table2.cxx.old	2010-03-03 16:44:02.000000000 +0100
-+++ sc/source/core/data/table2.cxx	2010-03-03 16:59:11.000000000 +0100
-@@ -1713,14 +1713,14 @@ void ScTable::ApplyPattern( SCCOL nCol,
+diff --git a/sc/source/core/data/table2.cxx b/sc/source/core/data/table2.cxx
+index 444f97f..9bcad4f 100644
+--- a/sc/source/core/data/table2.cxx
++++ b/sc/source/core/data/table2.cxx
+@@ -1691,14 +1691,14 @@ void ScTable::ApplyPattern( SCCOL nCol, SCROW nRow, const ScPatternAttr& rAttr )
  
  
  void ScTable::ApplyPatternArea( SCCOL nStartCol, SCROW nStartRow, SCCOL nEndCol, SCROW nEndRow,
@@ -531,7 +582,7 @@
      }
  }
  
-@@ -1928,10 +1928,11 @@ void ScTable::ApplyAttr( SCCOL nCol, SCR
+@@ -1906,10 +1906,11 @@ void ScTable::ApplyAttr( SCCOL nCol, SCROW nRow, const SfxPoolItem& rAttr )
  }
  
  
@@ -545,9 +596,11 @@
  }
  
  
---- sc/source/ui/docshell/docsh.cxx.old	2010-03-03 16:59:07.000000000 +0100
-+++ sc/source/ui/docshell/docsh.cxx	2010-03-03 16:59:11.000000000 +0100
-@@ -432,10 +432,31 @@ BOOL ScDocShell::SaveXML( SfxMedium* pSa
+diff --git a/sc/source/ui/docshell/docsh.cxx b/sc/source/ui/docshell/docsh.cxx
+index 03cb7b9..c7329f2 100644
+--- a/sc/source/ui/docshell/docsh.cxx
++++ b/sc/source/ui/docshell/docsh.cxx
+@@ -429,10 +429,31 @@ BOOL ScDocShell::SaveXML( SfxMedium* pSaveMedium, const ::com::sun::star::uno::R
      return bRet;
  }
  
@@ -580,7 +633,7 @@
      ScRefreshTimerProtector( aDocument.GetRefreshTimerControlAddress() );
  
      //	only the latin script language is loaded
-@@ -779,7 +800,7 @@ void __EXPORT ScDocShell::Notify( SfxBro
+@@ -795,7 +816,7 @@ void __EXPORT ScDocShell::Notify( SfxBroadcaster&, const SfxHint& rHint )
  BOOL __EXPORT ScDocShell::LoadFrom( SfxMedium& rMedium )
  {
      RTL_LOGFILE_CONTEXT_AUTHOR ( aLog, "sc", "nn93723", "ScDocShell::LoadFrom" );
@@ -589,7 +642,7 @@
      ScRefreshTimerProtector( aDocument.GetRefreshTimerControlAddress() );
  
      WaitObject aWait( GetActiveDialogParent() );
-@@ -834,6 +855,7 @@ static void lcl_parseHtmlFilterOption(co
+@@ -850,6 +871,7 @@ static void lcl_parseHtmlFilterOption(const OUString& rOption, LanguageType& rLa
  BOOL __EXPORT ScDocShell::ConvertFrom( SfxMedium& rMedium )
  {
      RTL_LOGFILE_CONTEXT_AUTHOR ( aLog, "sc", "nn93723", "ScDocShell::ConvertFrom" );
@@ -597,9 +650,11 @@
  
      BOOL bRet = FALSE;				// FALSE heisst Benutzerabbruch !!
                                      // bei Fehler: Fehler am Stream setzen!!
---- sc/source/ui/inc/undoblk.hxx.old	2009-10-08 16:17:09.000000000 +0200
-+++ sc/source/ui/inc/undoblk.hxx	2010-03-03 16:59:11.000000000 +0100
-@@ -35,6 +35,10 @@
+diff --git a/sc/source/ui/inc/undoblk.hxx b/sc/source/ui/inc/undoblk.hxx
+index 1c3d671..936ec52 100644
+--- a/sc/source/ui/inc/undoblk.hxx
++++ b/sc/source/ui/inc/undoblk.hxx
+@@ -32,6 +32,10 @@
  #include "viewutil.hxx"
  #include "spellparam.hxx"
  
@@ -610,7 +665,7 @@
  class ScDocShell;
  class ScBaseCell;
  class ScDocument;
-@@ -354,9 +358,11 @@ public:
+@@ -351,9 +355,11 @@ public:
  
      virtual String	GetComment() const;
  
@@ -618,11 +673,11 @@
  private:
      ScMarkData		aMarkData;
      ScRange			aRange;
-+    ScEditDataArray aDataArray; 
++    ScEditDataArray aDataArray;
      ScDocument*		pUndoDoc;
      BOOL			bMulti;
      ScPatternAttr*	pApplyPattern;
-@@ -364,6 +370,7 @@ private:
+@@ -361,6 +367,7 @@ private:
      SvxBoxInfoItem*	pLineInner;
  
      void			DoChange( const BOOL bUndo );
@@ -630,9 +685,11 @@
  };
  
  
---- sc/source/ui/inc/undocell.hxx.old	2009-10-07 15:06:14.000000000 +0200
-+++ sc/source/ui/inc/undocell.hxx	2010-03-03 16:59:11.000000000 +0100
-@@ -34,6 +34,8 @@
+diff --git a/sc/source/ui/inc/undocell.hxx b/sc/source/ui/inc/undocell.hxx
+index 73ff59e..6b70696 100644
+--- a/sc/source/ui/inc/undocell.hxx
++++ b/sc/source/ui/inc/undocell.hxx
+@@ -31,6 +31,8 @@
  #include "undobase.hxx"
  #include "postit.hxx"
  
@@ -641,7 +698,7 @@
  class ScDocShell;
  class ScBaseCell;
  class ScPatternAttr;
-@@ -62,6 +64,11 @@ public:
+@@ -59,6 +61,11 @@ public:
  
      virtual String	GetComment() const;
  
@@ -653,7 +710,7 @@
  private:
      SCCOL			nCol;
      SCROW			nRow;
-@@ -69,9 +76,11 @@ private:
+@@ -66,9 +73,11 @@ private:
      ScPatternAttr*	pOldPattern;
      ScPatternAttr*	pNewPattern;
      ScPatternAttr*	pApplyPattern;
@@ -666,9 +723,11 @@
  };
  
  
---- sc/source/ui/undo/makefile.mk.old	2009-10-07 15:06:14.000000000 +0200
-+++ sc/source/ui/undo/makefile.mk	2010-03-03 16:59:11.000000000 +0100
-@@ -78,6 +78,7 @@ SLOFILES =  \
+diff --git a/sc/source/ui/undo/makefile.mk b/sc/source/ui/undo/makefile.mk
+index 492bec8..c7ace9a 100644
+--- a/sc/source/ui/undo/makefile.mk
++++ b/sc/source/ui/undo/makefile.mk
+@@ -74,6 +74,7 @@ SLOFILES =  \
          $(SLO)$/undotab.obj
  
  EXCEPTIONSFILES= \
@@ -676,9 +735,11 @@
      $(SLO)$/undostyl.obj
  
  # --- Tagets -------------------------------------------------------
---- sc/source/ui/undo/undoblk3.cxx.old	2009-10-08 16:17:09.000000000 +0200
-+++ sc/source/ui/undo/undoblk3.cxx	2010-03-03 16:59:11.000000000 +0100
-@@ -482,6 +482,12 @@ String __EXPORT ScUndoSelectionAttr::Get
+diff --git a/sc/source/ui/undo/undoblk3.cxx b/sc/source/ui/undo/undoblk3.cxx
+index e269585..754439d 100644
+--- a/sc/source/ui/undo/undoblk3.cxx
++++ b/sc/source/ui/undo/undoblk3.cxx
+@@ -479,6 +479,12 @@ String __EXPORT ScUndoSelectionAttr::GetComment() const
      return ScGlobal::GetRscString( pLineOuter ? STR_UNDO_SELATTRLINES : STR_UNDO_SELATTR );
  }
  
@@ -691,7 +752,7 @@
  
  //----------------------------------------------------------------------------
  
-@@ -500,6 +506,8 @@ void ScUndoSelectionAttr::DoChange( cons
+@@ -497,6 +503,8 @@ void ScUndoSelectionAttr::DoChange( const BOOL bUndo )
      USHORT nExtFlags = 0;
      pDocShell->UpdatePaintExt( nExtFlags, aEffRange );
  
@@ -700,7 +761,7 @@
      if (bUndo)	// nur bei Undo
      {
          ScRange aCopyRange = aRange;
-@@ -524,6 +532,24 @@ void ScUndoSelectionAttr::DoChange( cons
+@@ -521,6 +529,24 @@ void ScUndoSelectionAttr::DoChange( const BOOL bUndo )
      ShowTable( aRange );
  }
  
@@ -725,9 +786,11 @@
  
  //----------------------------------------------------------------------------
  
---- sc/source/ui/undo/undocell.cxx.old	2009-10-08 16:17:09.000000000 +0200
-+++ sc/source/ui/undo/undocell.cxx	2010-03-03 16:59:11.000000000 +0100
-@@ -57,6 +57,8 @@
+diff --git a/sc/source/ui/undo/undocell.cxx b/sc/source/ui/undo/undocell.cxx
+index d056af7..b6917f5 100644
+--- a/sc/source/ui/undo/undocell.cxx
++++ b/sc/source/ui/undo/undocell.cxx
+@@ -54,6 +54,8 @@
  #include "sc.hrc"
  #include "docuno.hxx"
  
@@ -736,7 +799,7 @@
  // STATIC DATA -----------------------------------------------------------
  
  TYPEINIT1(ScUndoCursorAttr, ScSimpleUndo);
-@@ -85,6 +87,8 @@ ScUndoCursorAttr::ScUndoCursorAttr( ScDo
+@@ -82,6 +84,8 @@ ScUndoCursorAttr::ScUndoCursorAttr( ScDocShell* pNewDocShell,
      nCol( nNewCol ),
      nRow( nNewRow ),
      nTab( nNewTab ),
@@ -745,20 +808,20 @@
      bIsAutomatic( bAutomatic )
  {
      ScDocumentPool* pPool = pDocShell->GetDocument()->GetPool();
-@@ -109,9 +113,21 @@ String __EXPORT ScUndoCursorAttr::GetCom
+@@ -106,9 +110,21 @@ String __EXPORT ScUndoCursorAttr::GetComment() const
      return ScGlobal::GetRscString( nId );
  }
  
 -void ScUndoCursorAttr::DoChange( const ScPatternAttr* pWhichPattern ) const
 +void ScUndoCursorAttr::SetEditData( EditTextObject* pOld, EditTextObject* pNew )
- {
--    pDocShell->GetDocument()->SetPattern( nCol, nRow, nTab, *pWhichPattern, TRUE );
++{
 +    pOldEditData.reset(pOld);
 +    pNewEditData.reset(pNew);
 +}
 +
 +void ScUndoCursorAttr::DoChange( const ScPatternAttr* pWhichPattern, const shared_ptr<EditTextObject>& pEditData ) const
-+{
+ {
+-    pDocShell->GetDocument()->SetPattern( nCol, nRow, nTab, *pWhichPattern, TRUE );
 +    ScDocument* pDoc = pDocShell->GetDocument();
 +    pDoc->SetPattern( nCol, nRow, nTab, *pWhichPattern, TRUE );
 +
@@ -769,7 +832,7 @@
  
      ScTabViewShell* pViewShell = ScTabViewShell::GetActiveViewShell();
      if (pViewShell)
-@@ -137,7 +153,7 @@ void ScUndoCursorAttr::DoChange( const S
+@@ -134,7 +150,7 @@ void ScUndoCursorAttr::DoChange( const ScPatternAttr* pWhichPattern ) const
  void __EXPORT ScUndoCursorAttr::Undo()
  {
      BeginUndo();
@@ -778,7 +841,7 @@
  
      if ( bIsAutomatic )
      {
-@@ -155,7 +171,7 @@ void __EXPORT ScUndoCursorAttr::Undo()
+@@ -152,7 +168,7 @@ void __EXPORT ScUndoCursorAttr::Undo()
  void __EXPORT ScUndoCursorAttr::Redo()
  {
      BeginRedo();
@@ -787,9 +850,11 @@
      EndRedo();
  }
  
---- sc/source/ui/view/viewfunc.cxx.old	2010-03-03 16:59:10.000000000 +0100
-+++ sc/source/ui/view/viewfunc.cxx	2010-03-03 16:59:11.000000000 +0100
-@@ -1316,6 +1316,8 @@ void ScViewFunc::ApplySelectionPattern(
+diff --git a/sc/source/ui/view/viewfunc.cxx b/sc/source/ui/view/viewfunc.cxx
+index 681caa5..47d51ae 100644
+--- a/sc/source/ui/view/viewfunc.cxx
++++ b/sc/source/ui/view/viewfunc.cxx
+@@ -1313,6 +1313,8 @@ void ScViewFunc::ApplySelectionPattern( const ScPatternAttr& rAttr,
          SCROW nEndRow = aMarkRange.aEnd.Row();
          SCTAB nEndTab = aMarkRange.aEnd.Tab();
  
@@ -798,7 +863,7 @@
          if (bRecord)
          {
              ScRange aCopyRange = aMarkRange;
-@@ -1331,15 +1333,14 @@ void ScViewFunc::ApplySelectionPattern(
+@@ -1328,15 +1330,14 @@ void ScViewFunc::ApplySelectionPattern( const ScPatternAttr& rAttr,
  
              aFuncMark.MarkToMulti();
  
@@ -820,7 +885,7 @@
  
          pDocSh->PostPaint( nStartCol, nStartRow, nStartTab,
                             nEndCol,   nEndRow,   nEndTab,
-@@ -1353,6 +1354,19 @@ void ScViewFunc::ApplySelectionPattern(
+@@ -1350,6 +1351,19 @@ void ScViewFunc::ApplySelectionPattern( const ScPatternAttr& rAttr,
          SCCOL nCol = pViewData->GetCurX();
          SCROW nRow = pViewData->GetCurY();
          SCTAB nTab = pViewData->GetTabNo();
@@ -840,7 +905,7 @@
          aChangeRanges.Append( ScRange( nCol, nRow, nTab ) );
          ScPatternAttr* pOldPat = new ScPatternAttr(*pDoc->GetPattern( nCol, nRow, nTab ));
  
-@@ -1362,11 +1376,10 @@ void ScViewFunc::ApplySelectionPattern(
+@@ -1359,11 +1373,10 @@ void ScViewFunc::ApplySelectionPattern( const ScPatternAttr& rAttr,
  
          if (bRecord)
          {
@@ -849,10 +914,13 @@
 -                                              nCol, nRow, nTab,
 -                                              pOldPat, pNewPat, &rAttr,
 -                                              FALSE ) );	// FALSE = nicht automatisch
-+            ScUndoCursorAttr* pUndo = new ScUndoCursorAttr( 
++            ScUndoCursorAttr* pUndo = new ScUndoCursorAttr(
 +                pDocSh, nCol, nRow, nTab, pOldPat, pNewPat, &rAttr, false );
 +            pUndo->SetEditData(pOldEditData, pNewEditData);
 +            pDocSh->GetUndoManager()->AddUndoAction(pUndo);
          }
          delete pOldPat;		// wird im Undo kopiert (Pool)
  
+-- 
+1.7.0.1
+

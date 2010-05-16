@@ -1,8 +1,27 @@
-Modified: sd/source/ui/slideshow/slideshow.hrc
-==============================================================================
---- sd/source/ui/slideshow/slideshow.hrc	Sat Jan 31 09:53:18 2009	(r267232)
-+++ sd/source/ui/slideshow/slideshow.hrc	Sat Jan 31 14:05:38 2009	(r267233)
-@@ -38,8 +38,15 @@
+From ab55250fadc03d14ae7b2f185e07b0009a9e7b28 Mon Sep 17 00:00:00 2001
+From: Jan Holesovsky <kendy@suse.cz>
+Date: Fri, 14 May 2010 17:05:31 +0200
+Subject: [PATCH 675/878] slideshow-configurable-paintoverlay.diff
+
+---
+ sd/source/ui/slideshow/slideshow.hrc               |   13 ++-
+ sd/source/ui/slideshow/slideshow.src               |   50 +++++++
+ sd/source/ui/slideshow/slideshowimpl.cxx           |  143 +++++++++++++++++++-
+ sd/source/ui/slideshow/slideshowimpl.hxx           |    4 +
+ slideshow/source/engine/eventmultiplexer.cxx       |    8 +
+ slideshow/source/engine/slide/slideimpl.cxx        |    9 +-
+ slideshow/source/engine/slide/userpaintoverlay.cxx |   23 +++-
+ slideshow/source/engine/slideshowimpl.cxx          |   32 +++++
+ slideshow/source/inc/eventmultiplexer.hxx          |   11 ++
+ slideshow/source/inc/slide.hxx                     |    1 +
+ slideshow/source/inc/userpainteventhandler.hxx     |    1 +
+ 11 files changed, 287 insertions(+), 8 deletions(-)
+
+diff --git a/sd/source/ui/slideshow/slideshow.hrc b/sd/source/ui/slideshow/slideshow.hrc
+index c126ddf..b5a853f 100644
+--- a/sd/source/ui/slideshow/slideshow.hrc
++++ b/sd/source/ui/slideshow/slideshow.hrc
+@@ -35,8 +35,15 @@
  #define CM_SCREEN_BLACK	5
  #define CM_SCREEN_WHITE	6
  #define CM_ENDSHOW		7
@@ -21,15 +40,14 @@ Modified: sd/source/ui/slideshow/slideshow.hrc
 +#define CM_SLIDES		17
  
  #endif
-
-Modified: sd/source/ui/slideshow/slideshow.src
-==============================================================================
---- sd/source/ui/slideshow/slideshow.src	Sat Jan 31 09:53:18 2009	(r267232)
-+++ sd/source/ui/slideshow/slideshow.src	Sat Jan 31 14:05:38 2009	(r267233)
-@@ -100,6 +100,56 @@
- 		{
- 			Separator = TRUE;
- 		};
+diff --git a/sd/source/ui/slideshow/slideshow.src b/sd/source/ui/slideshow/slideshow.src
+index 0c2ff96..720280d 100644
+--- a/sd/source/ui/slideshow/slideshow.src
++++ b/sd/source/ui/slideshow/slideshow.src
+@@ -97,6 +97,56 @@ Menu RID_SLIDESHOW_CONTEXTMENU
+         {
+             Separator = TRUE;
+         };
 +    MenuItem
 +        {
 +                    Identifier = CM_WIDTH_PEN;
@@ -43,7 +61,7 @@ Modified: sd/source/ui/slideshow/slideshow.src
 +                    {
 +                        Identifier =  CM_WIDTH_PEN_VERY_THIN;
 +                        Text [ en-US ] = "~Very thin";
-+                    };			  
++                    };
 +                    MenuItem
 +                    {
 +                        Identifier =  CM_WIDTH_PEN_THIN;
@@ -53,7 +71,7 @@ Modified: sd/source/ui/slideshow/slideshow.src
 +                    {
 +                        Identifier =  CM_WIDTH_PEN_NORMAL;
 +                        Text [ en-US ] = "~Normal";
-+                    };			  
++                    };
 +                    MenuItem
 +                    {
 +                        Identifier =  CM_WIDTH_PEN_THICK;
@@ -63,7 +81,7 @@ Modified: sd/source/ui/slideshow/slideshow.src
 +                    {
 +                        Identifier =  CM_WIDTH_PEN_VERY_THICK;
 +                        Text [ en-US ] = "~Very Thick";
-+                    };			  
++                    };
 +                };
 +            };
 +        };
@@ -83,12 +101,11 @@ Modified: sd/source/ui/slideshow/slideshow.src
          MenuItem
          {
              Identifier = CM_ENDSHOW ;
-
-Modified: sd/source/ui/slideshow/slideshowimpl.cxx
-==============================================================================
---- sd/source/ui/slideshow/slideshowimpl.cxx	Sat Jan 31 09:53:18 2009	(r267232)
-+++ sd/source/ui/slideshow/slideshowimpl.cxx	Sat Jan 31 14:05:38 2009	(r267233)
-@@ -84,6 +84,7 @@
+diff --git a/sd/source/ui/slideshow/slideshowimpl.cxx b/sd/source/ui/slideshow/slideshowimpl.cxx
+index 08fe26a..da307c1 100644
+--- a/sd/source/ui/slideshow/slideshowimpl.cxx
++++ b/sd/source/ui/slideshow/slideshowimpl.cxx
+@@ -83,6 +83,7 @@
  #include "canvas/elapsedtime.hxx"
  #include "canvas/prioritybooster.hxx"
  #include "avmedia/mediawindow.hxx"
@@ -96,28 +113,28 @@ Modified: sd/source/ui/slideshow/slideshowimpl.cxx
  
  #include <boost/noncopyable.hpp>
  #include <boost/bind.hpp>
-@@ -532,7 +533,8 @@
+@@ -551,7 +552,8 @@ SlideshowImpl::SlideshowImpl( const Reference< XPresentation2 >& xPresentation,
  , mbInputFreeze(false)
  , mbActive(sal_False)
  , maPresSettings( pDoc->getPresentationSettings() )
 -, mnUserPaintColor( 0x0000FF00L )
 +, mnUserPaintColor( 0x00000000L )
-+, mdUserPaintStrokeWidth ( 4.0 ) 
++, mdUserPaintStrokeWidth ( 4.0 )
  , mnEntryCounter(0)
  , mnLastSlideNumber(-1)
  , msOnClick( RTL_CONSTASCII_USTRINGPARAM("OnClick") )
-@@ -2111,6 +2113,8 @@
+@@ -2149,6 +2151,8 @@ IMPL_LINK( SlideshowImpl, ContextMenuHdl, void*, EMPTYARG )
  
- 	PopupMenu* pMenu = new PopupMenu( SdResId( RID_SLIDESHOW_CONTEXTMENU ) );
+     PopupMenu* pMenu = new PopupMenu( SdResId( RID_SLIDESHOW_CONTEXTMENU ) );
  
 +    pMenu->EnableItem( CM_COLOR_PEN, (maPresSettings.mbMouseAsPen));
 +
- 	const ShowWindowMode eMode = mpShowWindow->GetShowWindowMode();
- 	pMenu->EnableItem( CM_NEXT_SLIDE, ( mpSlideController->getNextSlideIndex() != -1 ) );
- 	pMenu->EnableItem( CM_PREV_SLIDE, ( mpSlideController->getPreviousSlideIndex() != -1 ) || (eMode == SHOWWINDOWMODE_END) || (eMode == SHOWWINDOWMODE_PAUSE) || (eMode == SHOWWINDOWMODE_BLANK) );
-@@ -2178,6 +2182,55 @@
- 		}
- 	}
+     const ShowWindowMode eMode = mpShowWindow->GetShowWindowMode();
+     pMenu->EnableItem( CM_NEXT_SLIDE, ( mpSlideController->getNextSlideIndex() != -1 ) );
+     pMenu->EnableItem( CM_PREV_SLIDE, ( mpSlideController->getPreviousSlideIndex() != -1 ) || (eMode == SHOWWINDOWMODE_END) || (eMode == SHOWWINDOWMODE_PAUSE) || (eMode == SHOWWINDOWMODE_BLANK) );
+@@ -2216,6 +2220,55 @@ IMPL_LINK( SlideshowImpl, ContextMenuHdl, void*, EMPTYARG )
+         }
+     }
  
 +
 +    PopupMenu* pWidthMenu = pMenu->GetPopupMenu( CM_WIDTH_PEN);
@@ -133,15 +150,15 @@ Modified: sd/source/ui/slideshow/slideshowimpl.cxx
 +        {
 +            sal_Int32 nIterator;
 +            double nWidth;
-+            
-+ 			
++
++
 +
 +            nWidth = 4.0;
 +            for( nIterator = 1; nIterator < 6; nIterator++)
 +            {
 +                switch(nIterator)
 +                {
-+                    case 1: 
++                    case 1:
 +                        nWidth = 4.0;
 +                        break;
 +                    case 2:
@@ -159,33 +176,33 @@ Modified: sd/source/ui/slideshow/slideshowimpl.cxx
 +                    default:
 +                        break;
 +                }
-+                
++
 +                pWidthMenu->EnableItem( (USHORT)(CM_WIDTH_PEN + nIterator), TRUE);
 +                        if( nWidth ==  mdUserPaintStrokeWidth)
 +                            pWidthMenu->CheckItem( (USHORT)(CM_WIDTH_PEN + nIterator) );
-+                
++
 +            }
 +        }
 +    }
 +
- 	pMenu->SetSelectHdl( LINK( this, SlideshowImpl, ContextMenuSelectHdl ) );
- 	pMenu->Execute( mpShowWindow, maPopupMousePos );
- 	delete pMenu;
-@@ -2240,6 +2293,59 @@
- 			}
- 		}
- 		break;
+     pMenu->SetSelectHdl( LINK( this, SlideshowImpl, ContextMenuSelectHdl ) );
+     pMenu->Execute( mpShowWindow, maPopupMousePos );
+     delete pMenu;
+@@ -2278,6 +2331,59 @@ IMPL_LINK( SlideshowImpl, ContextMenuSelectHdl, Menu *, pMenu )
+             }
+         }
+         break;
 +
 +        case CM_COLOR_PEN:
 +             if( maPresSettings.mbMouseAsPen ){
 +
 +                //Open a color picker based on SvColorDialog
 +                ::Color aColor( mnUserPaintColor );
-+                SvColorDialog aColorDlg( mpShowWindow); 
++                SvColorDialog aColorDlg( mpShowWindow);
 +                aColorDlg.SetColor( aColor );
 +
 +                if (aColorDlg.Execute() )
-+                {   
++                {
 +                    aColor = aColorDlg.GetColor();
 +                    mnUserPaintColor = aColor.GetColor();
 +                    setPenColor(mnUserPaintColor);
@@ -196,7 +213,7 @@ Modified: sd/source/ui/slideshow/slideshowimpl.cxx
 +
 +        case CM_WIDTH_PEN_VERY_THIN:
 +             if( maPresSettings.mbMouseAsPen ){
-+              			setPenWidth(4.0);
++				setPenWidth(4.0);
 +                mbWasPaused = false;
 +            }
 +            break;
@@ -228,10 +245,10 @@ Modified: sd/source/ui/slideshow/slideshowimpl.cxx
 +                mbWasPaused = false;
 +            }
 +            break;
- 		
- 		case CM_ENDSHOW:
- 			// in case the user cancels the presentation, switch to current slide
-@@ -2824,6 +2930,17 @@
+         
+         case CM_ENDSHOW:
+             // in case the user cancels the presentation, switch to current slide
+@@ -2894,6 +3000,17 @@ void SAL_CALL SlideshowImpl::setUsePen( sal_Bool bMouseAsPen ) throw (RuntimeExc
          aPenProp.Value = aValue;
  
          mxShow->setProperty( aPenProp );
@@ -247,10 +264,10 @@ Modified: sd/source/ui/slideshow/slideshowimpl.cxx
 +
 +        mxShow->setProperty( aPenPropWidth );
      }
- 	catch( Exception& e )
- 	{
-@@ -2837,6 +2954,27 @@
- 	}
+     catch( Exception& e )
+     {
+@@ -2907,6 +3024,27 @@ void SAL_CALL SlideshowImpl::setUsePen( sal_Bool bMouseAsPen ) throw (RuntimeExc
+     }
  }
  
 +
@@ -277,29 +294,28 @@ Modified: sd/source/ui/slideshow/slideshowimpl.cxx
  // --------------------------------------------------------------------
  
  sal_Int32 SAL_CALL SlideshowImpl::getPenColor() throw (RuntimeException)
-@@ -2845,6 +2983,7 @@
- 	return mnUserPaintColor;
+@@ -2915,6 +3053,7 @@ sal_Int32 SAL_CALL SlideshowImpl::getPenColor() throw (RuntimeException)
+     return mnUserPaintColor;
  }
  
 +
  // --------------------------------------------------------------------
  
  void SAL_CALL SlideshowImpl::setPenColor( sal_Int32 nColor ) throw (RuntimeException)
-@@ -2852,7 +2991,7 @@
- 	::vos::OGuard aSolarGuard( Application::GetSolarMutex() );
- 	mnUserPaintColor = nColor;
- 	if( maPresSettings.mbMouseAsPen )
--		setUsePen( sal_True ); // update color
+@@ -2922,7 +3061,7 @@ void SAL_CALL SlideshowImpl::setPenColor( sal_Int32 nColor ) throw (RuntimeExcep
+     ::vos::OGuard aSolarGuard( Application::GetSolarMutex() );
+     mnUserPaintColor = nColor;
+     if( maPresSettings.mbMouseAsPen )
+-        setUsePen( sal_True ); // update color
 +        setUsePen( sal_True ); // update color and width
  }
  
  // --------------------------------------------------------------------
-
-Modified: sd/source/ui/slideshow/slideshowimpl.hxx
-==============================================================================
---- sd/source/ui/slideshow/slideshowimpl.hxx	Sat Jan 31 09:53:18 2009	(r267232)
-+++ sd/source/ui/slideshow/slideshowimpl.hxx	Sat Jan 31 14:05:38 2009	(r267233)
-@@ -200,6 +200,8 @@
+diff --git a/sd/source/ui/slideshow/slideshowimpl.hxx b/sd/source/ui/slideshow/slideshowimpl.hxx
+index bc18807..0459460 100644
+--- a/sd/source/ui/slideshow/slideshowimpl.hxx
++++ b/sd/source/ui/slideshow/slideshowimpl.hxx
+@@ -197,6 +197,8 @@ public:
      virtual void SAL_CALL setMouseVisible( ::sal_Bool _mousevisible ) throw (css::uno::RuntimeException);
      virtual ::sal_Bool SAL_CALL getUsePen() throw (css::uno::RuntimeException);
      virtual void SAL_CALL setUsePen( ::sal_Bool _usepen ) throw (css::uno::RuntimeException);
@@ -308,21 +324,20 @@ Modified: sd/source/ui/slideshow/slideshowimpl.hxx
      virtual ::sal_Int32 SAL_CALL getPenColor() throw (css::uno::RuntimeException);
      virtual void SAL_CALL setPenColor( ::sal_Int32 _pencolor ) throw (css::uno::RuntimeException);
      virtual ::sal_Bool SAL_CALL isRunning(  ) throw (css::uno::RuntimeException);
-@@ -379,6 +381,8 @@
- 	PresentationSettings maPresSettings;
- 	sal_Int32		mnUserPaintColor;
+@@ -380,6 +382,8 @@ private:
+     PresentationSettings maPresSettings;
+     sal_Int32		mnUserPaintColor;
  
 +    double		        mdUserPaintStrokeWidth;
 +
- 	/// used in updateHdl to prevent recursive calls
- 	sal_Int32		mnEntryCounter;
+     /// used in updateHdl to prevent recursive calls
+     sal_Int32		mnEntryCounter;
   
-
-Modified: slideshow/source/engine/eventmultiplexer.cxx
-==============================================================================
---- slideshow/source/engine/eventmultiplexer.cxx	Sat Jan 31 09:53:18 2009	(r267232)
-+++ slideshow/source/engine/eventmultiplexer.cxx	Sat Jan 31 14:05:38 2009	(r267233)
-@@ -1065,6 +1065,14 @@
+diff --git a/slideshow/source/engine/eventmultiplexer.cxx b/slideshow/source/engine/eventmultiplexer.cxx
+index 59b84c5..4f2251c 100644
+--- a/slideshow/source/engine/eventmultiplexer.cxx
++++ b/slideshow/source/engine/eventmultiplexer.cxx
+@@ -1070,6 +1070,14 @@ bool EventMultiplexer::notifyUserPaintColor( RGBColor const& rUserColor )
                      boost::cref(rUserColor)));
  }
  
@@ -337,12 +352,11 @@ Modified: slideshow/source/engine/eventmultiplexer.cxx
  bool EventMultiplexer::notifyUserPaintDisabled()
  {
      return mpImpl->maUserPaintEventHandlers.applyAll(
-
-Modified: slideshow/source/engine/slide/slideimpl.cxx
-==============================================================================
---- slideshow/source/engine/slide/slideimpl.cxx	Sat Jan 31 09:53:18 2009	(r267232)
-+++ slideshow/source/engine/slide/slideimpl.cxx	Sat Jan 31 14:05:38 2009	(r267233)
-@@ -113,6 +113,7 @@
+diff --git a/slideshow/source/engine/slide/slideimpl.cxx b/slideshow/source/engine/slide/slideimpl.cxx
+index 16dbb1b..f8ca942 100644
+--- a/slideshow/source/engine/slide/slideimpl.cxx
++++ b/slideshow/source/engine/slide/slideimpl.cxx
+@@ -110,6 +110,7 @@ public:
                 const ShapeEventListenerMap&                      rShapeListenerMap,
                 const ShapeCursorMap&                             rShapeCursorMap,
                 RGBColor const&                                   rUserPaintColor,
@@ -350,7 +364,7 @@ Modified: slideshow/source/engine/slide/slideimpl.cxx
                 bool                                              bUserPaintEnabled,
                 bool                                              bIntrinsicAnimationsAllowed,
                 bool                                              bDisableAnimationZOrder );
-@@ -246,6 +247,7 @@
+@@ -243,6 +244,7 @@ private:
      SlideAnimations										maAnimations;
          
      RGBColor                                            maUserPaintColor;
@@ -358,7 +372,7 @@ Modified: slideshow/source/engine/slide/slideimpl.cxx
      UserPaintOverlaySharedPtr							mpPaintOverlay;
      
      /// Bitmaps with slide content at various states
-@@ -347,6 +349,7 @@
+@@ -344,6 +346,7 @@ SlideImpl::SlideImpl( const uno::Reference< drawing::XDrawPage >&			xDrawPage,
                        const ShapeEventListenerMap&                          rShapeListenerMap,
                        const ShapeCursorMap&                                 rShapeCursorMap,
                        RGBColor const&                                       aUserPaintColor,
@@ -366,7 +380,7 @@ Modified: slideshow/source/engine/slide/slideimpl.cxx
                        bool                                                  bUserPaintEnabled,
                        bool                                                  bIntrinsicAnimationsAllowed,
                        bool                                                  bDisableAnimationZOrder ) :
-@@ -376,6 +379,7 @@
+@@ -373,6 +376,7 @@ SlideImpl::SlideImpl( const uno::Reference< drawing::XDrawPage >&			xDrawPage,
      maAnimations( maContext,
                    getSlideSizeImpl() ),
      maUserPaintColor(aUserPaintColor),
@@ -374,7 +388,7 @@ Modified: slideshow/source/engine/slide/slideimpl.cxx
      mpPaintOverlay(),
      maSlideBitmaps(),
      meAnimationState( CONSTRUCTING_STATE ),
-@@ -863,7 +867,7 @@
+@@ -860,7 +864,7 @@ void SlideImpl::enablePaintOverlay()
  {
      if( mbUserPaintOverlayEnabled )
          mpPaintOverlay = UserPaintOverlay::create( maUserPaintColor,
@@ -383,7 +397,7 @@ Modified: slideshow/source/engine/slide/slideimpl.cxx
                                                     maContext );
  }
  
-@@ -1188,6 +1192,7 @@
+@@ -1185,6 +1189,7 @@ SlideSharedPtr createSlide( const uno::Reference< drawing::XDrawPage >&			xDrawP
                              const ShapeEventListenerMap&                        rShapeListenerMap,
                              const ShapeCursorMap&                               rShapeCursorMap,
                              RGBColor const&                                     rUserPaintColor,
@@ -391,21 +405,20 @@ Modified: slideshow/source/engine/slide/slideimpl.cxx
                              bool                                                bUserPaintEnabled,
                              bool                                                bIntrinsicAnimationsAllowed,
                              bool                                                bDisableAnimationZOrder )
-@@ -1198,7 +1203,7 @@
+@@ -1195,7 +1200,7 @@ SlideSharedPtr createSlide( const uno::Reference< drawing::XDrawPage >&			xDrawP
                                                        rCursorManager, rViewContainer,
                                                        xComponentContext, rShapeListenerMap,
                                                        rShapeCursorMap, rUserPaintColor,
 -                                                      bUserPaintEnabled, 
-+                                                      dUserPaintStrokeWidth, bUserPaintEnabled, 
++                                                      dUserPaintStrokeWidth, bUserPaintEnabled,
                                                        bIntrinsicAnimationsAllowed,
                                                        bDisableAnimationZOrder ));
  
-
-Modified: slideshow/source/engine/slide/userpaintoverlay.cxx
-==============================================================================
---- slideshow/source/engine/slide/userpaintoverlay.cxx	Sat Jan 31 09:53:18 2009	(r267232)
-+++ slideshow/source/engine/slide/userpaintoverlay.cxx	Sat Jan 31 14:05:38 2009	(r267233)
-@@ -63,7 +63,8 @@
+diff --git a/slideshow/source/engine/slide/userpaintoverlay.cxx b/slideshow/source/engine/slide/userpaintoverlay.cxx
+index be13cbf..5a0bea4 100644
+--- a/slideshow/source/engine/slide/userpaintoverlay.cxx
++++ b/slideshow/source/engine/slide/userpaintoverlay.cxx
+@@ -60,7 +60,8 @@ namespace slideshow
      namespace internal
      {
          class PaintOverlayHandler : public MouseEventHandler,
@@ -415,15 +428,15 @@ Modified: slideshow/source/engine/slide/userpaintoverlay.cxx
          {
          public:
              PaintOverlayHandler( const RGBColor&         rStrokeColor,
-@@ -208,6 +209,7 @@
+@@ -205,6 +206,7 @@ namespace slideshow
                          if( pPolyPoly )
                          {
                              pPolyPoly->setRGBALineColor( maStrokeColor.getIntegerColor() );
-+ 			    pPolyPoly->setStrokeWidth(mnStrokeWidth);
++			    pPolyPoly->setStrokeWidth(mnStrokeWidth);
                              pPolyPoly->draw();
                          }
                      }
-@@ -226,6 +228,24 @@
+@@ -223,6 +225,24 @@ namespace slideshow
                  return false; // did not handle the event
              }
  
@@ -439,16 +452,16 @@ Modified: slideshow/source/engine/slide/userpaintoverlay.cxx
 +            }
 +
 +            bool disable(){
-+               	//this->maStrokeColor = *(new RGBColor(255,255,255));
++		//this->maStrokeColor = *(new RGBColor(255,255,255));
 +        //this->mnStrokeWidth = 4.0;
-+               	return true;
++		return true;
 +            }
 +
 +
          private:
              ActivitiesQueue&        mrActivitiesQueue;
              ScreenUpdater&          mrScreenUpdater;
-@@ -262,6 +282,7 @@
+@@ -259,6 +279,7 @@ namespace slideshow
              mrMultiplexer.addClickHandler( mpHandler, 3.0 );
              mrMultiplexer.addMouseMoveHandler( mpHandler, 3.0 );
              mrMultiplexer.addViewHandler( mpHandler );
@@ -456,12 +469,11 @@ Modified: slideshow/source/engine/slide/userpaintoverlay.cxx
          }
          
          UserPaintOverlay::~UserPaintOverlay()
-
-Modified: slideshow/source/engine/slideshowimpl.cxx
-==============================================================================
---- slideshow/source/engine/slideshowimpl.cxx	Sat Jan 31 09:53:18 2009	(r267232)
-+++ slideshow/source/engine/slideshowimpl.cxx	Sat Jan 31 14:05:38 2009	(r267233)
-@@ -332,6 +332,8 @@
+diff --git a/slideshow/source/engine/slideshowimpl.cxx b/slideshow/source/engine/slideshowimpl.cxx
+index e7f2340..60d91a4 100644
+--- a/slideshow/source/engine/slideshowimpl.cxx
++++ b/slideshow/source/engine/slideshowimpl.cxx
+@@ -360,6 +360,8 @@ private:
      
      boost::optional<RGBColor>               maUserPaintColor;
  
@@ -470,7 +482,7 @@ Modified: slideshow/source/engine/slideshowimpl.cxx
      boost::shared_ptr<canvas::tools::ElapsedTime> mpPresTimer;
      ScreenUpdater                           maScreenUpdater;
      EventQueue                              maEventQueue;
-@@ -444,6 +446,7 @@
+@@ -474,6 +476,7 @@ SlideShowImpl::SlideShowImpl(
        maShapeEventListeners(),
        maShapeCursors(),
        maUserPaintColor(),
@@ -478,7 +490,7 @@ Modified: slideshow/source/engine/slideshowimpl.cxx
        mpPresTimer( new canvas::tools::ElapsedTime ),
        maScreenUpdater(maViewContainer),
        maEventQueue( mpPresTimer ),
-@@ -767,6 +770,7 @@
+@@ -806,6 +809,7 @@ SlideSharedPtr SlideShowImpl::makeSlide(
                                               maShapeEventListeners,
                                               maShapeCursors,
                                               maUserPaintColor ? *maUserPaintColor : RGBColor(),
@@ -486,17 +498,17 @@ Modified: slideshow/source/engine/slideshowimpl.cxx
                                               !!maUserPaintColor,
                                               mbImageAnimationsAllowed,
                                               mbDisableAnimationZOrder) );
-@@ -1173,6 +1177,34 @@
+@@ -1349,6 +1353,34 @@ sal_Bool SlideShowImpl::setProperty( beans::PropertyValue const& rProperty )
  
          return true;
      }
 +
-+     // new Property for pen's width 
++     // new Property for pen's width
 +     if (rProperty.Name.equalsAsciiL(
 +            RTL_CONSTASCII_STRINGPARAM("UserPaintStrokeWidth") ))
 +    {
 +        double nWidth(4.0);
-+        if (rProperty.Value >>= nWidth) 
++        if (rProperty.Value >>= nWidth)
 +        {
 +            OSL_ENSURE( mbMouseVisible,
 +                        "setProperty(): User paint overrides invisible mouse" );
@@ -505,7 +517,7 @@ Modified: slideshow/source/engine/slideshowimpl.cxx
 +            maUserPaintStrokeWidth.reset( nWidth );
 +            maEventMultiplexer.notifyUserPaintStrokeWidth( *maUserPaintStrokeWidth );
 +        }
-+        else 
++        else
 +        {
 +            // disable user paint stroke width
 +            maUserPaintStrokeWidth.reset();
@@ -516,22 +528,21 @@ Modified: slideshow/source/engine/slideshowimpl.cxx
 +            resetCursor();
 +
 +        return true;
-+    }	
++    }
 +
      
      if (rProperty.Name.equalsAsciiL(
              RTL_CONSTASCII_STRINGPARAM("AdvanceOnClick") )) 
-
-Modified: slideshow/source/inc/eventmultiplexer.hxx
-==============================================================================
---- slideshow/source/inc/eventmultiplexer.hxx	Sat Jan 31 09:53:18 2009	(r267232)
-+++ slideshow/source/inc/eventmultiplexer.hxx	Sat Jan 31 14:05:38 2009	(r267233)
-@@ -486,6 +486,17 @@
+diff --git a/slideshow/source/inc/eventmultiplexer.hxx b/slideshow/source/inc/eventmultiplexer.hxx
+index d4c9a6d..a06d1b1 100644
+--- a/slideshow/source/inc/eventmultiplexer.hxx
++++ b/slideshow/source/inc/eventmultiplexer.hxx
+@@ -483,6 +483,17 @@ public:
      */
      bool notifyUserPaintColor( RGBColor const& rUserColor );
  
 +    /** Notify a new user paint width
-+        
++
 +        Sending this notification also implies that user paint is
 +        enabled. .
 +
@@ -544,25 +555,23 @@ Modified: slideshow/source/inc/eventmultiplexer.hxx
      /** Notify that user paint is disabled
          
          User paint denotes the feature to draw colored lines on top of
-
-Modified: slideshow/source/inc/slide.hxx
-==============================================================================
---- slideshow/source/inc/slide.hxx	Sat Jan 31 09:53:18 2009	(r267232)
-+++ slideshow/source/inc/slide.hxx	Sat Jan 31 14:05:38 2009	(r267233)
-@@ -198,6 +198,7 @@
+diff --git a/slideshow/source/inc/slide.hxx b/slideshow/source/inc/slide.hxx
+index 32990a0..1e14df0 100644
+--- a/slideshow/source/inc/slide.hxx
++++ b/slideshow/source/inc/slide.hxx
+@@ -195,6 +195,7 @@ namespace slideshow
                                      const ShapeEventListenerMap&                       rShapeListenerMap,
                                      const ShapeCursorMap&                              rShapeCursorMap,
                                      RGBColor const&                                    aUserPaintColor,
-+ 				    double                                             dUserPaintStrokeWidth,
++				    double                                             dUserPaintStrokeWidth,
                                      bool                                               bUserPaintEnabled,
                                      bool                                               bIntrinsicAnimationsAllowed,
                                      bool                                               bDisableAnimationZOrder );
-
-Modified: slideshow/source/inc/userpainteventhandler.hxx
-==============================================================================
---- slideshow/source/inc/userpainteventhandler.hxx	Sat Jan 31 09:53:18 2009	(r267232)
-+++ slideshow/source/inc/userpainteventhandler.hxx	Sat Jan 31 14:05:38 2009	(r267233)
-@@ -53,6 +53,7 @@
+diff --git a/slideshow/source/inc/userpainteventhandler.hxx b/slideshow/source/inc/userpainteventhandler.hxx
+index 077337e..082aab5 100644
+--- a/slideshow/source/inc/userpainteventhandler.hxx
++++ b/slideshow/source/inc/userpainteventhandler.hxx
+@@ -50,6 +50,7 @@ namespace slideshow
              virtual ~UserPaintEventHandler() {}
  
              virtual bool colorChanged( RGBColor const& rUserColor ) = 0;
@@ -570,4 +579,6 @@ Modified: slideshow/source/inc/userpainteventhandler.hxx
              virtual bool disable() = 0;
          };
  
+-- 
+1.7.0.1
 

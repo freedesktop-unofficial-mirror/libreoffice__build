@@ -1,16 +1,42 @@
---- sw/inc/IDocumentSettingAccess.hxx.old	2010-03-03 17:00:01.000000000 +0100
-+++ sw/inc/IDocumentSettingAccess.hxx	2010-03-03 17:00:02.000000000 +0100
-@@ -85,6 +85,7 @@ namespace com { namespace sun { namespac
+From 9dcb92750c9cc1ca405e1bda870d4d4e1178f65d Mon Sep 17 00:00:00 2001
+From: Jan Holesovsky <kendy@suse.cz>
+Date: Fri, 14 May 2010 17:05:13 +0200
+Subject: [PATCH 661/878] sw-collapse-empty-table-par-like-html.diff
+
+---
+ sw/inc/IDocumentSettingAccess.hxx        |    1 +
+ sw/inc/doc.hxx                           |    1 +
+ sw/inc/ndtxt.hxx                         |    2 +
+ sw/source/core/crsr/callnk.cxx           |   50 ++++++++++++++++++++++++++++++
+ sw/source/core/doc/doc.cxx               |    4 ++
+ sw/source/core/doc/docnew.cxx            |    1 +
+ sw/source/core/inc/frame.hxx             |    4 ++
+ sw/source/core/layout/calcmove.cxx       |   43 +++++++++++++++++++++++++
+ sw/source/core/layout/findfrm.cxx        |    9 +++++
+ sw/source/core/text/frmpaint.cxx         |   34 +++++++++++---------
+ sw/source/core/text/porrst.cxx           |   16 +++++++++
+ sw/source/filter/ww8/ww8par.cxx          |    1 +
+ sw/source/filter/ww8/ww8par2.cxx         |   12 -------
+ sw/source/ui/uno/SwXDocumentSettings.cxx |   14 ++++++++
+ 14 files changed, 165 insertions(+), 27 deletions(-)
+
+diff --git a/sw/inc/IDocumentSettingAccess.hxx b/sw/inc/IDocumentSettingAccess.hxx
+index 32e6551..3bd68f8 100644
+--- a/sw/inc/IDocumentSettingAccess.hxx
++++ b/sw/inc/IDocumentSettingAccess.hxx
+@@ -82,6 +82,7 @@ namespace com { namespace sun { namespace star { namespace i18n { struct Forbidd
           TAB_AT_LEFT_INDENT_FOR_PARA_IN_LIST,
           // <--
- 	 INVERT_BORDER_SPACING,
+      INVERT_BORDER_SPACING,
 +         COLLAPSE_EMPTY_CELL_PARA,
           // COMPATIBILITY FLAGS END
  
           BROWSE_MODE,
---- sw/inc/doc.hxx.old	2010-03-03 17:00:01.000000000 +0100
-+++ sw/inc/doc.hxx	2010-03-03 17:00:02.000000000 +0100
-@@ -598,6 +598,7 @@ private:
+diff --git a/sw/inc/doc.hxx b/sw/inc/doc.hxx
+index 03c6b2c..cd41d07 100644
+--- a/sw/inc/doc.hxx
++++ b/sw/inc/doc.hxx
+@@ -595,6 +595,7 @@ private:
      bool mbTabRelativeToIndent                      : 1;   // #i24363# tab stops relative to indent
      bool mbProtectForm                              : 1;
      bool mbInvertBorderSpacing                      : 1;
@@ -18,9 +44,11 @@
      bool mbTabAtLeftIndentForParagraphsInList;             // OD 2008-06-05 #i89181# - see above
  
      // #i78591#
---- sw/inc/ndtxt.hxx.old	2009-10-08 16:17:18.000000000 +0200
-+++ sw/inc/ndtxt.hxx	2010-03-03 17:00:02.000000000 +0100
-@@ -821,6 +821,8 @@ public:
+diff --git a/sw/inc/ndtxt.hxx b/sw/inc/ndtxt.hxx
+index 9525a72..11b28a2 100644
+--- a/sw/inc/ndtxt.hxx
++++ b/sw/inc/ndtxt.hxx
+@@ -818,6 +818,8 @@ public:
      virtual ::com::sun::star::uno::Reference<
          ::com::sun::star::rdf::XMetadatable > MakeUnoObject();
  
@@ -29,9 +57,11 @@
      DECL_FIXEDMEMPOOL_NEWDEL(SwTxtNode)
  };
  
---- sw/source/core/crsr/callnk.cxx.old	2009-10-08 16:17:18.000000000 +0200
-+++ sw/source/core/crsr/callnk.cxx	2010-03-03 17:00:02.000000000 +0100
-@@ -46,10 +46,15 @@
+diff --git a/sw/source/core/crsr/callnk.cxx b/sw/source/core/crsr/callnk.cxx
+index 332d5df..6a86029 100644
+--- a/sw/source/core/crsr/callnk.cxx
++++ b/sw/source/core/crsr/callnk.cxx
+@@ -43,10 +43,15 @@
  #include <doc.hxx>
  #include <frmfmt.hxx>
  #include <txtfrm.hxx>
@@ -47,15 +77,15 @@
  
  SwCallLink::SwCallLink( SwCrsrShell & rSh, ULONG nAktNode, xub_StrLen nAktCntnt,
                          BYTE nAktNdTyp, long nLRPos, bool bAktSelection )
-@@ -100,6 +105,51 @@ SwCallLink::~SwCallLink()
+@@ -97,6 +102,51 @@ SwCallLink::~SwCallLink()
      if( !pCNd )
          return;
  
 +    bool bUpdatedTable = false;
 +    SwFrm *myFrm=pCNd->GetFrm();
-+    if (myFrm!=NULL) 
++    if (myFrm!=NULL)
 +    {
-+        // We need to emulated a change of the row height in order 
++        // We need to emulated a change of the row height in order
 +        // to have the complete row redrawn
 +        SwRowFrm* pRow = myFrm->FindRowFrm( );
 +        if ( pRow )
@@ -67,7 +97,7 @@
 +            bUpdatedTable = true;
 +        }
 +    }
-+ 
++
 +    const SwDoc *pDoc=rShell.GetDoc();
 +    const SwCntntNode *pNode = NULL;
 +    if ( ( pDoc != NULL && nNode < pDoc->GetNodes( ).Count( ) ) )
@@ -77,9 +107,9 @@
 +    if ( pNode != NULL )
 +    {
 +        SwFrm *myFrm2=pNode->GetFrm();
-+        if (myFrm2!=NULL) 
++        if (myFrm2!=NULL)
 +        {
-+            // We need to emulated a change of the row height in order 
++            // We need to emulated a change of the row height in order
 +            // to have the complete row redrawn
 +            SwRowFrm* pRow = myFrm2->FindRowFrm();
 +            if ( pRow )
@@ -87,7 +117,7 @@
 +                const SwTableLine* pLine = pRow->GetTabLine( );
 +                SwFmtFrmSize pSize = pLine->GetFrmFmt( )->GetFrmSize( );
 +                pRow->Modify( NULL, &pSize );
-+            
++
 +                bUpdatedTable = true;
 +            }
 +        }
@@ -99,29 +129,33 @@
      xub_StrLen nCmp, nAktCntnt = pCurCrsr->GetPoint()->nContent.GetIndex();
      USHORT nNdWhich = pCNd->GetNodeType();
      ULONG nAktNode = pCurCrsr->GetPoint()->nNode.GetIndex();
---- sw/source/core/doc/doc.cxx.old	2010-03-03 17:00:01.000000000 +0100
-+++ sw/source/core/doc/doc.cxx	2010-03-03 17:00:02.000000000 +0100
-@@ -185,6 +185,7 @@ bool SwDoc::get(/*[in]*/ DocumentSetting
+diff --git a/sw/source/core/doc/doc.cxx b/sw/source/core/doc/doc.cxx
+index 88c611a..c3e51b9 100644
+--- a/sw/source/core/doc/doc.cxx
++++ b/sw/source/core/doc/doc.cxx
+@@ -182,6 +182,7 @@ bool SwDoc::get(/*[in]*/ DocumentSettingId id) const
          case TAB_AT_LEFT_INDENT_FOR_PARA_IN_LIST: return mbTabAtLeftIndentForParagraphsInList;
          // <--
- 	case INVERT_BORDER_SPACING: return mbInvertBorderSpacing;
+     case INVERT_BORDER_SPACING: return mbInvertBorderSpacing;
 +        case COLLAPSE_EMPTY_CELL_PARA: return mbCollapseEmptyCellPara;
           // COMPATIBILITY FLAGS END
  
          case BROWSE_MODE: return mbBrowseMode;
-@@ -311,6 +312,9 @@ void SwDoc::set(/*[in]*/ DocumentSetting
- 	case INVERT_BORDER_SPACING:
- 	    mbInvertBorderSpacing = value;
- 	break;
+@@ -308,6 +309,9 @@ void SwDoc::set(/*[in]*/ DocumentSettingId id, /*[in]*/ bool value)
+     case INVERT_BORDER_SPACING:
+         mbInvertBorderSpacing = value;
+     break;
 +        case COLLAPSE_EMPTY_CELL_PARA:
 +            mbCollapseEmptyCellPara = value;
 +         break;
           // COMPATIBILITY FLAGS END
  
          case BROWSE_MODE:
---- sw/source/core/doc/docnew.cxx.old	2010-03-03 17:00:01.000000000 +0100
-+++ sw/source/core/doc/docnew.cxx	2010-03-03 17:00:02.000000000 +0100
-@@ -369,6 +369,7 @@ SwDoc::SwDoc() :
+diff --git a/sw/source/core/doc/docnew.cxx b/sw/source/core/doc/docnew.cxx
+index 63c305d..db4cbc2 100644
+--- a/sw/source/core/doc/docnew.cxx
++++ b/sw/source/core/doc/docnew.cxx
+@@ -366,6 +366,7 @@ SwDoc::SwDoc() :
      mbTabAtLeftIndentForParagraphsInList    = false;        // hidden
      // <--
      mbInvertBorderSpacing                   = false;        // hidden
@@ -129,9 +163,11 @@
  
      //
      // COMPATIBILITY FLAGS END
---- sw/source/core/inc/frame.hxx.old	2009-10-07 15:06:25.000000000 +0200
-+++ sw/source/core/inc/frame.hxx	2010-03-03 17:00:02.000000000 +0100
-@@ -630,6 +630,7 @@ public:
+diff --git a/sw/source/core/inc/frame.hxx b/sw/source/core/inc/frame.hxx
+index 77b4a2d..92ea09b 100644
+--- a/sw/source/core/inc/frame.hxx
++++ b/sw/source/core/inc/frame.hxx
+@@ -627,6 +627,7 @@ public:
      SwRootFrm			*FindRootFrm();
      SwPageFrm	   		*FindPageFrm();
      SwFrm				*FindColFrm();
@@ -139,7 +175,7 @@
      SwFtnBossFrm		*FindFtnBossFrm( BOOL bFootnotes = FALSE );
      SwTabFrm			*ImplFindTabFrm();
      SwFtnFrm			*ImplFindFtnFrm();
-@@ -916,6 +917,9 @@ public:
+@@ -913,6 +914,9 @@ public:
  
      // FME 2007-08-30 #i81146# new loop control
      void ValidateThisAndAllLowers( const USHORT nStage );
@@ -149,9 +185,11 @@
  };
  
  inline BOOL	SwFrm::IsInDocBody() const
---- sw/source/core/layout/calcmove.cxx.old	2009-10-07 15:06:25.000000000 +0200
-+++ sw/source/core/layout/calcmove.cxx	2010-03-03 17:00:02.000000000 +0100
-@@ -68,6 +68,8 @@
+diff --git a/sw/source/core/layout/calcmove.cxx b/sw/source/core/layout/calcmove.cxx
+index 749abf9..3b6f29c 100644
+--- a/sw/source/core/layout/calcmove.cxx
++++ b/sw/source/core/layout/calcmove.cxx
+@@ -65,6 +65,8 @@
  #include <flyfrms.hxx>
  // <--
  
@@ -160,7 +198,7 @@
  //------------------------------------------------------------------------
  //				Move-Methoden
  //------------------------------------------------------------------------
-@@ -957,6 +959,42 @@ void SwLayoutFrm::MakeAll()
+@@ -954,6 +956,42 @@ void SwLayoutFrm::MakeAll()
  |*	Letzte Aenderung	MA 03. Mar. 96
  |*
  |*************************************************************************/
@@ -182,7 +220,7 @@
 +        } else {
 +            return false;
 +        }
-+    } else 
++    } else
 +        return false;
 +}
 +
@@ -203,7 +241,7 @@
  
  BOOL SwCntntFrm::MakePrtArea( const SwBorderAttrs &rAttrs )
  {
-@@ -1057,6 +1095,11 @@ BOOL SwCntntFrm::MakePrtArea( const SwBo
+@@ -1054,6 +1092,11 @@ BOOL SwCntntFrm::MakePrtArea( const SwBorderAttrs &rAttrs )
  
              // OD 2004-03-02 #106629# - use new method <CalcLowerSpace(..)>
              SwTwips nLower = CalcLowerSpace( &rAttrs );
@@ -215,9 +253,11 @@
  //            // in balanced columned section frames we do not want the
  //            // common border
  //            sal_Bool bCommonBorder = sal_True;
---- sw/source/core/layout/findfrm.cxx.old	2009-10-07 15:06:25.000000000 +0200
-+++ sw/source/core/layout/findfrm.cxx	2010-03-03 17:00:02.000000000 +0100
-@@ -599,6 +599,15 @@ SwFrm *SwFrm::FindColFrm()
+diff --git a/sw/source/core/layout/findfrm.cxx b/sw/source/core/layout/findfrm.cxx
+index a30f631..43ab991 100644
+--- a/sw/source/core/layout/findfrm.cxx
++++ b/sw/source/core/layout/findfrm.cxx
+@@ -596,6 +596,15 @@ SwFrm *SwFrm::FindColFrm()
      return pFrm;
  }
  
@@ -233,9 +273,11 @@
  SwFrm* SwFrm::FindFooterOrHeader()
  {
      SwFrm* pRet = this;
---- sw/source/core/text/frmpaint.cxx.old	2009-10-07 15:06:25.000000000 +0200
-+++ sw/source/core/text/frmpaint.cxx	2010-03-03 17:00:02.000000000 +0100
-@@ -570,21 +570,25 @@ sal_Bool SwTxtFrm::PaintEmpty( const SwR
+diff --git a/sw/source/core/text/frmpaint.cxx b/sw/source/core/text/frmpaint.cxx
+index f3a2084..bc9b995 100644
+--- a/sw/source/core/text/frmpaint.cxx
++++ b/sw/source/core/text/frmpaint.cxx
+@@ -567,21 +567,25 @@ sal_Bool SwTxtFrm::PaintEmpty( const SwRect &rRect, sal_Bool bCheck ) const
                      }
                  }
  
@@ -270,15 +312,17 @@
 +                    aDrawInf.SetFrm( this );
 +                    aDrawInf.SetFont( pFnt );
 +                    aDrawInf.SetSnapToGrid( sal_False );
-+    
++
 +                    pFnt->_DrawText( aDrawInf );
 +                }
                  delete pClip;
              }
              delete pFnt;
---- sw/source/core/text/porrst.cxx.old	2009-10-07 15:06:25.000000000 +0200
-+++ sw/source/core/text/porrst.cxx	2010-03-03 17:00:02.000000000 +0100
-@@ -61,6 +61,8 @@
+diff --git a/sw/source/core/text/porrst.cxx b/sw/source/core/text/porrst.cxx
+index 8557e81..ed6e316 100644
+--- a/sw/source/core/text/porrst.cxx
++++ b/sw/source/core/text/porrst.cxx
+@@ -58,6 +58,8 @@
  #include <IDocumentSettingAccess.hxx>
  #include <IDocumentDeviceAccess.hxx>
  
@@ -287,7 +331,7 @@
  /*************************************************************************
   *                      class SwTmpEndPortion
   *************************************************************************/
-@@ -230,6 +232,20 @@ SwLinePortion *SwArrowPortion::Compress(
+@@ -227,6 +229,20 @@ SwLinePortion *SwArrowPortion::Compress() { return this; }
  
  SwTwips SwTxtFrm::EmptyHeight() const
  {
@@ -308,9 +352,11 @@
      ASSERT( ! IsVertical() || ! IsSwapped(),"SwTxtFrm::EmptyHeight with swapped frame" );
  
      SwFont *pFnt;
---- sw/source/filter/ww8/ww8par.cxx.old	2010-03-03 17:00:01.000000000 +0100
-+++ sw/source/filter/ww8/ww8par.cxx	2010-03-03 17:00:02.000000000 +0100
-@@ -1455,6 +1455,7 @@ void SwWW8ImplReader::ImportDop()
+diff --git a/sw/source/filter/ww8/ww8par.cxx b/sw/source/filter/ww8/ww8par.cxx
+index 42f7575..9eb6810 100644
+--- a/sw/source/filter/ww8/ww8par.cxx
++++ b/sw/source/filter/ww8/ww8par.cxx
+@@ -1452,6 +1452,7 @@ void SwWW8ImplReader::ImportDop()
      // <--
  
      rDoc.set(IDocumentSettingAccess::INVERT_BORDER_SPACING, true);
@@ -318,9 +364,11 @@
  
      //
      // COMPATIBILITY FLAGS END
---- sw/source/filter/ww8/ww8par2.cxx.old	2010-01-21 01:00:04.000000000 +0100
-+++ sw/source/filter/ww8/ww8par2.cxx	2010-03-03 17:00:02.000000000 +0100
-@@ -3643,18 +3643,6 @@ void SwWW8ImplReader::TabCellEnd()
+diff --git a/sw/source/filter/ww8/ww8par2.cxx b/sw/source/filter/ww8/ww8par2.cxx
+index 4f3610d..716a36f 100644
+--- a/sw/source/filter/ww8/ww8par2.cxx
++++ b/sw/source/filter/ww8/ww8par2.cxx
+@@ -3640,18 +3640,6 @@ void SwWW8ImplReader::TabCellEnd()
      if (nInTable && pTableDesc)
      {
          pTableDesc->TableCellEnd();
@@ -339,9 +387,11 @@
      }
      
      bFirstPara = true;    // We have come to the end of a cell so FirstPara flag
---- sw/source/ui/uno/SwXDocumentSettings.cxx.old	2010-03-03 17:00:01.000000000 +0100
-+++ sw/source/ui/uno/SwXDocumentSettings.cxx	2010-03-03 17:00:02.000000000 +0100
-@@ -132,6 +132,7 @@ enum SwDocumentSettingsPropertyHandles
+diff --git a/sw/source/ui/uno/SwXDocumentSettings.cxx b/sw/source/ui/uno/SwXDocumentSettings.cxx
+index 779b46b..c359489 100644
+--- a/sw/source/ui/uno/SwXDocumentSettings.cxx
++++ b/sw/source/ui/uno/SwXDocumentSettings.cxx
+@@ -129,6 +129,7 @@ enum SwDocumentSettingsPropertyHandles
      HANDLE_TAB_AT_LEFT_INDENT_FOR_PARA_IN_LIST
      // <--
      ,HANDLE_INVERT_BORDER_SPACING
@@ -349,7 +399,7 @@
  };
  
  MasterPropertySetInfo * lcl_createSettingsInfo()
-@@ -186,6 +187,7 @@ MasterPropertySetInfo * lcl_createSettin
+@@ -183,6 +184,7 @@ MasterPropertySetInfo * lcl_createSettingsInfo()
          // --> OD 2008-06-05 #i89181#
          { RTL_CONSTASCII_STRINGPARAM("TabAtLeftIndentForParagraphsInList"), HANDLE_TAB_AT_LEFT_INDENT_FOR_PARA_IN_LIST, CPPUTYPE_BOOLEAN, 0, 0},
          { RTL_CONSTASCII_STRINGPARAM("InvertBorderSpacing"), HANDLE_INVERT_BORDER_SPACING, CPPUTYPE_BOOLEAN, 0, 0},
@@ -357,10 +407,10 @@
  /*
   * As OS said, we don't have a view when we need to set this, so I have to
   * find another solution before adding them to this property set - MTG
-@@ -685,6 +687,12 @@ void SwXDocumentSettings::_setSingleValu
+@@ -682,6 +684,12 @@ void SwXDocumentSettings::_setSingleValue( const comphelper::PropertyInfo & rInf
              mpDoc->set(IDocumentSettingAccess::INVERT_BORDER_SPACING, bTmp);
- 	}
- 	break;
+     }
+     break;
 +        case HANDLE_COLLAPSE_EMPTY_CELL_PARA:
 +        {
 +            sal_Bool bTmp = *(sal_Bool*)rValue.getValue();
@@ -370,10 +420,10 @@
          default:
              throw UnknownPropertyException();
      }
-@@ -1018,6 +1026,12 @@ void SwXDocumentSettings::_getSingleValu
+@@ -1015,6 +1023,12 @@ void SwXDocumentSettings::_getSingleValue( const comphelper::PropertyInfo & rInf
              rValue.setValue( &bTmp, ::getBooleanCppuType() );
- 	}
- 	break;
+     }
+     break;
 +        case HANDLE_COLLAPSE_EMPTY_CELL_PARA:
 +        {
 +            sal_Bool bTmp = mpDoc->get( IDocumentSettingAccess::COLLAPSE_EMPTY_CELL_PARA );
@@ -383,3 +433,6 @@
          default:
              throw UnknownPropertyException();
      }
+-- 
+1.7.0.1
+

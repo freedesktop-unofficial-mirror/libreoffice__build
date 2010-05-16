@@ -1,7 +1,21 @@
-diff -rup svtools-orig-1/source/filter.vcl/wmf/winmtf.cxx svtools/source/filter.vcl/wmf/winmtf.cxx
---- svtools-orig-1/source/filter.vcl/wmf/winmtf.cxx	2009-12-08 18:01:50.000000000 +0100
-+++ svtools/source/filter.vcl/wmf/winmtf.cxx	2009-12-08 18:02:32.000000000 +0100
-@@ -2293,3 +2293,8 @@ void WinMtfOutput::PassEMFPlus( void* pB
+From d81a069d2765b43a9a643526c31c86554fbb0ea9 Mon Sep 17 00:00:00 2001
+From: Jan Holesovsky <kendy@suse.cz>
+Date: Fri, 14 May 2010 17:07:41 +0200
+Subject: [PATCH 776/878] svtools-embedemf.diff
+
+---
+ svtools/source/filter.vcl/wmf/winmtf.cxx |    5 +
+ svtools/source/filter.vcl/wmf/winmtf.hxx |   15 ++
+ svtools/source/filter.vcl/wmf/winwmf.cxx |  215 +++++++++++++++++++++---------
+ svtools/source/filter.vcl/wmf/wmfwr.cxx  |   83 ++++++++++++
+ svtools/source/filter.vcl/wmf/wmfwr.hxx  |    9 ++
+ 5 files changed, 266 insertions(+), 61 deletions(-)
+
+diff --git a/svtools/source/filter.vcl/wmf/winmtf.cxx b/svtools/source/filter.vcl/wmf/winmtf.cxx
+index 30ec770..b49c26e 100644
+--- a/svtools/source/filter.vcl/wmf/winmtf.cxx
++++ b/svtools/source/filter.vcl/wmf/winmtf.cxx
+@@ -2294,3 +2294,8 @@ void WinMtfOutput::PassEMFPlus( void* pBuffer, UINT32 nLength )
      EMFP_DEBUG(printf ("\t\t\tadd EMF_PLUS comment length %d\n", nLength));
      mpGDIMetaFile->AddAction( new MetaCommentAction( "EMF_PLUS", 0, static_cast<const BYTE*>(pBuffer), nLength ) );
  }
@@ -10,10 +24,11 @@ diff -rup svtools-orig-1/source/filter.vcl/wmf/winmtf.cxx svtools/source/filter.
 +{
 +   rGDIMetaFile.Play( *mpGDIMetaFile, 0xFFFFFFFF );
 +}
-diff -rup svtools-orig-1/source/filter.vcl/wmf/winmtf.hxx svtools/source/filter.vcl/wmf/winmtf.hxx
---- svtools-orig-1/source/filter.vcl/wmf/winmtf.hxx	2009-12-08 18:01:50.000000000 +0100
-+++ svtools/source/filter.vcl/wmf/winmtf.hxx	2009-12-08 18:02:03.000000000 +0100
-@@ -692,6 +692,7 @@ class WinMtfOutput
+diff --git a/svtools/source/filter.vcl/wmf/winmtf.hxx b/svtools/source/filter.vcl/wmf/winmtf.hxx
+index d3c9431..7efc8db 100644
+--- a/svtools/source/filter.vcl/wmf/winmtf.hxx
++++ b/svtools/source/filter.vcl/wmf/winmtf.hxx
+@@ -690,6 +690,7 @@ class WinMtfOutput
          void				MoveClipRegion( const Size& rSize );
          void				SetClipPath( const PolyPolygon& rPolyPoly, sal_Int32 nClippingMode, sal_Bool bIsMapped );
          void				UpdateClipRegion();
@@ -21,16 +36,16 @@ diff -rup svtools-orig-1/source/filter.vcl/wmf/winmtf.hxx svtools/source/filter.
  
          void                PassEMFPlus( void* pBuffer, UINT32 nLength );
          void                PassEMFPlusHeaderInfo();
-@@ -761,6 +762,18 @@ private:
+@@ -759,6 +760,18 @@ private:
      UINT16			nUnitsPerInch;
      sal_uInt32		nRecSize;
  
 +    // embedded EMF data
-+    SvMemoryStream* pEMFStream; 
++    SvMemoryStream* pEMFStream;
 +
 +    // total number of comment records containing EMF data
 +    sal_uInt32      nEMFRecCount;
-+    
++
 +    // number of EMF records read
 +    sal_uInt32      nEMFRec;
 +
@@ -40,19 +55,20 @@ diff -rup svtools-orig-1/source/filter.vcl/wmf/winmtf.hxx svtools/source/filter.
      sal_uInt32		nSkipActions;
      sal_uInt32		nCurrentAction;
      sal_uInt32		nUnicodeEscapeAction;
-@@ -781,6 +794,8 @@ public:
- 
+@@ -780,6 +793,8 @@ public:
                      WMFReader( SvStream& rStreamWMF, GDIMetaFile& rGDIMetaFile, FilterConfigItem* pConfigItem = NULL )
                          : WinMtf( new WinMtfOutput( rGDIMetaFile ), rStreamWMF, pConfigItem ) {};
-+                    
-+                    ~WMFReader();
  
++                    ~WMFReader();
++
      // Liesst aus dem Stream eine WMF-Datei und fuellt das GDIMetaFile
- 	void			ReadWMF(WMF_APMFILEHEADER *pAPMHeader=NULL);
-diff -rup svtools-orig-1/source/filter.vcl/wmf/winwmf.cxx svtools/source/filter.vcl/wmf/winwmf.cxx
---- svtools-orig-1/source/filter.vcl/wmf/winwmf.cxx	2009-12-08 18:01:50.000000000 +0100
-+++ svtools/source/filter.vcl/wmf/winwmf.cxx	2009-12-08 18:07:59.000000000 +0100
-@@ -32,6 +32,7 @@
+     void			ReadWMF(WMF_APMFILEHEADER *pAPMHeader=NULL);
+ };
+diff --git a/svtools/source/filter.vcl/wmf/winwmf.cxx b/svtools/source/filter.vcl/wmf/winwmf.cxx
+index 72baa9f..bc960de 100644
+--- a/svtools/source/filter.vcl/wmf/winwmf.cxx
++++ b/svtools/source/filter.vcl/wmf/winwmf.cxx
+@@ -29,6 +29,7 @@
  #include "precompiled_svtools.hxx"
  
  #include "winmtf.hxx"
@@ -60,7 +76,7 @@ diff -rup svtools-orig-1/source/filter.vcl/wmf/winwmf.cxx svtools/source/filter.
  #include <svtools/wmf.hxx>
  #include <rtl/crc.h>
  #include <rtl/tencinfo.h>
-@@ -832,81 +833,136 @@ void WMFReader::ReadRecordParams( USHORT
+@@ -829,81 +830,136 @@ void WMFReader::ReadRecordParams( USHORT nFunc )
                  pWMF->SetError( SVSTREAM_FILEFORMAT_ERROR );
                  break;
              }
@@ -82,15 +98,15 @@ diff -rup svtools-orig-1/source/filter.vcl/wmf/winwmf.cxx svtools/source/filter.
                  {
 -                    sal_uInt32 nEscLen = nLen - 14;
 -                    if ( nEscLen <= ( nRecSize * 2 ) )
-+                    sal_uInt32 nNewMagic; // we have to read int32 for 
++                    sal_uInt32 nNewMagic; // we have to read int32 for
 +                    *pWMF >> nNewMagic;   // META_ESCAPE_ENHANCED_METAFILE CommentIdentifier
-+                    
++
 +                    if( nNewMagic == 0x2c2a4f4f &&  nLen >= 14 )
                      {
 +                        sal_uInt16 nMagic2;
 +                        *pWMF >> nMagic2;
 +                        if( nMagic2 == 0x0a ) // 2nd half of magic
-+                        {                     // continue with private escape  
++                        {                     // continue with private escape
 +                            sal_uInt32 nCheck, nEsc;
 +                            *pWMF >> nCheck
 +                                  >> nEsc;
@@ -120,6 +136,14 @@ diff -rup svtools-orig-1/source/filter.vcl/wmf/winwmf.cxx svtools/source/filter.
 -                            pData = new sal_Int8[ nEscLen ];
 -                            pWMF->Read( pData, nEscLen );
 -                            nCheckSum = rtl_crc32( nCheckSum, pData, nEscLen );
+-                        }
+-                        if ( nCheck == nCheckSum )
+-                        {
+-                            switch( nEsc )
+-                            {
+-                                case PRIVATE_ESCAPE_UNICODE :
+-                                {	// we will use text instead of polygons only if we have the correct font
+-                                    if ( aVDev.IsFontAvailable( pOut->GetFont().GetName() ) )
 +                                if ( ( static_cast< sal_uInt64 >( nEscLen ) + pWMF->Tell() ) > nMetaRecEndPos )
 +                                {
 +                                    pWMF->SetError( SVSTREAM_FILEFORMAT_ERROR );
@@ -134,7 +158,33 @@ diff -rup svtools-orig-1/source/filter.vcl/wmf/winwmf.cxx svtools/source/filter.
 +                                if ( nCheck == nCheckSum )
 +                                {
 +                                    switch( nEsc )
-+                                    {
+                                     {
+-                                        Point  aPt;
+-                                        String aString;
+-                                        sal_uInt32	i, nStringLen, nDXCount;
+-                                        sal_Int32* pDXAry = NULL;
+-                                        SvMemoryStream aMemoryStream( nEscLen );
+-                                        aMemoryStream.Write( pData, nEscLen );
+-                                        aMemoryStream.Seek( STREAM_SEEK_TO_BEGIN );
+-                                        aMemoryStream >> aPt.X()
+-                                                      >> aPt.Y()
+-                                                      >> nStringLen;
+-
+-                                        if ( ( static_cast< sal_uInt64 >( nStringLen ) * sizeof( sal_Unicode ) ) < ( nEscLen - aMemoryStream.Tell() ) )
+-                                        {
+-                                            sal_Unicode* pBuf = aString.AllocBuffer( (xub_StrLen)nStringLen );
+-                                            for ( i = 0; i < nStringLen; i++ )
+-                                                aMemoryStream >> pBuf[ i ];
+-                                            aMemoryStream >> nDXCount;
+-                                            if ( ( static_cast< sal_uInt64 >( nDXCount ) * sizeof( sal_Int32 ) ) >= ( nEscLen - aMemoryStream.Tell() ) )
+-                                                nDXCount = 0;
+-                                            if ( nDXCount )
+-                                                pDXAry = new sal_Int32[ nDXCount ];
+-                                            for  ( i = 0; i < nDXCount; i++ )
+-                                                aMemoryStream >> pDXAry[ i ];
+-                                            aMemoryStream >> nSkipActions;
+-                                            pOut->DrawText( aPt, aString, pDXAry );
+-                                            delete[] pDXAry;
 +                                        case PRIVATE_ESCAPE_UNICODE :
 +                                        {	// we will use text instead of polygons only if we have the correct font
 +                                            if ( aVDev.IsFontAvailable( pOut->GetFont().GetName() ) )
@@ -167,29 +217,28 @@ diff -rup svtools-orig-1/source/filter.vcl/wmf/winwmf.cxx svtools/source/filter.
 +                                                    delete[] pDXAry;
 +                                                }
 +                                            }
-+                                        }
+                                         }
 +                                        break;
-+                                    }
-+                                }
+                                     }
+                                 }
+-                                break;
 +                                delete[] pData;
 +                            }
-                         }
--                        if ( nCheck == nCheckSum )
++                        }
 +                    }
 +                    else if ( nNewMagic == 0x43464D57 && nLen >= 34 && (((sal_uInt32)nLen) + 10 <= nRecSize * 2 ))
 +                    {
-+                        sal_uInt32 nComType, nVersion, nFlags, nComRecCount, 
++                        sal_uInt32 nComType, nVersion, nFlags, nComRecCount,
 +                                   nCurRecSize, nRemainingSize, nEMFTotalSize;
 +                        sal_uInt16 nCheck;
-+                        
++
 +                        *pWMF >> nComType >> nVersion >> nCheck >> nFlags
-+                              >> nComRecCount >> nCurRecSize 
++                              >> nComRecCount >> nCurRecSize
 +                              >> nRemainingSize >> nEMFTotalSize; // the nRemainingSize is not mentioned in MSDN documentation
 +                                                                  // but it seems to be required to read in data produced by OLE
 +
 +                        if( nComType == 0x01 && nVersion == 0x10000 && nComRecCount )
-                         {
--                            switch( nEsc )
++                        {
 +                            if( !nEMFRec )
 +                            {   // first EMF comment
 +                                nEMFRecCount    = nComRecCount;
@@ -197,41 +246,7 @@ diff -rup svtools-orig-1/source/filter.vcl/wmf/winwmf.cxx svtools/source/filter.
 +                                pEMFStream = new SvMemoryStream( 0x20000 );
 +                            }
 +                            else if( nEMFRecCount != nComRecCount ) // add additional checks here
-                             {
--                                case PRIVATE_ESCAPE_UNICODE :
--                                {	// we will use text instead of polygons only if we have the correct font
--                                    if ( aVDev.IsFontAvailable( pOut->GetFont().GetName() ) )
--                                    {
--                                        Point  aPt;
--                                        String aString;
--                                        sal_uInt32	i, nStringLen, nDXCount;
--                                        sal_Int32* pDXAry = NULL;
--                                        SvMemoryStream aMemoryStream( nEscLen );
--                                        aMemoryStream.Write( pData, nEscLen );
--                                        aMemoryStream.Seek( STREAM_SEEK_TO_BEGIN );
--                                        aMemoryStream >> aPt.X()
--                                                      >> aPt.Y()
--                                                      >> nStringLen;
--
--                                        if ( ( static_cast< sal_uInt64 >( nStringLen ) * sizeof( sal_Unicode ) ) < ( nEscLen - aMemoryStream.Tell() ) )
--                                        {
--                                            sal_Unicode* pBuf = aString.AllocBuffer( (xub_StrLen)nStringLen );
--                                            for ( i = 0; i < nStringLen; i++ )
--                                                aMemoryStream >> pBuf[ i ];
--                                            aMemoryStream >> nDXCount;
--                                            if ( ( static_cast< sal_uInt64 >( nDXCount ) * sizeof( sal_Int32 ) ) >= ( nEscLen - aMemoryStream.Tell() ) )
--                                                nDXCount = 0;
--                                            if ( nDXCount )
--                                                pDXAry = new sal_Int32[ nDXCount ];
--                                            for  ( i = 0; i < nDXCount; i++ )
--                                                aMemoryStream >> pDXAry[ i ];
--                                            aMemoryStream >> nSkipActions;
--                                            pOut->DrawText( aPt, aString, pDXAry );
--                                            delete[] pDXAry;
--                                        }
--                                    }
--                                }
--                                break;
++                            {
 +                                // total records should be the same as in previous comments
 +                                nEMFRecCount = 0xFFFFFFFF;
 +                                delete pEMFStream;
@@ -245,7 +260,7 @@ diff -rup svtools-orig-1/source/filter.vcl/wmf/winwmf.cxx svtools/source/filter.
 +                                delete pEMFStream;
 +                                pEMFStream = NULL;
 +                            }
-+                            
++
 +                            if( pEMFStream )
 +                            {
 +                                sal_Int8* pBuf = new sal_Int8[ nCurRecSize ];
@@ -259,7 +274,7 @@ diff -rup svtools-orig-1/source/filter.vcl/wmf/winwmf.cxx svtools/source/filter.
                      }
                  }
              }
-@@ -1032,6 +1088,11 @@ void WMFReader::ReadWMF(WMF_APMFILEHEADE
+@@ -1029,6 +1085,11 @@ void WMFReader::ReadWMF(WMF_APMFILEHEADER *pAPMHeader)
      nCurrentAction = 0;
      nUnicodeEscapeAction = 0;
  
@@ -271,11 +286,11 @@ diff -rup svtools-orig-1/source/filter.vcl/wmf/winwmf.cxx svtools/source/filter.
      pOut->SetMapMode( MM_ANISOTROPIC );
      pOut->SetWinOrg( Point() );
      pOut->SetWinExt( Size( 1, 1 ) );
-@@ -1079,6 +1140,33 @@ void WMFReader::ReadWMF(WMF_APMFILEHEADE
+@@ -1076,6 +1137,33 @@ void WMFReader::ReadWMF(WMF_APMFILEHEADER *pAPMHeader)
                      ReadRecordParams( nFunction );
                  else
                      nSkipActions--;
-+                
++
 +                if( pEMFStream && nEMFRecCount == nEMFRec )
 +                {
 +                    GDIMetaFile aMeta;
@@ -284,7 +299,7 @@ diff -rup svtools-orig-1/source/filter.vcl/wmf/winwmf.cxx svtools/source/filter.
 +                    BOOL bRead = pEMFReader->ReadEnhWMF();
 +                    delete pEMFReader; // destroy first!!!
 +
-+                    if( bRead )   
++                    if( bRead )
 +                    {
 +                       pOut->AddFromGDIMetaFile( aMeta );
 +                       pOut->SetrclFrame( Rectangle(0, 0, aMeta.GetPrefSize().Width(), aMeta.GetPrefSize().Height() ));
@@ -305,7 +320,7 @@ diff -rup svtools-orig-1/source/filter.vcl/wmf/winwmf.cxx svtools/source/filter.
                  nPos += nRecSize * 2;
                  if ( nPos <= nEndPos )
                      pWMF->Seek( nPos  );
-@@ -1342,3 +1430,9 @@ sal_Bool WMFReader::GetPlaceableBound( R
+@@ -1339,3 +1427,8 @@ sal_Bool WMFReader::GetPlaceableBound( Rectangle& rPlaceableBound, SvStream* pSt
      return bRet;
  }
  
@@ -314,11 +329,11 @@ diff -rup svtools-orig-1/source/filter.vcl/wmf/winwmf.cxx svtools/source/filter.
 +    if( pEMFStream )
 +        delete pEMFStream;
 +}
-+
-diff -rup svtools-orig-1/source/filter.vcl/wmf/wmfwr.cxx svtools/source/filter.vcl/wmf/wmfwr.cxx
---- svtools-orig-1/source/filter.vcl/wmf/wmfwr.cxx	2009-12-08 18:01:50.000000000 +0100
-+++ svtools/source/filter.vcl/wmf/wmfwr.cxx	2009-12-08 18:04:25.000000000 +0100
-@@ -33,6 +33,7 @@
+diff --git a/svtools/source/filter.vcl/wmf/wmfwr.cxx b/svtools/source/filter.vcl/wmf/wmfwr.cxx
+index 937e7bd..63b2c71 100644
+--- a/svtools/source/filter.vcl/wmf/wmfwr.cxx
++++ b/svtools/source/filter.vcl/wmf/wmfwr.cxx
+@@ -30,6 +30,7 @@
  
  #include <vcl/salbtype.hxx>
  #include "wmfwr.hxx"
@@ -326,7 +341,7 @@ diff -rup svtools-orig-1/source/filter.vcl/wmf/wmfwr.cxx svtools/source/filter.v
  #include <vcl/fontcvt.hxx>
  #include <rtl/crc.h>
  #include <rtl/tencinfo.h>
-@@ -1807,6 +1808,7 @@ BOOL WMFWriter::WriteWMF( const GDIMetaF
+@@ -1804,6 +1805,7 @@ BOOL WMFWriter::WriteWMF( const GDIMetaFile& rMTF, SvStream& rTargetStream,
  {
      WMFWriterAttrStackMember * pAt;
  
@@ -334,7 +349,7 @@ diff -rup svtools-orig-1/source/filter.vcl/wmf/wmfwr.cxx svtools/source/filter.v
      bStatus=TRUE;
      pConvert = 0;
      pVirDev = new VirtualDevice;
-@@ -1870,6 +1872,8 @@ BOOL WMFWriter::WriteWMF( const GDIMetaF
+@@ -1867,6 +1869,8 @@ BOOL WMFWriter::WriteWMF( const GDIMetaFile& rMTF, SvStream& rTargetStream,
      CountActionsAndBitmaps(rMTF);
  
      WriteHeader(rMTF,bPlaceable);
@@ -343,7 +358,7 @@ diff -rup svtools-orig-1/source/filter.vcl/wmf/wmfwr.cxx svtools/source/filter.v
      WMFRecord_SetWindowOrg(Point(0,0));
      WMFRecord_SetWindowExt(rMTF.GetPrefSize());
      WMFRecord_SetBkMode( TRUE );
-@@ -1948,3 +1952,82 @@ USHORT WMFWriter::CalcSaveTargetMapMode(
+@@ -1945,3 +1949,82 @@ USHORT WMFWriter::CalcSaveTargetMapMode(MapMode& rMapMode,
  
      return nDivisor;
  }
@@ -389,8 +404,8 @@ diff -rup svtools-orig-1/source/filter.vcl/wmf/wmfwr.cxx svtools/source/filter.v
 +                nCurSize = nRemainingSize;
 +                nRemainingSize = 0;
 +            }
-+            WriteEMFRecord( aStream, 
-+                            nCurSize, 
++            WriteEMFRecord( aStream,
++                            nCurSize,
 +                            nRemainingSize,
 +                            nTotalSize,
 +                            nRecCounts,
@@ -399,14 +414,14 @@ diff -rup svtools-orig-1/source/filter.vcl/wmf/wmfwr.cxx svtools/source/filter.v
 +        }
 +    }
 +}
-+   
++
 +// ------------------------------------------------------------------------
 +
 +void WMFWriter::WriteEMFRecord( SvStream& rStream, sal_uInt32 nCurSize, sal_uInt32 nRemainingSize,
 +                sal_uInt32 nTotalSize, sal_uInt32 nRecCounts, sal_uInt16 nCheckSum )
 +{
 +   // according to http://msdn.microsoft.com/en-us/library/dd366152%28PROT.13%29.aspx
-+   WriteRecordHeader( 0, W_META_ESCAPE ); 
++   WriteRecordHeader( 0, W_META_ESCAPE );
 +   *pWMF << (sal_uInt16)W_MFCOMMENT     // same as META_ESCAPE_ENHANCED_METAFILE
 +          << (sal_uInt16)( nCurSize + 34 )	// we will always have a 34 byte escape header:
 +          << (sal_uInt32) 0x43464D57		// WMFC
@@ -423,13 +438,14 @@ diff -rup svtools-orig-1/source/filter.vcl/wmf/wmfwr.cxx svtools/source/filter.v
 +   sal_uInt32 nCount = rStream.Read( pBuf, nCurSize );
 +   if( nCount == nCurSize )
 +       pWMF->Write( pBuf, nCount );
-+   delete[] pBuf; 
++   delete[] pBuf;
 +   UpdateRecordHeader();
 +}
-diff -rup svtools-orig-1/source/filter.vcl/wmf/wmfwr.hxx svtools/source/filter.vcl/wmf/wmfwr.hxx
---- svtools-orig-1/source/filter.vcl/wmf/wmfwr.hxx	2009-12-08 18:01:50.000000000 +0100
-+++ svtools/source/filter.vcl/wmf/wmfwr.hxx	2009-12-08 18:02:03.000000000 +0100
-@@ -128,6 +128,8 @@ private:
+diff --git a/svtools/source/filter.vcl/wmf/wmfwr.hxx b/svtools/source/filter.vcl/wmf/wmfwr.hxx
+index 293e6c3..c34ff6a 100644
+--- a/svtools/source/filter.vcl/wmf/wmfwr.hxx
++++ b/svtools/source/filter.vcl/wmf/wmfwr.hxx
+@@ -125,6 +125,8 @@ private:
      ULONG nWrittenBitmaps;  // Anzahl der bereits geschriebenen Bitmaps
      ULONG nActBitmapPercent; // Wieviel Prozent die naechste Bitmap schon geschrieben ist.
  
@@ -438,12 +454,12 @@ diff -rup svtools-orig-1/source/filter.vcl/wmf/wmfwr.hxx svtools/source/filter.v
      void MayCallback();
          // Berechnet anhand der obigen 5 Parameter eine Prozentzahl
          // und macht dann ggf. einen Callback. Setzt bStatus auf FALSE wenn User abbrechen
-@@ -207,6 +209,13 @@ private:
+@@ -204,6 +206,13 @@ private:
      void WriteHeader(const GDIMetaFile & rMTF, BOOL bPlaceable);
      void UpdateHeader();
  
 +    void WriteEmbeddedEMF( const GDIMetaFile& rMTF );
-+    void WriteEMFRecord( SvStream& rStream, sal_uInt32 nCurSize, 
++    void WriteEMFRecord( SvStream& rStream, sal_uInt32 nCurSize,
 +                            sal_uInt32 nRemainingSize,
 +                            sal_uInt32 nTotalSize,
 +                            sal_uInt32 nRecCounts,
@@ -452,3 +468,6 @@ diff -rup svtools-orig-1/source/filter.vcl/wmf/wmfwr.hxx svtools/source/filter.v
      USHORT CalcSaveTargetMapMode(MapMode& rMapMode, const Size& rPrefSize);
  
  public:
+-- 
+1.7.0.1
+

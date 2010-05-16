@@ -1,23 +1,48 @@
-diff --git forms/source/misc/InterfaceContainer.cxx forms/source/misc/InterfaceContainer.cxx
-index 2879d2c..60796d3 100644
---- forms/source/misc/InterfaceContainer.cxx
-+++ forms/source/misc/InterfaceContainer.cxx
-@@ -148,9 +148,9 @@ OInterfaceContainer::fakeVbaEventsHack(  sal_Int32 _nIndex )
- 			{
- 				try
- 				{
+From 9c77225910a7bc637ecbaf83659502c816866621 Mon Sep 17 00:00:00 2001
+From: Jan Holesovsky <kendy@suse.cz>
+Date: Fri, 14 May 2010 17:00:03 +0200
+Subject: [PATCH 392/878] vba-dont-load-for-odf.diff
+
+---
+ forms/source/misc/InterfaceContainer.cxx    |    2 +-
+ sc/source/core/data/documen2.cxx            |    3 +-
+ sc/source/core/tool/interpr4.cxx            |    4 +-
+ sc/source/filter/excel/excimp8.cxx          |   11 ++++
+ sc/source/ui/docshell/docsh.cxx             |    2 +
+ sc/source/ui/docshell/docsh2.cxx            |    2 +
+ sc/source/ui/unoobj/servuno.cxx             |   18 +++++--
+ sc/util/makefile.mk                         |    1 -
+ svx/source/form/fmundo.cxx                  |   47 ++++++++++-------
+ sw/source/core/doc/doc.cxx                  |    3 +-
+ sw/source/core/unocore/unocoll.cxx          |   13 +++--
+ sw/util/makefile.mk                         |    1 -
+ vbahelper/inc/vbahelper/vbaaccesshelper.hxx |   79 +++++++++++++++++++++++++++
+ vbahelper/inc/vbahelper/vbahelper.hxx       |   12 +++--
+ vbahelper/prj/d.lst                         |    1 +
+ vbahelper/source/vbahelper/vbahelper.cxx    |   16 ------
+ 16 files changed, 158 insertions(+), 57 deletions(-)
+ create mode 100644 vbahelper/inc/vbahelper/vbaaccesshelper.hxx
+
+diff --git a/forms/source/misc/InterfaceContainer.cxx b/forms/source/misc/InterfaceContainer.cxx
+index de4e1a2..6b7acbc 100644
+--- a/forms/source/misc/InterfaceContainer.cxx
++++ b/forms/source/misc/InterfaceContainer.cxx
+@@ -145,9 +145,9 @@ OInterfaceContainer::fakeVbaEventsHack(  sal_Int32 _nIndex )
+             {
+                 try
+                 {
 +                    Reference< XCodeNameQuery > xNameQuery(  xDocFac->createInstance( rtl::OUString::createFromAscii( "ooo.vba.VBACodeNameProvider" ) ), UNO_QUERY_THROW );
- 					Reference< ooo::vba::XVBAToOOEventDescGen > xDescSupplier( xFac->createInstance( rtl::OUString::createFromAscii( "ooo.vba.VBAToOOEventDesc" ) ), UNO_QUERY_THROW );
- 					Reference< XInterface > xIf( getByIndex( _nIndex ) , UNO_QUERY_THROW );
--					Reference< XCodeNameQuery > xNameQuery(  xDocFac->createInstance( rtl::OUString::createFromAscii( "ooo.vba.VBACodeNameProvider" ) ), UNO_QUERY_THROW );
- 					rtl::OUString sCodeName;	
- 					sCodeName = xNameQuery->getCodeNameForObject( xIf );
- 					Reference< XPropertySet > xProps( xIf, UNO_QUERY );
-diff --git sc/source/core/data/documen2.cxx sc/source/core/data/documen2.cxx
-index 2a34517..e1a63f6 100644
---- sc/source/core/data/documen2.cxx
-+++ sc/source/core/data/documen2.cxx
-@@ -98,6 +98,7 @@
+                     Reference< ooo::vba::XVBAToOOEventDescGen > xDescSupplier( xFac->createInstance( rtl::OUString::createFromAscii( "ooo.vba.VBAToOOEventDesc" ) ), UNO_QUERY_THROW );
+                     Reference< XInterface > xIf( getByIndex( _nIndex ) , UNO_QUERY_THROW );
+-                    Reference< XCodeNameQuery > xNameQuery(  xDocFac->createInstance( rtl::OUString::createFromAscii( "ooo.vba.VBACodeNameProvider" ) ), UNO_QUERY_THROW );
+                     rtl::OUString sCodeName;
+                     sCodeName = xNameQuery->getCodeNameForObject( xIf );
+                     Reference< XPropertySet > xProps( xIf, UNO_QUERY );
+diff --git a/sc/source/core/data/documen2.cxx b/sc/source/core/data/documen2.cxx
+index 5b4e826..a732d8d 100644
+--- a/sc/source/core/data/documen2.cxx
++++ b/sc/source/core/data/documen2.cxx
+@@ -95,6 +95,7 @@
  #include "clipparam.hxx"
  #include "macromgr.hxx"
  #include <com/sun/star/document/XVbaEventsHelper.hpp>
@@ -25,20 +50,20 @@ index 2a34517..e1a63f6 100644
  
  // pImpl because including lookupcache.hxx in document.hxx isn't wanted, and
  // dtor plus helpers are convenient.
-@@ -1268,7 +1269,7 @@ using namespace com::sun::star;
- uno::Reference< document::XVbaEventsHelper > 
+@@ -1257,7 +1258,7 @@ using namespace com::sun::star;
+ uno::Reference< document::XVbaEventsHelper >
  ScDocument::GetVbaEventsHelper()
  {
--	if( !mxVbaEventsHelper.is() )
+-    if( !mxVbaEventsHelper.is() )
 +    if( !mxVbaEventsHelper.is() && pShell && ooo::vba::isAlienExcelDoc( *pShell ) )
- 	{
+     {
          try
          {
-diff --git sc/source/core/tool/interpr4.cxx sc/source/core/tool/interpr4.cxx
-index 9a3359f..aa0c6f0 100644
---- sc/source/core/tool/interpr4.cxx
-+++ sc/source/core/tool/interpr4.cxx
-@@ -81,8 +81,8 @@
+diff --git a/sc/source/core/tool/interpr4.cxx b/sc/source/core/tool/interpr4.cxx
+index a4e9af2..03e9c90 100644
+--- a/sc/source/core/tool/interpr4.cxx
++++ b/sc/source/core/tool/interpr4.cxx
+@@ -78,8 +78,8 @@
  #include <map>
  #include <algorithm>
  #include <functional>
@@ -48,23 +73,23 @@ index 9a3359f..aa0c6f0 100644
  #include <memory>
  
  using namespace com::sun::star;
-@@ -2702,7 +2702,7 @@ lcl_setVBARange( ScRange& aRange, ScDocument* pDok, SbxVariable* pPar )
- 		uno::Sequence< uno::Any > aArgs(2);
- 		aArgs[0] = uno::Any( uno::Reference< uno::XInterface >() ); // dummy parent
- 		aArgs[1] = uno::Any( xCellRange );
--		xVBARange = ov::createVBAUnoAPIServiceWithArgs( pDok->GetDocumentShell(), "ooo.vba.excel.Range", aArgs );
+@@ -2710,7 +2710,7 @@ lcl_setVBARange( ScRange& aRange, ScDocument* pDok, SbxVariable* pPar )
+         uno::Sequence< uno::Any > aArgs(2);
+         aArgs[0] = uno::Any( uno::Reference< uno::XInterface >() ); // dummy parent
+         aArgs[1] = uno::Any( xCellRange );
+-        xVBARange = ov::createVBAUnoAPIServiceWithArgs( pDok->GetDocumentShell(), "ooo.vba.excel.Range", aArgs );
 +        xVBARange = ooo::vba::createVBAUnoAPIServiceWithArgs( pDok->GetDocumentShell(), "ooo.vba.excel.Range", aArgs );
- 		if ( xVBARange.is() )
- 		{
- 			String sDummy(RTL_CONSTASCII_USTRINGPARAM("A-Range") );
-diff --git sc/source/filter/excel/excimp8.cxx sc/source/filter/excel/excimp8.cxx
-index 53d0ba6..a42f0b1 100644
---- sc/source/filter/excel/excimp8.cxx
-+++ sc/source/filter/excel/excimp8.cxx
-@@ -278,6 +278,17 @@ void ImportExcel8::ReadBasic( void )
+         if ( xVBARange.is() )
+         {
+             String sDummy(RTL_CONSTASCII_USTRINGPARAM("A-Range") );
+diff --git a/sc/source/filter/excel/excimp8.cxx b/sc/source/filter/excel/excimp8.cxx
+index 05c4384..32a529a 100644
+--- a/sc/source/filter/excel/excimp8.cxx
++++ b/sc/source/filter/excel/excimp8.cxx
+@@ -275,6 +275,17 @@ void ImportExcel8::ReadBasic( void )
          {
              SvxImportMSVBasic aBasicImport( *pShell, *xRootStrg, bLoadCode, bLoadStrg );
- 	    bool bAsComment = !bLoadExecutable;
+         bool bAsComment = !bLoadExecutable;
 +            if ( !bAsComment )
 +            {
 +                 uno::Any aGlobs;
@@ -79,19 +104,19 @@ index 53d0ba6..a42f0b1 100644
              aBasicImport.Import( EXC_STORAGE_VBA_PROJECT, EXC_STORAGE_VBA, bAsComment );
              if ( !bAsComment )
              {
-diff --git sc/source/ui/docshell/docsh.cxx sc/source/ui/docshell/docsh.cxx
-index fa4028e..c6322f1 100644
---- sc/source/ui/docshell/docsh.cxx
-+++ sc/source/ui/docshell/docsh.cxx
-@@ -373,6 +373,7 @@ void ScDocShell::AfterXMLLoading(sal_Bool bRet)
+diff --git a/sc/source/ui/docshell/docsh.cxx b/sc/source/ui/docshell/docsh.cxx
+index 4e3ae87..5bc2743 100644
+--- a/sc/source/ui/docshell/docsh.cxx
++++ b/sc/source/ui/docshell/docsh.cxx
+@@ -370,6 +370,7 @@ void ScDocShell::AfterXMLLoading(sal_Bool bRet)
      }
      else
          aDocument.SetInsertingFromOtherDoc( FALSE );
 +#if 0
- 	// add vba globals ( if they are availabl )
- 	uno::Any aGlobs;
+     // add vba globals ( if they are availabl )
+     uno::Any aGlobs;
          uno::Sequence< uno::Any > aArgs(1);
-@@ -399,6 +400,7 @@ void ScDocShell::AfterXMLLoading(sal_Bool bRet)
+@@ -396,6 +397,7 @@ void ScDocShell::AfterXMLLoading(sal_Bool bRet)
          if ( xEvt.is() )
              xEvt->setIgnoreEvents( sal_False );
  #endif
@@ -99,19 +124,19 @@ index fa4028e..c6322f1 100644
      aDocument.SetImportingXML( FALSE );
      aDocument.EnableExecuteLink( true );
      aDocument.EnableUndo( TRUE );
-diff --git sc/source/ui/docshell/docsh2.cxx sc/source/ui/docshell/docsh2.cxx
-index fb9edd0..eaa124d 100644
---- sc/source/ui/docshell/docsh2.cxx
-+++ sc/source/ui/docshell/docsh2.cxx
-@@ -105,6 +105,7 @@ BOOL __EXPORT ScDocShell::InitNew( const uno::Reference < embed::XStorage >& xSt
+diff --git a/sc/source/ui/docshell/docsh2.cxx b/sc/source/ui/docshell/docsh2.cxx
+index 91a9204..8ca6e5f 100644
+--- a/sc/source/ui/docshell/docsh2.cxx
++++ b/sc/source/ui/docshell/docsh2.cxx
+@@ -102,6 +102,7 @@ BOOL __EXPORT ScDocShell::InitNew( const uno::Reference < embed::XStorage >& xSt
  
      InitItems();
      CalcOutputFactor();
 +#if 0
- 	uno::Any aGlobs;
+     uno::Any aGlobs;
          uno::Sequence< uno::Any > aArgs(1);
          aArgs[ 0 ] <<= GetModel();
-@@ -124,6 +125,7 @@ BOOL __EXPORT ScDocShell::InitNew( const uno::Reference < embed::XStorage >& xSt
+@@ -121,6 +122,7 @@ BOOL __EXPORT ScDocShell::InitNew( const uno::Reference < embed::XStorage >& xSt
          BasicManager* pAppMgr = SFX_APP()->GetBasicManager();
          if ( pAppMgr )
              pAppMgr->SetGlobalUNOConstant( "ThisExcelDoc", aArgs[ 0 ] );
@@ -119,11 +144,11 @@ index fb9edd0..eaa124d 100644
  
      return bRet;
  }
-diff --git sc/source/ui/unoobj/servuno.cxx sc/source/ui/unoobj/servuno.cxx
-index 582a730..d4c5cd4 100644
---- sc/source/ui/unoobj/servuno.cxx
-+++ sc/source/ui/unoobj/servuno.cxx
-@@ -69,7 +69,7 @@
+diff --git a/sc/source/ui/unoobj/servuno.cxx b/sc/source/ui/unoobj/servuno.cxx
+index aec4384..e97bf57 100644
+--- a/sc/source/ui/unoobj/servuno.cxx
++++ b/sc/source/ui/unoobj/servuno.cxx
+@@ -66,7 +66,7 @@
  #include <com/sun/star/script/ScriptEventDescriptor.hpp>
  #include <comphelper/componentcontext.hxx>
  #include <cppuhelper/component_context.hxx>
@@ -132,7 +157,7 @@ index 582a730..d4c5cd4 100644
  using namespace ::com::sun::star;
  
  class ScVbaObjectForCodeNameProvider : public ::cppu::WeakImplHelper1< container::XNameAccess >
-@@ -87,7 +87,7 @@ public:
+@@ -84,7 +84,7 @@ public:
          uno::Sequence< uno::Any > aArgs(2);
          aArgs[0] = uno::Any( uno::Reference< uno::XInterface >() );
          aArgs[1] = uno::Any( mpDocShell->GetModel() );
@@ -141,7 +166,7 @@ index 582a730..d4c5cd4 100644
      }
  
      virtual ::sal_Bool SAL_CALL hasByName( const ::rtl::OUString& aName ) throw (::com::sun::star::uno::RuntimeException )
-@@ -120,7 +120,7 @@ public:
+@@ -117,7 +117,7 @@ public:
                          aArgs[0] = maWorkbook;
                          aArgs[1] = uno::Any( xModel );
                          aArgs[2] = uno::Any( rtl::OUString( sSheetName ) );
@@ -150,7 +175,7 @@ index 582a730..d4c5cd4 100644
                          break;
                      }
                  }
-@@ -535,10 +535,18 @@ uno::Reference<uno::XInterface> ScServiceProvider::MakeInstance(
+@@ -532,10 +532,18 @@ uno::Reference<uno::XInterface> ScServiceProvider::MakeInstance(
              }
              break;
          case SC_SERVICE_VBAOBJECTPROVIDER:
@@ -171,53 +196,53 @@ index 582a730..d4c5cd4 100644
              break;
      }
      return xRet;
-diff --git sc/util/makefile.mk sc/util/makefile.mk
-index 9dd9be3..022cbe7 100644
---- sc/util/makefile.mk
-+++ sc/util/makefile.mk
-@@ -79,7 +79,6 @@ SHL1IMPLIB= sci
+diff --git a/sc/util/makefile.mk b/sc/util/makefile.mk
+index a20cc03..cccfae0 100644
+--- a/sc/util/makefile.mk
++++ b/sc/util/makefile.mk
+@@ -75,7 +75,6 @@ SHL1IMPLIB= sci
  
  # dynamic libraries
  SHL1STDLIBS=       \
--		$(VBAHELPERLIB) \
+-        $(VBAHELPERLIB) \
      $(BASICLIB)	\
      $(SFXLIB)		\
      $(SVTOOLLIB)	\
-diff --git svx/source/form/fmundo.cxx svx/source/form/fmundo.cxx
-index c438b74..9c91b48 100644
---- svx/source/form/fmundo.cxx
-+++ svx/source/form/fmundo.cxx
-@@ -98,25 +98,7 @@ class ScriptEventListenerWrapper : public ScriptEventListener_BASE
+diff --git a/svx/source/form/fmundo.cxx b/svx/source/form/fmundo.cxx
+index 5082693..6112fdc 100644
+--- a/svx/source/form/fmundo.cxx
++++ b/svx/source/form/fmundo.cxx
+@@ -95,25 +95,7 @@ class ScriptEventListenerWrapper : public ScriptEventListener_BASE
  public:
- 	ScriptEventListenerWrapper( FmFormModel& _rModel) throw ( RuntimeException ) : pModel(&_rModel) 
- 	{
--		Reference < XPropertySet > xProps(
--			::comphelper::getProcessServiceFactory(), UNO_QUERY );
--		if ( xProps.is() )
--		{
--			Reference< XComponentContext > xCtx( xProps->getPropertyValue(
--				rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( "DefaultContext" ))), UNO_QUERY );
--			if ( xCtx.is() )
--			{
--				Reference< XMultiComponentFactory > xMFac( 
--					xCtx->getServiceManager(), UNO_QUERY );
--				if ( xMFac.is() )
--				{
--					m_vbaListener.set( xMFac->createInstanceWithContext( 
--						rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( 
--							"ooo.vba.EventListener"  ) ), xCtx ), 
--								UNO_QUERY_THROW );
--				}
--			}
--		}
+     ScriptEventListenerWrapper( FmFormModel& _rModel) throw ( RuntimeException ) : pModel(&_rModel)
+     {
+-        Reference < XPropertySet > xProps(
+-            ::comphelper::getProcessServiceFactory(), UNO_QUERY );
+-        if ( xProps.is() )
+-        {
+-            Reference< XComponentContext > xCtx( xProps->getPropertyValue(
+-                rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( "DefaultContext" ))), UNO_QUERY );
+-            if ( xCtx.is() )
+-            {
+-                Reference< XMultiComponentFactory > xMFac(
+-                    xCtx->getServiceManager(), UNO_QUERY );
+-                if ( xMFac.is() )
+-                {
+-                    m_vbaListener.set( xMFac->createInstanceWithContext(
+-                        rtl::OUString( RTL_CONSTASCII_USTRINGPARAM(
+-                            "ooo.vba.EventListener"  ) ), xCtx ),
+-                                UNO_QUERY_THROW );
+-                }
+-            }
+-        }
 +
- 	}
+     }
      // XEventListener
      virtual void SAL_CALL disposing(const EventObject& ) throw( RuntimeException ){}
-@@ -144,6 +126,33 @@ public:
+@@ -141,6 +123,33 @@ public:
  private:
- 	void setModel()
- 	{
+     void setModel()
+     {
 +        if ( !m_vbaListener.is() )
 +                {
 +            Reference < XPropertySet > xProps(
@@ -228,31 +253,31 @@ index c438b74..9c91b48 100644
 +                rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( "DefaultContext" ))), UNO_QUERY );
 +                if ( xCtx.is() )
 +                {
-+                    Reference< XMultiComponentFactory > xMFac( 
++                    Reference< XMultiComponentFactory > xMFac(
 +                    xCtx->getServiceManager(), UNO_QUERY );
 +                    SfxObjectShellRef xObjSh = pModel->GetObjectShell();
 +                    Reference< XMultiServiceFactory > xDocFac;
 +                    if ( xObjSh.Is() )
 +                        xDocFac.set( xObjSh->GetModel(), UNO_QUERY );
-+  
++
 +                    if ( xMFac.is() )
 +                    {
-+                        m_vbaListener.set( xMFac->createInstanceWithContext( 
-+                            rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( 
-+                                "ooo.vba.EventListener"  ) ), xCtx ), 
++                        m_vbaListener.set( xMFac->createInstanceWithContext(
++                            rtl::OUString( RTL_CONSTASCII_USTRINGPARAM(
++                                "ooo.vba.EventListener"  ) ), xCtx ),
 +                                    UNO_QUERY_THROW );
 +                    }
 +                }
 +            }
 +        }
- 		Reference< XPropertySet > xProps( m_vbaListener, UNO_QUERY );
- 		if ( xProps.is() )
- 		{
-diff --git sw/source/core/doc/doc.cxx sw/source/core/doc/doc.cxx
-index 503025d..88300a3 100644
---- sw/source/core/doc/doc.cxx
-+++ sw/source/core/doc/doc.cxx
-@@ -110,6 +110,7 @@
+         Reference< XPropertySet > xProps( m_vbaListener, UNO_QUERY );
+         if ( xProps.is() )
+         {
+diff --git a/sw/source/core/doc/doc.cxx b/sw/source/core/doc/doc.cxx
+index a223dc7..1f61019 100644
+--- a/sw/source/core/doc/doc.cxx
++++ b/sw/source/core/doc/doc.cxx
+@@ -107,6 +107,7 @@
  
  #include <osl/diagnose.h>
  #include <osl/interlck.h>
@@ -260,20 +285,20 @@ index 503025d..88300a3 100644
  
  /* @@@MAINTAINABILITY-HORROR@@@
     Probably unwanted dependency on SwDocShell
-@@ -2010,7 +2011,7 @@ void SwDoc::ChkCondColls()
- uno::Reference< document::XVbaEventsHelper > 
+@@ -2007,7 +2008,7 @@ void SwDoc::ChkCondColls()
+ uno::Reference< document::XVbaEventsHelper >
  SwDoc::GetVbaEventsHelper()
  {
--	if( !mxVbaEventsHelper.is() )
+-    if( !mxVbaEventsHelper.is() )
 +    if( !mxVbaEventsHelper.is() && GetDocShell() && ooo::vba::isAlienWordDoc( *GetDocShell() ) )
- 	{
+     {
          try
          {
-diff --git sw/source/core/unocore/unocoll.cxx sw/source/core/unocore/unocoll.cxx
-index 7b1d66e..518bc8b 100644
---- sw/source/core/unocore/unocoll.cxx
-+++ sw/source/core/unocore/unocoll.cxx
-@@ -84,7 +84,7 @@
+diff --git a/sw/source/core/unocore/unocoll.cxx b/sw/source/core/unocore/unocoll.cxx
+index 73acb2d..25c8297 100644
+--- a/sw/source/core/unocore/unocoll.cxx
++++ b/sw/source/core/unocore/unocoll.cxx
+@@ -81,7 +81,7 @@
  #include <com/sun/star/script/ModuleInfo.hpp>
  #include <com/sun/star/script/ModuleType.hpp>
  #include <com/sun/star/script/ScriptEventDescriptor.hpp>
@@ -282,8 +307,8 @@ index 7b1d66e..518bc8b 100644
  #include <basic/basmgr.hxx>
  
  using ::rtl::OUString;
-@@ -258,7 +258,7 @@ public:
- 	uno::Sequence< uno::Any > aArgs( 2 );
+@@ -255,7 +255,7 @@ public:
+     uno::Sequence< uno::Any > aArgs( 2 );
          aArgs[0] = uno::Any( uno::Reference< uno::XInterface >() );
          aArgs[1] = uno::Any( mpDocShell->GetModel() );
 -        uno::Reference< uno::XInterface > xDocObj = ov::createVBAUnoAPIServiceWithArgs( mpDocShell, "ooo.vba.word.Document" , aArgs );
@@ -291,129 +316,49 @@ index 7b1d66e..518bc8b 100644
          OSL_TRACE("Creating Object ( ooo.vba.word.Document ) 0x%x", xDocObj.get() );
          return  uno::makeAny( xDocObj );
      }
-@@ -586,14 +586,17 @@ uno::Reference< uno::XInterface >   SwXServiceProvider::MakeInstance(sal_uInt16
- 		break;
- 		case  SW_SERVICE_VBACODENAMEPROVIDER :
- 		{
--			SwVbaCodeNameProvider* pObjProv = new SwVbaCodeNameProvider( pDoc->GetDocShell() );
--			xRet =  (cppu::OWeakObject*)pObjProv;
+@@ -583,14 +583,17 @@ uno::Reference< uno::XInterface >   SwXServiceProvider::MakeInstance(sal_uInt16
+         break;
+         case  SW_SERVICE_VBACODENAMEPROVIDER :
+         {
+-            SwVbaCodeNameProvider* pObjProv = new SwVbaCodeNameProvider( pDoc->GetDocShell() );
+-            xRet =  (cppu::OWeakObject*)pObjProv;
 +            if ( pDoc->GetDocShell()  && ooo::vba::isAlienWordDoc( *pDoc->GetDocShell() ) )
 +            {
 +                SwVbaCodeNameProvider* pObjProv = new SwVbaCodeNameProvider( pDoc->GetDocShell() );
 +                xRet =  (cppu::OWeakObject*)pObjProv;
 +            }
- 		}
- 		break;
- 		case  SW_SERVICE_VBAPROJECTNAMEPROVIDER :
- 		{
+         }
+         break;
+         case  SW_SERVICE_VBAPROJECTNAMEPROVIDER :
+         {
                          uno::Reference< container::XNameContainer > xProjProv = pDoc->GetVBATemplateToProjectCache();
 -                        if ( !xProjProv.is() )
 +                        if ( !xProjProv.is() && pDoc->GetDocShell()  && ooo::vba::isAlienWordDoc( *pDoc->GetDocShell() ) )
                          {
- 			    xProjProv = new SwVbaProjectNameProvider( pDoc->GetDocShell() );
+                 xProjProv = new SwVbaProjectNameProvider( pDoc->GetDocShell() );
                              pDoc->SetVBATemplateToProjectCache( xProjProv );
-diff --git sw/util/makefile.mk sw/util/makefile.mk
-index 0396bd1..d126138 100644
---- sw/util/makefile.mk
-+++ sw/util/makefile.mk
-@@ -127,7 +127,6 @@ SHL1STDLIBS+= \
+diff --git a/sw/util/makefile.mk b/sw/util/makefile.mk
+index 88f6731..6c74b8f 100644
+--- a/sw/util/makefile.mk
++++ b/sw/util/makefile.mk
+@@ -123,7 +123,6 @@ SHL1STDLIBS+= \
      $(SALHELPERLIB) \
      $(ICUUCLIB) \
      $(I18NUTILLIB)	\
--		        $(VBAHELPERLIB) \
+-                $(VBAHELPERLIB) \
      $(AVMEDIALIB)
  
  .IF "$(GUI)"=="WNT"
-diff --git vbahelper/inc/vbahelper/vbahelper.hxx vbahelper/inc/vbahelper/vbahelper.hxx
-index ad3afee..71c4668 100644
---- vbahelper/inc/vbahelper/vbahelper.hxx
-+++ vbahelper/inc/vbahelper/vbahelper.hxx
-@@ -38,17 +38,19 @@
- #include <com/sun/star/lang/IllegalArgumentException.hpp>
- #include <com/sun/star/awt/XControl.hpp>
- #include <com/sun/star/awt/XDevice.hpp>
-+#include <basic/basmgr.hxx>
- #include <basic/sberrors.hxx>
- #include <cppuhelper/implbase1.hxx>
- #include <com/sun/star/frame/XModel.hpp>
- #include <sfx2/dispatch.hxx>
--//#include <ooo/vba/msforms/XShape.hpp>
-+#include <sfx2/objsh.hxx>
-+#include <sfx2/docfilt.hxx>
-+#include <sfx2/docfile.hxx>
- #include <vcl/pointr.hxx>
--#define VBAHELPER_DLLIMPLEMENTATION
--#include <vbahelper/vbadllapi.h>
- #include <memory>
--namespace css = ::com::sun::star;
-+#include "vbaaccesshelper.hxx"
- 
-+namespace css = ::com::sun::star;
- namespace ooo 
- {
- 	namespace vba 
-@@ -65,7 +67,7 @@ namespace ooo
- 		}
-         VBAHELPER_DLLPUBLIC SfxObjectShell* getSfxObjShell( const css::uno::Reference< css::frame::XModel >& xModel ) throw ( css::uno::RuntimeException);
-         VBAHELPER_DLLPUBLIC css::uno::Reference< css::uno::XInterface > createVBAUnoAPIService( SfxObjectShell* pShell,  const sal_Char* _pAsciiName ) throw (css::uno::RuntimeException);
--        VBAHELPER_DLLPUBLIC css::uno::Reference< css::uno::XInterface > createVBAUnoAPIServiceWithArgs( SfxObjectShell* pShell,  const sal_Char* _pAsciiName, const css::uno::Sequence< css::uno::Any >& aArgs ) throw (css::uno::RuntimeException);
-+
-         css::uno::Reference< css::frame::XModel > getCurrentDoc( const rtl::OUString& sKey ) throw (css::uno::RuntimeException);
-         VBAHELPER_DLLPUBLIC css::uno::Reference< css::frame::XModel > getCurrentExcelDoc( const css::uno::Reference< css::uno::XComponentContext >& xContext ) throw (css::uno::RuntimeException);
-         VBAHELPER_DLLPUBLIC css::uno::Reference< css::frame::XModel > getCurrentWordDoc( const css::uno::Reference< css::uno::XComponentContext >& xContext ) throw (css::uno::RuntimeException);
-diff --git vbahelper/prj/d.lst vbahelper/prj/d.lst
-index 6c547ab..cf56fc4 100644
---- vbahelper/prj/d.lst
-+++ vbahelper/prj/d.lst
-@@ -8,6 +8,7 @@
- mkdir: %_DEST%\inc%_EXT%\basic
- ..\inc\vbahelper\vbacollectionimpl.hxx %_DEST%\inc%_EXT%\vbahelper\vbacollectionimpl.hxx
- ..\inc\vbahelper\vbahelper.hxx %_DEST%\inc%_EXT%\vbahelper\vbahelper.hxx
-+..\inc\vbahelper\vbaaccesshelper.hxx %_DEST%\inc%_EXT%\vbahelper\vbaaccesshelper.hxx
- ..\inc\vbahelper\helperdecl.hxx %_DEST%\inc%_EXT%\vbahelper\helperdecl.hxx
- ..\inc\vbahelper\vbahelperinterface.hxx %_DEST%\inc%_EXT%\vbahelper\vbahelperinterface.hxx
- ..\inc\vbahelper\vbaapplicationbase.hxx %_DEST%\inc%_EXT%\vbahelper\vbaapplicationbase.hxx
-diff --git vbahelper/source/vbahelper/vbahelper.cxx vbahelper/source/vbahelper/vbahelper.cxx
-index cb50a15..b610502 100644
---- vbahelper/source/vbahelper/vbahelper.cxx
-+++ vbahelper/source/vbahelper/vbahelper.cxx
-@@ -102,15 +102,6 @@ namespace ooo
- namespace vba
- {
- 
--uno::Reference< lang::XMultiServiceFactory > getVBAServiceFactory( SfxObjectShell* pShell )
--{
--    uno::Any aUnoVar;
--    if ( !pShell || ! pShell->GetBasicManager()->GetGlobalUNOConstant( "VBAGlobals", aUnoVar ) )
--        throw lang::IllegalArgumentException();
--    uno::Reference< lang::XMultiServiceFactory > xVBAFactory( aUnoVar, uno::UNO_QUERY_THROW );
--    return xVBAFactory;
--}
--
- css::uno::Reference< css::uno::XInterface > createVBAUnoAPIService( SfxObjectShell* pShell, const sal_Char* _pAsciiName ) throw (css::uno::RuntimeException)
- {
-     OSL_PRECOND( pShell, "createVBAUnoAPIService: no shell!" );
-@@ -118,13 +109,6 @@ css::uno::Reference< css::uno::XInterface > createVBAUnoAPIService( SfxObjectShe
-     return getVBAServiceFactory( pShell )->createInstance( sVarName );
- }
- 
--css::uno::Reference< css::uno::XInterface > createVBAUnoAPIServiceWithArgs( SfxObjectShell* pShell, const sal_Char* _pAsciiName, const uno::Sequence< uno::Any >& aArgs ) throw ( css::uno::RuntimeException )
--{
--    OSL_PRECOND( pShell, "createVBAUnoAPIService: no shell!" );
--    ::rtl::OUString sVarName( ::rtl::OUString::createFromAscii( _pAsciiName ) );
--    uno::Reference< uno::XInterface > xIf = getVBAServiceFactory( pShell )->createInstanceWithArguments( sVarName, aArgs  );
--    return xIf;
--}
- // helper method to determine if the view ( calc ) is in print-preview mode
- bool isInPrintPreview( SfxViewFrame* pView )
- {
---- /dev/null	2009-04-14 11:16:40.000000000 +0100
-+++ vbahelper/inc/vbahelper/vbaaccesshelper.hxx	2009-12-18 10:27:31.000000000 +0000
+diff --git a/vbahelper/inc/vbahelper/vbaaccesshelper.hxx b/vbahelper/inc/vbahelper/vbaaccesshelper.hxx
+new file mode 100644
+index 0000000..79bb44c
+--- /dev/null
++++ b/vbahelper/inc/vbahelper/vbaaccesshelper.hxx
 @@ -0,0 +1,79 @@
 +/*************************************************************************
 + *
 + * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
-+ * 
++ *
 + * Copyright 2008 by Sun Microsystems, Inc.
 + *
 + * OpenOffice.org - a multi-platform office productivity suite
@@ -451,9 +396,9 @@ index cb50a15..b610502 100644
 +#include <vbahelper/vbadllapi.h>
 +#include <memory>
 +namespace css = ::com::sun::star;
-+namespace ooo 
++namespace ooo
 +{
-+    namespace vba 
++    namespace vba
 +    {
 +
 +        VBAHELPER_DLLPRIVATE inline css::uno::Reference< css::lang::XMultiServiceFactory > getVBAServiceFactory( SfxObjectShell* pShell )
@@ -489,3 +434,89 @@ index cb50a15..b610502 100644
 +} // org
 +
 +#endif
+diff --git a/vbahelper/inc/vbahelper/vbahelper.hxx b/vbahelper/inc/vbahelper/vbahelper.hxx
+index 8ec59f8..89b0298 100644
+--- a/vbahelper/inc/vbahelper/vbahelper.hxx
++++ b/vbahelper/inc/vbahelper/vbahelper.hxx
+@@ -38,17 +38,19 @@
+ #include <com/sun/star/lang/IllegalArgumentException.hpp>
+ #include <com/sun/star/awt/XControl.hpp>
+ #include <com/sun/star/awt/XDevice.hpp>
++#include <basic/basmgr.hxx>
+ #include <basic/sberrors.hxx>
+ #include <cppuhelper/implbase1.hxx>
+ #include <com/sun/star/frame/XModel.hpp>
+ #include <sfx2/dispatch.hxx>
+-//#include <ooo/vba/msforms/XShape.hpp>
++#include <sfx2/objsh.hxx>
++#include <sfx2/docfilt.hxx>
++#include <sfx2/docfile.hxx>
+ #include <vcl/pointr.hxx>
+-#define VBAHELPER_DLLIMPLEMENTATION
+-#include <vbahelper/vbadllapi.h>
+ #include <memory>
+-namespace css = ::com::sun::star;
++#include "vbaaccesshelper.hxx"
+ 
++namespace css = ::com::sun::star;
+ namespace ooo
+ {
+     namespace vba
+@@ -65,7 +67,7 @@ namespace ooo
+         }
+         VBAHELPER_DLLPUBLIC SfxObjectShell* getSfxObjShell( const css::uno::Reference< css::frame::XModel >& xModel ) throw ( css::uno::RuntimeException);
+         VBAHELPER_DLLPUBLIC css::uno::Reference< css::uno::XInterface > createVBAUnoAPIService( SfxObjectShell* pShell,  const sal_Char* _pAsciiName ) throw (css::uno::RuntimeException);
+-        VBAHELPER_DLLPUBLIC css::uno::Reference< css::uno::XInterface > createVBAUnoAPIServiceWithArgs( SfxObjectShell* pShell,  const sal_Char* _pAsciiName, const css::uno::Sequence< css::uno::Any >& aArgs ) throw (css::uno::RuntimeException);
++
+         css::uno::Reference< css::frame::XModel > getCurrentDoc( const rtl::OUString& sKey ) throw (css::uno::RuntimeException);
+         VBAHELPER_DLLPUBLIC css::uno::Reference< css::frame::XModel > getCurrentExcelDoc( const css::uno::Reference< css::uno::XComponentContext >& xContext ) throw (css::uno::RuntimeException);
+         VBAHELPER_DLLPUBLIC css::uno::Reference< css::frame::XModel > getCurrentWordDoc( const css::uno::Reference< css::uno::XComponentContext >& xContext ) throw (css::uno::RuntimeException);
+diff --git a/vbahelper/prj/d.lst b/vbahelper/prj/d.lst
+index db11559..2d20ab1 100644
+--- a/vbahelper/prj/d.lst
++++ b/vbahelper/prj/d.lst
+@@ -8,6 +8,7 @@
+ mkdir: %_DEST%\inc%_EXT%\basic
+ ..\inc\vbahelper\vbacollectionimpl.hxx %_DEST%\inc%_EXT%\vbahelper\vbacollectionimpl.hxx
+ ..\inc\vbahelper\vbahelper.hxx %_DEST%\inc%_EXT%\vbahelper\vbahelper.hxx
++..\inc\vbahelper\vbaaccesshelper.hxx %_DEST%\inc%_EXT%\vbahelper\vbaaccesshelper.hxx
+ ..\inc\vbahelper\helperdecl.hxx %_DEST%\inc%_EXT%\vbahelper\helperdecl.hxx
+ ..\inc\vbahelper\vbahelperinterface.hxx %_DEST%\inc%_EXT%\vbahelper\vbahelperinterface.hxx
+ ..\inc\vbahelper\vbaapplicationbase.hxx %_DEST%\inc%_EXT%\vbahelper\vbaapplicationbase.hxx
+diff --git a/vbahelper/source/vbahelper/vbahelper.cxx b/vbahelper/source/vbahelper/vbahelper.cxx
+index fd99816..2f57755 100644
+--- a/vbahelper/source/vbahelper/vbahelper.cxx
++++ b/vbahelper/source/vbahelper/vbahelper.cxx
+@@ -102,15 +102,6 @@ namespace ooo
+ namespace vba
+ {
+ 
+-uno::Reference< lang::XMultiServiceFactory > getVBAServiceFactory( SfxObjectShell* pShell )
+-{
+-    uno::Any aUnoVar;
+-    if ( !pShell || ! pShell->GetBasicManager()->GetGlobalUNOConstant( "VBAGlobals", aUnoVar ) )
+-        throw lang::IllegalArgumentException();
+-    uno::Reference< lang::XMultiServiceFactory > xVBAFactory( aUnoVar, uno::UNO_QUERY_THROW );
+-    return xVBAFactory;
+-}
+-
+ css::uno::Reference< css::uno::XInterface > createVBAUnoAPIService( SfxObjectShell* pShell, const sal_Char* _pAsciiName ) throw (css::uno::RuntimeException)
+ {
+     OSL_PRECOND( pShell, "createVBAUnoAPIService: no shell!" );
+@@ -118,13 +109,6 @@ css::uno::Reference< css::uno::XInterface > createVBAUnoAPIService( SfxObjectShe
+     return getVBAServiceFactory( pShell )->createInstance( sVarName );
+ }
+ 
+-css::uno::Reference< css::uno::XInterface > createVBAUnoAPIServiceWithArgs( SfxObjectShell* pShell, const sal_Char* _pAsciiName, const uno::Sequence< uno::Any >& aArgs ) throw ( css::uno::RuntimeException )
+-{
+-    OSL_PRECOND( pShell, "createVBAUnoAPIService: no shell!" );
+-    ::rtl::OUString sVarName( ::rtl::OUString::createFromAscii( _pAsciiName ) );
+-    uno::Reference< uno::XInterface > xIf = getVBAServiceFactory( pShell )->createInstanceWithArguments( sVarName, aArgs  );
+-    return xIf;
+-}
+ // helper method to determine if the view ( calc ) is in print-preview mode
+ bool isInPrintPreview( SfxViewFrame* pView )
+ {
+-- 
+1.7.0.1
+

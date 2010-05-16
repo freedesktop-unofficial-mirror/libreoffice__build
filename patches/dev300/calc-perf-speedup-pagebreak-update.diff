@@ -1,8 +1,23 @@
-diff --git sc/inc/document.hxx sc/inc/document.hxx
-index b9f3ee3..7158086 100644
---- sc/inc/document.hxx
-+++ sc/inc/document.hxx
-@@ -1228,7 +1228,6 @@ public:
+From b025a951b7a02248b9386c2a1ef84638b0fd34d9 Mon Sep 17 00:00:00 2001
+From: Jan Holesovsky <kendy@suse.cz>
+Date: Fri, 14 May 2010 16:57:00 +0200
+Subject: [PATCH 238/878] calc-perf-speedup-pagebreak-update.diff
+
+---
+ sc/inc/document.hxx              |    9 --
+ sc/inc/table.hxx                 |   21 ++++-
+ sc/source/core/data/document.cxx |   26 +-----
+ sc/source/core/data/table1.cxx   |    5 +-
+ sc/source/core/data/table2.cxx   |  176 +++++++++++++++++++++++--------------
+ sc/source/core/data/table5.cxx   |   83 +++++++++++++++++-
+ sc/source/ui/view/prevloc.cxx    |    4 +-
+ 7 files changed, 210 insertions(+), 114 deletions(-)
+
+diff --git a/sc/inc/document.hxx b/sc/inc/document.hxx
+index d6372ba..42c04c8 100644
+--- a/sc/inc/document.hxx
++++ b/sc/inc/document.hxx
+@@ -1226,7 +1226,6 @@ public:
      SC_DLLPUBLIC USHORT			GetRowHeight( SCROW nRow, SCTAB nTab ) const;
      SC_DLLPUBLIC ULONG			GetRowHeight( SCROW nStartRow, SCROW nEndRow, SCTAB nTab ) const;
      ULONG			GetScaledRowHeight( SCROW nStartRow, SCROW nEndRow, SCTAB nTab, double fScale ) const;
@@ -10,7 +25,7 @@ index b9f3ee3..7158086 100644
      SC_DLLPUBLIC ULONG			GetColOffset( SCCOL nCol, SCTAB nTab ) const;
      SC_DLLPUBLIC ULONG			GetRowOffset( SCROW nRow, SCTAB nTab ) const;
  
-@@ -1248,9 +1247,6 @@ public:
+@@ -1246,9 +1245,6 @@ public:
                          SCTAB nTab, double fScale ) const;
      SC_DLLPUBLIC inline USHORT	FastGetRowHeight( SCROW nRow, SCTAB nTab ) const;
      inline SCROW	FastGetRowForHeight( SCTAB nTab, ULONG nHeight ) const;
@@ -20,23 +35,23 @@ index b9f3ee3..7158086 100644
  
      SCROW			GetHiddenRowCount( SCROW nRow, SCTAB nTab ) const;
  
-@@ -1838,11 +1834,6 @@ inline SCROW ScDocument::FastGetRowForHeight( SCTAB nTab, ULONG nHeight ) const
- {
+@@ -1837,11 +1833,6 @@ inline SCROW ScDocument::FastGetRowForHeight( SCTAB nTab, ULONG nHeight ) const
      return pTab[nTab]->GetRowForHeight(nHeight);
  }
--
+ 
 -inline USHORT ScDocument::FastGetOriginalRowHeight( SCROW nRow, SCTAB nTab ) const
 -{
 -    return pTab[nTab]->pRowHeight->GetValue(nRow);
 -}
-  
+-
  #endif
  
-diff --git sc/inc/table.hxx sc/inc/table.hxx
-index cf638b2..6547ee6 100644
---- sc/inc/table.hxx
-+++ sc/inc/table.hxx
-@@ -85,6 +85,7 @@ struct ScFunctionData;
+ 
+diff --git a/sc/inc/table.hxx b/sc/inc/table.hxx
+index 4729a33..f5ad8e0 100644
+--- a/sc/inc/table.hxx
++++ b/sc/inc/table.hxx
+@@ -82,6 +82,7 @@ struct ScFunctionData;
  struct ScLineFlags;
  class CollatorWrapper;
  struct ScSetStringParam;
@@ -44,7 +59,7 @@ index cf638b2..6547ee6 100644
  class ScFlatBoolRowSegments;
  class ScFlatBoolColSegments;
  
-@@ -124,7 +125,7 @@ private:
+@@ -121,7 +122,7 @@ private:
      ::std::auto_ptr<ScTableProtection> pTabProtection;
  
      USHORT*			pColWidth;
@@ -53,16 +68,16 @@ index cf638b2..6547ee6 100644
  
      BYTE*			pColFlags;
      ScBitMaskCompressedArray< SCROW, BYTE>*     pRowFlags;
-@@ -605,7 +606,7 @@ public:
+@@ -601,7 +602,7 @@ public:
      void		SetManualHeight( SCROW nStartRow, SCROW nEndRow, BOOL bManual );
  
- 	USHORT		GetColWidth( SCCOL nCol );
+     USHORT		GetColWidth( SCCOL nCol );
 -    SC_DLLPUBLIC USHORT GetRowHeight( SCROW nRow );
 +    SC_DLLPUBLIC USHORT GetRowHeight( SCROW nRow, SCROW* pStartRow = NULL, SCROW* pEndRow = NULL );
- 	ULONG		GetRowHeight( SCROW nStartRow, SCROW nEndRow );
- 	ULONG		GetScaledRowHeight( SCROW nStartRow, SCROW nEndRow, double fScale );
- 	ULONG		GetColOffset( SCCOL nCol );
-@@ -652,8 +653,6 @@ public:
+     ULONG		GetRowHeight( SCROW nStartRow, SCROW nEndRow );
+     ULONG		GetScaledRowHeight( SCROW nStartRow, SCROW nEndRow, double fScale );
+     ULONG		GetColOffset( SCCOL nCol );
+@@ -648,8 +649,6 @@ public:
  
      const ScBitMaskCompressedArray< SCROW, BYTE> * GetRowFlagsArray() const
                      { return pRowFlags; }
@@ -71,19 +86,19 @@ index cf638b2..6547ee6 100644
  
      BOOL		UpdateOutlineCol( SCCOL nStartCol, SCCOL nEndCol, BOOL bShow );
      BOOL		UpdateOutlineRow( SCROW nStartRow, SCROW nEndRow, BOOL bShow );
-@@ -668,6 +667,19 @@ public:
+@@ -664,6 +663,19 @@ public:
      bool        HasColPageBreak(SCCOL nCol) const;
      bool        HasRowManualBreak(SCROW nRow) const;
      bool        HasColManualBreak(SCCOL nCol) const;
 +
-+    /** 
-+     * Get the row position of the next manual break that occurs at or below 
-+     * specified row.  When no more manual breaks are present at or below 
-+     * the specified row, -1 is returned. 
-+     *  
-+     * @param nRow row at which the search begins. 
-+     *  
-+     * @return SCROW next row position with manual page break, or -1 if no 
++    /**
++     * Get the row position of the next manual break that occurs at or below
++     * specified row.  When no more manual breaks are present at or below
++     * the specified row, -1 is returned.
++     *
++     * @param nRow row at which the search begins.
++     *
++     * @return SCROW next row position with manual page break, or -1 if no
 +     *         more manual breaks are present.
 +     */
 +    SCROW       GetNextManualBreak(SCROW nRow) const;
@@ -91,7 +106,7 @@ index cf638b2..6547ee6 100644
      void        RemoveRowPageBreaks(SCROW nStartRow, SCROW nEndRow);
      void        RemoveRowBreak(SCROW nRow, bool bPage, bool bManual);
      void        RemoveColBreak(SCCOL nCol, bool bPage, bool bManual);
-@@ -685,6 +697,7 @@ public:
+@@ -681,6 +693,7 @@ public:
      void        SetColHidden(SCCOL nStartCol, SCCOL nEndCol, bool bHidden);
      void        CopyColHidden(ScTable& rTable, SCCOL nStartCol, SCCOL nEndCol);
      void        CopyRowHidden(ScTable& rTable, SCROW nStartRow, SCROW nEndRow);
@@ -99,11 +114,11 @@ index cf638b2..6547ee6 100644
      SCROW       FirstVisibleRow(SCROW nStartRow, SCROW nEndRow);
      SCROW       LastVisibleRow(SCROW nStartRow, SCROW nEndRow);
      SCROW       CountVisibleRows(SCROW nStartRow, SCROW nEndRow);
-diff --git sc/source/core/data/document.cxx sc/source/core/data/document.cxx
-index 083c5c4..daacd45 100644
---- sc/source/core/data/document.cxx
-+++ sc/source/core/data/document.cxx
-@@ -3194,28 +3194,6 @@ ULONG ScDocument::GetScaledRowHeight( SCROW nStartRow, SCROW nEndRow,
+diff --git a/sc/source/core/data/document.cxx b/sc/source/core/data/document.cxx
+index 612aa0b..94ffd35 100644
+--- a/sc/source/core/data/document.cxx
++++ b/sc/source/core/data/document.cxx
+@@ -3185,28 +3185,6 @@ ULONG ScDocument::GetScaledRowHeight( SCROW nStartRow, SCROW nEndRow,
  }
  
  
@@ -132,7 +147,7 @@ index 083c5c4..daacd45 100644
  SCROW ScDocument::GetHiddenRowCount( SCROW nRow, SCTAB nTab ) const
  {
      if ( ValidTab(nTab) && pTab[nTab] )
-@@ -3695,7 +3673,7 @@ SCCOL ScDocument::GetNextDifferentChangedCol( SCTAB nTab, SCCOL nStart) const
+@@ -3686,7 +3664,7 @@ SCCOL ScDocument::GetNextDifferentChangedCol( SCTAB nTab, SCCOL nStart) const
  
  SCROW ScDocument::GetNextDifferentChangedRow( SCTAB nTab, SCROW nStart, bool bCareManualSize) const
  {
@@ -141,7 +156,7 @@ index 083c5c4..daacd45 100644
      {
          BYTE nStartFlags = pTab[nTab]->GetRowFlags(nStart);
          USHORT nStartHeight = pTab[nTab]->GetOriginalHeight(nStart);
-@@ -3705,7 +3683,7 @@ SCROW ScDocument::GetNextDifferentChangedRow( SCTAB nTab, SCROW nStart, bool bCa
+@@ -3696,7 +3674,7 @@ SCROW ScDocument::GetNextDifferentChangedRow( SCTAB nTab, SCROW nStart, bool bCa
              SCROW nFlagsEndRow;
              SCROW nHeightEndRow;
              BYTE nFlags = pTab[nTab]->GetRowFlagsArray()->GetValue( nRow, nIndex, nFlagsEndRow );
@@ -150,11 +165,11 @@ index 083c5c4..daacd45 100644
              if (((nStartFlags & CR_MANUALBREAK) != (nFlags & CR_MANUALBREAK)) ||
                  ((nStartFlags & CR_MANUALSIZE) != (nFlags & CR_MANUALSIZE)) ||
                  (bCareManualSize && (nStartFlags & CR_MANUALSIZE) && (nStartHeight != nHeight)) ||
-diff --git sc/source/core/data/table1.cxx sc/source/core/data/table1.cxx
-index 421e904..0134411 100644
---- sc/source/core/data/table1.cxx
-+++ sc/source/core/data/table1.cxx
-@@ -136,7 +136,7 @@ ScTable::ScTable( ScDocument* pDoc, SCTAB nNewTab, const String& rNewName,
+diff --git a/sc/source/core/data/table1.cxx b/sc/source/core/data/table1.cxx
+index 8b0c801..4faa102 100644
+--- a/sc/source/core/data/table1.cxx
++++ b/sc/source/core/data/table1.cxx
+@@ -133,7 +133,7 @@ ScTable::ScTable( ScDocument* pDoc, SCTAB nNewTab, const String& rNewName,
      nRepeatStartY( SCROW_REPEAT_NONE ),
      pTabProtection( NULL ),
      pColWidth( NULL ),
@@ -163,7 +178,7 @@ index 421e904..0134411 100644
      pColFlags( NULL ),
      pRowFlags( NULL ),
      mpHiddenCols(new ScFlatBoolColSegments),
-@@ -179,7 +179,7 @@ ScTable::ScTable( ScDocument* pDoc, SCTAB nNewTab, const String& rNewName,
+@@ -176,7 +176,7 @@ ScTable::ScTable( ScDocument* pDoc, SCTAB nNewTab, const String& rNewName,
  
      if (bRowInfo)
      {
@@ -172,7 +187,7 @@ index 421e904..0134411 100644
          pRowFlags  = new ScBitMaskCompressedArray< SCROW, BYTE>( MAXROW, 0);
      }
  
-@@ -221,7 +221,6 @@ ScTable::~ScTable()
+@@ -218,7 +218,6 @@ ScTable::~ScTable()
  
      delete[] pColWidth;
      delete[] pColFlags;
@@ -180,11 +195,11 @@ index 421e904..0134411 100644
      delete pRowFlags;
      delete pOutlineTable;
      delete pSearchParam;
-diff --git sc/source/core/data/table2.cxx sc/source/core/data/table2.cxx
-index 789de6d..56c7f49 100644
---- sc/source/core/data/table2.cxx
-+++ sc/source/core/data/table2.cxx
-@@ -121,15 +121,16 @@ void ScTable::InsertRow( SCCOL nStartCol, SCCOL nEndCol, SCROW nStartRow, SCSIZE
+diff --git a/sc/source/core/data/table2.cxx b/sc/source/core/data/table2.cxx
+index cbe46ee..e755daa 100644
+--- a/sc/source/core/data/table2.cxx
++++ b/sc/source/core/data/table2.cxx
+@@ -118,15 +118,16 @@ void ScTable::InsertRow( SCCOL nStartCol, SCCOL nEndCol, SCROW nStartRow, SCSIZE
      InitializeNoteCaptions();
      if (nStartCol==0 && nEndCol==MAXCOL)
      {
@@ -203,7 +218,7 @@ index 789de6d..56c7f49 100644
          if (pOutlineTable)
              pOutlineTable->InsertRow( nStartRow, nSize );
  
-@@ -153,11 +154,12 @@ void ScTable::DeleteRow( SCCOL nStartCol, SCCOL nEndCol, SCROW nStartRow, SCSIZE
+@@ -149,11 +150,12 @@ void ScTable::DeleteRow( SCCOL nStartCol, SCCOL nEndCol, SCROW nStartRow, SCSIZE
      InitializeNoteCaptions();
      if (nStartCol==0 && nEndCol==MAXCOL)
      {
@@ -220,7 +235,7 @@ index 789de6d..56c7f49 100644
          if (pOutlineTable)
              if (pOutlineTable->DeleteRow( nStartRow, nSize ))
                  if (pUndoOutline)
-@@ -376,10 +378,10 @@ void ScTable::CopyToClip(SCCOL nCol1, SCROW nRow1, SCCOL nCol2, SCROW nRow2,
+@@ -367,10 +369,10 @@ void ScTable::CopyToClip(SCCOL nCol1, SCROW nRow1, SCCOL nCol2, SCROW nRow2,
          pTable->CopyColHidden(*this, 0, nCol2);
          pTable->CopyColFiltered(*this, 0, nCol2);
  
@@ -233,7 +248,7 @@ index 789de6d..56c7f49 100644
          }
  
          pTable->CopyRowHidden(*this, 0, nRow2);
-@@ -424,10 +426,10 @@ void ScTable::CopyFromClip(SCCOL nCol1, SCROW nRow1, SCCOL nCol2, SCROW nRow2,
+@@ -415,10 +417,10 @@ void ScTable::CopyFromClip(SCCOL nCol1, SCROW nRow1, SCCOL nCol2, SCROW nRow2,
                  for (i=nCol1; i<=nCol2; i++)
                      pColWidth[i] = pTable->pColWidth[i-nDx];
  
@@ -246,7 +261,7 @@ index 789de6d..56c7f49 100644
                  // Must copy CR_MANUALSIZE bit too, otherwise pRowHeight doesn't make sense
                  for (SCROW j=nRow1; j<=nRow2; j++)
                  {
-@@ -666,7 +668,7 @@ void ScTable::CopyToTable(SCCOL nCol1, SCROW nRow1, SCCOL nCol2, SCROW nRow2,
+@@ -656,7 +658,7 @@ void ScTable::CopyToTable(SCCOL nCol1, SCROW nRow1, SCCOL nCol2, SCROW nRow2,
              bool bFlagChange = false;
  
              BOOL bWidth  = (nRow1==0 && nRow2==MAXROW && pColWidth && pDestTab->pColWidth);
@@ -255,14 +270,14 @@ index 789de6d..56c7f49 100644
  
              if (bWidth||bHeight)
              {
-@@ -691,12 +693,12 @@ void ScTable::CopyToTable(SCCOL nCol1, SCROW nRow1, SCCOL nCol2, SCROW nRow2,
+@@ -681,12 +683,12 @@ void ScTable::CopyToTable(SCCOL nCol1, SCROW nRow1, SCCOL nCol2, SCROW nRow2,
  
                  if (bHeight)
                  {
--					bool bChange = pDestTab->pRowHeight->SumValues(nRow1, nRow2) != pRowHeight->SumValues(nRow1, nRow2);
+-                    bool bChange = pDestTab->pRowHeight->SumValues(nRow1, nRow2) != pRowHeight->SumValues(nRow1, nRow2);
 +                    bool bChange = pDestTab->GetRowHeight(nRow1, nRow2) != GetRowHeight(nRow1, nRow2);
  
- 					if (bChange)
+                     if (bChange)
                          bFlagChange = true;
  
 -                    pDestTab->pRowHeight->CopyFrom( *pRowHeight, nRow1, nRow2);
@@ -270,7 +285,7 @@ index 789de6d..56c7f49 100644
                      pDestTab->pRowFlags->CopyFrom(*pRowFlags, nRow1, nRow2);
  
                      // Hidden flags.
-@@ -759,7 +761,7 @@ void ScTable::UndoToTable(SCCOL nCol1, SCROW nRow1, SCCOL nCol2, SCROW nRow2,
+@@ -749,7 +751,7 @@ void ScTable::UndoToTable(SCCOL nCol1, SCROW nRow1, SCCOL nCol2, SCROW nRow2,
      if (ValidColRow(nCol1, nRow1) && ValidColRow(nCol2, nRow2))
      {
          BOOL bWidth  = (nRow1==0 && nRow2==MAXROW && pColWidth && pDestTab->pColWidth);
@@ -279,7 +294,7 @@ index 789de6d..56c7f49 100644
  
          if (bWidth||bHeight)
              IncRecalcLevel();
-@@ -779,7 +781,8 @@ void ScTable::UndoToTable(SCCOL nCol1, SCROW nRow1, SCCOL nCol2, SCROW nRow2,
+@@ -769,7 +771,8 @@ void ScTable::UndoToTable(SCCOL nCol1, SCROW nRow1, SCCOL nCol2, SCROW nRow2,
                  for (SCCOL i=nCol1; i<=nCol2; i++)
                      pDestTab->pColWidth[i] = pColWidth[i];
              if (bHeight)
@@ -288,8 +303,8 @@ index 789de6d..56c7f49 100644
 +
              DecRecalcLevel();
          }
- 	}
-@@ -1389,7 +1392,7 @@ SCSIZE ScTable::FillMaxRot( RowInfo* pRowInfo, SCSIZE nArrCount, SCCOL nX1, SCCO
+     }
+@@ -1367,7 +1370,7 @@ SCSIZE ScTable::FillMaxRot( RowInfo* pRowInfo, SCSIZE nArrCount, SCCOL nX1, SCCO
                          // reicht die gedrehte Zelle bis in den sichtbaren Bereich?
  
                          SCCOL nTouchedCol = nCol;
@@ -298,7 +313,7 @@ index 789de6d..56c7f49 100644
                          DBG_ASSERT(nWidth <= 0, "Richtung falsch");
                          while ( nWidth < 0 && nTouchedCol > 0 )
                          {
-@@ -1417,7 +1420,7 @@ SCSIZE ScTable::FillMaxRot( RowInfo* pRowInfo, SCSIZE nArrCount, SCCOL nX1, SCCO
+@@ -1395,7 +1398,7 @@ SCSIZE ScTable::FillMaxRot( RowInfo* pRowInfo, SCSIZE nArrCount, SCCOL nX1, SCCO
  
  void ScTable::FindMaxRotCol( RowInfo* pRowInfo, SCSIZE nArrCount, SCCOL nX1, SCCOL nX2 )
  {
@@ -307,7 +322,7 @@ index 789de6d..56c7f49 100644
      {
          DBG_ERROR( "Spalten-/Zeileninfo fehlt" );
          return;
-@@ -2059,7 +2062,7 @@ void ScTable::SetColWidth( SCCOL nCol, USHORT nNewWidth )
+@@ -2036,7 +2039,7 @@ void ScTable::SetColWidth( SCCOL nCol, USHORT nNewWidth )
  
  void ScTable::SetRowHeight( SCROW nRow, USHORT nNewHeight )
  {
@@ -316,7 +331,7 @@ index 789de6d..56c7f49 100644
      {
          if (!nNewHeight)
          {
-@@ -2067,7 +2070,7 @@ void ScTable::SetRowHeight( SCROW nRow, USHORT nNewHeight )
+@@ -2044,7 +2047,7 @@ void ScTable::SetRowHeight( SCROW nRow, USHORT nNewHeight )
              nNewHeight = ScGlobal::nStdRowHeight;
          }
  
@@ -325,7 +340,7 @@ index 789de6d..56c7f49 100644
          if ( nNewHeight != nOldHeight )
          {
              IncRecalcLevel();
-@@ -2075,7 +2078,7 @@ void ScTable::SetRowHeight( SCROW nRow, USHORT nNewHeight )
+@@ -2052,7 +2055,7 @@ void ScTable::SetRowHeight( SCROW nRow, USHORT nNewHeight )
              ScDrawLayer* pDrawLayer = pDocument->GetDrawLayer();
              if (pDrawLayer)
                  pDrawLayer->HeightChanged( nTab, nRow, ((long) nNewHeight) - (long) nOldHeight );
@@ -334,18 +349,18 @@ index 789de6d..56c7f49 100644
              DecRecalcLevel();
  
              InvalidatePageBreaks();
-@@ -2088,12 +2091,45 @@ void ScTable::SetRowHeight( SCROW nRow, USHORT nNewHeight )
+@@ -2064,12 +2067,45 @@ void ScTable::SetRowHeight( SCROW nRow, USHORT nNewHeight )
      }
  }
  
 +namespace {
 +
-+/** 
-+ * Check if the new pixel size is different from the old size between 
-+ * specified ranges. 
++/**
++ * Check if the new pixel size is different from the old size between
++ * specified ranges.
 + */
 +bool lcl_pixelSizeChanged(
-+    ScFlatUInt16RowSegments& rRowHeights, SCROW nStartRow, SCROW nEndRow, 
++    ScFlatUInt16RowSegments& rRowHeights, SCROW nStartRow, SCROW nEndRow,
 +    sal_uInt16 nNewHeight, double nPPTY)
 +{
 +    long nNewPix = static_cast<long>(nNewHeight * nPPTY);
@@ -358,7 +373,7 @@ index 789de6d..56c7f49 100644
 +            break;
 +
 +        if (nHeight != nNewHeight)
-+        {    
++        {
 +            bool bChanged = (nNewPix != static_cast<long>(nHeight * nPPTY));
 +            if (bChanged)
 +                return true;
@@ -381,7 +396,7 @@ index 789de6d..56c7f49 100644
      {
          IncRecalcLevel();
          InitializeNoteCaptions();
-@@ -2103,8 +2139,6 @@ BOOL ScTable::SetRowHeightRange( SCROW nStartRow, SCROW nEndRow, USHORT nNewHeig
+@@ -2079,8 +2115,6 @@ BOOL ScTable::SetRowHeightRange( SCROW nStartRow, SCROW nEndRow, USHORT nNewHeig
              nNewHeight = ScGlobal::nStdRowHeight;
          }
  
@@ -390,7 +405,7 @@ index 789de6d..56c7f49 100644
          BOOL bSingle = FALSE;   // TRUE = process every row for its own
          ScDrawLayer* pDrawLayer = pDocument->GetDrawLayer();
          if (pDrawLayer)
-@@ -2113,24 +2147,17 @@ BOOL ScTable::SetRowHeightRange( SCROW nStartRow, SCROW nEndRow, USHORT nNewHeig
+@@ -2089,24 +2123,17 @@ BOOL ScTable::SetRowHeightRange( SCROW nStartRow, SCROW nEndRow, USHORT nNewHeig
  
          if (bSingle)
          {
@@ -420,11 +435,11 @@ index 789de6d..56c7f49 100644
  
                  /*  #i94028# #i94991# If drawing objects are involved, each row
                      has to be changed for its own, because each call to
-@@ -2143,12 +2170,12 @@ BOOL ScTable::SetRowHeightRange( SCROW nStartRow, SCROW nEndRow, USHORT nNewHeig
+@@ -2118,12 +2145,12 @@ BOOL ScTable::SetRowHeightRange( SCROW nStartRow, SCROW nEndRow, USHORT nNewHeig
                      for( SCROW nRow = nStartRow; nRow <= nEndRow ; ++nRow )
                      {
                          pDrawLayer->HeightChanged( nTab, nRow,
--                             ((long) nNewHeight) - ((long) pRowHeight->GetValue( nRow )));
+-                            ((long) nNewHeight) - ((long) pRowHeight->GetValue( nRow )));
 -                        pRowHeight->SetValue( nRow, nNewHeight );
 +                             static_cast<long>(nNewHeight) - static_cast<long>(mpRowHeights->getValue(nRow)));
 +                        mpRowHeights->setValue(nRow, nRow, nNewHeight);
@@ -436,7 +451,7 @@ index 789de6d..56c7f49 100644
              }
              else
              {
-@@ -2162,22 +2189,19 @@ BOOL ScTable::SetRowHeightRange( SCROW nStartRow, SCROW nEndRow, USHORT nNewHeig
+@@ -2138,22 +2165,19 @@ BOOL ScTable::SetRowHeightRange( SCROW nStartRow, SCROW nEndRow, USHORT nNewHeig
          {
              if (pDrawLayer)
              {
@@ -466,7 +481,7 @@ index 789de6d..56c7f49 100644
          DecRecalcLevel();
  
          if (bChanged)
-@@ -2283,16 +2307,27 @@ USHORT ScTable::GetCommonWidth( SCCOL nEndCol )
+@@ -2258,16 +2282,27 @@ USHORT ScTable::GetCommonWidth( SCCOL nEndCol )
  }
  
  
@@ -475,7 +490,7 @@ index 789de6d..56c7f49 100644
  {
      DBG_ASSERT(VALIDROW(nRow),"Falsche Zeilennummer");
  
--	if (VALIDROW(nRow) && pRowHeight)
+-    if (VALIDROW(nRow) && pRowHeight)
 +    if (VALIDROW(nRow) && mpRowHeights)
      {
          if (RowHidden(nRow))
@@ -497,16 +512,16 @@ index 789de6d..56c7f49 100644
      }
      else
          return (USHORT) ScGlobal::nStdRowHeight;
-@@ -2303,7 +2338,7 @@ ULONG ScTable::GetRowHeight( SCROW nStartRow, SCROW nEndRow )
+@@ -2278,7 +2313,7 @@ ULONG ScTable::GetRowHeight( SCROW nStartRow, SCROW nEndRow )
  {
      DBG_ASSERT(VALIDROW(nStartRow) && VALIDROW(nEndRow),"Falsche Zeilennummer");
  
--	if (VALIDROW(nStartRow) && VALIDROW(nEndRow) && pRowHeight)
+-    if (VALIDROW(nStartRow) && VALIDROW(nEndRow) && pRowHeight)
 +    if (VALIDROW(nStartRow) && VALIDROW(nEndRow) && mpRowHeights)
      {
          ULONG nHeight = 0;
          SCROW nRow = nStartRow;
-@@ -2314,7 +2349,7 @@ ULONG ScTable::GetRowHeight( SCROW nStartRow, SCROW nEndRow )
+@@ -2289,7 +2324,7 @@ ULONG ScTable::GetRowHeight( SCROW nStartRow, SCROW nEndRow )
              {
                  if (nLastRow > nEndRow)
                      nLastRow = nEndRow;
@@ -515,16 +530,16 @@ index 789de6d..56c7f49 100644
              }
              nRow = nLastRow + 1;
          }
-@@ -2329,7 +2364,7 @@ ULONG ScTable::GetScaledRowHeight( SCROW nStartRow, SCROW nEndRow, double fScale
+@@ -2304,7 +2339,7 @@ ULONG ScTable::GetScaledRowHeight( SCROW nStartRow, SCROW nEndRow, double fScale
  {
      DBG_ASSERT(VALIDROW(nStartRow) && VALIDROW(nEndRow),"Falsche Zeilennummer");
  
--	if (VALIDROW(nStartRow) && VALIDROW(nEndRow) && pRowHeight)
+-    if (VALIDROW(nStartRow) && VALIDROW(nEndRow) && pRowHeight)
 +    if (VALIDROW(nStartRow) && VALIDROW(nEndRow) && mpRowHeights)
      {
          ULONG nHeight = 0;
          SCROW nRow = nStartRow;
-@@ -2340,8 +2375,8 @@ ULONG ScTable::GetScaledRowHeight( SCROW nStartRow, SCROW nEndRow, double fScale
+@@ -2315,8 +2350,8 @@ ULONG ScTable::GetScaledRowHeight( SCROW nStartRow, SCROW nEndRow, double fScale
              {
                  if (nLastRow > nEndRow)
                      nLastRow = nEndRow;
@@ -535,7 +550,7 @@ index 789de6d..56c7f49 100644
              }
              nRow = nLastRow + 1;
          }
-@@ -2356,8 +2391,8 @@ USHORT ScTable::GetOriginalHeight( SCROW nRow ) const		// non-0 even if hidden
+@@ -2331,8 +2366,8 @@ USHORT ScTable::GetOriginalHeight( SCROW nRow ) const		// non-0 even if hidden
  {
      DBG_ASSERT(VALIDROW(nRow),"wrong row number");
  
@@ -546,7 +561,7 @@ index 789de6d..56c7f49 100644
      else
          return (USHORT) ScGlobal::nStdRowHeight;
  }
-@@ -2429,9 +2464,11 @@ void ScTable::ShowRow(SCROW nRow, BOOL bShow)
+@@ -2403,9 +2438,11 @@ void ScTable::ShowRow(SCROW nRow, BOOL bShow)
              if (pDrawLayer)
              {
                  if (bShow)
@@ -560,7 +575,7 @@ index 789de6d..56c7f49 100644
              }
  
              SetRowHidden(nRow, nRow, !bShow);
-@@ -2468,9 +2505,11 @@ void ScTable::DBShowRow(SCROW nRow, BOOL bShow)
+@@ -2441,9 +2478,11 @@ void ScTable::DBShowRow(SCROW nRow, BOOL bShow)
              if (pDrawLayer)
              {
                  if (bShow)
@@ -574,7 +589,7 @@ index 789de6d..56c7f49 100644
              }
          }
  
-@@ -2519,7 +2558,7 @@ void ScTable::DBShowRows(SCROW nRow1, SCROW nRow2, BOOL bShow)
+@@ -2489,7 +2528,7 @@ void ScTable::DBShowRows(SCROW nRow1, SCROW nRow2, BOOL bShow)
              ScDrawLayer* pDrawLayer = pDocument->GetDrawLayer();
              if (pDrawLayer)
              {
@@ -583,7 +598,7 @@ index 789de6d..56c7f49 100644
                  if (bShow)
                      pDrawLayer->HeightChanged( nTab, nStartRow, nHeight );
                  else
-@@ -2569,7 +2608,7 @@ void ScTable::ShowRows(SCROW nRow1, SCROW nRow2, BOOL bShow)
+@@ -2536,7 +2575,7 @@ void ScTable::ShowRows(SCROW nRow1, SCROW nRow2, BOOL bShow)
              ScDrawLayer* pDrawLayer = pDocument->GetDrawLayer();
              if (pDrawLayer)
              {
@@ -592,7 +607,7 @@ index 789de6d..56c7f49 100644
                  if (bShow)
                      pDrawLayer->HeightChanged( nTab, nStartRow, nHeight );
                  else
-@@ -2681,7 +2720,10 @@ SCROW ScTable::GetLastChangedRow() const
+@@ -2647,7 +2686,10 @@ SCROW ScTable::GetLastChangedRow() const
      if (!ValidRow(nLastFlags))
          nLastFlags = 0;
  
@@ -604,7 +619,7 @@ index 789de6d..56c7f49 100644
      if (!ValidRow(nLastHeight))
          nLastHeight = 0;
  
-@@ -2979,7 +3021,7 @@ void ScTable::SetDrawPageSize(bool bResetStreamValid)
+@@ -2945,7 +2987,7 @@ void ScTable::SetDrawPageSize(bool bResetStreamValid, bool bUpdateNoteCaptionPos
  ULONG ScTable::GetRowOffset( SCROW nRow )
  {
      ULONG n = 0;
@@ -613,7 +628,7 @@ index 789de6d..56c7f49 100644
      {
          if (nRow == 0)
              return 0;
-@@ -3015,7 +3057,7 @@ SCROW ScTable::GetRowForHeight(ULONG nHeight)
+@@ -2981,7 +3023,7 @@ SCROW ScTable::GetRowForHeight(ULONG nHeight)
              continue;
          }
  
@@ -622,11 +637,11 @@ index 789de6d..56c7f49 100644
          nSum += nNew;
          if (nSum > nHeight)
          {
-diff --git sc/source/core/data/table5.cxx sc/source/core/data/table5.cxx
-index 9c124bc..5eea2b0 100644
---- sc/source/core/data/table5.cxx
-+++ sc/source/core/data/table5.cxx
-@@ -203,15 +203,31 @@ void ScTable::UpdatePageBreaks( const ScRange* pUserArea )
+diff --git a/sc/source/core/data/table5.cxx b/sc/source/core/data/table5.cxx
+index 8eb21c6..4a0df2c 100644
+--- a/sc/source/core/data/table5.cxx
++++ b/sc/source/core/data/table5.cxx
+@@ -200,15 +200,31 @@ void ScTable::UpdatePageBreaks( const ScRange* pUserArea )
      BOOL bRepeatRow = ( nRepeatStartY != SCROW_REPEAT_NONE );
      BOOL bRowFound = FALSE;
      long nSizeY = 0;
@@ -644,7 +659,7 @@ index 9c124bc..5eea2b0 100644
 +        long nThisY = 0;
 +        if (!bThisRowHidden)
 +        {
-+            sal_uInt16 nTmp;    
++            sal_uInt16 nTmp;
 +            aIterHeights.getValue(nY, nTmp);
 +            nThisY = static_cast<long>(nTmp);
 +        }
@@ -659,10 +674,10 @@ index 9c124bc..5eea2b0 100644
 +        }
  
 -        bool bManualBreak = HasRowManualBreak(nY);
- 		if ( (nSizeY+nThisY > nPageSizeY) || (bManualBreak && !bSkipBreaks) )
+         if ( (nSizeY+nThisY > nPageSizeY) || (bManualBreak && !bSkipBreaks) )
          {
              SetRowBreak(nY, true, false);
-@@ -237,6 +253,38 @@ void ScTable::UpdatePageBreaks( const ScRange* pUserArea )
+@@ -234,6 +250,38 @@ void ScTable::UpdatePageBreaks( const ScRange* pUserArea )
              bRowFound = TRUE;
          }
  
@@ -683,7 +698,7 @@ index 9c124bc..5eea2b0 100644
 +            SCROW nLastCommon = ::std::min(nLastHidden, nLastHeight);
 +            if (nNextManualBreak >= 0)
 +                nLastCommon = ::std::min(nLastCommon, nNextManualBreak-1);
-+    
++
 +            if (nLastCommon > nY)
 +            {
 +                long nMaxMultiple = static_cast<long>(nLastCommon - nY);
@@ -701,7 +716,7 @@ index 9c124bc..5eea2b0 100644
          nSizeY += nThisY;
      }
  
-@@ -328,6 +376,12 @@ bool ScTable::HasColManualBreak(SCCOL nCol) const
+@@ -325,6 +373,12 @@ bool ScTable::HasColManualBreak(SCCOL nCol) const
      return (maColManualBreaks.count(nCol) > 0);
  }
  
@@ -714,7 +729,7 @@ index 9c124bc..5eea2b0 100644
  void ScTable::RemoveRowPageBreaks(SCROW nStartRow, SCROW nEndRow)
  {
      using namespace std;
-@@ -565,6 +619,25 @@ void ScTable::CopyRowHidden(ScTable& rTable, SCROW nStartRow, SCROW nEndRow)
+@@ -562,6 +616,25 @@ void ScTable::CopyRowHidden(ScTable& rTable, SCROW nStartRow, SCROW nEndRow)
      }
  }
  
@@ -740,7 +755,7 @@ index 9c124bc..5eea2b0 100644
  SCROW ScTable::FirstVisibleRow(SCROW nStartRow, SCROW nEndRow)
  {
      SCROW nRow = nStartRow;
-@@ -647,7 +720,7 @@ sal_uInt32 ScTable::GetTotalRowHeight(SCROW nStartRow, SCROW nEndRow)
+@@ -644,7 +717,7 @@ sal_uInt32 ScTable::GetTotalRowHeight(SCROW nStartRow, SCROW nEndRow)
  
          if (!aData.mbValue)
              // visible row range.
@@ -749,11 +764,11 @@ index 9c124bc..5eea2b0 100644
  
          nRow = aData.mnRow2 + 1;
      }
-diff --git sc/source/ui/view/prevloc.cxx sc/source/ui/view/prevloc.cxx
-index fb65955..65c7f73 100644
---- sc/source/ui/view/prevloc.cxx
-+++ sc/source/ui/view/prevloc.cxx
-@@ -692,7 +692,7 @@ void ScPreviewLocationData::GetTableInfo( const Rectangle& rVisiblePixel, ScPrev
+diff --git a/sc/source/ui/view/prevloc.cxx b/sc/source/ui/view/prevloc.cxx
+index 7b2b179..48df657 100644
+--- a/sc/source/ui/view/prevloc.cxx
++++ b/sc/source/ui/view/prevloc.cxx
+@@ -689,7 +689,7 @@ void ScPreviewLocationData::GetTableInfo( const Rectangle& rVisiblePixel, ScPrev
                  if (pDoc->RowHidden(nRow, nTab))
                      continue;
  
@@ -762,7 +777,7 @@ index fb65955..65c7f73 100644
                  long nNextY = nPosY + (long) (nDocH * nScaleY);
  
                  long nPixelStart = pWindow->LogicToPixel( Size( 0, nPosY ), aCellMapMode ).Height();
-@@ -713,7 +713,7 @@ void ScPreviewLocationData::GetTableInfo( const Rectangle& rVisiblePixel, ScPrev
+@@ -710,7 +710,7 @@ void ScPreviewLocationData::GetTableInfo( const Rectangle& rVisiblePixel, ScPrev
                  if (pDoc->RowHidden(nRow, nTab))
                      continue;
  
@@ -771,3 +786,6 @@ index fb65955..65c7f73 100644
                  long nNextY = nPosY + (long) (nDocH * nScaleY);
  
                  long nPixelStart = pWindow->LogicToPixel( Size( 0, nPosY ), aCellMapMode ).Height();
+-- 
+1.7.0.1
+

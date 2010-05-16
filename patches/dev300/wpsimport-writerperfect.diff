@@ -1,5 +1,43 @@
---- writerperfect/prj/build.lst.old	2009-04-02 10:49:34.000000000 +0000
-+++ writerperfect/prj/build.lst	2009-04-06 16:41:41.000000000 +0000
+From 4248a55eedeff76b29c25f565c10539d24a73ead Mon Sep 17 00:00:00 2001
+From: Jan Holesovsky <kendy@suse.cz>
+Date: Fri, 14 May 2010 16:53:40 +0200
+Subject: [PATCH 064/878] wpsimport-writerperfect.diff
+
+---
+ writerperfect/prj/build.lst                        |    5 +-
+ writerperfect/prj/d.lst                            |    6 +-
+ writerperfect/source/filter/DocumentCollector.cxx  |    2 +-
+ writerperfect/source/filter/DocumentCollector.hxx  |    7 +-
+ writerperfect/source/filter/DocumentHandler.cxx    |   10 +-
+ writerperfect/source/filter/SectionStyle.cxx       |    2 +-
+ writerperfect/source/filter/makefile.mk            |   12 +-
+ writerperfect/source/stream/WPXSvStream.cxx        |    2 +-
+ writerperfect/source/stream/WPXSvStream.h          |    3 +-
+ writerperfect/source/stream/makefile.mk            |    6 +
+ .../source/wpdimp/WordPerfectCollector.cxx         |    5 +-
+ .../source/wpdimp/WordPerfectCollector.hxx         |    4 +-
+ writerperfect/source/wpdimp/makefile.mk            |   12 +-
+ writerperfect/source/wpsimp/MSWorksCollector.cxx   |   48 +++
+ writerperfect/source/wpsimp/MSWorksCollector.hxx   |   41 +++
+ .../source/wpsimp/MSWorksImportFilter.cxx          |  303 ++++++++++++++++++++
+ .../source/wpsimp/MSWorksImportFilter.hxx          |  129 +++++++++
+ writerperfect/source/wpsimp/makefile.mk            |   29 ++
+ .../source/wpsimp/msworks_genericfilter.cxx        |  101 +++++++
+ writerperfect/util/makefile.mk                     |   47 +++-
+ writerperfect/util/msworks.map                     |    8 +
+ 21 files changed, 748 insertions(+), 34 deletions(-)
+ create mode 100644 writerperfect/source/wpsimp/MSWorksCollector.cxx
+ create mode 100644 writerperfect/source/wpsimp/MSWorksCollector.hxx
+ create mode 100644 writerperfect/source/wpsimp/MSWorksImportFilter.cxx
+ create mode 100644 writerperfect/source/wpsimp/MSWorksImportFilter.hxx
+ create mode 100644 writerperfect/source/wpsimp/makefile.mk
+ create mode 100644 writerperfect/source/wpsimp/msworks_genericfilter.cxx
+ create mode 100644 writerperfect/util/msworks.map
+
+diff --git a/writerperfect/prj/build.lst b/writerperfect/prj/build.lst
+index 3bb3867..df9d2dd 100644
+--- a/writerperfect/prj/build.lst
++++ b/writerperfect/prj/build.lst
 @@ -1,6 +1,7 @@
 -wp      writerperfect : LIBWPD:libwpd sot comphelper xmloff NULL
 +wp      writerperfect : LIBWPS:libwps LIBWPD:libwpd sot comphelper xmloff NULL
@@ -10,8 +48,10 @@
 -wp	writerperfect\util		nmake	-	all	wp_util wp_wpdimp wp_filter wp_stream NULL
 +wp	writerperfect\source\wpsimp	nmake	-	all	wp_wpsimp NULL
 +wp	writerperfect\util		nmake	-	all	wp_util wp_wpsimp wp_wpdimp wp_filter wp_stream NULL
---- writerperfect/prj/d.lst.old	2009-04-02 10:49:34.000000000 +0000
-+++ writerperfect/prj/d.lst	2009-04-06 16:41:41.000000000 +0000
+diff --git a/writerperfect/prj/d.lst b/writerperfect/prj/d.lst
+index 8884d78..8a8a737 100644
+--- a/writerperfect/prj/d.lst
++++ b/writerperfect/prj/d.lst
 @@ -1,5 +1,5 @@
 -..\%__SRC%\lib\libwpft*.so %_DEST%\lib%_EXT%
 -..\%__SRC%\bin\wpft*.dll %_DEST%\lib%_EXT%
@@ -21,9 +61,11 @@
 +..\%__SRC%\bin\*.dll %_DEST%\bin%_EXT%
  ..\%__SRC%\bin\wpftgo.dll %_DEST%\bin%_EXT%\wpftgo.dll
  ..\%__SRC%\lib\*.dylib %_DEST%\lib%_EXT%\*.dylib
---- writerperfect/source/filter/DocumentCollector.cxx.old	2009-04-02 10:49:34.000000000 +0000
-+++ writerperfect/source/filter/DocumentCollector.cxx	2009-04-06 16:41:41.000000000 +0000
-@@ -58,7 +58,7 @@ _WriterDocumentState::_WriterDocumentSta
+diff --git a/writerperfect/source/filter/DocumentCollector.cxx b/writerperfect/source/filter/DocumentCollector.cxx
+index 828e799..5baae93 100644
+--- a/writerperfect/source/filter/DocumentCollector.cxx
++++ b/writerperfect/source/filter/DocumentCollector.cxx
+@@ -58,7 +58,7 @@ _WriterDocumentState::_WriterDocumentState() :
  {
  }
  
@@ -31,9 +73,11 @@
 +DocumentCollector::DocumentCollector(WPSInputStream *pInput, DocumentHandler *pHandler) :
          mpInput(pInput),
          mpHandler(pHandler),
- 	mbUsed(false),
---- writerperfect/source/filter/DocumentCollector.hxx.old	2009-04-02 10:49:34.000000000 +0000
-+++ writerperfect/source/filter/DocumentCollector.hxx	2009-04-06 16:41:41.000000000 +0000
+     mbUsed(false),
+diff --git a/writerperfect/source/filter/DocumentCollector.hxx b/writerperfect/source/filter/DocumentCollector.hxx
+index 18ebcdb..a1e7fbc 100644
+--- a/writerperfect/source/filter/DocumentCollector.hxx
++++ b/writerperfect/source/filter/DocumentCollector.hxx
 @@ -35,6 +35,7 @@
  #if defined _MSC_VER
  #pragma warning( push, 1 )
@@ -46,72 +90,76 @@
  class DocumentCollector : public WPXHLListenerImpl
  {
  public:
--	DocumentCollector(WPXInputStream *pInput, DocumentHandler *pHandler);
+-    DocumentCollector(WPXInputStream *pInput, DocumentHandler *pHandler);
 +    DocumentCollector(WPSInputStream *pInput, DocumentHandler *pHandler);
- 	virtual ~DocumentCollector();
- 	bool filter();
+     virtual ~DocumentCollector();
+     bool filter();
  
 @@ -133,7 +134,7 @@ public:
- 	virtual void closeTableCell();
- 	virtual void insertCoveredTableCell(const WPXPropertyList &propList);
-  	virtual void closeTable();
--	virtual bool parseSourceDocument(WPXInputStream &input) = 0;
+     virtual void closeTableCell();
+     virtual void insertCoveredTableCell(const WPXPropertyList &propList);
+      virtual void closeTable();
+-    virtual bool parseSourceDocument(WPXInputStream &input) = 0;
 +    virtual bool parseSourceDocument(WPSInputStream &input) = 0;
  
  protected:
- 	void _resetDocumentState();
+     void _resetDocumentState();
 @@ -147,7 +148,7 @@ private:
- 	void _openListLevel(TagOpenElement *pListLevelOpenElement);
- 	void _closeListLevel(const char *szListType);
+     void _openListLevel(TagOpenElement *pListLevelOpenElement);
+     void _closeListLevel(const char *szListType);
  
 -        WPXInputStream *mpInput;
 +        WPSInputStream *mpInput;
          DocumentHandler *mpHandler;
- 	bool mbUsed; // whether or not it has been before (you can only use me once!)
+     bool mbUsed; // whether or not it has been before (you can only use me once!)
  
---- writerperfect/source/filter/DocumentHandler.cxx.old	2009-04-02 10:49:34.000000000 +0000
-+++ writerperfect/source/filter/DocumentHandler.cxx	2009-04-06 16:41:41.000000000 +0000
-@@ -42,19 +42,19 @@ DocumentHandler::DocumentHandler(Referen
+diff --git a/writerperfect/source/filter/DocumentHandler.cxx b/writerperfect/source/filter/DocumentHandler.cxx
+index e0a11ab..2af504c 100644
+--- a/writerperfect/source/filter/DocumentHandler.cxx
++++ b/writerperfect/source/filter/DocumentHandler.cxx
+@@ -42,19 +42,19 @@ DocumentHandler::DocumentHandler(Reference < XDocumentHandler > &xHandler) :
  
  void DocumentHandler::startDocument() 
  {
--	WRITER_DEBUG_MSG(("DocumentHandler::startDocument"));
+-    WRITER_DEBUG_MSG(("DocumentHandler::startDocument"));
 +    WRITER_DEBUG_MSG(("DocumentHandler::startDocument\n"));
- 	mxHandler->startDocument();
+     mxHandler->startDocument();
  }
  
  void DocumentHandler::endDocument()
  {
--	WRITER_DEBUG_MSG(("DocumentHandler::endDocument"));
+-    WRITER_DEBUG_MSG(("DocumentHandler::endDocument"));
 +    WRITER_DEBUG_MSG(("DocumentHandler::endDocument\n"));
- 	mxHandler->endDocument();
+     mxHandler->endDocument();
  }
  
  void DocumentHandler::startElement(const char *psName, const WPXPropertyList &xPropList)
  {
--	WRITER_DEBUG_MSG(("DocumentHandler::startElement"));
+-    WRITER_DEBUG_MSG(("DocumentHandler::startElement"));
 +    WRITER_DEBUG_MSG(("DocumentHandler::startElement\n"));
          SvXMLAttributeList *pAttrList = new SvXMLAttributeList();
- 	Reference < XAttributeList > xAttrList(pAttrList);
- 	WPXPropertyList::Iter i(xPropList);
-@@ -71,13 +71,13 @@ void DocumentHandler::startElement(const
+     Reference < XAttributeList > xAttrList(pAttrList);
+     WPXPropertyList::Iter i(xPropList);
+@@ -71,13 +71,13 @@ void DocumentHandler::startElement(const char *psName, const WPXPropertyList &xP
  
  void DocumentHandler::endElement(const char *psName)
  {
--	WRITER_DEBUG_MSG(("DocumentHandler::endElement"));
+-    WRITER_DEBUG_MSG(("DocumentHandler::endElement"));
 +    WRITER_DEBUG_MSG(("DocumentHandler::endElement\n"));
          mxHandler->endElement(OUString::createFromAscii(psName));
  }
  
  void DocumentHandler::characters(const WPXString &sCharacters)
  {
--	WRITER_DEBUG_MSG(("DocumentHandler::characters"));
+-    WRITER_DEBUG_MSG(("DocumentHandler::characters"));
 +    WRITER_DEBUG_MSG(("DocumentHandler::characters\n"));
          OUString sCharU16(sCharacters.cstr(), strlen(sCharacters.cstr()), RTL_TEXTENCODING_UTF8);
          mxHandler->characters(sCharU16);
  }
---- writerperfect/source/filter/SectionStyle.cxx.old	2009-04-02 10:49:34.000000000 +0000
-+++ writerperfect/source/filter/SectionStyle.cxx	2009-04-06 16:41:41.000000000 +0000
+diff --git a/writerperfect/source/filter/SectionStyle.cxx b/writerperfect/source/filter/SectionStyle.cxx
+index 7dae06c..de94e9c 100644
+--- a/writerperfect/source/filter/SectionStyle.cxx
++++ b/writerperfect/source/filter/SectionStyle.cxx
 @@ -33,7 +33,7 @@
  
  #ifdef _MSC_VER
@@ -121,8 +169,10 @@
  
  SectionStyle::SectionStyle(const WPXPropertyList &xPropList, 
                             const WPXPropertyListVector &xColumns, 
---- writerperfect/source/filter/makefile.mk.old	2009-04-02 10:49:34.000000000 +0000
-+++ writerperfect/source/filter/makefile.mk	2009-04-06 16:41:41.000000000 +0000
+diff --git a/writerperfect/source/filter/makefile.mk b/writerperfect/source/filter/makefile.mk
+index e535d2a..a092ce2 100644
+--- a/writerperfect/source/filter/makefile.mk
++++ b/writerperfect/source/filter/makefile.mk
 @@ -7,12 +7,16 @@ ENABLE_EXCEPTIONS=true
  .INCLUDE :  settings.mk
  
@@ -142,21 +192,25 @@
 +INCPRE+= -I..
 +
  SLOFILES= \
- 	$(SLO)$/DocumentElement.obj		\
- 	$(SLO)$/FontStyle.obj			\
---- writerperfect/source/stream/WPXSvStream.cxx.old	2009-04-02 10:49:34.000000000 +0000
-+++ writerperfect/source/stream/WPXSvStream.cxx	2009-04-06 16:41:41.000000000 +0000
+     $(SLO)$/DocumentElement.obj		\
+     $(SLO)$/FontStyle.obj			\
+diff --git a/writerperfect/source/stream/WPXSvStream.cxx b/writerperfect/source/stream/WPXSvStream.cxx
+index 3737e93..f7cfe35 100644
+--- a/writerperfect/source/stream/WPXSvStream.cxx
++++ b/writerperfect/source/stream/WPXSvStream.cxx
 @@ -9,7 +9,7 @@ using namespace ::com::sun::star::uno;
  using namespace ::com::sun::star::io;
  
  WPXSvInputStream::WPXSvInputStream( Reference< XInputStream > xStream ) :
--		WPXInputStream(true),
+-        WPXInputStream(true),
 +        WPSInputStream(),
- 		mxChildStorage(),
- 		mxChildStream(),
- 		mxStream(xStream),
---- writerperfect/source/stream/WPXSvStream.h.old	2009-04-02 10:49:34.000000000 +0000
-+++ writerperfect/source/stream/WPXSvStream.h	2009-04-06 16:41:41.000000000 +0000
+         mxChildStorage(),
+         mxChildStream(),
+         mxStream(xStream),
+diff --git a/writerperfect/source/stream/WPXSvStream.h b/writerperfect/source/stream/WPXSvStream.h
+index 099c5a7..f4f3b7e 100644
+--- a/writerperfect/source/stream/WPXSvStream.h
++++ b/writerperfect/source/stream/WPXSvStream.h
 @@ -12,12 +12,13 @@
  #if defined _MSC_VER
  #pragma warning( push, 1 )
@@ -171,9 +225,11 @@
 +class WPXSvInputStream : public WPSInputStream
  {
  public:
- 	WPXSvInputStream( ::com::sun::star::uno::Reference<
---- writerperfect/source/stream/makefile.mk.old	2009-04-02 10:49:34.000000000 +0000
-+++ writerperfect/source/stream/makefile.mk	2009-04-06 16:41:41.000000000 +0000
+     WPXSvInputStream( ::com::sun::star::uno::Reference<
+diff --git a/writerperfect/source/stream/makefile.mk b/writerperfect/source/stream/makefile.mk
+index 7e684b7..97262e7 100644
+--- a/writerperfect/source/stream/makefile.mk
++++ b/writerperfect/source/stream/makefile.mk
 @@ -10,6 +10,12 @@ ENABLE_EXCEPTIONS=true
  INCPRE+=$(LIBWPD_CFLAGS)
  .ENDIF
@@ -187,8 +243,10 @@
  # broken but ... necessary, internal include shafted ...
  INCPRE+= -I..
  
---- writerperfect/source/wpdimp/WordPerfectCollector.cxx.old	2009-04-02 10:49:34.000000000 +0000
-+++ writerperfect/source/wpdimp/WordPerfectCollector.cxx	2009-04-06 16:41:41.000000000 +0000
+diff --git a/writerperfect/source/wpdimp/WordPerfectCollector.cxx b/writerperfect/source/wpdimp/WordPerfectCollector.cxx
+index 0bc10cc..9d32fde 100644
+--- a/writerperfect/source/wpdimp/WordPerfectCollector.cxx
++++ b/writerperfect/source/wpdimp/WordPerfectCollector.cxx
 @@ -30,11 +30,12 @@
  #pragma warning( push, 1 )
  #endif
@@ -200,10 +258,10 @@
  
 -WordPerfectCollector::WordPerfectCollector(WPXInputStream *pInput, DocumentHandler *pHandler) :
 +WordPerfectCollector::WordPerfectCollector(WPSInputStream *pInput, DocumentHandler *pHandler) :
- 	DocumentCollector(pInput, pHandler)
+     DocumentCollector(pInput, pHandler)
  {
  }
-@@ -43,7 +44,7 @@ WordPerfectCollector::~WordPerfectCollec
+@@ -43,7 +44,7 @@ WordPerfectCollector::~WordPerfectCollector()
  {
  }
  
@@ -212,21 +270,25 @@
  {
          WPDResult result = WPDocument::parse(&input, static_cast<WPXHLListenerImpl *>(this));
          if (result != WPD_OK)
---- writerperfect/source/wpdimp/WordPerfectCollector.hxx.old	2009-04-02 10:49:34.000000000 +0000
-+++ writerperfect/source/wpdimp/WordPerfectCollector.hxx	2009-04-06 16:41:41.000000000 +0000
+diff --git a/writerperfect/source/wpdimp/WordPerfectCollector.hxx b/writerperfect/source/wpdimp/WordPerfectCollector.hxx
+index 400a5ca..95ed7af 100644
+--- a/writerperfect/source/wpdimp/WordPerfectCollector.hxx
++++ b/writerperfect/source/wpdimp/WordPerfectCollector.hxx
 @@ -34,8 +34,8 @@
  class WordPerfectCollector : public DocumentCollector
  {
  public:
--	WordPerfectCollector(WPXInputStream *pInput, DocumentHandler *pHandler);
+-    WordPerfectCollector(WPXInputStream *pInput, DocumentHandler *pHandler);
 +    WordPerfectCollector(WPSInputStream *pInput, DocumentHandler *pHandler);
- 	virtual ~WordPerfectCollector();
--	bool parseSourceDocument(WPXInputStream &pInput);
+     virtual ~WordPerfectCollector();
+-    bool parseSourceDocument(WPXInputStream &pInput);
 +    bool parseSourceDocument(WPSInputStream &pInput);
  };
  #endif
---- writerperfect/source/wpdimp/makefile.mk.old	2009-04-02 10:49:34.000000000 +0000
-+++ writerperfect/source/wpdimp/makefile.mk	2009-04-06 16:41:41.000000000 +0000
+diff --git a/writerperfect/source/wpdimp/makefile.mk b/writerperfect/source/wpdimp/makefile.mk
+index bc2a3cd..745887e 100644
+--- a/writerperfect/source/wpdimp/makefile.mk
++++ b/writerperfect/source/wpdimp/makefile.mk
 @@ -7,12 +7,16 @@ ENABLE_EXCEPTIONS=true
  .INCLUDE :  settings.mk
  
@@ -246,10 +308,13 @@
 +INCPRE+= -I..
 +
  SLOFILES= \
- 	$(SLO)$/WordPerfectCollector.obj  \
- 	$(SLO)$/WordPerfectImportFilter.obj  \
---- writerperfect/source/wpsimp/MSWorksCollector.cxx.old	1970-01-01 00:00:00.000000000 +0000
-+++ writerperfect/source/wpsimp/MSWorksCollector.cxx	2009-04-06 16:41:41.000000000 +0000
+     $(SLO)$/WordPerfectCollector.obj  \
+     $(SLO)$/WordPerfectImportFilter.obj  \
+diff --git a/writerperfect/source/wpsimp/MSWorksCollector.cxx b/writerperfect/source/wpsimp/MSWorksCollector.cxx
+new file mode 100644
+index 0000000..f562365
+--- /dev/null
++++ b/writerperfect/source/wpsimp/MSWorksCollector.cxx
 @@ -0,0 +1,48 @@
 +/* MSWorksCollector: Collects sections and runs of text from a
 + * wordperfect file (and styles to go along with them) and writes them
@@ -299,8 +364,11 @@
 +
 +    return true;
 +}
---- writerperfect/source/wpsimp/MSWorksCollector.hxx.old	1970-01-01 00:00:00.000000000 +0000
-+++ writerperfect/source/wpsimp/MSWorksCollector.hxx	2009-04-06 16:41:41.000000000 +0000
+diff --git a/writerperfect/source/wpsimp/MSWorksCollector.hxx b/writerperfect/source/wpsimp/MSWorksCollector.hxx
+new file mode 100644
+index 0000000..3b137c4
+--- /dev/null
++++ b/writerperfect/source/wpsimp/MSWorksCollector.hxx
 @@ -0,0 +1,41 @@
 +/* MSWorksCollector: Collects sections and runs of text from a
 + * wordperfect file (and styles to go along with them) and writes them
@@ -343,8 +411,11 @@
 +    bool parseSourceDocument(WPSInputStream &input);
 +};
 +#endif
---- writerperfect/source/wpsimp/MSWorksImportFilter.cxx.old	1970-01-01 00:00:00.000000000 +0000
-+++ writerperfect/source/wpsimp/MSWorksImportFilter.cxx	2009-04-06 16:41:41.000000000 +0000
+diff --git a/writerperfect/source/wpsimp/MSWorksImportFilter.cxx b/writerperfect/source/wpsimp/MSWorksImportFilter.cxx
+new file mode 100644
+index 0000000..417ff05
+--- /dev/null
++++ b/writerperfect/source/wpsimp/MSWorksImportFilter.cxx
 @@ -0,0 +1,303 @@
 +/* MSWorksImportFilter: Sets up the filter, and calls DocumentCollector
 + * to do the actual filtering
@@ -353,26 +424,26 @@
 + * Copyright (C) 2002-2004 William Lachance (wlach@interlog.com)
 + * Copyright (C) 2004 Net Integration Technologies (http://www.net-itech.com)
 + * Copyright (C) 2004 Fridrich Strba <fridrich.strba@bluewin.ch>
-+ * 
++ *
 + * This program is free software; you can redistribute it and/or
 + * modify it under the terms of the GNU General Public License
 + * as published by the Free Software Foundation; either version 2
 + * of the License, or (at your option) any later version.
-+ * 
++ *
 + * This program is distributed in the hope that it will be useful,
 + * but WITHOUT ANY WARRANTY; without even the implied warranty of
 + * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 + * GNU General Public License for more details.
-+ * 
++ *
 + * You should have received a copy of the GNU General Public License
 + * along with this program; if not, write to the Free Software
-+ * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  
++ * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA
 + * 02111-1307, USA.
 + *
 + *  Contributor(s): Martin Gallwey (gallwey@sun.com)
 + *
 + */
-+/* "This product is not manufactured, approved, or supported by 
++/* "This product is not manufactured, approved, or supported by
 + * Corel Corporation or Corel Corporation Limited."
 + */
 +
@@ -454,7 +525,7 @@
 +    throw (RuntimeException)
 +{
 +    WRITER_DEBUG_MSG(("MSWorksImportFilter::importImpl: Got here!\n"));
-+    
++
 +    sal_Int32 nLength = aDescriptor.getLength();
 +    const PropertyValue * pValue = aDescriptor.getConstArray();
 +    OUString sURL;
@@ -473,12 +544,12 @@
 +    }
 +    OString sFileName;
 +    sFileName = OUStringToOString(sURL, RTL_TEXTENCODING_INFO_ASCII);
-+    
++
 +    // An XML import service: what we push sax messages to..
 +    OUString sXMLImportService ( RTL_CONSTASCII_USTRINGPARAM ( "com.sun.star.comp.Writer.XMLImporter" ) );
 +    Reference < XDocumentHandler > xInternalHandler( mxMSF->createInstance( sXMLImportService ), UNO_QUERY );
 +
-+    // The XImporter sets up an empty target document for XDocumentHandler to write to.. 
++    // The XImporter sets up an empty target document for XDocumentHandler to write to..
 +    Reference < XImporter > xImporter(xInternalHandler, UNO_QUERY);
 +    xImporter->setTargetDocument(mxDoc);
 +
@@ -491,16 +562,16 @@
 +    MSWorksCollector collector(&input, &xHandler);
 +    collector.filter();
 +
-+    return true; 
++    return true;
 +}
 +
-+sal_Bool SAL_CALL MSWorksImportFilter::filter( const Sequence< ::com::sun::star::beans::PropertyValue >& aDescriptor ) 
++sal_Bool SAL_CALL MSWorksImportFilter::filter( const Sequence< ::com::sun::star::beans::PropertyValue >& aDescriptor )
 +    throw (RuntimeException)
 +{
 +    WRITER_DEBUG_MSG(("MSWorksImportFilter::filter: Got here!\n"));
 +    return importImpl ( aDescriptor );
 +}
-+void SAL_CALL MSWorksImportFilter::cancel(  ) 
++void SAL_CALL MSWorksImportFilter::cancel(  )
 +    throw (RuntimeException)
 +{
 +    WRITER_DEBUG_MSG(("MSWorksImportFilter::cancel: Got here!\n"));
@@ -520,7 +591,7 @@
 +    throw( com::sun::star::uno::RuntimeException )
 +{
 +    WRITER_DEBUG_MSG(("MSWorksImportFilter::detect: Got here!\n"));
-+    
++
 +    WPSConfidence confidence = WPS_CONFIDENCE_NONE;
 +    OUString sTypeName = OUString( RTL_CONSTASCII_USTRINGPARAM ( "" ) );
 +    sal_Int32 nLength = Descriptor.getLength();
@@ -550,13 +621,13 @@
 +        {
 +            return ::rtl::OUString();
 +        }
-+        
++
 +                if (!xInputStream.is())
 +                    return ::rtl::OUString();
 +        }
-+        
++
 +    WPXSvInputStream input( xInputStream );
-+    
++
 +    if (input.atEOS())
 +        return ::rtl::OUString();
 +
@@ -576,12 +647,12 @@
 +        Descriptor[location].Value <<=sTypeName;
 +    }
 +
-+    return sTypeName;	
++    return sTypeName;
 +}
 +
 +
 +// XInitialization
-+void SAL_CALL MSWorksImportFilter::initialize( const Sequence< Any >& aArguments ) 
++void SAL_CALL MSWorksImportFilter::initialize( const Sequence< Any >& aArguments )
 +    throw (Exception, RuntimeException)
 +{
 +    WRITER_DEBUG_MSG(("MSWorksImportFilter::initialize: Got here!\n"));
@@ -609,19 +680,19 @@
 +
 +#define SERVICE_NAME1 "com.sun.star.document.ImportFilter"
 +#define SERVICE_NAME2 "com.sun.star.document.ExtendedTypeDetection"
-+sal_Bool SAL_CALL MSWorksImportFilter_supportsService( const OUString& ServiceName ) 
++sal_Bool SAL_CALL MSWorksImportFilter_supportsService( const OUString& ServiceName )
 +    throw (RuntimeException)
 +{
 +    return (ServiceName.equalsAsciiL( RTL_CONSTASCII_STRINGPARAM ( SERVICE_NAME1 ) ) ||
 +        ServiceName.equalsAsciiL( RTL_CONSTASCII_STRINGPARAM ( SERVICE_NAME2 ) ) );
 +}
-+Sequence< OUString > SAL_CALL MSWorksImportFilter_getSupportedServiceNames(  ) 
++Sequence< OUString > SAL_CALL MSWorksImportFilter_getSupportedServiceNames(  )
 +    throw (RuntimeException)
 +{
 +    Sequence < OUString > aRet(2);
 +        OUString* pArray = aRet.getArray();
 +        pArray[0] =  OUString ( RTL_CONSTASCII_USTRINGPARAM ( SERVICE_NAME1 ) );
-+    pArray[1] =  OUString ( RTL_CONSTASCII_USTRINGPARAM ( SERVICE_NAME2 ) ); 
++    pArray[1] =  OUString ( RTL_CONSTASCII_USTRINGPARAM ( SERVICE_NAME2 ) );
 +        return aRet;
 +}
 +#undef SERVICE_NAME2
@@ -634,50 +705,53 @@
 +}
 +
 +// XServiceInfo
-+OUString SAL_CALL MSWorksImportFilter::getImplementationName(  ) 
++OUString SAL_CALL MSWorksImportFilter::getImplementationName(  )
 +    throw (RuntimeException)
 +{
 +    return MSWorksImportFilter_getImplementationName();
 +}
-+sal_Bool SAL_CALL MSWorksImportFilter::supportsService( const OUString& rServiceName ) 
++sal_Bool SAL_CALL MSWorksImportFilter::supportsService( const OUString& rServiceName )
 +    throw (RuntimeException)
 +{
 +    return MSWorksImportFilter_supportsService( rServiceName );
 +}
-+Sequence< OUString > SAL_CALL MSWorksImportFilter::getSupportedServiceNames(  ) 
++Sequence< OUString > SAL_CALL MSWorksImportFilter::getSupportedServiceNames(  )
 +    throw (RuntimeException)
 +{
 +    return MSWorksImportFilter_getSupportedServiceNames();
 +}
---- writerperfect/source/wpsimp/MSWorksImportFilter.hxx.old	1970-01-01 00:00:00.000000000 +0000
-+++ writerperfect/source/wpsimp/MSWorksImportFilter.hxx	2009-04-06 16:41:41.000000000 +0000
+diff --git a/writerperfect/source/wpsimp/MSWorksImportFilter.hxx b/writerperfect/source/wpsimp/MSWorksImportFilter.hxx
+new file mode 100644
+index 0000000..db4519d
+--- /dev/null
++++ b/writerperfect/source/wpsimp/MSWorksImportFilter.hxx
 @@ -0,0 +1,129 @@
-+/* 
++/*
 + * Copyright (C) 2000 by Sun Microsystems, Inc.
 + * Copyright (C) 2002-2004 William Lachance (wlach@interlog.com)
 + * Copyright (C) 2004 Net Integration Technologies (http://www.net-itech.com)
 + * Copyright (C) 2004 Fridrich Strba <fridrich.strba@bluewin.ch>
-+ * 
++ *
 + * This program is free software; you can redistribute it and/or
 + * modify it under the terms of the GNU General Public License
 + * as published by the Free Software Foundation; either version 2
 + * of the License, or (at your option) any later version.
-+ * 
++ *
 + * This program is distributed in the hope that it will be useful,
 + * but WITHOUT ANY WARRANTY; without even the implied warranty of
 + * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 + * GNU General Public License for more details.
-+ * 
++ *
 + * You should have received a copy of the GNU General Public License
 + * along with this program; if not, write to the Free Software
-+ * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  
++ * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA
 + * 02111-1307, USA.
 + *
 + *  Contributor(s): Martin Gallwey (gallwey@sun.com)
 + *
 + */
 +
-+/* "This product is not manufactured, approved, or supported by 
++/* "This product is not manufactured, approved, or supported by
 + * Corel Corporation or Corel Corporation Limited."
 + */
 +#ifndef _WORDPERFECTIMPORTFILTER_HXX
@@ -705,7 +779,7 @@
 +#include <cppuhelper/implbase5.hxx>
 +#endif
 +
-+enum FilterType 
++enum FilterType
 +{
 +    FILTER_IMPORT,
 +    FILTER_EXPORT
@@ -713,8 +787,8 @@
 +/* This component will be instantiated for both import or export. Whether it calls
 + * setSourceDocument or setTargetDocument determines which Impl function the filter
 + * member calls */
-+class MSWorksImportFilter : public cppu::WeakImplHelper5 
-+< 
++class MSWorksImportFilter : public cppu::WeakImplHelper5
++<
 +    com::sun::star::document::XFilter,
 +    com::sun::star::document::XImporter,
 +    com::sun::star::document::XExtendedFilterDetection,
@@ -731,7 +805,7 @@
 +
 +    FilterType meType;
 +
-+    sal_Bool SAL_CALL importImpl( const ::com::sun::star::uno::Sequence< ::com::sun::star::beans::PropertyValue >& aDescriptor ) 
++    sal_Bool SAL_CALL importImpl( const ::com::sun::star::uno::Sequence< ::com::sun::star::beans::PropertyValue >& aDescriptor )
 +        throw (::com::sun::star::uno::RuntimeException);
 +
 +public:
@@ -740,29 +814,29 @@
 +    virtual ~MSWorksImportFilter() {}
 +
 +    // XFilter
-+        virtual sal_Bool SAL_CALL filter( const ::com::sun::star::uno::Sequence< ::com::sun::star::beans::PropertyValue >& aDescriptor ) 
++        virtual sal_Bool SAL_CALL filter( const ::com::sun::star::uno::Sequence< ::com::sun::star::beans::PropertyValue >& aDescriptor )
 +        throw (::com::sun::star::uno::RuntimeException);
-+        virtual void SAL_CALL cancel(  ) 
++        virtual void SAL_CALL cancel(  )
 +        throw (::com::sun::star::uno::RuntimeException);
 +
 +    // XImporter
-+        virtual void SAL_CALL setTargetDocument( const ::com::sun::star::uno::Reference< ::com::sun::star::lang::XComponent >& xDoc ) 
++        virtual void SAL_CALL setTargetDocument( const ::com::sun::star::uno::Reference< ::com::sun::star::lang::XComponent >& xDoc )
 +        throw (::com::sun::star::lang::IllegalArgumentException, ::com::sun::star::uno::RuntimeException);
 +
-+ 	//XExtendedFilterDetection
-+    virtual ::rtl::OUString SAL_CALL detect( com::sun::star::uno::Sequence< com::sun::star::beans::PropertyValue >& Descriptor ) 
++	//XExtendedFilterDetection
++    virtual ::rtl::OUString SAL_CALL detect( com::sun::star::uno::Sequence< com::sun::star::beans::PropertyValue >& Descriptor )
 +        throw( com::sun::star::uno::RuntimeException );
 +
 +    // XInitialization
-+        virtual void SAL_CALL initialize( const ::com::sun::star::uno::Sequence< ::com::sun::star::uno::Any >& aArguments ) 
++        virtual void SAL_CALL initialize( const ::com::sun::star::uno::Sequence< ::com::sun::star::uno::Any >& aArguments )
 +        throw (::com::sun::star::uno::Exception, ::com::sun::star::uno::RuntimeException);
 +
 +    // XServiceInfo
-+        virtual ::rtl::OUString SAL_CALL getImplementationName(  ) 
++        virtual ::rtl::OUString SAL_CALL getImplementationName(  )
 +        throw (::com::sun::star::uno::RuntimeException);
-+        virtual sal_Bool SAL_CALL supportsService( const ::rtl::OUString& ServiceName ) 
++        virtual sal_Bool SAL_CALL supportsService( const ::rtl::OUString& ServiceName )
 +        throw (::com::sun::star::uno::RuntimeException);
-+        virtual ::com::sun::star::uno::Sequence< ::rtl::OUString > SAL_CALL getSupportedServiceNames(  ) 
++        virtual ::com::sun::star::uno::Sequence< ::rtl::OUString > SAL_CALL getSupportedServiceNames(  )
 +        throw (::com::sun::star::uno::RuntimeException);
 +
 +};
@@ -770,10 +844,10 @@
 +::rtl::OUString MSWorksImportFilter_getImplementationName()
 +    throw ( ::com::sun::star::uno::RuntimeException );
 +
-+sal_Bool SAL_CALL MSWorksImportFilter_supportsService( const ::rtl::OUString& ServiceName ) 
++sal_Bool SAL_CALL MSWorksImportFilter_supportsService( const ::rtl::OUString& ServiceName )
 +    throw ( ::com::sun::star::uno::RuntimeException );
 +
-+::com::sun::star::uno::Sequence< ::rtl::OUString > SAL_CALL MSWorksImportFilter_getSupportedServiceNames(  ) 
++::com::sun::star::uno::Sequence< ::rtl::OUString > SAL_CALL MSWorksImportFilter_getSupportedServiceNames(  )
 +    throw ( ::com::sun::star::uno::RuntimeException );
 +
 +::com::sun::star::uno::Reference< ::com::sun::star::uno::XInterface >
@@ -781,8 +855,11 @@
 +    throw ( ::com::sun::star::uno::Exception );
 +
 +#endif
---- writerperfect/source/wpsimp/makefile.mk.old	1970-01-01 00:00:00.000000000 +0000
-+++ writerperfect/source/wpsimp/makefile.mk	2009-04-06 16:41:41.000000000 +0000
+diff --git a/writerperfect/source/wpsimp/makefile.mk b/writerperfect/source/wpsimp/makefile.mk
+new file mode 100644
+index 0000000..da17e80
+--- /dev/null
++++ b/writerperfect/source/wpsimp/makefile.mk
 @@ -0,0 +1,29 @@
 +PRJ=..$/..
 +
@@ -810,34 +887,37 @@
 +SLOFILES= \
 +    $(SLO)$/MSWorksCollector.obj  \
 +    $(SLO)$/MSWorksImportFilter.obj  \
-+    $(SLO)$/msworks_genericfilter.obj		
++    $(SLO)$/msworks_genericfilter.obj
 +
 +.INCLUDE :  target.mk
---- writerperfect/source/wpsimp/msworks_genericfilter.cxx.old	1970-01-01 00:00:00.000000000 +0000
-+++ writerperfect/source/wpsimp/msworks_genericfilter.cxx	2009-04-06 16:41:41.000000000 +0000
+diff --git a/writerperfect/source/wpsimp/msworks_genericfilter.cxx b/writerperfect/source/wpsimp/msworks_genericfilter.cxx
+new file mode 100644
+index 0000000..f77b9c2
+--- /dev/null
++++ b/writerperfect/source/wpsimp/msworks_genericfilter.cxx
 @@ -0,0 +1,101 @@
 +/* genericfilter: mostly generic code for registering the filter
 + *
 + * Portions of this code Copyright 2000 by Sun Microsystems, Inc.
 + * Rest is Copyright (C) 2002 William Lachance (wlach@interlog.com)
-+ * 
++ *
 + * This program is free software; you can redistribute it and/or
 + * modify it under the terms of the GNU General Public License
 + * as published by the Free Software Foundation; either version 2
 + * of the License, or (at your option) any later version.
-+ * 
++ *
 + * This program is distributed in the hope that it will be useful,
 + * but WITHOUT ANY WARRANTY; without even the implied warranty of
 + * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 + * GNU General Public License for more details.
-+ * 
++ *
 + * You should have received a copy of the GNU General Public License
 + * along with this program; if not, write to the Free Software
-+ * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  
++ * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA
 + * 02111-1307, USA.
 + */
 +
-+/* "This product is not manufactured, approved, or supported by 
++/* "This product is not manufactured, approved, or supported by
 + * Corel Corporation or Corel Corporation Limited."
 + */
 +#include <stdio.h>
@@ -876,9 +956,9 @@
 +        {
 +            sal_Int32 nPos = 0;
 +            Reference< XRegistryKey > xNewKey(
-+                reinterpret_cast< XRegistryKey * >( pRegistryKey )->createKey( MSWorksImportFilter_getImplementationName() ) ); 
++                reinterpret_cast< XRegistryKey * >( pRegistryKey )->createKey( MSWorksImportFilter_getImplementationName() ) );
 +            xNewKey = xNewKey->createKey( OUString::createFromAscii( "/UNO/SERVICES" ) );
-+            
++
 +            const Sequence< OUString > & rSNL = MSWorksImportFilter_getSupportedServiceNames();
 +            const OUString * pArray = rSNL.getConstArray();
 +            for ( nPos = rSNL.getLength(); nPos--; )
@@ -906,19 +986,21 @@
 +            reinterpret_cast< XMultiServiceFactory * >( pServiceManager ),
 +            OUString::createFromAscii( pImplName ),
 +            MSWorksImportFilter_createInstance, MSWorksImportFilter_getSupportedServiceNames() ) );
-+        
++
 +        if (xFactory.is())
 +        {
 +            xFactory->acquire();
 +            pRet = xFactory.get();
 +        }
 +    }
-+    
++
 +    return pRet;
 +}
 +}
---- writerperfect/util/makefile.mk.old	2009-04-02 10:49:34.000000000 +0000
-+++ writerperfect/util/makefile.mk	2009-04-06 16:41:41.000000000 +0000
+diff --git a/writerperfect/util/makefile.mk b/writerperfect/util/makefile.mk
+index 4da9352..bc565b3 100644
+--- a/writerperfect/util/makefile.mk
++++ b/writerperfect/util/makefile.mk
 @@ -4,18 +4,26 @@ TARGET=writerperfect
  
  .INCLUDE :  settings.mk
@@ -951,7 +1033,7 @@
  .ENDIF
  
  LIB1TARGET= $(SLB)$/wpft.lib
-@@ -45,4 +53,33 @@ SHL1LIBS = $(LIB1TARGET)
+@@ -42,4 +50,33 @@ SHL1LIBS = $(LIB1TARGET)
  SHL1VERSIONMAP=wpft.map
  DEF1NAME=$(SHL1TARGET)
  
@@ -985,8 +1067,11 @@
 +DEF2NAME=$(SHL2TARGET)
 +
  .INCLUDE :  target.mk
---- writerperfect/util/msworks.map.old	1970-01-01 00:00:00.000000000 +0000
-+++ writerperfect/util/msworks.map	2009-04-06 16:41:41.000000000 +0000
+diff --git a/writerperfect/util/msworks.map b/writerperfect/util/msworks.map
+new file mode 100644
+index 0000000..7152f7e
+--- /dev/null
++++ b/writerperfect/util/msworks.map
 @@ -0,0 +1,8 @@
 +WPFT_1_0 {
 +    global:
@@ -996,3 +1081,6 @@
 +    local:
 +        *;
 +};
+-- 
+1.7.0.1
+
