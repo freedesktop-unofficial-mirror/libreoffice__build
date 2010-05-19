@@ -1,9 +1,13 @@
-From 29e74b6f5a7ebc2b808ad6284d005949016e565c Mon Sep 17 00:00:00 2001
+From 9b6f90dd2c21781e2fe6553fda1b4fd674c700de Mon Sep 17 00:00:00 2001
 From: Jan Holesovsky <kendy@suse.cz>
 Date: Fri, 14 May 2010 17:03:57 +0200
-Subject: [PATCH 596/878] novell-win32-odma.diff
+Subject: [PATCH 523/768] novell-win32-odma.diff
 
 ---
+ cui/source/options/optgdlg.cxx                     |   44 ++
+ cui/source/options/optgdlg.hrc                     |    8 +-
+ cui/source/options/optgdlg.hxx                     |    4 +
+ cui/source/options/optgdlg.src                     |   19 +-
  desktop/source/app/cmdlineargs.cxx                 |    9 +
  fpicker/prj/build.lst                              |    1 +
  fpicker/source/generic/fpicker.cxx                 |   28 +-
@@ -22,16 +26,11 @@ Subject: [PATCH 596/878] novell-win32-odma.diff
  .../schema/org/openoffice/Office/Common.xcs        |    7 +
  scp2/source/ooo/directory_ooo.scp                  |    5 +
  scp2/source/ooo/file_library_ooo.scp               |    8 +
- scp2/source/ooo/file_ooo.scp                       |   32 ++
  solenv/bin/modules/installer/windows/component.pm  |    5 +
  solenv/bin/modules/installer/windows/directory.pm  |    6 +
  solenv/inc/libs.mk                                 |    4 +
  svtools/inc/svtools/miscopt.hxx                    |    4 +
  svtools/source/config/miscopt.cxx                  |   59 ++-
- svx/source/cui/optgdlg.cxx                         |   44 ++
- svx/source/cui/optgdlg.hrc                         |    8 +-
- svx/source/cui/optgdlg.hxx                         |    4 +
- svx/source/cui/optgdlg.src                         |   19 +-
  ucb/prj/build.lst                                  |    1 +
  ucb/prj/d.lst                                      |    5 +
  ucb/source/ucp/odma/makefile.mk                    |   11 +-
@@ -45,7 +44,7 @@ Subject: [PATCH 596/878] novell-win32-odma.diff
  ucb/source/ucp/odma/odma_provider.hxx              |   15 +-
  ucb/source/ucp/odma/odma_services.cxx              |   14 +-
  ucb/source/ucp/odma/ucpodma.xml                    |    2 +-
- 41 files changed, 1707 insertions(+), 158 deletions(-)
+ 40 files changed, 1675 insertions(+), 158 deletions(-)
  create mode 100644 fpicker/source/odma/ODMAFilePicker.cxx
  create mode 100644 fpicker/source/odma/ODMAFilePicker.hxx
  create mode 100644 fpicker/source/odma/ODMAFolderPicker.cxx
@@ -54,10 +53,201 @@ Subject: [PATCH 596/878] novell-win32-odma.diff
  create mode 100644 fpicker/source/odma/fps_odma.cxx
  create mode 100644 fpicker/source/odma/makefile.mk
 
-diff --git a/desktop/source/app/cmdlineargs.cxx b/desktop/source/app/cmdlineargs.cxx
-index df8ddc2..44ec4df 100644
---- a/desktop/source/app/cmdlineargs.cxx
-+++ b/desktop/source/app/cmdlineargs.cxx
+diff --git cui/source/options/optgdlg.cxx cui/source/options/optgdlg.cxx
+index 19c8c02..f532b5b 100644
+--- cui/source/options/optgdlg.cxx
++++ cui/source/options/optgdlg.cxx
+@@ -205,6 +205,7 @@ OfaMiscTabPage::OfaMiscTabPage(Window* pParent, const SfxItemSet& rSet ) :
+     aFileDlgFL			( this, CUI_RES( FL_FILEDLG ) ),
+     aFileDlgROImage     ( this, CUI_RES( FI_FILEDLG_RO ) ),
+     aFileDlgCB			( this, CUI_RES( CB_FILEDLG ) ),
++    aODMADlgCB			( this, CUI_RES( CB_ODMADLG ) ),
+     aPrintDlgFL			( this, CUI_RES( FL_PRINTDLG ) ),
+     aPrintDlgCB			( this, CUI_RES( CB_PRINTDLG ) ),
+     aDocStatusFL		( this, CUI_RES( FL_DOCSTATUS ) ),
+@@ -228,6 +229,31 @@ OfaMiscTabPage::OfaMiscTabPage(Window* pParent, const SfxItemSet& rSet ) :
+     aPrintDlgCB.Hide();
+     #endif
+ 
++#ifdef WNT
++    aFileDlgCB.SetToggleHdl( LINK( this, OfaMiscTabPage, OnFileDlgToggled ) );
++#else
++    {
++        aODMADlgCB.Hide();
++        // rearrange the following controls
++        Point aNewPos = aDocStatusFL.GetPosPixel();
++        long nDelta = aNewPos.Y() - aODMADlgCB.GetPosPixel().Y();
++
++        Window* pWins[] =
++        {
++            &aDocStatusFL, &aDocStatusCB, &aTwoFigureFL,
++            &aInterpretFT, &aYearValueField, &aToYearFT
++        };
++        Window** pCurrent = pWins;
++        const sal_Int32 nCount = sizeof( pWins ) / sizeof( pWins[ 0 ] );
++        for ( sal_Int32 i = 0; i < nCount; ++i, ++pCurrent )
++        {
++            aNewPos = (*pCurrent)->GetPosPixel();
++            aNewPos.Y() -= nDelta;
++            (*pCurrent)->SetPosPixel( aNewPos );
++        }
++    }
++#endif
++
+     if ( !aFileDlgCB.IsVisible() )
+     {
+         // rearrange the following controls
+@@ -317,6 +343,14 @@ OfaMiscTabPage::OfaMiscTabPage(Window* pParent, const SfxItemSet& rSet ) :
+     }
+ }
+ 
++#ifdef WNT
++IMPL_LINK( OfaMiscTabPage, OnFileDlgToggled, CheckBox*, EMPTYARG )
++{
++    aODMADlgCB.Enable( !aFileDlgCB.IsChecked() );
++    return 0;
++}
++#endif
++
+ // -----------------------------------------------------------------------
+ 
+ OfaMiscTabPage::~OfaMiscTabPage()
+@@ -371,6 +405,13 @@ BOOL OfaMiscTabPage::FillItemSet( SfxItemSet& rSet )
+         bModified = TRUE;
+     }
+ 
++    if ( aODMADlgCB.IsChecked() != aODMADlgCB.GetSavedValue() )
++    {
++        SvtMiscOptions aMiscOpt;
++        aMiscOpt.SetTryODMADialog( aODMADlgCB.IsChecked() );
++        bModified = TRUE;
++    }
++
+     if ( aDocStatusCB.IsChecked() != aDocStatusCB.GetSavedValue() )
+     {
+         SvtPrintWarningOptions aPrintOptions;
+@@ -420,6 +461,9 @@ void OfaMiscTabPage::Reset( const SfxItemSet& rSet )
+     aPrintDlgCB.Check( !aMiscOpt.UseSystemPrintDialog() );
+     aPrintDlgCB.SaveValue();
+ 
++    aODMADlgCB.Check( aMiscOpt.TryODMADialog() );
++    aODMADlgCB.SaveValue();
++
+     SvtPrintWarningOptions aPrintOptions;
+     aDocStatusCB.Check(aPrintOptions.IsModifyDocumentOnPrintingAllowed());
+     aDocStatusCB.SaveValue();
+diff --git cui/source/options/optgdlg.hrc cui/source/options/optgdlg.hrc
+index 7df69da..db1ded0 100644
+--- cui/source/options/optgdlg.hrc
++++ cui/source/options/optgdlg.hrc
+@@ -53,9 +53,10 @@
+ #define ROW6                    (ROW5+RSC_CD_DROPDOWN_HEIGHT+ROWSPACE)
+ #define ROW7					(ROW6+RSC_CD_FIXEDLINE_HEIGHT+ROWSPACE)
+ #define ROW8					(ROW7+RSC_CD_CHECKBOX_HEIGHT+ROWSPACE)
+-#define ROW9					(ROW8+RSC_CD_FIXEDLINE_HEIGHT+ROWSPACE)
+-#define ROW10					(ROW9+RSC_CD_CHECKBOX_HEIGHT+ROWSPACE)
+-#define ROW11					(ROW10+RSC_CD_FIXEDLINE_HEIGHT+ROWSPACE)
++#define ROW9					(ROW8+RSC_CD_CHECKBOX_HEIGHT+ROWSPACE)
++#define ROW10					(ROW9+RSC_CD_FIXEDLINE_HEIGHT+ROWSPACE)
++#define ROW11					(ROW10+RSC_CD_CHECKBOX_HEIGHT+ROWSPACE)
++#define ROW12					(ROW11+RSC_CD_FIXEDLINE_HEIGHT+ROWSPACE)
+ 
+ #define DIFF(v1,v2)						(v2-v1)
+ #define OFFS_TEXTBOX_FIXEDTEXT(base)	(base+(RSC_CD_TEXTBOX_HEIGHT-RSC_CD_FIXEDTEXT_HEIGHT)/2)
+@@ -199,6 +200,7 @@
+ #define FT_HELPAGENT_TIME_UNIT      59
+ #define FL_DOCSTATUS                60
+ #define CB_DOCSTATUS                61
++#define CB_ODMADLG                  62
+ #endif // #ifndef _SVX_OPTGDLG_HRC
+ 
+ // ******************************************************************* EOF
+diff --git cui/source/options/optgdlg.hxx cui/source/options/optgdlg.hxx
+index 6263bc4..5b51490 100644
+--- cui/source/options/optgdlg.hxx
++++ cui/source/options/optgdlg.hxx
+@@ -56,6 +56,7 @@ private:
+     FixedLine           aFileDlgFL;
+     ReadOnlyImage       aFileDlgROImage;
+     CheckBox            aFileDlgCB;
++    CheckBox            aODMADlgCB;
+ 
+     FixedLine           aPrintDlgFL;
+     CheckBox            aPrintDlgCB;
+@@ -74,6 +75,9 @@ private:
+     DECL_LINK( TwoFigureConfigHdl, NumericField* );
+     DECL_LINK( HelpCheckHdl_Impl, CheckBox* );
+     DECL_LINK( HelpAgentResetHdl_Impl, PushButton* );
++#ifdef WNT
++    DECL_LINK( OnFileDlgToggled, CheckBox* );
++#endif
+ protected:
+     virtual int         DeactivatePage( SfxItemSet* pSet = NULL );
+ 
+diff --git cui/source/options/optgdlg.src cui/source/options/optgdlg.src
+index 527f76d..ce0f934 100644
+--- cui/source/options/optgdlg.src
++++ cui/source/options/optgdlg.src
+@@ -112,34 +112,41 @@ TabPage OFA_TP_MISC
+         Size = MAP_APPFONT( WHOLE_WIDTH - COL1, RSC_CD_CHECKBOX_HEIGHT );
+         Text [ en-US ] = "~Use %PRODUCTNAME dialogs";
+     };
++    CheckBox CB_ODMADLG
++    {
++        Pos = MAP_APPFONT( COL1, ROW8 );
++        Size = MAP_APPFONT( WHOLE_WIDTH - COL4, RSC_CD_CHECKBOX_HEIGHT );
++        Text [ en-US ] = "Show ODMA DMS dialogs first";
++        Text [ en-GB ] = "Show ODMA DMS dialogues first";
++    };
+     FixedLine FL_DOCSTATUS
+     {
+-        Pos = MAP_APPFONT( COL0, ROW8 );
++        Pos = MAP_APPFONT( COL0, ROW9 );
+         Size = MAP_APPFONT( WHOLE_WIDTH, RSC_CD_FIXEDLINE_HEIGHT );
+         Text [ en-US ] = "Document status";
+     };
+     CheckBox CB_DOCSTATUS
+     {
+-        Pos = MAP_APPFONT( COL1, ROW9 );
++        Pos = MAP_APPFONT( COL1, ROW10 );
+         Size = MAP_APPFONT( WHOLE_WIDTH - COL1, RSC_CD_CHECKBOX_HEIGHT );
+         Text [ en-US ] = "~Printing sets \"document modified\" status";
+     };
+     FixedLine FL_TWOFIGURE
+     {
+-        Pos = MAP_APPFONT( COL0, ROW10 );
++        Pos = MAP_APPFONT( COL0, ROW11 );
+         Size = MAP_APPFONT( WHOLE_WIDTH, RSC_CD_FIXEDLINE_HEIGHT );
+         Text [ en-US ] = "Year (two digits)" ;
+     };
+     FixedText FT_INTERPRET
+     {
+-        Pos = MAP_APPFONT( COL1, OFFS_TEXTBOX_FIXEDTEXT(ROW11) );
++        Pos = MAP_APPFONT( COL1, OFFS_TEXTBOX_FIXEDTEXT(ROW12) );
+         Size = MAP_APPFONT( DIFF( COL1, COL3), RSC_CD_FIXEDTEXT_HEIGHT );
+         Text [ en-US ] = "Interpret as years between";
+     };
+     NumericField NF_YEARVALUE
+     {
+         Border = TRUE ;
+-        Pos = MAP_APPFONT( COL4, ROW11 );
++        Pos = MAP_APPFONT( COL4, ROW12 );
+         Size = MAP_APPFONT( EDIT_WIDTH, RSC_CD_TEXTBOX_HEIGHT );
+         Minimum = 1583 ;
+         Maximum = 9857 ;
+@@ -148,7 +155,7 @@ TabPage OFA_TP_MISC
+     };
+     FixedText FT_TOYEAR
+     {
+-        Pos = MAP_APPFONT( COL6, OFFS_TEXTBOX_FIXEDTEXT(ROW11) );
++        Pos = MAP_APPFONT( COL6, OFFS_TEXTBOX_FIXEDTEXT(ROW12) );
+         Size = MAP_APPFONT( WHOLE_WIDTH - COL6, RSC_CD_FIXEDTEXT_HEIGHT );
+         Text [ en-US ] = "and " ;
+     };
+diff --git desktop/source/app/cmdlineargs.cxx desktop/source/app/cmdlineargs.cxx
+index 7585228..d3622f5 100644
+--- desktop/source/app/cmdlineargs.cxx
++++ desktop/source/app/cmdlineargs.cxx
 @@ -306,6 +306,15 @@ void CommandLineArgs::ParseCommandLine_Impl( Supplier& supplier )
                      }
                      else
@@ -74,10 +264,10 @@ index df8ddc2..44ec4df 100644
                          // handle this argument as a filename
                          if ( bOpenEvent )
                              AddStringListParam_Impl( CMD_STRINGPARAM_OPENLIST, aArgStr );
-diff --git a/fpicker/prj/build.lst b/fpicker/prj/build.lst
+diff --git fpicker/prj/build.lst fpicker/prj/build.lst
 index 47b7c7c..04872c5 100644
---- a/fpicker/prj/build.lst
-+++ b/fpicker/prj/build.lst
+--- fpicker/prj/build.lst
++++ fpicker/prj/build.lst
 @@ -2,6 +2,7 @@ fp	fpicker	:    l10n rdbmaker svtools NULL
  fp	fpicker\inc							nmake	-	all	fp_inc NULL
  fp	fpicker\source\generic				nmake	-	all	fp_generic fp_inc NULL
@@ -86,10 +276,10 @@ index 47b7c7c..04872c5 100644
  fp	fpicker\source\unx\gnome			nmake	-	u	fp_gnome_filepicker fp_inc NULL
  fp	fpicker\source\unx\kde4			nmake	-	u	fp_kde4_filepicker fp_inc NULL
  fp	fpicker\source\unx\kde_unx			nmake	-	u	fp_unx_common fp_inc NULL
-diff --git a/fpicker/source/generic/fpicker.cxx b/fpicker/source/generic/fpicker.cxx
-index 393b843..0e203bd 100644
---- a/fpicker/source/generic/fpicker.cxx
-+++ b/fpicker/source/generic/fpicker.cxx
+diff --git fpicker/source/generic/fpicker.cxx fpicker/source/generic/fpicker.cxx
+index 980c045..2498066 100644
+--- fpicker/source/generic/fpicker.cxx
++++ fpicker/source/generic/fpicker.cxx
 @@ -34,6 +34,13 @@
  #include "cppuhelper/implementationentry.hxx"
  #endif
@@ -102,7 +292,7 @@ index 393b843..0e203bd 100644
 +#endif
 +
  #include "svtools/miscopt.hxx"
- #include "svtools/pickerhistoryaccess.hxx"
+ #include "svl/pickerhistoryaccess.hxx"
  
 @@ -52,6 +59,7 @@ using rtl::OUString;
   */
@@ -152,10 +342,10 @@ index 393b843..0e203bd 100644
  }
  
  static Reference< css::uno::XInterface > FolderPicker_createInstance (
-diff --git a/fpicker/source/generic/makefile.mk b/fpicker/source/generic/makefile.mk
-index 9bf1e63..8e66095 100644
---- a/fpicker/source/generic/makefile.mk
-+++ b/fpicker/source/generic/makefile.mk
+diff --git fpicker/source/generic/makefile.mk fpicker/source/generic/makefile.mk
+index bfbfb65..f426bd7 100644
+--- fpicker/source/generic/makefile.mk
++++ fpicker/source/generic/makefile.mk
 @@ -46,6 +46,7 @@ SHL1TARGET=	$(TARGET)
  SHL1IMPLIB=	i$(TARGET)
  SHL1OBJS=	$(SLOFILES)
@@ -164,11 +354,11 @@ index 9bf1e63..8e66095 100644
      $(VCLLIB) \
      $(SVLLIB) \
          $(SVTOOLLIB) \
-diff --git a/fpicker/source/odma/ODMAFilePicker.cxx b/fpicker/source/odma/ODMAFilePicker.cxx
+diff --git fpicker/source/odma/ODMAFilePicker.cxx fpicker/source/odma/ODMAFilePicker.cxx
 new file mode 100644
 index 0000000..3174c25
 --- /dev/null
-+++ b/fpicker/source/odma/ODMAFilePicker.cxx
++++ fpicker/source/odma/ODMAFilePicker.cxx
 @@ -0,0 +1,565 @@
 +/*************************************************************************
 + *
@@ -735,11 +925,11 @@ index 0000000..3174c25
 +    Reference< XMultiServiceFactory > xServiceManager (rxContext->getServiceManager(), UNO_QUERY_THROW);
 +    return Reference< XInterface >( *new ODMAFilePicker( xServiceManager ) );
 +}
-diff --git a/fpicker/source/odma/ODMAFilePicker.hxx b/fpicker/source/odma/ODMAFilePicker.hxx
+diff --git fpicker/source/odma/ODMAFilePicker.hxx fpicker/source/odma/ODMAFilePicker.hxx
 new file mode 100644
 index 0000000..eb308b9
 --- /dev/null
-+++ b/fpicker/source/odma/ODMAFilePicker.hxx
++++ fpicker/source/odma/ODMAFilePicker.hxx
 @@ -0,0 +1,242 @@
 +/*************************************************************************
 + *
@@ -983,11 +1173,11 @@ index 0000000..eb308b9
 +};
 +
 +#endif // INCLUDED_ODMA_FILEPICKER_HXX
-diff --git a/fpicker/source/odma/ODMAFolderPicker.cxx b/fpicker/source/odma/ODMAFolderPicker.cxx
+diff --git fpicker/source/odma/ODMAFolderPicker.cxx fpicker/source/odma/ODMAFolderPicker.cxx
 new file mode 100644
 index 0000000..4f43437
 --- /dev/null
-+++ b/fpicker/source/odma/ODMAFolderPicker.cxx
++++ fpicker/source/odma/ODMAFolderPicker.cxx
 @@ -0,0 +1,202 @@
 +/*************************************************************************
 + *
@@ -1191,11 +1381,11 @@ index 0000000..4f43437
 +    Reference< XMultiServiceFactory > xServiceManager (rxContext->getServiceManager(), UNO_QUERY_THROW);
 +    return Reference< XInterface >( *new ODMAFolderPicker( xServiceManager ) );
 +}
-diff --git a/fpicker/source/odma/ODMAFolderPicker.hxx b/fpicker/source/odma/ODMAFolderPicker.hxx
+diff --git fpicker/source/odma/ODMAFolderPicker.hxx fpicker/source/odma/ODMAFolderPicker.hxx
 new file mode 100644
 index 0000000..c832eb5
 --- /dev/null
-+++ b/fpicker/source/odma/ODMAFolderPicker.hxx
++++ fpicker/source/odma/ODMAFolderPicker.hxx
 @@ -0,0 +1,118 @@
 +/*************************************************************************
 + *
@@ -1315,11 +1505,11 @@ index 0000000..c832eb5
 +};
 +
 +#endif // INCLUDED_ODMA_FOLDERPICKER_HXX
-diff --git a/fpicker/source/odma/exports.map b/fpicker/source/odma/exports.map
+diff --git fpicker/source/odma/exports.map fpicker/source/odma/exports.map
 new file mode 100644
 index 0000000..f4ed78b
 --- /dev/null
-+++ b/fpicker/source/odma/exports.map
++++ fpicker/source/odma/exports.map
 @@ -0,0 +1,8 @@
 +UDK_3_0_0 {
 +    global:
@@ -1329,11 +1519,11 @@ index 0000000..f4ed78b
 +    local:
 +        *;
 +};
-diff --git a/fpicker/source/odma/fps_odma.cxx b/fpicker/source/odma/fps_odma.cxx
+diff --git fpicker/source/odma/fps_odma.cxx fpicker/source/odma/fps_odma.cxx
 new file mode 100644
 index 0000000..64f46a1
 --- /dev/null
-+++ b/fpicker/source/odma/fps_odma.cxx
++++ fpicker/source/odma/fps_odma.cxx
 @@ -0,0 +1,90 @@
 +/*************************************************************************
 + *
@@ -1425,11 +1615,11 @@ index 0000000..64f46a1
 +}
 +
 +} // extern "C"
-diff --git a/fpicker/source/odma/makefile.mk b/fpicker/source/odma/makefile.mk
+diff --git fpicker/source/odma/makefile.mk fpicker/source/odma/makefile.mk
 new file mode 100644
 index 0000000..81e70b7
 --- /dev/null
-+++ b/fpicker/source/odma/makefile.mk
++++ fpicker/source/odma/makefile.mk
 @@ -0,0 +1,79 @@
 +#*************************************************************************
 +#
@@ -1510,22 +1700,22 @@ index 0000000..81e70b7
 +# --- Targets ------------------------------------------------------
 +
 +.INCLUDE :	target.mk
-diff --git a/framework/prj/build.lst b/framework/prj/build.lst
-index b981403..bd7376a 100644
---- a/framework/prj/build.lst
-+++ b/framework/prj/build.lst
+diff --git framework/prj/build.lst framework/prj/build.lst
+index 5c745e0..2eb363b 100644
+--- framework/prj/build.lst
++++ framework/prj/build.lst
 @@ -1,4 +1,4 @@
 -fr	framework	:    l10n svtools NULL
 +fr	framework	:    l10n svtools ucb NULL
  fr	framework								usr1	-	all	fr_mkout NULL
  fr  framework\inc			        	    nmake   -   all fr_inc NULL
  fr  framework\source\constant               nmake   -   all fr_constant fr_inc NULL
-diff --git a/framework/source/uielement/recentfilesmenucontroller.cxx b/framework/source/uielement/recentfilesmenucontroller.cxx
-index 0d46606..719601e 100644
---- a/framework/source/uielement/recentfilesmenucontroller.cxx
-+++ b/framework/source/uielement/recentfilesmenucontroller.cxx
+diff --git framework/source/uielement/recentfilesmenucontroller.cxx framework/source/uielement/recentfilesmenucontroller.cxx
+index 652c2b2..e2a78fc 100644
+--- framework/source/uielement/recentfilesmenucontroller.cxx
++++ framework/source/uielement/recentfilesmenucontroller.cxx
 @@ -62,6 +62,11 @@
- #include <svtools/historyoptions.hxx>
+ #include <unotools/historyoptions.hxx>
  #include <cppuhelper/implbase1.hxx>
  #include <osl/file.hxx>
 +#ifdef WNT
@@ -1578,11 +1768,11 @@ index 0d46606..719601e 100644
                  else
                  {
                      // Use INetURLObject to abbreviate all other URLs
-diff --git a/framework/util/makefile.mk b/framework/util/makefile.mk
-index 03784d1..ce8341a 100644
---- a/framework/util/makefile.mk
-+++ b/framework/util/makefile.mk
-@@ -340,6 +340,7 @@ SHL4OBJS=       \
+diff --git framework/util/makefile.mk framework/util/makefile.mk
+index 65edaff..e3cf7b7 100644
+--- framework/util/makefile.mk
++++ framework/util/makefile.mk
+@@ -339,6 +339,7 @@ SHL4OBJS=       \
                  $(SLO)$/startmoduledispatcher.obj
  
  SHL4STDLIBS=    \
@@ -1590,11 +1780,11 @@ index 03784d1..ce8341a 100644
                  $(FWILIB)                           \
                  $(FWELIB)                           \
                  $(SVTOOLLIB)                        \
-diff --git a/officecfg/registry/data/org/openoffice/ucb/Configuration.xcu b/officecfg/registry/data/org/openoffice/ucb/Configuration.xcu
-index 6adb964..54e59c9 100644
---- a/officecfg/registry/data/org/openoffice/ucb/Configuration.xcu
-+++ b/officecfg/registry/data/org/openoffice/ucb/Configuration.xcu
-@@ -197,6 +197,17 @@
+diff --git officecfg/registry/data/org/openoffice/ucb/Configuration.xcu officecfg/registry/data/org/openoffice/ucb/Configuration.xcu
+index 3143633..761a895 100644
+--- officecfg/registry/data/org/openoffice/ucb/Configuration.xcu
++++ officecfg/registry/data/org/openoffice/ucb/Configuration.xcu
+@@ -175,6 +175,17 @@
                  <value/>
                </prop>
              </node>
@@ -1612,11 +1802,11 @@ index 6adb964..54e59c9 100644
              <!-- We want the Provider to be the final fallback provider -->
              <node oor:name="Provider999" oor:op="replace" install:module="gio">
                <prop oor:name="ServiceName">
-diff --git a/officecfg/registry/schema/org/openoffice/Office/Common.xcs b/officecfg/registry/schema/org/openoffice/Office/Common.xcs
-index 4011321..6d94faf 100644
---- a/officecfg/registry/schema/org/openoffice/Office/Common.xcs
-+++ b/officecfg/registry/schema/org/openoffice/Office/Common.xcs
-@@ -5734,6 +5734,13 @@ Dymamic border coloring means that when the mouse is hovered over a control, and
+diff --git officecfg/registry/schema/org/openoffice/Office/Common.xcs officecfg/registry/schema/org/openoffice/Office/Common.xcs
+index d20b82a..2203909 100644
+--- officecfg/registry/schema/org/openoffice/Office/Common.xcs
++++ officecfg/registry/schema/org/openoffice/Office/Common.xcs
+@@ -5748,6 +5748,13 @@
  				</info>
  				<value>false</value>
  			</prop>
@@ -1630,10 +1820,10 @@ index 4011321..6d94faf 100644
  			<prop oor:name="SymbolSet" oor:type="xs:short">
  				<!-- UIHints: Tools  Options General View -->
  				<info>
-diff --git a/scp2/source/ooo/directory_ooo.scp b/scp2/source/ooo/directory_ooo.scp
-index 60b980d..17e3315 100644
---- a/scp2/source/ooo/directory_ooo.scp
-+++ b/scp2/source/ooo/directory_ooo.scp
+diff --git scp2/source/ooo/directory_ooo.scp scp2/source/ooo/directory_ooo.scp
+index 4724f90..d524d62 100644
+--- scp2/source/ooo/directory_ooo.scp
++++ scp2/source/ooo/directory_ooo.scp
 @@ -163,6 +163,11 @@ Directory gid_Dir_Shellnew
      DosName = "shellnew";
  End
@@ -1646,11 +1836,11 @@ index 60b980d..17e3315 100644
  #endif
  
  Directory gid_Dir_User
-diff --git a/scp2/source/ooo/file_library_ooo.scp b/scp2/source/ooo/file_library_ooo.scp
-index 409d86a..1356c41 100644
---- a/scp2/source/ooo/file_library_ooo.scp
-+++ b/scp2/source/ooo/file_library_ooo.scp
-@@ -706,6 +706,10 @@ End
+diff --git scp2/source/ooo/file_library_ooo.scp scp2/source/ooo/file_library_ooo.scp
+index 2e22a94..6bc462c 100644
+--- scp2/source/ooo/file_library_ooo.scp
++++ scp2/source/ooo/file_library_ooo.scp
+@@ -630,6 +630,10 @@ End
  #endif
  #endif
  
@@ -1661,7 +1851,7 @@ index 409d86a..1356c41 100644
  SPECIAL_UNO_COMPONENT_LIB_FILE( gid_File_Lib_Fps_Office, fps_office.uno )
  SPECIAL_UNO_COMPONENT_LIB_FILE( gid_File_Lib_Fpicker, fpicker.uno )
  
-@@ -1645,6 +1649,10 @@ SPECIAL_UNO_COMPONENT_LIB_FILE(gid_File_Ucptdoc1, ucptdoc1.uno)
+@@ -1521,6 +1525,10 @@ SPECIAL_UNO_COMPONENT_LIB_FILE(gid_File_Ucptdoc1, ucptdoc1.uno)
  
  SPECIAL_UNO_COMPONENT_LIB_FILE(gid_File_Ucpexpand1, ucpexpand1.uno)
  
@@ -1672,71 +1862,10 @@ index 409d86a..1356c41 100644
  File gid_File_Lib_Lnth
      TXT_FILE_BODY;
      Styles = (PACKED,UNO_COMPONENT);
-diff --git a/scp2/source/ooo/file_ooo.scp b/scp2/source/ooo/file_ooo.scp
-index 3b42c83..54e49f7 100755
---- a/scp2/source/ooo/file_ooo.scp
-+++ b/scp2/source/ooo/file_ooo.scp
-@@ -2316,24 +2316,56 @@ End
- 
- STD_SHELLNEW_FILE(gid_File_Shellnew_Ods_Soffice, soffice.ods)
- 
-+File gid_File_Shellnew2_Ods_Soffice
-+    TXT_FILE_BODY;
-+    Styles = (PACKED,WORKSTATION, OVERWRITE);
-+    Dir = PREDEFINED_OSWINSHELLNEWDIR;
-+    NetDir = gid_Dir_ShellnewToo;
-+    Name = "soffice.ods";
-+End
-+
- #endif
- 
- #ifdef WNT
- 
- STD_SHELLNEW_FILE(gid_File_Shellnew_Odg_Soffice, soffice.odg)
- 
-+File gid_File_Shellnew2_Odg_Soffice
-+    TXT_FILE_BODY;
-+    Styles = (PACKED,WORKSTATION, OVERWRITE);
-+    Dir = PREDEFINED_OSWINSHELLNEWDIR;
-+    NetDir = gid_Dir_ShellnewToo;
-+    Name = "soffice.odg";
-+End
-+
- #endif
- 
- #ifdef WNT
- 
- STD_SHELLNEW_FILE(gid_File_Shellnew_Odp_Soffice, soffice.odp)
- 
-+File gid_File_Shellnew2_Odp_Soffice
-+    TXT_FILE_BODY;
-+    Styles = (PACKED,WORKSTATION, OVERWRITE);
-+    Dir = PREDEFINED_OSWINSHELLNEWDIR;
-+    NetDir = gid_Dir_ShellnewToo;
-+    Name = "soffice.odp";
-+End
-+
- #endif
- 
- #ifdef WNT
- 
- STD_SHELLNEW_FILE(gid_File_Shellnew_Odt_Soffice, soffice.odt)
- 
-+File gid_File_Shellnew2_Odt_Soffice
-+    TXT_FILE_BODY;
-+    Styles = (PACKED,WORKSTATION, OVERWRITE);
-+    Dir = PREDEFINED_OSWINSHELLNEWDIR;
-+    NetDir = gid_Dir_ShellnewToo;
-+    Name = "soffice.odt";
-+End
-+
- #endif
- 
- #ifdef UNX
-diff --git a/solenv/bin/modules/installer/windows/component.pm b/solenv/bin/modules/installer/windows/component.pm
-index 1a9cba0..fcd6e81 100644
---- a/solenv/bin/modules/installer/windows/component.pm
-+++ b/solenv/bin/modules/installer/windows/component.pm
+diff --git solenv/bin/modules/installer/windows/component.pm solenv/bin/modules/installer/windows/component.pm
+index 418139b..07869b8 100644
+--- solenv/bin/modules/installer/windows/component.pm
++++ solenv/bin/modules/installer/windows/component.pm
 @@ -128,6 +128,11 @@ sub get_file_component_directory
          return $installer::globals::templatefolder;
      }
@@ -1749,10 +1878,10 @@ index 1a9cba0..fcd6e81 100644
      my $destination = $onefile->{'destination'};
      
      installer::pathanalyzer::get_path_from_fullqualifiedname(\$destination);
-diff --git a/solenv/bin/modules/installer/windows/directory.pm b/solenv/bin/modules/installer/windows/directory.pm
-index 4de398f..ca46745 100644
---- a/solenv/bin/modules/installer/windows/directory.pm
-+++ b/solenv/bin/modules/installer/windows/directory.pm
+diff --git solenv/bin/modules/installer/windows/directory.pm solenv/bin/modules/installer/windows/directory.pm
+index fd0f89d..01f8e03 100644
+--- solenv/bin/modules/installer/windows/directory.pm
++++ solenv/bin/modules/installer/windows/directory.pm
 @@ -269,6 +269,12 @@ sub add_root_directories
      my $oneline = "TARGETDIR\t\tSourceDir\n";
      push(@{$directorytableref}, $oneline);
@@ -1766,10 +1895,10 @@ index 4de398f..ca46745 100644
      my $sourcediraddon = "";
      if (($installer::globals::addchildprojects) ||
          ($installer::globals::patch) ||
-diff --git a/solenv/inc/libs.mk b/solenv/inc/libs.mk
-index 86152b7..5db94c2 100644
---- a/solenv/inc/libs.mk
-+++ b/solenv/inc/libs.mk
+diff --git solenv/inc/libs.mk solenv/inc/libs.mk
+index 3c014a8..1daf69c 100644
+--- solenv/inc/libs.mk
++++ solenv/inc/libs.mk
 @@ -28,6 +28,9 @@ LIBSMKREV!:="$$Revision: 1.134.2.3 $$"
  
  .IF ("$(GUI)"=="UNX" || "$(COM)"=="GCC") && "$(GUI)"!="OS2"
@@ -1780,7 +1909,7 @@ index 86152b7..5db94c2 100644
  #
  #externe libs in plattform.mk
  #
-@@ -346,6 +349,7 @@ UNOPKGAPPLIB=-lunopkgapp
+@@ -356,6 +359,7 @@ TESTLIB=-ltest
  
  .ELSE				# ("$(GUI)"=="UNX" || "$(COM)"=="GCC") && "$(GUI)"!="OS2"
  
@@ -1788,11 +1917,11 @@ index 86152b7..5db94c2 100644
  AWTLIB*=jawt.lib
  AVMEDIALIB=iavmedia.lib
  ICUINLIB=icuin.lib
-diff --git a/svtools/inc/svtools/miscopt.hxx b/svtools/inc/svtools/miscopt.hxx
-index c62ec63..7db48d8 100644
---- a/svtools/inc/svtools/miscopt.hxx
-+++ b/svtools/inc/svtools/miscopt.hxx
-@@ -110,6 +110,10 @@ class SVT_DLLPUBLIC SvtMiscOptions: public svt::detail::Options
+diff --git svtools/inc/svtools/miscopt.hxx svtools/inc/svtools/miscopt.hxx
+index 7ce78e1..c810068 100644
+--- svtools/inc/svtools/miscopt.hxx
++++ svtools/inc/svtools/miscopt.hxx
+@@ -110,6 +110,10 @@ class SVT_DLLPUBLIC SvtMiscOptions: public utl::detail::Options
          void        SetUseSystemFileDialog( sal_Bool bSet );
          sal_Bool    IsUseSystemFileDialogReadOnly() const;
  
@@ -1803,11 +1932,11 @@ index c62ec63..7db48d8 100644
          sal_Bool    IsPluginsEnabled() const;
          void        SetPluginsEnabled( sal_Bool bEnable );
          sal_Bool    IsPluginsEnabledReadOnly() const;
-diff --git a/svtools/source/config/miscopt.cxx b/svtools/source/config/miscopt.cxx
-index a8efee3..f62bb97 100644
---- a/svtools/source/config/miscopt.cxx
-+++ b/svtools/source/config/miscopt.cxx
-@@ -82,8 +82,10 @@ using namespace ::com::sun::star;
+diff --git svtools/source/config/miscopt.cxx svtools/source/config/miscopt.cxx
+index 128fb4a..10b2574 100644
+--- svtools/source/config/miscopt.cxx
++++ svtools/source/config/miscopt.cxx
+@@ -78,8 +78,10 @@ using namespace ::com::sun::star;
  #define PROPERTYHANDLE_SYMBOLSTYLE			4
  #define PROPERTYNAME_USESYSTEMPRINTDIALOG	ASCII_STR("UseSystemPrintDialog")
  #define PROPERTYHANDLE_USESYSTEMPRINTDIALOG	5
@@ -1819,7 +1948,7 @@ index a8efee3..f62bb97 100644
  
  #define VCL_TOOLBOX_STYLE_FLAT				((USHORT)0x0004) // from <vcl/toolbox.hxx>
  
-@@ -103,6 +105,8 @@ class SvtMiscOptions_Impl : public ConfigItem
+@@ -99,6 +101,8 @@ class SvtMiscOptions_Impl : public ConfigItem
      LinkList    aList;
      sal_Bool    m_bUseSystemFileDialog;
      sal_Bool    m_bIsUseSystemFileDialogRO;
@@ -1828,7 +1957,7 @@ index a8efee3..f62bb97 100644
      sal_Bool    m_bPluginsEnabled;
      sal_Bool    m_bIsPluginsEnabledRO;
      sal_Int16   m_nSymbolsSize;
-@@ -180,6 +184,15 @@ class SvtMiscOptions_Impl : public ConfigItem
+@@ -176,6 +180,15 @@ class SvtMiscOptions_Impl : public ConfigItem
          inline sal_Bool IsUseSystemFileDialogReadOnly() const
          { return m_bIsUseSystemFileDialogRO; }
  
@@ -1844,7 +1973,7 @@ index a8efee3..f62bb97 100644
          inline sal_Bool IsPluginsEnabled() const
          { return m_bPluginsEnabled; }
  
-@@ -304,6 +317,8 @@ SvtMiscOptions_Impl::SvtMiscOptions_Impl()
+@@ -262,6 +275,8 @@ SvtMiscOptions_Impl::SvtMiscOptions_Impl()
  
      , m_bUseSystemFileDialog( sal_False )
      , m_bIsUseSystemFileDialogRO( sal_False )
@@ -1853,7 +1982,7 @@ index a8efee3..f62bb97 100644
      , m_bPluginsEnabled( sal_False )
      , m_bIsPluginsEnabledRO( sal_False )
      , m_nSymbolsSize( 0 )
-@@ -385,6 +400,16 @@ SvtMiscOptions_Impl::SvtMiscOptions_Impl()
+@@ -343,6 +358,16 @@ SvtMiscOptions_Impl::SvtMiscOptions_Impl()
                  break;
              }
  
@@ -1870,7 +1999,7 @@ index a8efee3..f62bb97 100644
              case PROPERTYHANDLE_SYMBOLSTYLE :
              {
                  ::rtl::OUString aSymbolsStyle;
-@@ -488,6 +513,13 @@ void SvtMiscOptions_Impl::Load( const Sequence< OUString >& rPropertyNames )
+@@ -446,6 +471,13 @@ void SvtMiscOptions_Impl::Load( const Sequence< OUString >& rPropertyNames )
                                                              }
                                                          }
                                                      break;
@@ -1884,7 +2013,7 @@ index a8efee3..f62bb97 100644
              case PROPERTYHANDLE_SYMBOLSTYLE         :   {
                                                              ::rtl::OUString aSymbolsStyle;
                                                              if( seqValues[nProperty] >>= aSymbolsStyle )
-@@ -634,6 +666,13 @@ void SvtMiscOptions_Impl::Commit()
+@@ -592,6 +624,13 @@ void SvtMiscOptions_Impl::Commit()
                  break;
              }
  
@@ -1898,7 +2027,7 @@ index a8efee3..f62bb97 100644
              case PROPERTYHANDLE_SYMBOLSTYLE :
              {
                  if ( !m_bIsSymbolsStyleRO )
-@@ -666,7 +705,8 @@ Sequence< OUString > SvtMiscOptions_Impl::GetPropertyNames()
+@@ -624,7 +663,8 @@ Sequence< OUString > SvtMiscOptions_Impl::GetPropertyNames()
          PROPERTYNAME_TOOLBOXSTYLE,
          PROPERTYNAME_USESYSTEMFILEDIALOG,
          PROPERTYNAME_SYMBOLSTYLE,
@@ -1908,7 +2037,7 @@ index a8efee3..f62bb97 100644
      };
  
      // Initialize return sequence with these list ...
-@@ -734,6 +774,21 @@ sal_Bool SvtMiscOptions::IsUseSystemFileDialogReadOnly() const
+@@ -692,6 +732,21 @@ sal_Bool SvtMiscOptions::IsUseSystemFileDialogReadOnly() const
      return m_pDataContainer->IsUseSystemFileDialogReadOnly();
  }
  
@@ -1930,210 +2059,19 @@ index a8efee3..f62bb97 100644
  sal_Bool SvtMiscOptions::IsPluginsEnabled() const
  {
      return m_pDataContainer->IsPluginsEnabled();
-diff --git a/svx/source/cui/optgdlg.cxx b/svx/source/cui/optgdlg.cxx
-index d3b2e49..d0d9f85 100644
---- a/svx/source/cui/optgdlg.cxx
-+++ b/svx/source/cui/optgdlg.cxx
-@@ -216,6 +216,7 @@ OfaMiscTabPage::OfaMiscTabPage(Window* pParent, const SfxItemSet& rSet ) :
-     aFileDlgFL			( this, SVX_RES( FL_FILEDLG ) ),
-     aFileDlgROImage     ( this, SVX_RES( FI_FILEDLG_RO ) ),
-     aFileDlgCB			( this, SVX_RES( CB_FILEDLG ) ),
-+    aODMADlgCB			( this, SVX_RES( CB_ODMADLG ) ),
-     aPrintDlgFL			( this, SVX_RES( FL_PRINTDLG ) ),
-     aPrintDlgCB			( this, SVX_RES( CB_PRINTDLG ) ),
-     aDocStatusFL		( this, SVX_RES( FL_DOCSTATUS ) ),
-@@ -239,6 +240,31 @@ OfaMiscTabPage::OfaMiscTabPage(Window* pParent, const SfxItemSet& rSet ) :
-     aPrintDlgCB.Hide();
-     #endif
- 
-+#ifdef WNT
-+    aFileDlgCB.SetToggleHdl( LINK( this, OfaMiscTabPage, OnFileDlgToggled ) );
-+#else
-+    {
-+        aODMADlgCB.Hide();
-+        // rearrange the following controls
-+        Point aNewPos = aDocStatusFL.GetPosPixel();
-+        long nDelta = aNewPos.Y() - aODMADlgCB.GetPosPixel().Y();
-+
-+        Window* pWins[] =
-+        {
-+            &aDocStatusFL, &aDocStatusCB, &aTwoFigureFL,
-+            &aInterpretFT, &aYearValueField, &aToYearFT
-+        };
-+        Window** pCurrent = pWins;
-+        const sal_Int32 nCount = sizeof( pWins ) / sizeof( pWins[ 0 ] );
-+        for ( sal_Int32 i = 0; i < nCount; ++i, ++pCurrent )
-+        {
-+            aNewPos = (*pCurrent)->GetPosPixel();
-+            aNewPos.Y() -= nDelta;
-+            (*pCurrent)->SetPosPixel( aNewPos );
-+        }
-+    }
-+#endif
-+
-     if ( !aFileDlgCB.IsVisible() )
-     {
-         // rearrange the following controls
-@@ -328,6 +354,14 @@ OfaMiscTabPage::OfaMiscTabPage(Window* pParent, const SfxItemSet& rSet ) :
-     }
- }
- 
-+#ifdef WNT
-+IMPL_LINK( OfaMiscTabPage, OnFileDlgToggled, CheckBox*, EMPTYARG )
-+{
-+    aODMADlgCB.Enable( !aFileDlgCB.IsChecked() );
-+    return 0;
-+}
-+#endif
-+
- // -----------------------------------------------------------------------
- 
- OfaMiscTabPage::~OfaMiscTabPage()
-@@ -382,6 +416,13 @@ BOOL OfaMiscTabPage::FillItemSet( SfxItemSet& rSet )
-         bModified = TRUE;
-     }
- 
-+    if ( aODMADlgCB.IsChecked() != aODMADlgCB.GetSavedValue() )
-+    {
-+        SvtMiscOptions aMiscOpt;
-+        aMiscOpt.SetTryODMADialog( aODMADlgCB.IsChecked() );
-+        bModified = TRUE;
-+    }
-+
-     if ( aDocStatusCB.IsChecked() != aDocStatusCB.GetSavedValue() )
-     {
-         SvtPrintWarningOptions aPrintOptions;
-@@ -431,6 +472,9 @@ void OfaMiscTabPage::Reset( const SfxItemSet& rSet )
-     aPrintDlgCB.Check( !aMiscOpt.UseSystemPrintDialog() );
-     aPrintDlgCB.SaveValue();
- 
-+    aODMADlgCB.Check( aMiscOpt.TryODMADialog() );
-+    aODMADlgCB.SaveValue();
-+
-     SvtPrintWarningOptions aPrintOptions;
-     aDocStatusCB.Check(aPrintOptions.IsModifyDocumentOnPrintingAllowed());
-     aDocStatusCB.SaveValue();
-diff --git a/svx/source/cui/optgdlg.hrc b/svx/source/cui/optgdlg.hrc
-index fd43fcb..fd4e059 100644
---- a/svx/source/cui/optgdlg.hrc
-+++ b/svx/source/cui/optgdlg.hrc
-@@ -53,9 +53,10 @@
- #define ROW6                    (ROW5+RSC_CD_DROPDOWN_HEIGHT+ROWSPACE)
- #define ROW7					(ROW6+RSC_CD_FIXEDLINE_HEIGHT+ROWSPACE)
- #define ROW8					(ROW7+RSC_CD_CHECKBOX_HEIGHT+ROWSPACE)
--#define ROW9					(ROW8+RSC_CD_FIXEDLINE_HEIGHT+ROWSPACE)
--#define ROW10					(ROW9+RSC_CD_CHECKBOX_HEIGHT+ROWSPACE)
--#define ROW11					(ROW10+RSC_CD_FIXEDLINE_HEIGHT+ROWSPACE)
-+#define ROW9					(ROW8+RSC_CD_CHECKBOX_HEIGHT+ROWSPACE)
-+#define ROW10					(ROW9+RSC_CD_FIXEDLINE_HEIGHT+ROWSPACE)
-+#define ROW11					(ROW10+RSC_CD_CHECKBOX_HEIGHT+ROWSPACE)
-+#define ROW12					(ROW11+RSC_CD_FIXEDLINE_HEIGHT+ROWSPACE)
- 
- #define DIFF(v1,v2)						(v2-v1)
- #define OFFS_TEXTBOX_FIXEDTEXT(base)	(base+(RSC_CD_TEXTBOX_HEIGHT-RSC_CD_FIXEDTEXT_HEIGHT)/2)
-@@ -199,6 +200,7 @@
- #define FT_HELPAGENT_TIME_UNIT      59
- #define FL_DOCSTATUS                60
- #define CB_DOCSTATUS                61
-+#define CB_ODMADLG                  62
- #endif // #ifndef _SVX_OPTGDLG_HRC
- 
- // ******************************************************************* EOF
-diff --git a/svx/source/cui/optgdlg.hxx b/svx/source/cui/optgdlg.hxx
-index 6d0c76f..89ab8cd 100644
---- a/svx/source/cui/optgdlg.hxx
-+++ b/svx/source/cui/optgdlg.hxx
-@@ -56,6 +56,7 @@ private:
-     FixedLine           aFileDlgFL;
-     ReadOnlyImage       aFileDlgROImage;
-     CheckBox            aFileDlgCB;
-+    CheckBox            aODMADlgCB;
- 
-     FixedLine           aPrintDlgFL;
-     CheckBox            aPrintDlgCB;
-@@ -74,6 +75,9 @@ private:
-     DECL_LINK( TwoFigureConfigHdl, NumericField* );
-     DECL_LINK( HelpCheckHdl_Impl, CheckBox* );
-     DECL_LINK( HelpAgentResetHdl_Impl, PushButton* );
-+#ifdef WNT
-+    DECL_LINK( OnFileDlgToggled, CheckBox* );
-+#endif
- protected:
-     virtual int         DeactivatePage( SfxItemSet* pSet = NULL );
- 
-diff --git a/svx/source/cui/optgdlg.src b/svx/source/cui/optgdlg.src
-index 575e38d..d0e84df 100644
---- a/svx/source/cui/optgdlg.src
-+++ b/svx/source/cui/optgdlg.src
-@@ -112,34 +112,41 @@ TabPage OFA_TP_MISC
-         Size = MAP_APPFONT( WHOLE_WIDTH - COL1, RSC_CD_CHECKBOX_HEIGHT );
-         Text [ en-US ] = "~Use %PRODUCTNAME dialogs";
-     };
-+    CheckBox CB_ODMADLG
-+    {
-+        Pos = MAP_APPFONT( COL1, ROW8 );
-+        Size = MAP_APPFONT( WHOLE_WIDTH - COL4, RSC_CD_CHECKBOX_HEIGHT );
-+        Text [ en-US ] = "Show ODMA DMS dialogs first";
-+        Text [ en-GB ] = "Show ODMA DMS dialogues first";
-+    };
-     FixedLine FL_DOCSTATUS
-     {
--        Pos = MAP_APPFONT( COL0, ROW8 );
-+        Pos = MAP_APPFONT( COL0, ROW9 );
-         Size = MAP_APPFONT( WHOLE_WIDTH, RSC_CD_FIXEDLINE_HEIGHT );
-         Text [ en-US ] = "Document status";
-     };
-     CheckBox CB_DOCSTATUS
-     {
--        Pos = MAP_APPFONT( COL1, ROW9 );
-+        Pos = MAP_APPFONT( COL1, ROW10 );
-         Size = MAP_APPFONT( WHOLE_WIDTH - COL1, RSC_CD_CHECKBOX_HEIGHT );
-         Text [ en-US ] = "~Printing sets \"document modified\" status";
-     };
-     FixedLine FL_TWOFIGURE
-     {
--        Pos = MAP_APPFONT( COL0, ROW10 );
-+        Pos = MAP_APPFONT( COL0, ROW11 );
-         Size = MAP_APPFONT( WHOLE_WIDTH, RSC_CD_FIXEDLINE_HEIGHT );
-         Text [ en-US ] = "Year (two digits)" ;
-     };
-     FixedText FT_INTERPRET
-     {
--        Pos = MAP_APPFONT( COL1, OFFS_TEXTBOX_FIXEDTEXT(ROW11) );
-+        Pos = MAP_APPFONT( COL1, OFFS_TEXTBOX_FIXEDTEXT(ROW12) );
-         Size = MAP_APPFONT( DIFF( COL1, COL3), RSC_CD_FIXEDTEXT_HEIGHT );
-         Text [ en-US ] = "Interpret as years between";
-     };
-     NumericField NF_YEARVALUE
-     {
-         Border = TRUE ;
--        Pos = MAP_APPFONT( COL4, ROW11 );
-+        Pos = MAP_APPFONT( COL4, ROW12 );
-         Size = MAP_APPFONT( EDIT_WIDTH, RSC_CD_TEXTBOX_HEIGHT );
-         Minimum = 1583 ;
-         Maximum = 9857 ;
-@@ -148,7 +155,7 @@ TabPage OFA_TP_MISC
-     };
-     FixedText FT_TOYEAR
-     {
--        Pos = MAP_APPFONT( COL6, OFFS_TEXTBOX_FIXEDTEXT(ROW11) );
-+        Pos = MAP_APPFONT( COL6, OFFS_TEXTBOX_FIXEDTEXT(ROW12) );
-         Size = MAP_APPFONT( WHOLE_WIDTH - COL6, RSC_CD_FIXEDTEXT_HEIGHT );
-         Text [ en-US ] = "and " ;
-     };
-diff --git a/ucb/prj/build.lst b/ucb/prj/build.lst
-index 3235b64..621211d 100644
---- a/ucb/prj/build.lst
-+++ b/ucb/prj/build.lst
-@@ -14,3 +14,4 @@ uc	ucb\source\ucp\webdav		nmake	-	all	uc_webdav uc_inc NULL
- uc	ucb\source\ucp\package		nmake	-	all	uc_package uc_inc NULL
+diff --git ucb/prj/build.lst ucb/prj/build.lst
+index a372e13..092c548 100644
+--- ucb/prj/build.lst
++++ ucb/prj/build.lst
+@@ -15,3 +15,4 @@ uc	ucb\source\ucp\package		nmake	-	all	uc_package uc_inc NULL
  uc	ucb\source\ucp\tdoc			nmake	-	all	uc_tdoc uc_inc NULL
  uc	ucb\source\ucp\expand		nmake	-	all	uc_expand uc_inc NULL
+ uc ucb\qa\unoapi nmake - all uc_qa_unoapi NULL
 +uc	ucb\source\ucp\odma			nmake	-	w	uc_odma uc_inc NULL
-diff --git a/ucb/prj/d.lst b/ucb/prj/d.lst
+diff --git ucb/prj/d.lst ucb/prj/d.lst
 index b02c818..7b15e5b 100644
---- a/ucb/prj/d.lst
-+++ b/ucb/prj/d.lst
+--- ucb/prj/d.lst
++++ ucb/prj/d.lst
 @@ -23,6 +23,11 @@
  ..\%__SRC%\lib\ucp*.uno.dylib %_DEST%\lib%_EXT%\ucp*.uno.dylib
  ..\%__SRC%\misc\ucp*.map %_DEST%\bin%_EXT%\ucp*.map
@@ -2146,10 +2084,10 @@ index b02c818..7b15e5b 100644
  ..\source\ucp\file\ucpfile.xml %_DEST%\xml%_EXT%\ucpfile.xml
  ..\source\ucp\ftp\ucpftp.xml %_DEST%\xml%_EXT%\ucpftp.xml
  ..\source\ucp\hierarchy\ucphier.xml %_DEST%\xml%_EXT%\ucphier.xml
-diff --git a/ucb/source/ucp/odma/makefile.mk b/ucb/source/ucp/odma/makefile.mk
-index feb8ad5..20a6486 100644
---- a/ucb/source/ucp/odma/makefile.mk
-+++ b/ucb/source/ucp/odma/makefile.mk
+diff --git ucb/source/ucp/odma/makefile.mk ucb/source/ucp/odma/makefile.mk
+index 14a7d3d..643b4fa 100644
+--- ucb/source/ucp/odma/makefile.mk
++++ ucb/source/ucp/odma/makefile.mk
 @@ -47,7 +47,7 @@ LIBTARGET=NO
  
  # --- General -----------------------------------------------------
@@ -2182,10 +2120,10 @@ index feb8ad5..20a6486 100644
  # --- Targets ----------------------------------------------------------
  
  .INCLUDE: target.mk
-diff --git a/ucb/source/ucp/odma/odma_content.cxx b/ucb/source/ucp/odma/odma_content.cxx
-index 7a8edf2..e2462db 100644
---- a/ucb/source/ucp/odma/odma_content.cxx
-+++ b/ucb/source/ucp/odma/odma_content.cxx
+diff --git ucb/source/ucp/odma/odma_content.cxx ucb/source/ucp/odma/odma_content.cxx
+index 663436b..5360f1f 100644
+--- ucb/source/ucp/odma/odma_content.cxx
++++ ucb/source/ucp/odma/odma_content.cxx
 @@ -471,6 +471,12 @@ uno::Any SAL_CALL Content::execute(
      }
      else if( ! aCommand.Name.compareToAscii( "transfer" ) )
@@ -2289,7 +2227,7 @@ index 7a8edf2..e2462db 100644
 +            // getContentPropertyWithDocumentId() call above should
 +            // succeed.
  
--                delete lpszNewDocId;
+-                delete [] lpszNewDocId;
 -            }
              if(bError)
                  ucbhelper::cancelCommandExecution(
@@ -2318,10 +2256,10 @@ index 7a8edf2..e2462db 100644
      else
      {
          //////////////////////////////////////////////////////////////////
-diff --git a/ucb/source/ucp/odma/odma_content.hxx b/ucb/source/ucp/odma/odma_content.hxx
-index 0ba461b..02198e6 100644
---- a/ucb/source/ucp/odma/odma_content.hxx
-+++ b/ucb/source/ucp/odma/odma_content.hxx
+diff --git ucb/source/ucp/odma/odma_content.hxx ucb/source/ucp/odma/odma_content.hxx
+index ab50e1a..ed9fc38 100644
+--- ucb/source/ucp/odma/odma_content.hxx
++++ ucb/source/ucp/odma/odma_content.hxx
 @@ -59,7 +59,7 @@ namespace odma
  
  // UNO service name for the content.
@@ -2331,10 +2269,10 @@ index 0ba461b..02198e6 100644
  
  //=========================================================================
  class ContentProvider;
-diff --git a/ucb/source/ucp/odma/odma_contentprops.hxx b/ucb/source/ucp/odma/odma_contentprops.hxx
-index bbeb1c4..4179046 100644
---- a/ucb/source/ucp/odma/odma_contentprops.hxx
-+++ b/ucb/source/ucp/odma/odma_contentprops.hxx
+diff --git ucb/source/ucp/odma/odma_contentprops.hxx ucb/source/ucp/odma/odma_contentprops.hxx
+index 8ac9fae..614a15e 100644
+--- ucb/source/ucp/odma/odma_contentprops.hxx
++++ ucb/source/ucp/odma/odma_contentprops.hxx
 @@ -64,6 +64,7 @@ namespace odma
          {}
  
@@ -2343,10 +2281,10 @@ index bbeb1c4..4179046 100644
          inline ::rtl::OUString getSavedAsName() const { return m_sSavedAsName;	}
      };
      typedef ::std::binary_function< ::rtl::Reference<ContentProperties>, ::rtl::OUString,bool> TContentPropertiesFunctorBase;
-diff --git a/ucb/source/ucp/odma/odma_datasupplier.cxx b/ucb/source/ucp/odma/odma_datasupplier.cxx
-index 055ff87..9182697 100644
---- a/ucb/source/ucp/odma/odma_datasupplier.cxx
-+++ b/ucb/source/ucp/odma/odma_datasupplier.cxx
+diff --git ucb/source/ucp/odma/odma_datasupplier.cxx ucb/source/ucp/odma/odma_datasupplier.cxx
+index a9024d4..ad08145 100644
+--- ucb/source/ucp/odma/odma_datasupplier.cxx
++++ ucb/source/ucp/odma/odma_datasupplier.cxx
 @@ -41,7 +41,6 @@
  #include "odma_content.hxx"
  #include "odma_contentprops.hxx"
@@ -2364,10 +2302,10 @@ index 055ff87..9182697 100644
      
      DWORD dwFlags = ODM_SPECIFIC;
      odm = NODMQueryExecute(ContentProvider::getHandle(), sQuery,dwFlags, lpszDMSList, pQueryId );
-diff --git a/ucb/source/ucp/odma/odma_lib.cxx b/ucb/source/ucp/odma/odma_lib.cxx
-index adc912b..cf0c19f 100644
---- a/ucb/source/ucp/odma/odma_lib.cxx
-+++ b/ucb/source/ucp/odma/odma_lib.cxx
+diff --git ucb/source/ucp/odma/odma_lib.cxx ucb/source/ucp/odma/odma_lib.cxx
+index b6a0d3a..3f27bbd 100644
+--- ucb/source/ucp/odma/odma_lib.cxx
++++ ucb/source/ucp/odma/odma_lib.cxx
 @@ -32,6 +32,8 @@
  //#endif
  #include <osl/module.h>
@@ -2424,10 +2362,10 @@ index adc912b..cf0c19f 100644
      }
      // -------------------------------------------------------------------------
  
-diff --git a/ucb/source/ucp/odma/odma_lib.hxx b/ucb/source/ucp/odma/odma_lib.hxx
-index 716964a..a6c915c 100644
---- a/ucb/source/ucp/odma/odma_lib.hxx
-+++ b/ucb/source/ucp/odma/odma_lib.hxx
+diff --git ucb/source/ucp/odma/odma_lib.hxx ucb/source/ucp/odma/odma_lib.hxx
+index 0c9180e..6eaae88 100644
+--- ucb/source/ucp/odma/odma_lib.hxx
++++ ucb/source/ucp/odma/odma_lib.hxx
 @@ -27,19 +27,7 @@
  #ifndef ODMA_LIB_HXX
  #define ODMA_LIB_HXX
@@ -2518,10 +2456,10 @@ index 716964a..a6c915c 100644
  
      extern TODMRegisterApp			pODMRegisterApp;
      extern TODMUnRegisterApp		pODMUnRegisterApp;
-diff --git a/ucb/source/ucp/odma/odma_provider.cxx b/ucb/source/ucp/odma/odma_provider.cxx
-index 0679c6b..3143caf 100644
---- a/ucb/source/ucp/odma/odma_provider.cxx
-+++ b/ucb/source/ucp/odma/odma_provider.cxx
+diff --git ucb/source/ucp/odma/odma_provider.cxx ucb/source/ucp/odma/odma_provider.cxx
+index c6a30ac..7ba5b7c 100644
+--- ucb/source/ucp/odma/odma_provider.cxx
++++ ucb/source/ucp/odma/odma_provider.cxx
 @@ -434,7 +434,7 @@ void ContentProvider::append(const ::rtl::Reference<ContentProperties>& _rProp)
          lpszDMSList[strlen(lpszDMSList)+1] = '\0';
  
@@ -2544,10 +2482,10 @@ index 0679c6b..3143caf 100644
  ::rtl::OUString ContentProvider::openDoc(const ::rtl::Reference<ContentProperties>& _rProp)  throw (uno::Exception)
  {
      OSL_ENSURE(_rProp.is(),"No valid content properties!");
-diff --git a/ucb/source/ucp/odma/odma_provider.hxx b/ucb/source/ucp/odma/odma_provider.hxx
-index e2600fa..664e5b9 100644
---- a/ucb/source/ucp/odma/odma_provider.hxx
-+++ b/ucb/source/ucp/odma/odma_provider.hxx
+diff --git ucb/source/ucp/odma/odma_provider.hxx ucb/source/ucp/odma/odma_provider.hxx
+index cbd8e6b..272d5e7 100644
+--- ucb/source/ucp/odma/odma_provider.hxx
++++ ucb/source/ucp/odma/odma_provider.hxx
 @@ -29,6 +29,8 @@
  #define ODMA_PROVIDER_HXX
  
@@ -2590,10 +2528,10 @@ index e2600fa..664e5b9 100644
          @param	_sSaveAsName	the SavedAsName of the document
  
          @return	the content properties
-diff --git a/ucb/source/ucp/odma/odma_services.cxx b/ucb/source/ucp/odma/odma_services.cxx
-index 3e4639e..23886bc 100644
---- a/ucb/source/ucp/odma/odma_services.cxx
-+++ b/ucb/source/ucp/odma/odma_services.cxx
+diff --git ucb/source/ucp/odma/odma_services.cxx ucb/source/ucp/odma/odma_services.cxx
+index 1140083..9464b57 100644
+--- ucb/source/ucp/odma/odma_services.cxx
++++ ucb/source/ucp/odma/odma_services.cxx
 @@ -32,21 +32,19 @@
  #include <com/sun/star/registry/XRegistryKey.hpp>
  #include "odma_contentprops.hxx"
@@ -2632,10 +2570,10 @@ index 3e4639e..23886bc 100644
      }
  
      //////////////////////////////////////////////////////////////////////
-diff --git a/ucb/source/ucp/odma/ucpodma.xml b/ucb/source/ucp/odma/ucpodma.xml
+diff --git ucb/source/ucp/odma/ucpodma.xml ucb/source/ucp/odma/ucpodma.xml
 index c3804b6..390245e 100644
---- a/ucb/source/ucp/odma/ucpodma.xml
-+++ b/ucb/source/ucp/odma/ucpodma.xml
+--- ucb/source/ucp/odma/ucpodma.xml
++++ ucb/source/ucp/odma/ucpodma.xml
 @@ -11,7 +11,7 @@
              Ocke Janssen
          </author>
