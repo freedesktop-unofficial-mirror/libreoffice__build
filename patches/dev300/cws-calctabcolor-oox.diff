@@ -1,36 +1,3 @@
-From 2765cdf63e481968b6cccc0a20a5317520d304ca Mon Sep 17 00:00:00 2001
-From: Jan Holesovsky <kendy@suse.cz>
-Date: Fri, 14 May 2010 16:52:47 +0200
-Subject: [PATCH 008/768] cws-calctabcolor-oox.diff
-
----
- oox/inc/oox/xls/viewsettings.hxx     |    3 +++
- oox/source/token/properties.txt      |    1 +
- oox/source/xls/viewsettings.cxx      |    9 +++++++++
- oox/source/xls/worksheetfragment.cxx |    4 +++-
- 4 files changed, 16 insertions(+), 1 deletions(-)
-
-diff --git oox/inc/oox/xls/viewsettings.hxx oox/inc/oox/xls/viewsettings.hxx
-index 64d1e56..b05ba38 100644
---- oox/inc/oox/xls/viewsettings.hxx
-+++ oox/inc/oox/xls/viewsettings.hxx
-@@ -80,6 +80,7 @@ struct SheetViewModel
-     bool                mbShowZeros;                    /// True = show zero value zells.
-     bool                mbShowOutline;                  /// True = show outlines.
-     bool                mbZoomToFit;                    /// True = zoom chart sheet to fit window.
-+    Color               maTabColor;                     /// Sheet tab color. (TODO: Move to sheet settings later.)
- 
-     explicit            SheetViewModel();
- 
-@@ -111,6 +112,8 @@ public:
- 
-     /** Imports the sheetView element containing sheet view settings. */
-     void                importSheetView( const AttributeList& rAttribs );
-+    /** Imports the tabcolor element containing tab color settings. */
-+    void                importTabColor( const AttributeList& rAttribs );
-     /** Imports the pane element containing sheet pane settings. */
-     void                importPane( const AttributeList& rAttribs );
-     /** Imports the selection element containing selection settings for a pane. */
 diff --git oox/source/token/properties.txt oox/source/token/properties.txt
 index 4d20b8f..4569d8c 100644
 --- oox/source/token/properties.txt
@@ -43,48 +10,54 @@ index 4d20b8f..4569d8c 100644
  TableBorder
  TableLayout
  TableSelected
-diff --git oox/source/xls/viewsettings.cxx oox/source/xls/viewsettings.cxx
-index 2addbf5..bc68bb3 100644
---- oox/source/xls/viewsettings.cxx
-+++ oox/source/xls/viewsettings.cxx
-@@ -248,6 +248,12 @@ void SheetViewSettings::importSheetView( const AttributeList& rAttribs )
-     rModel.mbShowOutline     = rAttribs.getBool( XML_showOutlineSymbols, true );
+diff --git oox/source/xls/worksheethelper.cxx oox/source/xls/worksheethelper.cxx
+index b92050e..cb1c7bf 100644
+--- oox/source/xls/worksheethelper.cxx
++++ oox/source/xls/worksheethelper.cxx
+@@ -997,6 +997,8 @@ void WorksheetData::finalizeWorksheetImport()
+     maCondFormats.finalizeImport();
+     maPageSett.finalizeImport();
+     maSheetViewSett.finalizeImport();
++    maSheetSett.finalizeImport();
++
+     lclUpdateProgressBar( mxFinalProgress, 0.5 );
+     convertColumns();
+     convertRows();
+diff --git oox/source/xls/worksheetsettings.cxx oox/source/xls/worksheetsettings.cxx
+index b95bada..0a9885b 100644
+--- oox/source/xls/worksheetsettings.cxx
++++ oox/source/xls/worksheetsettings.cxx
+@@ -26,14 +26,18 @@
+  ************************************************************************/
+ 
+ #include "oox/xls/worksheetsettings.hxx"
+-#include <com/sun/star/util/XProtectable.hpp>
+ #include "oox/helper/attributelist.hxx"
+ #include "oox/helper/recordinputstream.hxx"
+ #include "oox/xls/biffinputstream.hxx"
+ #include "oox/xls/pagesettings.hxx"
+ #include "oox/xls/workbooksettings.hxx"
++#include "properties.hxx"
++
++#include <com/sun/star/util/XProtectable.hpp>
+ 
+ using ::rtl::OUString;
++using ::com::sun::star::beans::XPropertySet;
++using ::com::sun::star::uno::Any;
+ using ::com::sun::star::uno::Exception;
+ using ::com::sun::star::uno::Reference;
+ using ::com::sun::star::uno::UNO_QUERY_THROW;
+@@ -308,6 +312,13 @@ void WorksheetSettings::finalizeImport()
+     catch( Exception& )
+     {
+     }
++
++    if (!maSheetSettings.maTabColor.isAuto())
++    {
++        sal_Int32 nColor = maSheetSettings.maTabColor.getColor(getBaseFilter());
++        PropertySet aSheetProp(getSheet());
++        aSheetProp.setProperty(PROP_TabColor, nColor);
++    }
  }
  
-+void SheetViewSettings::importTabColor( const AttributeList& rAttribs )
-+{
-+    SheetViewModel& rModel = maSheetViews.empty() ? *createSheetView() : *maSheetViews.back();
-+    rModel.maTabColor.importColor( rAttribs );
-+}
-+
- void SheetViewSettings::importPane( const AttributeList& rAttribs )
- {
-     OSL_ENSURE( !maSheetViews.empty(), "SheetViewSettings::importPane - missing sheet view model" );
-@@ -588,6 +594,9 @@ void SheetViewSettings::finalizeImport()
-     aPropMap[ PROP_ShowZeroValues ]               <<= xModel->mbShowZeros;
-     aPropMap[ PROP_IsOutlineSymbolsSet ]          <<= xModel->mbShowOutline;
- 
-+    if (!xModel->maTabColor.isAuto())
-+        aPropMap[ PROP_TabColor ] <<= static_cast< sal_Int32 >(xModel->maTabColor.getColor(getBaseFilter()));
-+
-     // store sheet view settings in global view settings object
-     getViewSettings().setSheetViewSettings( getSheetIndex(), xModel, Any( aPropMap.makePropertyValueSequence() ) );
- }
-diff --git oox/source/xls/worksheetfragment.cxx oox/source/xls/worksheetfragment.cxx
-index ce95c0e..38525df 100644
---- oox/source/xls/worksheetfragment.cxx
-+++ oox/source/xls/worksheetfragment.cxx
-@@ -296,7 +296,9 @@ ContextHandlerRef OoxWorksheetFragment::onCreateContext( sal_Int32 nElement, con
-         case XLS_TOKEN( sheetPr ):
-             switch( nElement )
-             {
--                case XLS_TOKEN( tabColor ):         getWorksheetSettings().importTabColor( rAttribs );              break;
-+// TODO: Treat tab color as a sheet setting later.
-+//              case XLS_TOKEN( tabColor ):         getWorksheetSettings().importTabColor( rAttribs );              break;
-+                case XLS_TOKEN( tabColor ):         getSheetViewSettings().importTabColor( rAttribs );              break;
-                 case XLS_TOKEN( outlinePr ):        getWorksheetSettings().importOutlinePr( rAttribs );             break;
-                 case XLS_TOKEN( pageSetUpPr ):      importPageSetUpPr( rAttribs );                                  break;
-             }
--- 
-1.7.0.1
-
+ // ============================================================================
