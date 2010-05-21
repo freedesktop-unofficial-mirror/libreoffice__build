@@ -1,0 +1,522 @@
+
+# HG changeset patch
+# User Rene Engelhard <rene@openoffice.org>
+# Date 1274184320 -7200
+# Node ID 0db036bf824fc489595f3593db6e72389d5f00db
+# Parent  9d3789dba51999a4be5144a85419dee8d5c52375
+systemlibc: migrate systemlibc to hg; try again from scratch
+
+diff -r 9d3789dba519 -r 0db036bf824f configure.in
+--- configure.in	Wed Apr 21 19:22:29 2010 +0200
++++ configure.in	Tue May 18 14:05:20 2010 +0200
+@@ -5134,6 +5134,15 @@
+    fi
+ fi
+ 
++AC_CHECK_FUNCS(getopt, SYSTEM_GETOPT=YES, [SYSTEM_GETOPT=NO])
++AC_CHECK_FUNCS(readdir_r, SYSTEM_READDIR_R=YES, [SYSTEM_READDIR_R=NO])
++if test "$SYSTEM_GETOPT" = "YES" -a "$SYSTEM_READDIR_R" = "YES"; then
++	SYSTEM_GLIBC=YES
++fi
++AC_SUBST(SYSTEM_GETOPT)
++AC_SUBST(SYSTEM_READDIR_R)
++AC_SUBST(SYSTEM_GLIBC)
++
+ dnl =========================================
+ dnl Check for the Microsoft Platform SDK.
+ dnl =========================================
+diff -r 9d3789dba519 -r 0db036bf824f external/glibc-2.1.3.patch
+--- external/glibc-2.1.3.patch	Wed Apr 21 19:22:29 2010 +0200
++++ external/glibc-2.1.3.patch	Tue May 18 14:05:20 2010 +0200
+@@ -76,7 +76,7 @@
+  extern int getopt ();
+ --- misc/glibc-2.1.3/posix/makefile.mk	Mon Mar 31 09:43:50 2008
+ +++ misc/build/glibc-2.1.3/posix/makefile.mk	Mon Mar 31 09:43:38 2008
+-@@ -1 +1,63 @@
++@@ -1 +1,69 @@
+ -dummy
+ +#*************************************************************************
+ +#
+@@ -123,14 +123,16 @@
+ +
+ +# --- Files --------------------------------------------------------
+ +
+++.IF "$(SYSTEM_GETOPT)" != "YES"
+ +OBJFILES=	$(OBJ)$/getopt.obj		\
+ +			$(OBJ)$/getopt1.obj
+ +
+ +LIB1TARGET=$(SLB)$/$(TARGET).lib
+ +LIB1ARCHIV=$(LB)$/lib$(TARGET).a
+ +LIB1OBJFILES=$(OBJFILES)
+++.ENDIF
+ +
+-+.IF "$(OS)"=="NETBSD"
+++.IF "$(SYSTEM_READDIR_R)" != "YES"
+ +TARGET2=gnu_readdir_r
+ +OBJFILES+= $(OBJ)$/readdir_r.obj
+ +LIB2TARGET=$(SLB)$/$(TARGET2).lib
+@@ -138,6 +140,11 @@
+ +LIB2OBJFILES= $(OBJ)$/readdir_r.obj
+ +.ENDIF
+ +
+++.IF "$(SYSTEM_READDIR_R)" == "YES" && "$(SYSTEM_GETOPT)" == "YES"
+++@all:
+++	@echo "Nothing to do here.
+++.ENDIF
+++
+ +# --- Targets ------------------------------------------------------
+ +
+ +.INCLUDE :  target.mk
+diff -r 9d3789dba519 -r 0db036bf824f external/glibc/makefile.mk
+--- external/glibc/makefile.mk	Wed Apr 21 19:22:29 2010 +0200
++++ external/glibc/makefile.mk	Tue May 18 14:05:20 2010 +0200
+@@ -36,10 +36,14 @@
+ 
+ # --- Files --------------------------------------------------------
+ 
++.IF "$(SYSTEM_GETOPT)" != "YES" || "$(SYSTEM_READDIR_R)" != "YES"
+ TARFILE_NAME=glibc-2.1.3-stub
+ TARFILE_MD5=4a660ce8466c9df01f19036435425c3a
+ TARFILE_ROOTDIR=glibc-2.1.3
+-ADDITIONAL_FILES=posix$/makefile.mk posix$/config.h posix$/readdir_r.c
++ADDITIONAL_FILES=posix$/makefile.mk posix$/config.h
++.IF "$(SYSTEM_READDIR_R)" != "YES"
++ADDITIONAL_FILES += posix$/readdir_r.c
++.ENDIF
+ 
+ PATCH_FILES=$(PRJ)$/glibc-2.1.3.patch
+ 
+@@ -48,6 +52,10 @@
+ 
+ BUILD_DIR=posix
+ BUILD_ACTION=dmake $(MFLAGS) $(CALLMACROS)
++.ELSE
++@all:
++	@echo "Nothing to do here."
++.ENDIF
+ 
+ # --- Targets ------------------------------------------------------
+ 
+diff -r 9d3789dba519 -r 0db036bf824f idlc/source/preproc/getopt.c
+--- idlc/source/preproc/getopt.c	Wed Apr 21 19:22:29 2010 +0200
++++ /dev/null	Thu Jan 01 00:00:00 1970 +0000
+@@ -1,94 +0,0 @@
+-/*************************************************************************
+- *
+- * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+- * 
+- * Copyright 2000, 2010 Oracle and/or its affiliates.
+- *
+- * OpenOffice.org - a multi-platform office productivity suite
+- *
+- * This file is part of OpenOffice.org.
+- *
+- * OpenOffice.org is free software: you can redistribute it and/or modify
+- * it under the terms of the GNU Lesser General Public License version 3
+- * only, as published by the Free Software Foundation.
+- *
+- * OpenOffice.org is distributed in the hope that it will be useful,
+- * but WITHOUT ANY WARRANTY; without even the implied warranty of
+- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+- * GNU Lesser General Public License version 3 for more details
+- * (a copy is included in the LICENSE file that accompanied this code).
+- *
+- * You should have received a copy of the GNU Lesser General Public License
+- * version 3 along with OpenOffice.org.  If not, see
+- * <http://www.openoffice.org/license.html>
+- * for a copy of the LGPLv3 License.
+- *
+- ************************************************************************/
+-
+-#include	<stdio.h>
+-#include    <string.h>
+-
+-#define EPR                 fprintf(stderr,
+-#define ERR(str, chr)       if(opterr) { EPR "%s%c\n", str, chr); }
+-
+-int opterr = 1;
+-int optind = 1;
+-int optopt;
+-char *optarg;
+-
+-int
+-    cppgetopt(int argc, char *const argv[], const char *opts)
+-{
+-    static int sp = 1;
+-    register int c;
+-    register char *cp;
+-
+-    if (sp == 1)
+-    {
+-        if (optind >= argc ||
+-            argv[optind][0] != '-' || argv[optind][1] == '\0')
+-            return -1;
+-        else
+-            if (strcmp(argv[optind], "--") == 0)
+-            {
+-                optind++;
+-                return -1;
+-            }
+-    }
+-    optopt = c = argv[optind][sp];
+-    if (c == ':' || (cp = strchr(opts, c)) == 0)
+-    {
+-        ERR(": illegal option -- ", c);
+-        if (argv[optind][++sp] == '\0')
+-        {
+-            optind++;
+-            sp = 1;
+-        }
+-        return '?';
+-    }
+-    if (*++cp == ':')
+-    {
+-        if (argv[optind][sp + 1] != '\0')
+-            optarg = &argv[optind++][sp + 1];
+-        else
+-            if (++optind >= argc)
+-            {
+-                ERR(": option requires an argument -- ", c);
+-                sp = 1;
+-                return '?';
+-            }
+-            else
+-                optarg = argv[optind++];
+-        sp = 1;
+-    }
+-    else
+-    {
+-        if (argv[optind][++sp] == '\0')
+-        {
+-            sp = 1;
+-            optind++;
+-        }
+-        optarg = 0;
+-    }
+-    return c;
+-}
+diff -r 9d3789dba519 -r 0db036bf824f idlc/source/preproc/makefile.mk
+--- idlc/source/preproc/makefile.mk	Wed Apr 21 19:22:29 2010 +0200
++++ idlc/source/preproc/makefile.mk	Tue May 18 14:05:20 2010 +0200
+@@ -43,7 +43,6 @@
+ OBJFILES=   \
+ 			$(OBJ)$/cpp.obj	\
+ 			$(OBJ)$/eval.obj	\
+-			$(OBJ)$/getopt.obj	\
+ 			$(OBJ)$/include.obj	\
+ 			$(OBJ)$/lex.obj	\
+ 			$(OBJ)$/macro.obj	\
+diff -r 9d3789dba519 -r 0db036bf824f idlc/source/preproc/nlist.c
+--- idlc/source/preproc/nlist.c	Wed Apr 21 19:22:29 2010 +0200
++++ idlc/source/preproc/nlist.c	Tue May 18 14:05:20 2010 +0200
+@@ -29,9 +29,6 @@
+ #include <string.h>
+ #include "cpp.h"
+ 
+-extern int cppgetopt(int, char *const *, const char *);
+-extern char *optarg;
+-extern int optind;
+ extern int Cplusplus;
+ Nlist *kwdefined;
+ char wd[128];
+diff -r 9d3789dba519 -r 0db036bf824f idlc/source/preproc/unix.c
+--- idlc/source/preproc/unix.c	Wed Apr 21 19:22:29 2010 +0200
++++ idlc/source/preproc/unix.c	Tue May 18 14:05:20 2010 +0200
+@@ -39,9 +39,7 @@
+ 
+ #include "cpp.h"
+ 
+-extern int cppgetopt(int, char *const *, const char *);
+-extern char *optarg, rcsid[];
+-extern int optind;
++extern char rcsid[];
+ 
+ int Pflag = 0;                          /* print no line information */
+ int Iflag = 0;							/* print includes */
+@@ -62,7 +60,7 @@
+     Tokenrow tr;
+ 
+     setup_kwtab();
+-    while ((c = cppgetopt(argc, argv, "NOPV:I:D:U:F:A:X:u:l:+")) != -1)
++    while ((c = getopt(argc, argv, "NOPV:I:D:U:F:A:X:u:l:+")) != -1)
+         switch (c)
+         {
+             case 'N':
+diff -r 9d3789dba519 -r 0db036bf824f set_soenv.in
+--- set_soenv.in	Wed Apr 21 19:22:29 2010 +0200
++++ set_soenv.in	Tue May 18 14:05:20 2010 +0200
+@@ -1875,6 +1875,9 @@
+ ToFile( "HUNSPELL_CFLAGS",   "@HUNSPELL_CFLAGS@",  "e" );
+ ToFile( "HUNSPELL_LIBS",     "@HUNSPELL_LIBS@",    "e" );
+ ToFile( "SYSTEM_LPSOLVE",    "@SYSTEM_LPSOLVE@",   "e" );
++ToFile( "SYSTEM_GETOPT",     "@SYSTEM_GETOPT@",    "e" );
++ToFile( "SYSTEM_READDIR_R",  "@SYSTEM_READDIR_R@", "e" );
++ToFile( "SYSTEM_GLIBC",      "@SYSTEM_GLIBC@",     "e" );
+ ToFile( "SYSTEM_HYPH",       "@SYSTEM_HYPH@",      "e" );
+ ToFile( "HYPHEN_LIB",        "@HYPHEN_LIB@",       "e" );
+ ToFile( "SYSTEM_MYTHES",     "@SYSTEM_MYTHES@",    "e" );
+diff -r 9d3789dba519 -r 0db036bf824f soltools/cpp/_getopt.c
+--- soltools/cpp/_getopt.c	Wed Apr 21 19:22:29 2010 +0200
++++ /dev/null	Thu Jan 01 00:00:00 1970 +0000
+@@ -1,71 +0,0 @@
+-#include    <stdio.h>
+-#include    <string.h>
+-
+-#define EPR                 fprintf(stderr,
+-#define ERR(str, chr)       if(opterr) { EPR "%s%c\n", str, chr); }
+-
+-int opterr = 1;
+-int optind = 1;
+-int optopt;
+-char *optarg;
+-
+-int
+-    stgetopt(int argc, char *const argv[], const char *opts)
+-{
+-    static int sp = 1;
+-    register int c;
+-    register char *cp;
+-
+-    if (sp == 1)
+-    {
+-        if (optind >= argc ||
+-            argv[optind][0] != '-' || argv[optind][1] == '\0')
+-            return -1;
+-        else if (strcmp(argv[optind], "--") == 0)
+-            {
+-                optind++;
+-                return -1;
+-            } 
+-        else if (strcmp(argv[optind], "-isysroot") == 0) 
+-            {
+-                // skip Mac OS X SDK selection flags
+-                optind++; optind++;
+-            }
+-    }
+-    optopt = c = argv[optind][sp];
+-    if (c == ':' || (cp = strchr(opts, c)) == 0)
+-    {
+-        ERR(": illegal option -- ", c);
+-        if (argv[optind][++sp] == '\0')
+-        {
+-            optind++;
+-            sp = 1;
+-        }
+-        return '?';
+-    }
+-    if (*++cp == ':')
+-    {
+-        if (argv[optind][sp + 1] != '\0')
+-            optarg = &argv[optind++][sp + 1];
+-        else
+-            if (++optind >= argc)
+-            {
+-                ERR(": option requires an argument -- ", c);
+-                sp = 1;
+-                return '?';
+-            }
+-            else
+-                optarg = argv[optind++];
+-        sp = 1;
+-    }
+-    else
+-    {
+-        if (argv[optind][++sp] == '\0')
+-        {
+-            sp = 1;
+-            optind++;
+-        }
+-        optarg = 0;
+-    }
+-    return c;
+-}
+diff -r 9d3789dba519 -r 0db036bf824f soltools/cpp/_nlist.c
+--- soltools/cpp/_nlist.c	Wed Apr 21 19:22:29 2010 +0200
++++ soltools/cpp/_nlist.c	Tue May 18 14:05:20 2010 +0200
+@@ -3,9 +3,6 @@
+ #include <string.h>
+ #include "cpp.h"
+ 
+-extern int stgetopt(int, char *const *, const char *);
+-extern char *optarg;
+-extern int optind;
+ extern int Cplusplus;
+ Nlist *kwdefined;
+ char wd[128];
+diff -r 9d3789dba519 -r 0db036bf824f soltools/cpp/_unix.c
+--- soltools/cpp/_unix.c	Wed Apr 21 19:22:29 2010 +0200
++++ soltools/cpp/_unix.c	Tue May 18 14:05:20 2010 +0200
+@@ -12,9 +12,7 @@
+ 
+ #include "cpp.h"
+ 
+-extern int stgetopt(int, char *const *, const char *);
+-extern char *optarg, rcsid[];
+-extern int optind;
++extern char rcsid[];
+ 
+ int Pflag = 0;                          /* print no line information */
+ int Iflag = 0;							/* print includes */
+@@ -36,7 +34,7 @@
+     Tokenrow tr;
+ 
+     setup_kwtab();
+-    while ((c = stgetopt(argc, argv, "NOPV:I:D:U:F:A:X:u:l:+")) != -1)
++    while ((c = getopt(argc, argv, "NOPV:I:D:U:F:A:X:u:l:+")) != -1)
+         switch (c)
+         {
+             case 'N':
+diff -r 9d3789dba519 -r 0db036bf824f soltools/cpp/makefile.mk
+--- soltools/cpp/makefile.mk	Wed Apr 21 19:22:29 2010 +0200
++++ soltools/cpp/makefile.mk	Tue May 18 14:05:20 2010 +0200
+@@ -45,7 +45,6 @@
+ OBJFILES= \
+ 	$(OBJ)$/_cpp.obj		\
+ 	$(OBJ)$/_eval.obj 	\
+-	$(OBJ)$/_getopt.obj	\
+ 	$(OBJ)$/_include.obj \
+ 	$(OBJ)$/_lex.obj 	\
+ 	$(OBJ)$/_macro.obj 	\
+diff -r 9d3789dba519 -r 0db036bf824f soltools/javadep/javadep.c
+--- soltools/javadep/javadep.c	Wed Apr 21 19:22:29 2010 +0200
++++ soltools/javadep/javadep.c	Tue May 18 14:05:20 2010 +0200
+@@ -138,13 +138,6 @@
+ void    err_quit(const char *, ...);
+ void    silent_quit(void);
+ 
+-/* poor man's getopt() */
+-int     simple_getopt(char *pargv[], const char *poptstring);
+-char    *optarg = NULL;
+-int     optind  = 1;
+-int     optopt  = 0;
+-int     opterr  = 0;
+-
+ uint8
+ read_uint8(const file_t *pfile)
+ {
+@@ -731,45 +724,6 @@
+             pprogname);
+ }
+ 
+-/* my very simple minded implementation of getopt()
+- * it's to sad that getopt() is not available everywhere
+- * note: this is not a full POSIX conforming getopt()
+- */
+-int simple_getopt(char *pargv[], const char *poptstring)
+-{
+-    char *parg = pargv[optind];
+-
+-    /* skip all response file arguments */
+-    if ( parg ) {
+-        while ( *parg == '@' )
+-            parg = pargv[++optind];
+-        
+-        if ( parg[0] == '-' && parg[1] != '\0' ) {
+-            char *popt;
+-            int c = parg[1];
+-            if ( (popt = strchr(poptstring, c)) == NULL ) {
+-                optopt = c;
+-                if ( opterr )
+-                    fprintf(stderr, "Unknown option character `\\x%x'.\n", optopt);
+-                return '?';
+-            }
+-            if ( *(++popt) == ':') {
+-                if ( parg[2] != '\0' ) {
+-                    optarg = ++parg;
+-                } else {
+-                    optarg = pargv[++optind];
+-                }
+-            } else {
+-                optarg = NULL;
+-            }
+-            ++optind;
+-            return c;
+-        }
+-    }
+-    return -1;
+-}
+-
+-
+ int CDECL
+ main(int argc, char *argv[])
+ {
+@@ -817,7 +771,7 @@
+     opterr = 0;
+     pincs = allocate_growable();
+ 
+-    while( (c = simple_getopt(pall_argv, ":i:I:s:S:o:OhHvV")) != -1 ) {
++    while( (c = getopt(nall_argc, pall_argv, ":i:I:s:S:o:OhHvV")) != -1 ) {
+         switch(c) {
+             case 'i':
+             case 'I':
+diff -r 9d3789dba519 -r 0db036bf824f tools/bootstrp/rscdep.cxx
+--- tools/bootstrp/rscdep.cxx	Wed Apr 21 19:22:29 2010 +0200
++++ tools/bootstrp/rscdep.cxx	Tue May 18 14:05:20 2010 +0200
+@@ -70,15 +70,6 @@
+ 
+ //static String aDelim;
+ 
+-/* poor man's getopt() */
+-int     simple_getopt(char *argv[], const char *optstring);
+-#if defined(WNT) || defined(OS2)
+-static char	*optarg = NULL;
+-static int	optind = 1; 
+-static int	optopt = 0; 
+-static int	opterr = 0; 
+-#endif
+-
+ SAL_IMPLEMENT_MAIN_WITH_ARGS( argc, argv )
+ {
+ 	int c;
+@@ -179,7 +170,7 @@
+ 
+ 	while( 1 )
+ 	{
+-		c = simple_getopt( argv,
++		c = getopt( argc, argv,
+ 		"_abcdefghi:jklmnopqrstuvwxyzABCDEFGHI:JKLMNOPQRSTUVWXYZ1234567890/-+=.\\()\"");
+ 		if ( c == -1 )
+ 			break;
+@@ -296,41 +287,3 @@
+ 	return 0;
+ }
+ 
+-/* my very simple minded implementation of getopt()
+- * it's too sad that getopt() is not available everywhere
+- * note: this is not a full POSIX conforming getopt()
+- */
+-int simple_getopt(char *argv[], const char *optstring)
+-{
+-    char *arg = argv[optind];
+-
+-    /* skip all response file arguments */
+-    if ( arg ) {
+-		while ( *arg == '@' )
+-        	arg = argv[++optind];
+-        
+-    	if ( arg[0] == '-' && arg[1] != '\0' ) {
+-        	const char *popt;
+-        	int c = arg[1];
+-        	if ( (popt = strchr(optstring, c)) == NULL ) {
+-            	optopt = c;
+-            	if ( opterr )
+-                	fprintf(stderr, "Unknown option character `\\x%x'.\n", optopt);
+-            	return '?';
+-        	}
+-        	if ( *(++popt) == ':') {
+-             	if ( arg[2] != '\0' ) {
+-                 	optarg = ++arg;
+-             	} else {
+-                 	optarg = argv[++optind];
+-             	}
+-         	} else {
+-             	optarg = NULL;
+-         	}
+-         	++optind;
+-         	return c;
+-    	}
+-	}
+-    return -1;
+-}
+-
+
