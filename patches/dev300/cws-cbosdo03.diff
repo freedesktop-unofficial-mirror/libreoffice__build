@@ -1,39 +1,7 @@
-From cae61fd2b742202815c323266a902237735249d2 Mon Sep 17 00:00:00 2001
-From: Jan Holesovsky <kendy@suse.cz>
-Date: Fri, 14 May 2010 17:00:37 +0200
-Subject: [PATCH 416/878] writerfilter-docx-numbering.diff
-
----
- offapi/com/sun/star/style/NumberingType.idl       |   10 +
- writerfilter/inc/dmapper/DomainMapper.hxx         |    6 +-
- writerfilter/source/dmapper/ConversionHelper.cxx  |  124 ++-
- writerfilter/source/dmapper/DomainMapper.cxx      |   57 +-
- writerfilter/source/dmapper/DomainMapper_Impl.cxx |   19 +-
- writerfilter/source/dmapper/DomainMapper_Impl.hxx |   14 +-
- writerfilter/source/dmapper/LFOTable.cxx          |  606 ----------
- writerfilter/source/dmapper/LFOTable.hxx          |   65 -
- writerfilter/source/dmapper/ListTable.cxx         | 1300 ---------------------
- writerfilter/source/dmapper/ListTable.hxx         |   89 --
- writerfilter/source/dmapper/NumberingManager.cxx  | 1018 ++++++++++++++++
- writerfilter/source/dmapper/NumberingManager.hxx  |  225 ++++
- writerfilter/source/dmapper/PropertyIds.cxx       |    2 +-
- writerfilter/source/dmapper/PropertyIds.hxx       |    1 +
- writerfilter/source/dmapper/StyleSheetTable.cxx   |   40 +-
- writerfilter/source/dmapper/makefile.mk           |    3 +-
- writerfilter/source/doctok/WW8DocumentImpl.cxx    |   23 +-
- writerfilter/source/ooxml/OOXMLDocumentImpl.cxx   |    2 +-
- 18 files changed, 1414 insertions(+), 2190 deletions(-)
- delete mode 100644 writerfilter/source/dmapper/LFOTable.cxx
- delete mode 100644 writerfilter/source/dmapper/LFOTable.hxx
- delete mode 100644 writerfilter/source/dmapper/ListTable.cxx
- delete mode 100644 writerfilter/source/dmapper/ListTable.hxx
- create mode 100644 writerfilter/source/dmapper/NumberingManager.cxx
- create mode 100644 writerfilter/source/dmapper/NumberingManager.hxx
-
-diff --git a/offapi/com/sun/star/style/NumberingType.idl b/offapi/com/sun/star/style/NumberingType.idl
-index c24331b..58329ef 100644
---- a/offapi/com/sun/star/style/NumberingType.idl
-+++ b/offapi/com/sun/star/style/NumberingType.idl
+diff --git offapi/com/sun/star/style/NumberingType.idl offapi/com/sun/star/style/NumberingType.idl
+index 506e5ad..8a408f6 100644
+--- offapi/com/sun/star/style/NumberingType.idl
++++ offapi/com/sun/star/style/NumberingType.idl
 @@ -121,6 +121,7 @@ published constants NumberingType
  
      //-------------------------------------------------------------------------
@@ -100,62 +68,206 @@ index c24331b..58329ef 100644
  
          @since OOo 1.1.2
       */
-diff --git a/writerfilter/inc/dmapper/DomainMapper.hxx b/writerfilter/inc/dmapper/DomainMapper.hxx
-index b344d70..b951c95 100644
---- a/writerfilter/inc/dmapper/DomainMapper.hxx
-+++ b/writerfilter/inc/dmapper/DomainMapper.hxx
-@@ -62,7 +62,8 @@ namespace dmapper
+diff --git oox/source/shape/ShapeContextHandler.cxx oox/source/shape/ShapeContextHandler.cxx
+index d514781..7790a20 100644
+--- oox/source/shape/ShapeContextHandler.cxx
++++ oox/source/shape/ShapeContextHandler.cxx
+@@ -31,11 +31,6 @@
+ #include "oox/vml/vmlshapecontainer.hxx"
+ #include "tokens.hxx"
+ 
+-#if DEBUG
+-#include <iostream>
+-using namespace std;
+-#endif
+-
+ namespace oox { namespace shape {
+ 
+ using namespace ::com::sun::star;
+@@ -93,9 +88,6 @@ ShapeContextHandler::getGraphicShapeContext(::sal_Int32 Element )
+ uno::Reference<xml::sax::XFastContextHandler>
+ ShapeContextHandler::getDrawingShapeContext()
+ {
+-#if DEBUG
+-    clog << "ShapeContextHandler::getDrawingShapeContext" << endl;
+-#endif
+     if (!mxDrawingFragmentHandler.is())
+     {
+         mpDrawing.reset( new oox::vml::Drawing( *mxFilterBase, mxDrawPage, oox::vml::VMLDRAWING_WORD ) );
+@@ -186,9 +178,6 @@ ShapeContextHandler::createFastChildContext
+  const uno::Reference< xml::sax::XFastAttributeList > & Attribs)
+     throw (uno::RuntimeException, xml::sax::SAXException)
+ {
+-#if DEBUG
+-    clog << "ShapeContextHandler::createFastChildContext" << endl;
+-#endif
+     uno::Reference< xml::sax::XFastContextHandler > xResult;
+     uno::Reference< xml::sax::XFastContextHandler > xContextHandler(getContextHandler());
+ 
+diff --git sw/inc/unotext.hxx sw/inc/unotext.hxx
+index ff95bf6..31024de 100644
+--- sw/inc/unotext.hxx
++++ sw/inc/unotext.hxx
+@@ -31,6 +31,7 @@
+ #include <com/sun/star/lang/XUnoTunnel.hpp>
+ #include <com/sun/star/beans/XPropertySet.hpp>
+ #include <com/sun/star/text/XText.hpp>
++#include <com/sun/star/text/XTextCopy.hpp>
+ #include <com/sun/star/text/XTextRangeCompare.hpp>
+ #include <com/sun/star/text/XRelativeTextContentInsert.hpp>
+ #include <com/sun/star/text/XRelativeTextContentRemove.hpp>
+@@ -62,6 +63,7 @@ class SwXText
+     , public ::com::sun::star::lang::XUnoTunnel
+     , public ::com::sun::star::beans::XPropertySet
+     , public ::com::sun::star::text::XTextAppendAndConvert
++    , public ::com::sun::star::text::XTextCopy
+     , public ::com::sun::star::text::XTextRangeCompare
+     , public ::com::sun::star::text::XRelativeTextContentInsert
+     , public ::com::sun::star::text::XRelativeTextContentRemove
+@@ -333,6 +335,11 @@ public:
+         throw (::com::sun::star::lang::IllegalArgumentException,
+                 ::com::sun::star::uno::RuntimeException);
+ 
++    // XTextCopy
++    virtual void SAL_CALL copyText( 
++            const ::com::sun::star::uno::Reference< 
++                ::com::sun::star::text::XTextCopy >& xSource )
++        throw (::com::sun::star::uno::RuntimeException);
+ };
+ 
+ #endif // SW_UNOTEXT_HXX
+diff --git sw/source/core/unocore/unotext.cxx sw/source/core/unocore/unotext.cxx
+index 089cba4..2022161 100644
+--- sw/source/core/unocore/unotext.cxx
++++ sw/source/core/unocore/unotext.cxx
+@@ -76,8 +76,6 @@
+ #include <stdlib.h>
+ 
+ #include <iostream>
+-
+-
+ using namespace ::com::sun::star;
+ using ::rtl::OUString;
+ 
+@@ -277,6 +275,10 @@ SwXText::queryInterface(const uno::Type& rType) throw (uno::RuntimeException)
+     {
+         aRet <<= uno::Reference< text::XTextContentAppend >(this);
+     }
++    else if(rType == text::XTextCopy::static_type())
++    {
++        aRet <<= uno::Reference< text::XTextCopy >( this );
++    }
+     return aRet;
+ }
+ /* -----------------------------15.03.00 17:42--------------------------------
+@@ -1860,6 +1862,32 @@ static bool lcl_SimilarPosition( const sal_Int32 nPos1, const sal_Int32 nPos2 )
+     return abs( nPos1 - nPos2 ) < COL_POS_FUZZY;
+ }
+ 
++void SwXText::copyText(
++    const uno::Reference< text::XTextCopy >& xSource )
++        throw ( uno::RuntimeException )
++{
++    uno::Reference< lang::XUnoTunnel > xTTunnel( xSource, uno::UNO_QUERY_THROW );
++    SwXText* pText = 0;
++    pText = reinterpret_cast< SwXText* >(
++                   sal::static_int_cast< sal_IntPtr >( xTTunnel->getSomething( SwXText::getUnoTunnelId()) ));
++    
++    uno::Reference< text::XText > xText( xSource, uno::UNO_QUERY_THROW );
++    uno::Reference< text::XTextCursor > xCursor = xText->createTextCursor( );
++    xCursor->gotoEnd( sal_True );
++    
++    uno::Reference< lang::XUnoTunnel > xTunnel( xCursor, uno::UNO_QUERY_THROW );
++    
++    OTextCursorHelper* pCursor = 0;
++    pCursor = reinterpret_cast< OTextCursorHelper* >(
++                   sal::static_int_cast< sal_IntPtr >( xTunnel->getSomething( OTextCursorHelper::getUnoTunnelId()) ));
++    if ( pCursor )
++    {
++        SwNodeIndex rNdIndex( *GetStartNode( ), 1 );
++        SwPosition rPos( rNdIndex );
++        m_pImpl->m_pDoc->CopyRange( *pCursor->GetPaM( ), rPos, false );
++    }
++}
++
+ void SwXText::Impl::ConvertCell(
+     const bool bFirstCell,
+     const uno::Sequence< uno::Reference< text::XTextRange > > & rCell,
+diff --git writerfilter/inc/dmapper/DomainMapper.hxx writerfilter/inc/dmapper/DomainMapper.hxx
+index e752a11..8a1c64e 100644
+--- writerfilter/inc/dmapper/DomainMapper.hxx
++++ writerfilter/inc/dmapper/DomainMapper.hxx
+@@ -62,6 +62,8 @@ namespace dmapper
  
  class PropertyMap;
  class DomainMapper_Impl;
--class ListTable;
 +class ListsManager;
 +class StyleSheetTable;
  
  // different context types require different sprm handling (e.g. names)
  enum SprmType
-@@ -133,7 +134,8 @@ public:
+@@ -103,6 +105,7 @@ public:
+     virtual void endSectionGroup();
+     virtual void startParagraphGroup();
+     virtual void endParagraphGroup();
++    virtual void markLastParagraphInSection();
+     virtual void startCharacterGroup();
+     virtual void endCharacterGroup();
+     virtual void startShape( ::com::sun::star::uno::Reference< com::sun::star::drawing::XShape > xShape );
+@@ -131,6 +134,8 @@ public:
      ::com::sun::star::uno::Reference< ::com::sun::star::text::XTextRange > GetCurrentTextRange();
  
      ::rtl::OUString getOrCreateCharStyle( PropertyValueVector_t& rCharProperties );
--    boost::shared_ptr< ListTable > GetListTable( );
 +    boost::shared_ptr< ListsManager > GetListTable( );
 +    boost::shared_ptr< StyleSheetTable > GetStyleSheetTable( );
  
  private:
      void handleUnderlineType(const sal_Int32 nIntValue, const ::boost::shared_ptr<PropertyMap> pContext);
-diff --git a/writerfilter/source/dmapper/ConversionHelper.cxx b/writerfilter/source/dmapper/ConversionHelper.cxx
-index 166e39e..ca5b6f5 100644
---- a/writerfilter/source/dmapper/ConversionHelper.cxx
-+++ b/writerfilter/source/dmapper/ConversionHelper.cxx
+diff --git writerfilter/inc/resourcemodel/WW8ResourceModel.hxx writerfilter/inc/resourcemodel/WW8ResourceModel.hxx
+index a95e705..95b6262 100644
+--- writerfilter/inc/resourcemodel/WW8ResourceModel.hxx
++++ writerfilter/inc/resourcemodel/WW8ResourceModel.hxx
+@@ -208,6 +208,8 @@ public:
+      */
+     virtual void endParagraphGroup() = 0;
+ 
++    virtual void markLastParagraphInSection( ) { };
++
+     /**
+        Receives start mark for group with the same character properties.
+      */
+diff --git writerfilter/source/dmapper/ConversionHelper.cxx writerfilter/source/dmapper/ConversionHelper.cxx
+index 350e040..85fc040 100644
+--- writerfilter/source/dmapper/ConversionHelper.cxx
++++ writerfilter/source/dmapper/ConversionHelper.cxx
 @@ -553,26 +553,104 @@ sal_Int16 ConvertNumberingType(sal_Int32 nNFC)
      switch(nNFC)
      {
          case NS_ooxml::LN_Value_ST_NumberFormat_decimal:
 -        case 0: nRet = style::NumberingType::ARABIC;                break;
-+        case 0:
-+            nRet = style::NumberingType::ARABIC;
++        case 0: 
++            nRet = style::NumberingType::ARABIC;                
 +            break;
          case NS_ooxml::LN_Value_ST_NumberFormat_upperRoman:
 -        case 1: nRet = style::NumberingType::ROMAN_UPPER;           break;
-+        case 1:
-+            nRet = style::NumberingType::ROMAN_UPPER;
++        case 1: 
++            nRet = style::NumberingType::ROMAN_UPPER;           
 +            break;
          case NS_ooxml::LN_Value_ST_NumberFormat_lowerRoman:
 -        case 2: nRet = style::NumberingType::ROMAN_LOWER;           break;
 -        case 3: nRet = style::NumberingType::CHARS_UPPER_LETTER_N;  break;
 -        case 4: nRet = style::NumberingType::CHARS_LOWER_LETTER_N;  break;
 -        case 5: nRet = style::NumberingType::ARABIC;                break;//ORDINAL
-+        case 2:
++        case 2: 
 +            nRet = style::NumberingType::ROMAN_LOWER;
 +            break;
-+        case 3:
-+            nRet = style::NumberingType::CHARS_UPPER_LETTER_N;
++        case 3: 
++            nRet = style::NumberingType::CHARS_UPPER_LETTER_N; 
 +            break;
 +        case 4:
 +            nRet = style::NumberingType::CHARS_LOWER_LETTER_N;
 +            break;
-+        case 5:
++        case 5: 
 +            nRet = style::NumberingType::ARABIC;
 +            break;//ORDINAL
          case NS_ooxml::LN_Value_ST_NumberFormat_bullet:
@@ -165,7 +277,7 @@ index 166e39e..ca5b6f5 100644
          break;
 -        case 255: nRet = style::NumberingType::NUMBER_NONE; break;
 +        case NS_ooxml::LN_Value_ST_NumberFormat_none:
-+        case 255:
++        case 255: 
 +            nRet = style::NumberingType::NUMBER_NONE;
 +            break;
          case NS_ooxml::LN_Value_ST_NumberFormat_upperLetter:
@@ -297,20 +409,19 @@ index 166e39e..ca5b6f5 100644
      NS_ooxml::LN_Value_ST_NumberFormat_thaiNumbers = 91735;
      NS_ooxml::LN_Value_ST_NumberFormat_thaiCounting = 91736;*/
      return nRet;
-diff --git a/writerfilter/source/dmapper/DomainMapper.cxx b/writerfilter/source/dmapper/DomainMapper.cxx
-index 17b4a5e..1e24158 100644
---- a/writerfilter/source/dmapper/DomainMapper.cxx
-+++ b/writerfilter/source/dmapper/DomainMapper.cxx
-@@ -29,7 +29,7 @@
+diff --git writerfilter/source/dmapper/DomainMapper.cxx writerfilter/source/dmapper/DomainMapper.cxx
+index 643f1c5..3d76b7d 100755
+--- writerfilter/source/dmapper/DomainMapper.cxx
++++ writerfilter/source/dmapper/DomainMapper.cxx
+@@ -29,6 +29,7 @@
  #include <dmapper/DomainMapper.hxx>
  #include <DomainMapper_Impl.hxx>
  #include <ConversionHelper.hxx>
--#include <ListTable.hxx>
 +#include <NumberingManager.hxx>
  #include <ThemeTable.hxx>
  #include <ModelEventListener.hxx>
  #include <MeasureHandler.hxx>
-@@ -1647,7 +1647,9 @@ void DomainMapper::attribute(Id nName, Value & val)
+@@ -1630,7 +1631,9 @@ void DomainMapper::attribute(Id nName, Value & val)
          case NS_ooxml::LN_CT_TabStop_val:
              /* WRITERFILTERSTATUS: done: 100, planned: 0.5, spent: 0 */
              if (sal::static_int_cast<Id>(nIntValue) == NS_ooxml::LN_Value_ST_TabJc_clear)
@@ -320,7 +431,7 @@ index 17b4a5e..1e24158 100644
              else
              {
                  m_pImpl->m_aCurrentTabStop.bDeleted = false;
-@@ -1774,8 +1776,11 @@ void DomainMapper::attribute(Id nName, Value & val)
+@@ -1757,8 +1760,11 @@ void DomainMapper::attribute(Id nName, Value & val)
          case NS_ooxml::LN_CT_Ind_hanging:
              /* WRITERFILTERSTATUS: done: 100, planned: 0.5, spent: 0 */
              if (m_pImpl->GetTopContext())
@@ -333,7 +444,7 @@ index 17b4a5e..1e24158 100644
              break;
          case NS_ooxml::LN_CT_Ind_firstLine:
              /* WRITERFILTERSTATUS: done: 100, planned: 0.5, spent: 0 */
-@@ -2264,20 +2269,26 @@ void DomainMapper::sprm( Sprm& rSprm, PropertyMapPtr rContext, SprmType eSprmTyp
+@@ -2253,20 +2259,26 @@ void DomainMapper::sprm( Sprm& rSprm, PropertyMapPtr rContext, SprmType eSprmTyp
          /* WRITERFILTERSTATUS: comment:  */
          {
              //convert the ListTable entry to a NumberingRules propery and apply it
@@ -367,7 +478,7 @@ index 17b4a5e..1e24158 100644
              }
          }
          break;
-@@ -3911,7 +3922,7 @@ void DomainMapper::sprm( Sprm& rSprm, PropertyMapPtr rContext, SprmType eSprmTyp
+@@ -3929,7 +3941,7 @@ void DomainMapper::sprm( Sprm& rSprm, PropertyMapPtr rContext, SprmType eSprmTyp
          
          if( pStyleSheetProperties && pStyleSheetProperties->GetListId() >= 0 )
              rContext->Insert( PROP_NUMBERING_STYLE_NAME, true, uno::makeAny( 
@@ -376,17 +487,82 @@ index 17b4a5e..1e24158 100644
          
          if( pStyleSheetProperties && pStyleSheetProperties->GetListLevel() >= 0 )
              rContext->Insert( PROP_NUMBERING_LEVEL, true, uno::makeAny(pStyleSheetProperties->GetListLevel()), false);
-@@ -4132,9 +4143,6 @@ void DomainMapper::sprm( Sprm& rSprm, PropertyMapPtr rContext, SprmType eSprmTyp
-     break;
+@@ -4114,9 +4126,6 @@ void DomainMapper::sprm( Sprm& rSprm, PropertyMapPtr rContext, SprmType eSprmTyp
+     /* WRITERFILTERSTATUS: done: 0, planned: 4, spent: 0 */
+     case NS_ooxml::LN_object:
+     {
+-#if DEBUG
+-        clog << "DomainMapper: LN_object" << endl;
+-#endif
+         writerfilter::Reference<Properties>::Pointer_t pProperties = rSprm.getProps();
+         if( pProperties.get( ) )
+         {
+@@ -4156,10 +4165,6 @@ void DomainMapper::sprm( Sprm& rSprm, PropertyMapPtr rContext, SprmType eSprmTyp
      case NS_ooxml::LN_EG_SectPrContents_formProt: //section protection, only form editing is enabled - unsupported
+             /* WRITERFILTERSTATUS: done: 0, planned: 0.5, spent: 0 */
      break;
 -    case NS_ooxml::LN_CT_Lvl_pStyle:
+-            /* WRITERFILTERSTATUS: done: 0, planned: 0.5, spent: 0 */
 -        //TODO: numbering style should apply current numbering level - not yet supported
 -    break;
      default:
          {
- #if OSL_DEBUG_LEVEL > 0
-@@ -4524,9 +4532,12 @@ void DomainMapper::table(Id name, writerfilter::Reference<Table>::Pointer_t ref)
+ #ifdef DEBUG_DOMAINMAPPER
+@@ -4250,38 +4255,6 @@ void DomainMapper::startParagraphGroup()
+ -----------------------------------------------------------------------*/
+ void DomainMapper::endParagraphGroup()
+ {
+-    //handle unprocessed deferred breaks
+-    PropertyMapPtr pParaProperties = m_pImpl->GetTopContextOfType(CONTEXT_PARAGRAPH);
+-    if( pParaProperties->hasEmptyPropertyValues() )
+-    {
+-        PropertyMap::const_iterator aIter = pParaProperties->find(PropertyDefinition( PROP_BREAK_TYPE , false ) );
+-        if( aIter != pParaProperties->end() )
+-        {
+-            style::BreakType eType;
+-            aIter->second >>= eType;
+-            bool bPage = false;
+-            bool bColumn = false;
+-            if( eType == style::BreakType_PAGE_BEFORE )
+-                bPage = true;
+-            else if( eType == style::BreakType_COLUMN_BEFORE )
+-                 bColumn = true;
+-
+-            if( bPage || bColumn )
+-            {
+-                try
+-                {
+-                        uno::Reference< beans::XPropertySet > xRangeProperties( m_pImpl->GetTopTextAppend()->getEnd(), uno::UNO_QUERY_THROW );
+-                        xRangeProperties->setPropertyValue(
+-                            PropertyNameSupplier::GetPropertyNameSupplier().GetName(PROP_BREAK_TYPE),
+-                                                    uno::makeAny( bPage ? style::BreakType_PAGE_BEFORE : style::BreakType_COLUMN_BEFORE));
+-                }
+-                catch( const uno::Exception& )
+-                {
+-                }
+-            }
+-        }
+-    }
+-
+     m_pImpl->PopProperties(CONTEXT_PARAGRAPH);
+     m_pImpl->getTableManager().endParagraphGroup();
+     //frame conversion has to be executed after table conversion
+@@ -4291,6 +4264,14 @@ void DomainMapper::endParagraphGroup()
+ #endif
+ }
+ 
++void DomainMapper::markLastParagraphInSection( )
++{
++#ifdef DEBUG_DOMAINMAPPER
++    dmapper_logger->element( "markLastParagraphInSection" );
++#endif
++    m_pImpl->SetIsLastParagraphInSection( true );
++}
++
+ void DomainMapper::startShape( uno::Reference< drawing::XShape > xShape )
+ {
+ #ifdef DEBUG_DOMAINMAPPER
+@@ -4593,9 +4574,12 @@ void DomainMapper::table(Id name, writerfilter::Reference<Table>::Pointer_t ref)
          }
          break;
      case NS_rtf::LN_LFOTABLE:
@@ -402,7 +578,23 @@ index 17b4a5e..1e24158 100644
          break;
      case NS_ooxml::LN_THEMETABLE:
          ref->resolve ( *m_pImpl->GetThemeTable() );
-@@ -4789,6 +4800,7 @@ com::sun::star::style::TabAlign DomainMapper::getTabAlignFromValue(const sal_Int
+@@ -4622,6 +4606,7 @@ void DomainMapper::substream(Id rName, ::writerfilter::Reference<Stream>::Pointe
+     dmapper_logger->startElement("substream");
+ #endif
+ 
++    m_pImpl->appendTableManager( );
+     m_pImpl->getTableManager().startLevel();
+ 
+     //->debug
+@@ -4691,6 +4676,7 @@ void DomainMapper::substream(Id rName, ::writerfilter::Reference<Stream>::Pointe
+     }
+ 
+     m_pImpl->getTableManager().endLevel();
++    m_pImpl->popTableManager( );
+ 
+ #ifdef DEBUG_DOMAINMAPPER
+     dmapper_logger->endElement("substream");
+@@ -4857,6 +4843,7 @@ com::sun::star::style::TabAlign DomainMapper::getTabAlignFromValue(const sal_Int
      {
      case 0:
      case 4: // bar not supported
@@ -410,7 +602,7 @@ index 17b4a5e..1e24158 100644
          return com::sun::star::style::TabAlign_LEFT;
      case 1:
          return com::sun::star::style::TabAlign_CENTER;
-@@ -4796,8 +4808,6 @@ com::sun::star::style::TabAlign DomainMapper::getTabAlignFromValue(const sal_Int
+@@ -4864,8 +4851,6 @@ com::sun::star::style::TabAlign DomainMapper::getTabAlignFromValue(const sal_Int
          return com::sun::star::style::TabAlign_RIGHT;
      case 3:
          return com::sun::star::style::TabAlign_DECIMAL;
@@ -419,7 +611,7 @@ index 17b4a5e..1e24158 100644
      }
      return com::sun::star::style::TabAlign_LEFT;
  }
-@@ -4837,10 +4847,6 @@ uno::Reference < lang::XMultiServiceFactory > DomainMapper::GetTextFactory() con
+@@ -4905,10 +4890,6 @@ uno::Reference < lang::XMultiServiceFactory > DomainMapper::GetTextFactory() con
  /*-- 12.11.2007 10:41:01---------------------------------------------------
  
    -----------------------------------------------------------------------*/
@@ -430,16 +622,15 @@ index 17b4a5e..1e24158 100644
  /*-- 31.01.2008 18:19:44---------------------------------------------------
  
    -----------------------------------------------------------------------*/
-@@ -4858,10 +4864,15 @@ uno::Reference< text::XTextRange > DomainMapper::GetCurrentTextRange()
+@@ -4926,5 +4907,15 @@ uno::Reference< text::XTextRange > DomainMapper::GetCurrentTextRange()
      return pStyleSheets->getOrCreateCharStyle( rCharProperties );
  }
  
--ListTablePtr DomainMapper::GetListTable( )
 +ListsManager::Pointer DomainMapper::GetListTable( )
- {
-     return m_pImpl->GetListTable( );
- }
- 
++{
++    return m_pImpl->GetListTable( );
++}
++
 +StyleSheetTablePtr DomainMapper::GetStyleSheetTable( )
 +{
 +    return m_pImpl->GetStyleSheetTable( );
@@ -447,11 +638,11 @@ index 17b4a5e..1e24158 100644
 +
  } //namespace dmapper
  } //namespace writerfilter
-diff --git a/writerfilter/source/dmapper/DomainMapper_Impl.cxx b/writerfilter/source/dmapper/DomainMapper_Impl.cxx
-index d0801bf..11b4db2 100644
---- a/writerfilter/source/dmapper/DomainMapper_Impl.cxx
-+++ b/writerfilter/source/dmapper/DomainMapper_Impl.cxx
-@@ -80,6 +80,7 @@
+diff --git writerfilter/source/dmapper/DomainMapper_Impl.cxx writerfilter/source/dmapper/DomainMapper_Impl.cxx
+index e4eaa6d..7dd49da 100644
+--- writerfilter/source/dmapper/DomainMapper_Impl.cxx
++++ writerfilter/source/dmapper/DomainMapper_Impl.cxx
+@@ -81,6 +81,7 @@
  #if DEBUG
  #include <stdio.h>
  #include <com/sun/star/lang/XServiceInfo.hpp>
@@ -459,7 +650,91 @@ index d0801bf..11b4db2 100644
  #endif
  
  #include <map>
-@@ -702,7 +703,7 @@ void DomainMapper_Impl::IncorporateTabStop( const DeletableTabStop &  rTabStop )
+@@ -402,7 +403,7 @@ DomainMapper_Impl::DomainMapper_Impl(
+         m_bIsPageBreakDeferred( false ),
+         m_bIsInShape( false ),
+         m_bShapeContextAdded( false ),
+-        m_TableManager( eDocumentType == DOCUMENT_OOXML ),
++        m_pLastSectionContext( ),
+         m_nCurrentTabStopIndex( 0 ),
+         m_sCurrentParaStyleId(),
+         m_bInStyleSheetImport( false ),
+@@ -410,8 +411,11 @@ DomainMapper_Impl::DomainMapper_Impl(
+         m_bLineNumberingSet( false ),
+         m_bIsInFootnoteProperties( true ),
+         m_bIsCustomFtnMark( false ),
+-        m_bIsParaChange( false )
++        m_bIsParaChange( false ),
++        m_bParaChanged( false ),
++        m_bIsLastParaInSection( false )
+ {
++    appendTableManager( );
+     GetBodyText();
+     uno::Reference< text::XTextAppend > xBodyTextAppend = uno::Reference< text::XTextAppend >( m_xBodyText, uno::UNO_QUERY );
+     m_aTextAppendStack.push(xBodyTextAppend);
+@@ -420,13 +424,18 @@ DomainMapper_Impl::DomainMapper_Impl(
+     uno::Reference< text::XTextAppendAndConvert > xBodyTextAppendAndConvert( m_xBodyText, uno::UNO_QUERY );
+     TableDataHandler_t::Pointer_t pTableHandler
+         (new DomainMapperTableHandler(xBodyTextAppendAndConvert, *this));
+-    m_TableManager.setHandler(pTableHandler);
++    getTableManager( ).setHandler(pTableHandler);
++
++    getTableManager( ).startLevel();
+ }
+ /*-- 01.09.2006 10:22:28---------------------------------------------------
+ 
+   -----------------------------------------------------------------------*/
+ DomainMapper_Impl::~DomainMapper_Impl()
+ {
++    RemoveLastParagraph( );
++    getTableManager( ).endLevel();
++    popTableManager( );
+ }
+ /*-------------------------------------------------------------------------
+ 
+@@ -480,6 +489,28 @@ void DomainMapper_Impl::SetDocumentSettingsProperty( const ::rtl::OUString& rPro
+         }
+     }
+ }
++
++void DomainMapper_Impl::RemoveLastParagraph( )
++{
++    uno::Reference< text::XTextAppend >  xTextAppend = m_aTextAppendStack.top().xTextAppend;
++    try
++    {
++        uno::Reference< text::XTextCursor > xCursor = xTextAppend->createTextCursor();
++        xCursor->gotoEnd(false);
++        xCursor->goLeft( 1, true );
++        xCursor->setString(::rtl::OUString());
++    }
++    catch( const uno::Exception& rEx)
++    {
++        (void)rEx;
++    }
++}
++
++void DomainMapper_Impl::SetIsLastParagraphInSection( bool bIsLast )
++{
++    m_bIsLastParaInSection = bIsLast;
++}
++
+ /*-------------------------------------------------------------------------
+ 
+   -----------------------------------------------------------------------*/
+@@ -530,6 +561,12 @@ void DomainMapper_Impl::PushListProperties(PropertyMapPtr pListProperties)
+ void    DomainMapper_Impl::PopProperties(ContextType eId)
+ {
+     OSL_ENSURE(!m_aPropertyStacks[eId].empty(), "section stack already empty");
++
++    if ( eId == CONTEXT_SECTION )
++    {
++        m_pLastSectionContext = m_aPropertyStacks[eId].top( );
++    }
++
+     m_aPropertyStacks[eId].pop();
+     m_aContextStack.pop();
+     if(!m_aContextStack.empty() && !m_aPropertyStacks[m_aContextStack.top()].empty())
+@@ -664,7 +701,7 @@ void DomainMapper_Impl::IncorporateTabStop( const DeletableTabStop &  rTabStop )
    -----------------------------------------------------------------------*/
  uno::Sequence< style::TabStop > DomainMapper_Impl::GetCurrentTabStopAndClear()
  {
@@ -468,7 +743,7 @@ index d0801bf..11b4db2 100644
      style::TabStop* pArray = aRet.getArray();
      ::std::vector<DeletableTabStop>::const_iterator aIt = m_aCurrentTabStops.begin();
      ::std::vector<DeletableTabStop>::const_iterator aEndIt = m_aCurrentTabStops.end();
-@@ -755,11 +756,11 @@ uno::Any DomainMapper_Impl::GetPropertyFromStyleSheet(PropertyIds eId)
+@@ -717,11 +754,11 @@ uno::Any DomainMapper_Impl::GetPropertyFromStyleSheet(PropertyIds eId)
  /*-------------------------------------------------------------------------
  
    -----------------------------------------------------------------------*/
@@ -482,29 +757,171 @@ index d0801bf..11b4db2 100644
      return m_pListTable;
  }
  
-@@ -1090,6 +1091,18 @@ void DomainMapper_Impl::finishParagraph( PropertyMapPtr pPropertyMap )
-                     aProperties[nLength].Value <<= aDrop;
-                     aProperties[nLength].Name = rPropNameSupplier.GetName(PROP_DROP_CAP_FORMAT);
+@@ -856,7 +893,7 @@ void DomainMapper_Impl::finishParagraph( PropertyMapPtr pPropertyMap )
+     dmapper_logger->attribute("isIgnor", m_TableManager.isIgnore());
+ #endif 
+     
+-    if(xTextAppend.is() && ! m_TableManager.isIgnore())
++    if(xTextAppend.is() && ! getTableManager( ).isIgnore())
+     {
+         try
+         {
+@@ -1060,7 +1097,7 @@ void DomainMapper_Impl::finishParagraph( PropertyMapPtr pPropertyMap )
                  }
-+#if DEBUG
-+                sal_Int32 nLen = aProperties.getLength();
-+                for ( sal_Int32 i = 0; i < nLen; i++ )
-+                {
-+                    uno::Any aValue = aProperties[i].Value;
-+                    uno::Sequence< style::TabStop > aTabs;
-+                    if ( aValue >>= aTabs )
-+                    {
-+                        fprintf( stderr, "Found tab stops\n" );
-+                    }
-+                }
-+#endif
                  uno::Reference< text::XTextRange > xTextRange =
                      xTextAppend->finishParagraph( aProperties );
-                 getTableManager( ).handle(xTextRange);
-diff --git a/writerfilter/source/dmapper/DomainMapper_Impl.hxx b/writerfilter/source/dmapper/DomainMapper_Impl.hxx
-index 3b520cd..0d1c7a8 100644
---- a/writerfilter/source/dmapper/DomainMapper_Impl.hxx
-+++ b/writerfilter/source/dmapper/DomainMapper_Impl.hxx
+-                m_TableManager.handle(xTextRange);
++                getTableManager( ).handle(xTextRange);
+             
+                 // Set the anchor of the objects to the created paragraph
+                 while ( m_aAnchoredStack.size( ) > 0 && !m_bIsInShape )
+@@ -1086,6 +1123,15 @@ void DomainMapper_Impl::finishParagraph( PropertyMapPtr pPropertyMap )
+                 xCur->goLeft( 1 , true );
+                 uno::Reference< text::XTextRange > xParaEnd( xCur, uno::UNO_QUERY );
+                 CheckParaRedline( xParaEnd );
++
++                // Remove the last empty section paragraph if needed
++                if ( m_bIsLastParaInSection && !m_bParaChanged )
++                {
++                    RemoveLastParagraph( );
++                    m_bIsLastParaInSection = false;
++                }
++
++                m_bParaChanged = false;
+             }
+             if( !bKeepLastParagraphProperties )
+                 rAppendContext.pLastParagraphProperties = pToBeSavedProperties;
+@@ -1132,7 +1178,7 @@ util::DateTime lcl_DateStringToDateTime( const ::rtl::OUString& rDateTime )
+ void DomainMapper_Impl::appendTextPortion( const ::rtl::OUString& rString, PropertyMapPtr pPropertyMap )
+ {
+     uno::Reference< text::XTextAppend >  xTextAppend = m_aTextAppendStack.top().xTextAppend;
+-    if(xTextAppend.is() && ! m_TableManager.isIgnore())
++    if(xTextAppend.is() && ! getTableManager( ).isIgnore())
+     {
+         try
+         {
+@@ -1140,8 +1186,9 @@ void DomainMapper_Impl::appendTextPortion( const ::rtl::OUString& rString, Prope
+                 xTextAppend->appendTextPortion
+                 (rString, pPropertyMap->GetPropertyValues());
+             CheckRedline( xTextRange );
++            m_bParaChanged = true;
+ 
+-            //m_TableManager.handle(xTextRange);
++            //getTableManager( ).handle(xTextRange);
+         }
+         catch(const lang::IllegalArgumentException& rEx)
+         {
+@@ -1165,7 +1212,7 @@ void DomainMapper_Impl::appendTextContent(
+ {
+     uno::Reference< text::XTextAppendAndConvert >  xTextAppendAndConvert( m_aTextAppendStack.top().xTextAppend, uno::UNO_QUERY );
+     OSL_ENSURE( xTextAppendAndConvert.is(), "trying to append a text content without XTextAppendAndConvert" );
+-    if(xTextAppendAndConvert.is() && ! m_TableManager.isIgnore())
++    if(xTextAppendAndConvert.is() && ! getTableManager( ).isIgnore())
+     {
+         try
+         {
+@@ -1332,18 +1379,7 @@ void DomainMapper_Impl::PopPageHeaderFooter()
+ {
+     //header and footer always have an empty paragraph at the end
+     //this has to be removed
+-    uno::Reference< text::XTextAppend >  xTextAppend = m_aTextAppendStack.top().xTextAppend;
+-    try
+-    {
+-        uno::Reference< text::XTextCursor > xCursor = xTextAppend->createTextCursor();
+-        xCursor->gotoEnd(false);
+-        xCursor->goLeft( 1, true );
+-        xCursor->setString(::rtl::OUString());
+-    }
+-    catch( const uno::Exception& rEx)
+-    {
+-        (void)rEx;
+-    }
++    RemoveLastParagraph( );
+     m_aTextAppendStack.pop();
+ }
+ /*-- 24.05.2007 14:22:28---------------------------------------------------
+@@ -1397,9 +1433,6 @@ void DomainMapper_Impl::CreateRedline( uno::Reference< text::XTextRange > xRange
+ {
+     if ( pRedline.get( ) )
+     {
+-#if DEBUG
+-        clog << "REDLINE: Writing redline: " << pRedline->m_nId << endl;
+-#endif
+         try
+         {
+             ::rtl::OUString sType;
+@@ -1428,9 +1461,6 @@ void DomainMapper_Impl::CreateRedline( uno::Reference< text::XTextRange > xRange
+         }
+         catch( const uno::Exception & rEx )
+         {
+-#if DEBUG
+-            clog << "REDLINE: error - " << rtl::OUStringToOString( rEx.Message, RTL_TEXTENCODING_UTF8 ).getStr( ) << endl;
+-#endif
+             ( void ) rEx;
+             OSL_ENSURE( false, "Exception in makeRedline" );
+         }
+@@ -1515,9 +1545,6 @@ void DomainMapper_Impl::PopAnnotation()
+ 
+ void DomainMapper_Impl::PushShapeContext( const uno::Reference< drawing::XShape > xShape )
+ {
+-#if DEBUG
+-    clog << "PushShapeContext" << endl;
+-#endif
+     m_bIsInShape = true;
+     try 
+     {
+@@ -1554,10 +1581,6 @@ void DomainMapper_Impl::PushShapeContext( const uno::Reference< drawing::XShape
+   -----------------------------------------------------------------------*/
+ void DomainMapper_Impl::PopShapeContext()
+ {
+-#if DEBUG
+-        clog << "PopShapeContext" << endl;
+-#endif
+-    
+     if ( m_bShapeContextAdded )
+     {
+         m_aTextAppendStack.pop();
+@@ -3641,16 +3664,10 @@ void DomainMapper_Impl::AddNewRedline(  )
+     pNew->m_nToken = ooxml::OOXML_mod;
+     if ( !m_bIsParaChange ) 
+     {
+-#if DEBUG
+-    clog << "REDLINE: Adding a new redline to stack" << endl;
+-#endif
+         m_aRedlines.push_back( pNew );
+     }
+     else
+     {
+-#if DEBUG
+-    clog << "REDLINE: Setting a new paragraph redline" << endl;
+-#endif
+         m_pParaRedline.swap( pNew );
+     }
+ }
+@@ -3709,9 +3726,6 @@ void DomainMapper_Impl::RemoveCurrentRedline( )
+ {
+     if ( m_aRedlines.size( ) > 0 )
+     {
+-#if DEBUG
+-        clog << "REDLINE: Removing back redline" << endl;
+-#endif
+         m_aRedlines.pop_back( );
+     }
+ }
+@@ -3720,9 +3734,6 @@ void DomainMapper_Impl::ResetParaRedline( )
+ {
+     if ( m_pParaRedline.get( ) )
+     {
+-#if DEBUG
+-        clog << "REDLINE: Cleaning the para redline" << endl;
+-#endif
+         RedlineParamsPtr pEmpty;
+         m_pParaRedline.swap( pEmpty );
+     }
+diff --git writerfilter/source/dmapper/DomainMapper_Impl.hxx writerfilter/source/dmapper/DomainMapper_Impl.hxx
+index ef1885c..2b4e517 100755
+--- writerfilter/source/dmapper/DomainMapper_Impl.hxx
++++ writerfilter/source/dmapper/DomainMapper_Impl.hxx
 @@ -45,8 +45,7 @@
  #include <DomainMapperTableManager.hxx>
  #include <PropertyMap.hxx>
@@ -513,9 +930,18 @@ index 3b520cd..0d1c7a8 100644
 -#include <LFOTable.hxx>
 +#include <NumberingManager.hxx>
  #include <StyleSheetTable.hxx>
- #include <ThemeTable.hxx>
  #include <SettingsTable.hxx>
-@@ -303,8 +302,7 @@ private:
+ #include <ThemeTable.hxx>
+@@ -296,15 +295,15 @@ private:
+     _PageMar                                                                        m_aPageMargins;
+ 
+ 
+-    DomainMapperTableManager m_TableManager;
++    // TableManagers are stacked: one for each stream to avoid any confusion
++    std::stack< boost::shared_ptr< DomainMapperTableManager > > m_aTableManagers;
+ 
+     //each context needs a stack of currently used attributes
+     FIB                     m_aFIB;
      PropertyStack           m_aPropertyStacks[NUMBER_OF_CONTEXTS];
      ContextStack            m_aContextStack;
      FontTablePtr            m_pFontTable;
@@ -524,8 +950,47 @@ index 3b520cd..0d1c7a8 100644
 +    ListsManager::Pointer   m_pListTable;
      StyleSheetTablePtr      m_pStyleSheetTable;
      ThemeTablePtr           m_pThemeTable;
-     GraphicImportPtr        m_pGraphicImport;
-@@ -431,13 +429,7 @@ public:
+     SettingsTablePtr        m_pSettingsTable;
+@@ -312,6 +311,7 @@ private:
+ 
+ 
+     PropertyMapPtr                  m_pTopContext;
++    PropertyMapPtr           m_pLastSectionContext;
+ 
+     ::std::vector<DeletableTabStop> m_aCurrentTabStops;
+     sal_uInt32                      m_nCurrentTabStopIndex;
+@@ -333,6 +333,8 @@ private:
+     RedlineParamsPtr                m_pParaRedline;
+     bool                            m_bIsParaChange;
+ 
++    bool                            m_bParaChanged;
++    bool                            m_bIsLastParaInSection;
+ 
+     //annotation import
+     uno::Reference< beans::XPropertySet >                                      m_xAnnotationField;
+@@ -355,6 +357,11 @@ public:
+     DomainMapper_Impl();
+     virtual ~DomainMapper_Impl();
+ 
++    SectionPropertyMap* GetLastSectionContext( )
++    {
++        return dynamic_cast< SectionPropertyMap* >( m_pLastSectionContext.get( ) );
++    }
++
+     ::com::sun::star::uno::Reference< ::com::sun::star::container::XNameContainer > GetPageStyles();
+     ::com::sun::star::uno::Reference< ::com::sun::star::text::XText >               GetBodyText();
+     ::com::sun::star::uno::Reference < ::com::sun::star::lang::XMultiServiceFactory > GetTextFactory() const
+@@ -380,6 +387,9 @@ public:
+     void StartParaChange( );
+     void EndParaChange( );
+ 
++    void RemoveLastParagraph( );
++    void SetIsLastParagraphInSection( bool bIsLast );
++
+     void deferBreak( BreakType deferredBreakType );
+     bool isBreakDeferred( BreakType deferredBreakType );
+     void clearDeferredBreaks();
+@@ -421,13 +431,7 @@ public:
              m_pStyleSheetTable.reset(new StyleSheetTable( m_rDMapper, m_xTextDocument ));
          return m_pStyleSheetTable;
      }
@@ -540,16 +1005,55 @@ index 3b520cd..0d1c7a8 100644
      ThemeTablePtr GetThemeTable()
      {
          if(!m_pThemeTable)
-diff --git a/writerfilter/source/dmapper/LFOTable.cxx b/writerfilter/source/dmapper/LFOTable.cxx
+@@ -494,7 +498,24 @@ public:
+ 
+     void AddBookmark( const ::rtl::OUString& rBookmarkName, const ::rtl::OUString& rId );
+ 
+-    DomainMapperTableManager& getTableManager() { return m_TableManager; }
++    DomainMapperTableManager& getTableManager()
++    {
++        boost::shared_ptr< DomainMapperTableManager > pMngr = m_aTableManagers.top();
++        return *pMngr.get( );
++    }
++
++    void appendTableManager( )
++    {
++        boost::shared_ptr< DomainMapperTableManager > pMngr(
++                new DomainMapperTableManager( m_eDocumentType == DOCUMENT_OOXML ) );
++        m_aTableManagers.push( pMngr );
++    }
++
++    void popTableManager( )
++    {
++        if ( m_aTableManagers.size( ) > 0 )
++            m_aTableManagers.pop( );
++    }
+ 
+     void SetLineNumbering( sal_Int32 nLnnMod, sal_Int32 nLnc, sal_Int32 ndxaLnn );
+     bool IsLineNumberingSet() const {return m_bLineNumberingSet;}
+diff --git writerfilter/source/dmapper/GraphicImport.cxx writerfilter/source/dmapper/GraphicImport.cxx
+index e8269c7..41eb96b 100644
+--- writerfilter/source/dmapper/GraphicImport.cxx
++++ writerfilter/source/dmapper/GraphicImport.cxx
+@@ -1553,7 +1553,7 @@ uno::Reference< text::XTextContent > GraphicImport::createGraphicObject( const b
+             }
+ 
+             // setting properties for all types
+-            xGraphicObjectProperties->setPropertyValue(rPropNameSupplier.GetName( PROP_ALTERNATIVE_TEXT ),
++            xGraphicObjectProperties->setPropertyValue(rPropNameSupplier.GetName( PROP_TITLE ),
+                 uno::makeAny( m_pImpl->sAlternativeText ));
+             if( m_pImpl->bPositionProtected )
+                 xGraphicObjectProperties->setPropertyValue(rPropNameSupplier.GetName( PROP_POSITION_PROTECTED ), 
+diff --git writerfilter/source/dmapper/LFOTable.cxx writerfilter/source/dmapper/LFOTable.cxx
 deleted file mode 100644
-index c122b4c..0000000
---- a/writerfilter/source/dmapper/LFOTable.cxx
+index c507ab3..0000000
+--- writerfilter/source/dmapper/LFOTable.cxx
 +++ /dev/null
-@@ -1,606 +0,0 @@
+@@ -1,199 +0,0 @@
 -/*************************************************************************
 - *
 - * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
-- *
+- * 
 - * Copyright 2000, 2010 Oracle and/or its affiliates.
 - *
 - * OpenOffice.org - a multi-platform office productivity suite
@@ -642,434 +1146,47 @@ index c122b4c..0000000
 -    switch( Name )
 -    {
 -//        case NS_rtf::LN_ISTD: break;//index of applied style
--        /* WRITERFILTERSTATUS: done: 50, planned: 0, spent: 0 */
 -        case NS_rtf::LN_ISTARTAT:
--        /* WRITERFILTERSTATUS: done: 50, planned: 0, spent: 0 */
 -        case NS_rtf::LN_ILVL:
--        /* WRITERFILTERSTATUS: done: 50, planned: 0, spent: 0 */
 -        case NS_rtf::LN_FSTARTAT:
--        /* WRITERFILTERSTATUS: done: 50, planned: 0, spent: 0 */
 -        case NS_rtf::LN_FFORMATTING:
+-        /* WRITERFILTERSTATUS: done: 100, planned: 0, spent: 0 */
 -            if(m_pImpl->m_pCurrentEntry->aLFOLevels.size())
 -            {
 -                vector< LFOLevelPtr >::reverse_iterator aEndIter = m_pImpl->m_pCurrentEntry->aLFOLevels.rbegin();
 -                switch( Name )
 -                {
 -                    case NS_rtf::LN_ISTARTAT:
+-                        /* WRITERFILTERSTATUS:*/
 -                        (*aEndIter)->nIStartAt = nIntValue;
 -                    break;
 -                    case NS_rtf::LN_ILVL:
+-                        /* WRITERFILTERSTATUS:*/
 -                        (*aEndIter)->sILevel = val.getString();
 -                    break;
 -                    case NS_rtf::LN_FSTARTAT:
+-                        /* WRITERFILTERSTATUS:*/
 -                        (*aEndIter)->nFStartAt = nIntValue;
 -                    break;
 -                    case NS_rtf::LN_FFORMATTING:
+-                        /* WRITERFILTERSTATUS:*/
 -                        (*aEndIter)->nFFormatting = nIntValue;
 -                    break;
 -                    default:;
 -                }
 -            }
 -        break;
--//        case NS_rtf::LN_NFC: break;
--//        case NS_rtf::LN_JC: break;
--//        case NS_rtf::LN_FLEGAL: break;
--//        case NS_rtf::LN_FNORESTART: break;
--//        case NS_rtf::LN_FPREV: break;
--//        case NS_rtf::LN_FPREVSPACE: break;
--//        case NS_rtf::LN_FWORD6: break;
--//        case NS_rtf::LN_UNUSED5_7: break;
--//        case NS_rtf::LN_RGBXCHNUMS: break;
--//        case NS_rtf::LN_IXCHFOLLOW: break;
--//        case NS_rtf::LN_DXASPACE: break;
--//        case NS_rtf::LN_DXAINDENT: break;
--//        case NS_rtf::LN_CBGRPPRLCHPX: break;
--//        case NS_rtf::LN_CBGRPPRLPAPX: break;
--        /* WRITERFILTERSTATUS: done: 50, planned: 0, spent: 0 */
 -        case NS_rtf::LN_LSID:
+-        /* WRITERFILTERSTATUS: done: 50, planned: 0, spent: 0 */
 -            m_pImpl->m_pCurrentEntry->nListId = nIntValue;
 -        break;
--//        case NS_rtf::LN_TPLC: break;
--//        case NS_rtf::LN_RGISTD: break;
--//        case NS_rtf::LN_FSIMPLELIST: break;
--//        case NS_rtf::LN_FRESTARTHDN: break;
--//        case NS_rtf::LN_UNSIGNED26_2: break;
--//        case NS_rtf::LN_UNSIGNED4_6: break;
--        /* WRITERFILTERSTATUS: done: 1, planned: 0, spent: 0 */
--        case NS_rtf::LN_UNUSED4:
--        /* WRITERFILTERSTATUS: done: 1, planned: 0, spent: 0 */
--        case NS_rtf::LN_UNUSED8:
--            // as the names state they are unused
--        break;
+-        case NS_rtf::LN_clfolvl:
 -        /* WRITERFILTERSTATUS: done: 50, planned: 0, spent: 0 */
--        case NS_rtf::LN_CLFOLVL:
 -            m_pImpl->m_pCurrentEntry->nCLFOLevel = nIntValue;
 -        break;
--//        case NS_rtf::LN_CBFFNM1: break;
--//        case NS_rtf::LN_PRQ: break;
--//        case NS_rtf::LN_FTRUETYPE: break;
--//        case NS_rtf::LN_UNUSED1_3: break;
--//        case NS_rtf::LN_FF: break;
--//        case NS_rtf::LN_UNUSED1_7: break;
--//        case NS_rtf::LN_WWEIGHT: break;
--//        case NS_rtf::LN_CHS: break;
--//        case NS_rtf::LN_IXCHSZALT: break;
--//        case NS_rtf::LN_PANOSE: break;
--//        case NS_rtf::LN_FS: break;
--//        case NS_rtf::LN_STI: break;
--//        case NS_rtf::LN_FSCRATCH: break;
--//        case NS_rtf::LN_FINVALHEIGHT: break;
--//        case NS_rtf::LN_FHASUPE: break;
--//        case NS_rtf::LN_FMASSCOPY: break;
--//        case NS_rtf::LN_SGC: break;
--//        case NS_rtf::LN_ISTDBASE: break;
--//        case NS_rtf::LN_CUPX: break;
--//        case NS_rtf::LN_ISTDNEXT: break;
--//        case NS_rtf::LN_BCHUPE: break;
--//        case NS_rtf::LN_FAUTOREDEF: break;
--//        case NS_rtf::LN_FHIDDEN: break;
--//        case NS_rtf::LN_UNUSED8_3: break;
--//        case NS_rtf::LN_CSTD: break;
--//        case NS_rtf::LN_CBSTDBASEINFILE: break;
--//        case NS_rtf::LN_FSTDSTYLENAMESWRITTEN: break;
--//        case NS_rtf::LN_UNUSED4_2: break;
--//        case NS_rtf::LN_STIMAXWHENSAVED: break;
--//        case NS_rtf::LN_ISTDMAXFIXEDWHENSAVED: break;
--//        case NS_rtf::LN_NVERBUILTINNAMESWHENSAVED: break;
--//        case NS_rtf::LN_RGFTCSTANDARDCHPSTSH: break;
--//        case NS_rtf::LN_WIDENT: break;
--//        case NS_rtf::LN_NFIB: break;
--//        case NS_rtf::LN_NPRODUCT: break;
--//        case NS_rtf::LN_LID: break;
--//        case NS_rtf::LN_PNNEXT: break;
--//        case NS_rtf::LN_FDOT: break;
--//        case NS_rtf::LN_FGLSY: break;
--//        case NS_rtf::LN_FCOMPLEX: break;
--//        case NS_rtf::LN_FHASPIC: break;
--//        case NS_rtf::LN_CQUICKSAVES: break;
--//        case NS_rtf::LN_FENCRYPTED: break;
--//        case NS_rtf::LN_FWHICHTBLSTM: break;
--//        case NS_rtf::LN_FREADONLYRECOMMENDED: break;
--//        case NS_rtf::LN_FWRITERESERVATION: break;
--//        case NS_rtf::LN_FEXTCHAR: break;
--//        case NS_rtf::LN_FLOADOVERRIDE: break;
--//        case NS_rtf::LN_FFAREAST: break;
--//        case NS_rtf::LN_FCRYPTO: break;
--//        case NS_rtf::LN_NFIBBACK: break;
--//        case NS_rtf::LN_LKEY: break;
--//        case NS_rtf::LN_ENVR: break;
--//        case NS_rtf::LN_FMAC: break;
--//        case NS_rtf::LN_FEMPTYSPECIAL: break;
--//        case NS_rtf::LN_FLOADOVERRIDEPAGE: break;
--//        case NS_rtf::LN_FFUTURESAVEDUNDO: break;
--//        case NS_rtf::LN_FWORD97SAVED: break;
--//        case NS_rtf::LN_FSPARE0: break;
--//        case NS_rtf::LN_CHSTABLES: break;
--//        case NS_rtf::LN_FCMIN: break;
--//        case NS_rtf::LN_FCMAC: break;
--//        case NS_rtf::LN_CSW: break;
--//        case NS_rtf::LN_WMAGICCREATED: break;
--//        case NS_rtf::LN_WMAGICREVISED: break;
--//        case NS_rtf::LN_WMAGICCREATEDPRIVATE: break;
--//        case NS_rtf::LN_WMAGICREVISEDPRIVATE: break;
--//        case NS_rtf::LN_PNFBPCHPFIRST_W6: break;
--//        case NS_rtf::LN_PNCHPFIRST_W6: break;
--//        case NS_rtf::LN_CPNBTECHP_W6: break;
--//        case NS_rtf::LN_PNFBPPAPFIRST_W6: break;
--//        case NS_rtf::LN_PNPAPFIRST_W6: break;
--//        case NS_rtf::LN_CPNBTEPAP_W6: break;
--//        case NS_rtf::LN_PNFBPLVCFIRST_W6: break;
--//        case NS_rtf::LN_PNLVCFIRST_W6: break;
--//        case NS_rtf::LN_CPNBTELVC_W6: break;
--//        case NS_rtf::LN_LIDFE: break;
--//        case NS_rtf::LN_CLW: break;
--//        case NS_rtf::LN_CBMAC: break;
--//        case NS_rtf::LN_LPRODUCTCREATED: break;
--//        case NS_rtf::LN_LPRODUCTREVISED: break;
--//        case NS_rtf::LN_CCPTEXT: break;
--//        case NS_rtf::LN_CCPFTN: break;
--//        case NS_rtf::LN_CCPHDD: break;
--//        case NS_rtf::LN_CCPMCR: break;
--//        case NS_rtf::LN_CCPATN: break;
--//        case NS_rtf::LN_CCPEDN: break;
--//        case NS_rtf::LN_CCPTXBX: break;
--//        case NS_rtf::LN_CCPHDRTXBX: break;
--//        case NS_rtf::LN_PNFBPCHPFIRST: break;
--//        case NS_rtf::LN_PNCHPFIRST: break;
--//        case NS_rtf::LN_CPNBTECHP: break;
--//        case NS_rtf::LN_PNFBPPAPFIRST: break;
--//        case NS_rtf::LN_PNPAPFIRST: break;
--//        case NS_rtf::LN_CPNBTEPAP: break;
--//        case NS_rtf::LN_PNFBPLVCFIRST: break;
--//        case NS_rtf::LN_PNLVCFIRST: break;
--//        case NS_rtf::LN_CPNBTELVC: break;
--//        case NS_rtf::LN_FCISLANDFIRST: break;
--//        case NS_rtf::LN_FCISLANDLIM: break;
--//        case NS_rtf::LN_CFCLCB: break;
--//        case NS_rtf::LN_FCSTSHFORIG: break;
--//        case NS_rtf::LN_LCBSTSHFORIG: break;
--//        case NS_rtf::LN_FCSTSHF: break;
--//        case NS_rtf::LN_LCBSTSHF: break;
--//        case NS_rtf::LN_FCPLCFFNDREF: break;
--//        case NS_rtf::LN_LCBPLCFFNDREF: break;
--//        case NS_rtf::LN_FCPLCFFNDTXT: break;
--//        case NS_rtf::LN_LCBPLCFFNDTXT: break;
--//        case NS_rtf::LN_FCPLCFANDREF: break;
--//        case NS_rtf::LN_LCBPLCFANDREF: break;
--//        case NS_rtf::LN_FCPLCFANDTXT: break;
--//        case NS_rtf::LN_LCBPLCFANDTXT: break;
--//        case NS_rtf::LN_FCPLCFSED: break;
--//        case NS_rtf::LN_LCBPLCFSED: break;
--//        case NS_rtf::LN_FCPLCFPAD: break;
--//        case NS_rtf::LN_LCBPLCFPAD: break;
--//        case NS_rtf::LN_FCPLCFPHE: break;
--//        case NS_rtf::LN_LCBPLCFPHE: break;
--//        case NS_rtf::LN_FCSTTBFGLSY: break;
--//        case NS_rtf::LN_LCBSTTBFGLSY: break;
--//        case NS_rtf::LN_FCPLCFGLSY: break;
--//        case NS_rtf::LN_LCBPLCFGLSY: break;
--//        case NS_rtf::LN_FCPLCFHDD: break;
--//        case NS_rtf::LN_LCBPLCFHDD: break;
--//        case NS_rtf::LN_FCPLCFBTECHPX: break;
--//        case NS_rtf::LN_LCBPLCFBTECHPX: break;
--//        case NS_rtf::LN_FCPLCFBTEPAPX: break;
--//        case NS_rtf::LN_LCBPLCFBTEPAPX: break;
--//        case NS_rtf::LN_FCPLCFSEA: break;
--//        case NS_rtf::LN_LCBPLCFSEA: break;
--//        case NS_rtf::LN_FCSTTBFFFN: break;
--//        case NS_rtf::LN_LCBSTTBFFFN: break;
--//        case NS_rtf::LN_FCPLCFFLDMOM: break;
--//        case NS_rtf::LN_LCBPLCFFLDMOM: break;
--//        case NS_rtf::LN_FCPLCFFLDHDR: break;
--//        case NS_rtf::LN_LCBPLCFFLDHDR: break;
--//        case NS_rtf::LN_FCPLCFFLDFTN: break;
--//        case NS_rtf::LN_LCBPLCFFLDFTN: break;
--//        case NS_rtf::LN_FCPLCFFLDATN: break;
--//        case NS_rtf::LN_LCBPLCFFLDATN: break;
--//        case NS_rtf::LN_FCPLCFFLDMCR: break;
--//        case NS_rtf::LN_LCBPLCFFLDMCR: break;
--//        case NS_rtf::LN_FCSTTBFBKMK: break;
--//        case NS_rtf::LN_LCBSTTBFBKMK: break;
--//        case NS_rtf::LN_FCPLCFBKF: break;
--//        case NS_rtf::LN_LCBPLCFBKF: break;
--//        case NS_rtf::LN_FCPLCFBKL: break;
--//        case NS_rtf::LN_LCBPLCFBKL: break;
--//        case NS_rtf::LN_FCCMDS: break;
--//        case NS_rtf::LN_LCBCMDS: break;
--//        case NS_rtf::LN_FCPLCMCR: break;
--//        case NS_rtf::LN_LCBPLCMCR: break;
--//        case NS_rtf::LN_FCSTTBFMCR: break;
--//        case NS_rtf::LN_LCBSTTBFMCR: break;
--//        case NS_rtf::LN_FCPRDRVR: break;
--//        case NS_rtf::LN_LCBPRDRVR: break;
--//        case NS_rtf::LN_FCPRENVPORT: break;
--//        case NS_rtf::LN_LCBPRENVPORT: break;
--//        case NS_rtf::LN_FCPRENVLAND: break;
--//        case NS_rtf::LN_LCBPRENVLAND: break;
--//        case NS_rtf::LN_FCWSS: break;
--//        case NS_rtf::LN_LCBWSS: break;
--//        case NS_rtf::LN_FCDOP: break;
--//        case NS_rtf::LN_LCBDOP: break;
--//        case NS_rtf::LN_FCSTTBFASSOC: break;
--//        case NS_rtf::LN_LCBSTTBFASSOC: break;
--//        case NS_rtf::LN_FCCLX: break;
--//        case NS_rtf::LN_LCBCLX: break;
--//        case NS_rtf::LN_FCPLCFPGDFTN: break;
--//        case NS_rtf::LN_LCBPLCFPGDFTN: break;
--//        case NS_rtf::LN_FCAUTOSAVESOURCE: break;
--//        case NS_rtf::LN_LCBAUTOSAVESOURCE: break;
--//        case NS_rtf::LN_FCGRPXSTATNOWNERS: break;
--//        case NS_rtf::LN_LCBGRPXSTATNOWNERS: break;
--//        case NS_rtf::LN_FCSTTBFATNBKMK: break;
--//        case NS_rtf::LN_LCBSTTBFATNBKMK: break;
--//        case NS_rtf::LN_FCPLCDOAMOM: break;
--//        case NS_rtf::LN_LCBPLCDOAMOM: break;
--//        case NS_rtf::LN_FCPLCDOAHDR: break;
--//        case NS_rtf::LN_LCBPLCDOAHDR: break;
--//        case NS_rtf::LN_FCPLCSPAMOM: break;
--//        case NS_rtf::LN_LCBPLCSPAMOM: break;
--//        case NS_rtf::LN_FCPLCSPAHDR: break;
--//        case NS_rtf::LN_LCBPLCSPAHDR: break;
--//        case NS_rtf::LN_FCPLCFATNBKF: break;
--//        case NS_rtf::LN_LCBPLCFATNBKF: break;
--//        case NS_rtf::LN_FCPLCFATNBKL: break;
--//        case NS_rtf::LN_LCBPLCFATNBKL: break;
--//        case NS_rtf::LN_FCPMS: break;
--//        case NS_rtf::LN_LCBPMS: break;
--//        case NS_rtf::LN_FCFORMFLDSTTBF: break;
--//        case NS_rtf::LN_LCBFORMFLDSTTBF: break;
--//        case NS_rtf::LN_FCPLCFENDREF: break;
--//        case NS_rtf::LN_LCBPLCFENDREF: break;
--//        case NS_rtf::LN_FCPLCFENDTXT: break;
--//        case NS_rtf::LN_LCBPLCFENDTXT: break;
--//        case NS_rtf::LN_FCPLCFFLDEDN: break;
--//        case NS_rtf::LN_LCBPLCFFLDEDN: break;
--//        case NS_rtf::LN_FCPLCFPGDEDN: break;
--//        case NS_rtf::LN_LCBPLCFPGDEDN: break;
--//        case NS_rtf::LN_FCDGGINFO: break;
--//        case NS_rtf::LN_LCBDGGINFO: break;
--//        case NS_rtf::LN_FCSTTBFRMARK: break;
--//        case NS_rtf::LN_LCBSTTBFRMARK: break;
--//        case NS_rtf::LN_FCSTTBFCAPTION: break;
--//        case NS_rtf::LN_LCBSTTBFCAPTION: break;
--//        case NS_rtf::LN_FCSTTBFAUTOCAPTION: break;
--//        case NS_rtf::LN_LCBSTTBFAUTOCAPTION: break;
--//        case NS_rtf::LN_FCPLCFWKB: break;
--//        case NS_rtf::LN_LCBPLCFWKB: break;
--//        case NS_rtf::LN_FCPLCFSPL: break;
--//        case NS_rtf::LN_LCBPLCFSPL: break;
--//        case NS_rtf::LN_FCPLCFTXBXTXT: break;
--//        case NS_rtf::LN_LCBPLCFTXBXTXT: break;
--//        case NS_rtf::LN_FCPLCFFLDTXBX: break;
--//        case NS_rtf::LN_LCBPLCFFLDTXBX: break;
--//        case NS_rtf::LN_FCPLCFHDRTXBXTXT: break;
--//        case NS_rtf::LN_LCBPLCFHDRTXBXTXT: break;
--//        case NS_rtf::LN_FCPLCFFLDHDRTXBX: break;
--//        case NS_rtf::LN_LCBPLCFFLDHDRTXBX: break;
--//        case NS_rtf::LN_FCSTWUSER: break;
--//        case NS_rtf::LN_LCBSTWUSER: break;
--//        case NS_rtf::LN_FCSTTBTTMBD: break;
--//        case NS_rtf::LN_LCBSTTBTTMBD: break;
--//        case NS_rtf::LN_FCUNUSED: break;
--//        case NS_rtf::LN_LCBUNUSED: break;
--//        case NS_rtf::LN_FCPGDMOTHER: break;
--//        case NS_rtf::LN_LCBPGDMOTHER: break;
--//        case NS_rtf::LN_FCBKDMOTHER: break;
--//        case NS_rtf::LN_LCBBKDMOTHER: break;
--//        case NS_rtf::LN_FCPGDFTN: break;
--//        case NS_rtf::LN_LCBPGDFTN: break;
--//        case NS_rtf::LN_FCBKDFTN: break;
--//        case NS_rtf::LN_LCBBKDFTN: break;
--//        case NS_rtf::LN_FCPGDEDN: break;
--//        case NS_rtf::LN_LCBPGDEDN: break;
--//        case NS_rtf::LN_FCBKDEDN: break;
--//        case NS_rtf::LN_LCBBKDEDN: break;
--//        case NS_rtf::LN_FCSTTBFINTLFLD: break;
--//        case NS_rtf::LN_LCBSTTBFINTLFLD: break;
--//        case NS_rtf::LN_FCROUTESLIP: break;
--//        case NS_rtf::LN_LCBROUTESLIP: break;
--//        case NS_rtf::LN_FCSTTBSAVEDBY: break;
--//        case NS_rtf::LN_LCBSTTBSAVEDBY: break;
--//        case NS_rtf::LN_FCSTTBFNM: break;
--//        case NS_rtf::LN_LCBSTTBFNM: break;
--//        case NS_rtf::LN_FCPLCFLST: break;
--//        case NS_rtf::LN_LCBPLCFLST: break;
--//        case NS_rtf::LN_FCPLFLFO: break;
--//        case NS_rtf::LN_LCBPLFLFO: break;
--//        case NS_rtf::LN_FCPLCFTXBXBKD: break;
--//        case NS_rtf::LN_LCBPLCFTXBXBKD: break;
--//        case NS_rtf::LN_FCPLCFTXBXHDRBKD: break;
--//        case NS_rtf::LN_LCBPLCFTXBXHDRBKD: break;
--//        case NS_rtf::LN_FCDOCUNDO: break;
--//        case NS_rtf::LN_LCBDOCUNDO: break;
--//        case NS_rtf::LN_FCRGBUSE: break;
--//        case NS_rtf::LN_LCBRGBUSE: break;
--//        case NS_rtf::LN_FCUSP: break;
--//        case NS_rtf::LN_LCBUSP: break;
--//        case NS_rtf::LN_FCUSKF: break;
--//        case NS_rtf::LN_LCBUSKF: break;
--//        case NS_rtf::LN_FCPLCUPCRGBUSE: break;
--//        case NS_rtf::LN_LCBPLCUPCRGBUSE: break;
--//        case NS_rtf::LN_FCPLCUPCUSP: break;
--//        case NS_rtf::LN_LCBPLCUPCUSP: break;
--//        case NS_rtf::LN_FCSTTBGLSYSTYLE: break;
--//        case NS_rtf::LN_LCBSTTBGLSYSTYLE: break;
--//        case NS_rtf::LN_FCPLGOSL: break;
--//        case NS_rtf::LN_LCBPLGOSL: break;
--//        case NS_rtf::LN_FCPLCOCX: break;
--//        case NS_rtf::LN_LCBPLCOCX: break;
--//        case NS_rtf::LN_FCPLCFBTELVC: break;
--//        case NS_rtf::LN_LCBPLCFBTELVC: break;
--//        case NS_rtf::LN_DWLOWDATETIME: break;
--//        case NS_rtf::LN_DWHIGHDATETIME: break;
--//        case NS_rtf::LN_FCPLCFLVC: break;
--//        case NS_rtf::LN_LCBPLCFLVC: break;
--//        case NS_rtf::LN_FCPLCASUMY: break;
--//        case NS_rtf::LN_LCBPLCASUMY: break;
--//        case NS_rtf::LN_FCPLCFGRAM: break;
--//        case NS_rtf::LN_LCBPLCFGRAM: break;
--//        case NS_rtf::LN_FCSTTBLISTNAMES: break;
--//        case NS_rtf::LN_LCBSTTBLISTNAMES: break;
--//        case NS_rtf::LN_FCSTTBFUSSR: break;
--//        case NS_rtf::LN_LCBSTTBFUSSR: break;
--//        case NS_rtf::LN_FN: break;
--//        case NS_rtf::LN_FCSEPX: break;
--//        case NS_rtf::LN_FNMPR: break;
--//        case NS_rtf::LN_FCMPR: break;
--//        case NS_rtf::LN_ICOFORE: break;
--//        case NS_rtf::LN_ICOBACK: break;
--//        case NS_rtf::LN_IPAT: break;
--//        case NS_rtf::LN_SHDFORECOLOR: break;
--//        case NS_rtf::LN_SHDBACKCOLOR: break;
--//        case NS_rtf::LN_SHDPATTERN: break;
--//        case NS_rtf::LN_DPTLINEWIDTH: break;
--//        case NS_rtf::LN_BRCTYPE: break;
--//        case NS_rtf::LN_ICO: break;
--//        case NS_rtf::LN_DPTSPACE: break;
--//        case NS_rtf::LN_FSHADOW: break;
--//        case NS_rtf::LN_FFRAME: break;
--//        case NS_rtf::LN_UNUSED2_15: break;
--//        case NS_rtf::LN_FFIRSTMERGED: break;
--//        case NS_rtf::LN_FMERGED: break;
--//        case NS_rtf::LN_FVERTICAL: break;
--//        case NS_rtf::LN_FBACKWARD: break;
--//        case NS_rtf::LN_FROTATEFONT: break;
--//        case NS_rtf::LN_FVERTMERGE: break;
--//        case NS_rtf::LN_FVERTRESTART: break;
--//        case NS_rtf::LN_VERTALIGN: break;
--//        case NS_rtf::LN_FUNUSED: break;
--//        case NS_rtf::LN_WUNUSED: break;
--//        case NS_rtf::LN_BRCTOP: break;
--//        case NS_rtf::LN_BRCLEFT: break;
--//        case NS_rtf::LN_BRCBOTTOM: break;
--//        case NS_rtf::LN_BRCRIGHT: break;
--//        case NS_rtf::LN_IBKL: break;
--//        case NS_rtf::LN_ITCFIRST: break;
--//        case NS_rtf::LN_FPUB: break;
--//        case NS_rtf::LN_ITCLIM: break;
--//        case NS_rtf::LN_FCOL: break;
--//        case NS_rtf::LN_LINECOLOR: break;
--//        case NS_rtf::LN_LINEWIDTH: break;
--//        case NS_rtf::LN_LINETYPE: break;
--//        case NS_rtf::LN_MM: break;
--//        case NS_rtf::LN_XEXT: break;
--//        case NS_rtf::LN_YEXT: break;
--//        case NS_rtf::LN_HMF: break;
--//        case NS_rtf::LN_LCB: break;
--//        case NS_rtf::LN_CBHEADER: break;
--//        case NS_rtf::LN_MFP: break;
--//        case NS_rtf::LN_BM_RCWINMF: break;
--//        case NS_rtf::LN_DXAGOAL: break;
--//        case NS_rtf::LN_DYAGOAL: break;
--//        case NS_rtf::LN_MX: break;
--//        case NS_rtf::LN_MY: break;
--//        case NS_rtf::LN_DXACROPLEFT: break;
--//        case NS_rtf::LN_DYACROPTOP: break;
--//        case NS_rtf::LN_DXACROPRIGHT: break;
--//        case NS_rtf::LN_DYACROPBOTTOM: break;
--//        case NS_rtf::LN_BRCL: break;
--//        case NS_rtf::LN_FFRAMEEMPTY: break;
--//        case NS_rtf::LN_FBITMAP: break;
--//        case NS_rtf::LN_FDRAWHATCH: break;
--//        case NS_rtf::LN_FERROR: break;
--//        case NS_rtf::LN_BPP: break;
--//        case NS_rtf::LN_DXAORIGIN: break;
--//        case NS_rtf::LN_DYAORIGIN: break;
--//        case NS_rtf::LN_CPROPS: break;
--//        case NS_rtf::LN_LINEPROPSTOP: break;
--//        case NS_rtf::LN_LINEPROPSLEFT: break;
--//        case NS_rtf::LN_LINEPROPSBOTTOM: break;
--//        case NS_rtf::LN_LINEPROPSRIGHT: break;
--//        case NS_rtf::LN_LINEPROPSHORIZONTAL: break;
--//        case NS_rtf::LN_LINEPROPSVERTICAL: break;
--//        case NS_rtf::LN_headerr: break;
--//        case NS_rtf::LN_footerr: break;
--//        case NS_rtf::LN_endnote: break;
--//        case NS_rtf::LN_BOOKMARKNAME: break;
--
--//        case NS_rtf::LN_LISTLEVEL: break;
--        /* WRITERFILTERSTATUS: done: 50, planned: 0, spent: 0 */
--        case NS_rtf::LN_LFO:
+-#if 0
+-        case NS_rtf::LN_LFOLevel:
+-            /* WRITERFILTERSTATUS: done: 50, planned: 0, spent: 0 */
 -        {
 -            writerfilter::Reference<Properties>::Pointer_t pProperties;
 -            if(m_pImpl->m_pCurrentEntry && (pProperties = val.getProperties()).get())
@@ -1079,27 +1196,7 @@ index c122b4c..0000000
 -            }
 -        }
 -        break;
--//        case NS_rtf::LN_F: break;
--//        case NS_rtf::LN_ALTFONTNAME: break;
--//        case NS_rtf::LN_XSZFFN: break;
--//        case NS_rtf::LN_XSTZNAME: break;
--//        case NS_rtf::LN_XSTZNAME1: break;
--//        case NS_rtf::LN_UPXSTART: break;
--//        case NS_rtf::LN_UPX: break;
--//        case NS_rtf::LN_sed: break;
--//        case NS_rtf::LN_picf: break;
--//        case NS_rtf::LN_rgbrc: break;
--//        case NS_rtf::LN_shd: break;
--//        case NS_rtf::LN_cellShd: break;
--//        case NS_rtf::LN_cellTopColor: break;
--//        case NS_rtf::LN_cellLeftColor: break;
--//        case NS_rtf::LN_cellBottomColor: break;
--//        case NS_rtf::LN_cellRightColor: break;
--        
--//        case NS_rtf::LN_LISTTABLE: break;
--//        case NS_rtf::LN_LFOTABLE: break;
--//        case NS_rtf::LN_FONTTABLE: break;
--//        case NS_rtf::LN_STYLESHEET: break;
+-#endif
 -        default:
 -        {
 -            OSL_ENSURE( false, "LFOTable::attribute: default statement");
@@ -1152,16 +1249,16 @@ index c122b4c..0000000
 -
 -}//namespace dmapper
 -}//namespace writerfilter
-diff --git a/writerfilter/source/dmapper/LFOTable.hxx b/writerfilter/source/dmapper/LFOTable.hxx
+diff --git writerfilter/source/dmapper/LFOTable.hxx writerfilter/source/dmapper/LFOTable.hxx
 deleted file mode 100644
-index 89f72c5..0000000
---- a/writerfilter/source/dmapper/LFOTable.hxx
+index fa1711f..0000000
+--- writerfilter/source/dmapper/LFOTable.hxx
 +++ /dev/null
 @@ -1,65 +0,0 @@
 -/*************************************************************************
 - *
 - * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
-- *
+- * 
 - * Copyright 2000, 2010 Oracle and/or its affiliates.
 - *
 - * OpenOffice.org - a multi-platform office productivity suite
@@ -1223,16 +1320,16 @@ index 89f72c5..0000000
 -}}
 -
 -#endif //
-diff --git a/writerfilter/source/dmapper/ListTable.cxx b/writerfilter/source/dmapper/ListTable.cxx
+diff --git writerfilter/source/dmapper/ListTable.cxx writerfilter/source/dmapper/ListTable.cxx
 deleted file mode 100644
-index 512aa93..0000000
---- a/writerfilter/source/dmapper/ListTable.cxx
+index 6f057a4..0000000
+--- writerfilter/source/dmapper/ListTable.cxx
 +++ /dev/null
-@@ -1,1300 +0,0 @@
+@@ -1,903 +0,0 @@
 -/*************************************************************************
 - *
 - * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
-- *
+- * 
 - * Copyright 2000, 2010 Oracle and/or its affiliates.
 - *
 - * OpenOffice.org - a multi-platform office productivity suite
@@ -1571,13 +1668,13 @@ index 512aa93..0000000
 -    /* WRITERFILTERSTATUS: table: ListTable_attributedata */
 -    switch(nName)
 -    {
--        /* WRITERFILTERSTATUS: done: 50, planned: 0, spent: 0 */
 -        case NS_rtf::LN_RGBXCHNUMS:
+-        /* WRITERFILTERSTATUS: done: 50, planned: 0, spent: 0 */
 -            if(m_pImpl->m_pCurrentEntry->pCurrentProperties.get())
 -                m_pImpl->m_pCurrentEntry->pCurrentProperties->sRGBXchNums += rVal.getString();
 -        break;
--        /* WRITERFILTERSTATUS: done: 0, planned: 0, spent: 0 */
 -        case NS_ooxml::LN_CT_LevelText_val:
+-        /* WRITERFILTERSTATUS: done: 0, planned: 0, spent: 0 */
 -        {    
 -            //this strings contains the definition of the level
 -            //the level number is marked as %n
@@ -1591,429 +1688,45 @@ index 512aa93..0000000
 -        }
 -        break;
 -//        case NS_rtf::LN_ISTD: break;
--        /* WRITERFILTERSTATUS: done: 75, planned: 0, spent: 0 */
 -        case NS_rtf::LN_ISTARTAT:
--        /* WRITERFILTERSTATUS: done: 75, planned: 0, spent: 0 */
 -        case NS_rtf::LN_NFC:
--        /* WRITERFILTERSTATUS: done: 75, planned: 0, spent: 0 */
 -        case NS_rtf::LN_JC:
--        /* WRITERFILTERSTATUS: done: 75, planned: 0, spent: 0 */
 -        case NS_rtf::LN_FLEGAL:
--        /* WRITERFILTERSTATUS: done: 75, planned: 0, spent: 0 */
 -        case NS_rtf::LN_FNORESTART:
--        /* WRITERFILTERSTATUS: done: 75, planned: 0, spent: 0 */
--        case NS_rtf::LN_FPREV:
--        /* WRITERFILTERSTATUS: done: 75, planned: 0, spent: 0 */
--        case NS_rtf::LN_FPREVSPACE:
--        /* WRITERFILTERSTATUS: done: 75, planned: 0, spent: 0 */
--        case NS_rtf::LN_FWORD6:
--        /* WRITERFILTERSTATUS: done: 75, planned: 0, spent: 0 */
+-        case NS_rtf::LN_FIDENTSAV:
+-        case NS_rtf::LN_FCONVERTED:
+-        case NS_rtf::LN_FTENTATIVE:
 -        case NS_rtf::LN_IXCHFOLLOW:
+-            /* WRITERFILTERSTATUS: done: 75, planned: 0, spent: 0 */
 -            ApplyLevelValues( nName, nIntValue);
 -        break;
--        /* WRITERFILTERSTATUS: done: 100, planned: 0, spent: 0 */
--        case NS_rtf::LN_UNUSED5_7:
--            //unused
--        break;
--//        case NS_rtf::LN_DXASPACE: break;
--//        case NS_rtf::LN_DXAINDENT: break;
--//        case NS_rtf::LN_CBGRPPRLCHPX: break;
--//        case NS_rtf::LN_CBGRPPRLPAPX: break;
--        /* WRITERFILTERSTATUS: done: 75, planned: 0, spent: 0 */
 -        case NS_rtf::LN_LSID:
+-        /* WRITERFILTERSTATUS: done: 75, planned: 0, spent: 0 */
 -            m_pImpl->m_pCurrentEntry->nListId = nIntValue;
 -        break;
--        /* WRITERFILTERSTATUS: done: 75, planned: 0, spent: 0 */
 -        case NS_rtf::LN_TPLC:
+-        /* WRITERFILTERSTATUS: done: 75, planned: 0, spent: 0 */
 -            m_pImpl->m_pCurrentEntry->nTPLC = nIntValue;
 -        break;
--        /* WRITERFILTERSTATUS: done: 75, planned: 0, spent: 0 */
 -        case NS_rtf::LN_RGISTD:
+-        /* WRITERFILTERSTATUS: done: 75, planned: 0, spent: 0 */
 -            m_pImpl->m_pCurrentEntry->sRGISTD += rVal.getString();
 -        break;
--        /* WRITERFILTERSTATUS: done: 75, planned: 0, spent: 0 */
 -        case NS_rtf::LN_FSIMPLELIST:
+-        /* WRITERFILTERSTATUS: done: 75, planned: 0, spent: 0 */
 -            m_pImpl->m_pCurrentEntry->nSimpleList = nIntValue;
 -        break;
+-        case NS_rtf::LN_fAutoNum:
 -        /* WRITERFILTERSTATUS: done: 75, planned: 0, spent: 0 */
--        case NS_rtf::LN_FRESTARTHDN:
 -            m_pImpl->m_pCurrentEntry->nRestart = nIntValue;
 -        break;
+-        case NS_rtf::LN_fHybrid:
 -        /* WRITERFILTERSTATUS: done: 75, planned: 0, spent: 0 */
--        case NS_rtf::LN_UNSIGNED26_2:
 -            m_pImpl->m_pCurrentEntry->nUnsigned = nIntValue;
 -        break;
--//        case NS_rtf::LN_ILVL: break;
--//        case NS_rtf::LN_FSTARTAT: break;
--//        case NS_rtf::LN_FFORMATTING: break;
--//        case NS_rtf::LN_UNSIGNED4_6: break;
--//        case NS_rtf::LN_UNUSED4: break;
--//        case NS_rtf::LN_UNUSED8: break;
--//        case NS_rtf::LN_CLFOLVL: break;
--//        case NS_rtf::LN_CBFFNM1: break;
--//        case NS_rtf::LN_PRQ: break;
--//        case NS_rtf::LN_FTRUETYPE: break;
--//        case NS_rtf::LN_UNUSED1_3: break;
--//        case NS_rtf::LN_FF: break;
--//        case NS_rtf::LN_UNUSED1_7: break;
--//        case NS_rtf::LN_WWEIGHT: break;
--//        case NS_rtf::LN_CHS: break;
--//        case NS_rtf::LN_IXCHSZALT: break;
--//        case NS_rtf::LN_PANOSE: break;
--//        case NS_rtf::LN_FS: break;
--//        case NS_rtf::LN_STI: break;
--//        case NS_rtf::LN_FSCRATCH: break;
--//        case NS_rtf::LN_FINVALHEIGHT: break;
--//        case NS_rtf::LN_FHASUPE: break;
--//        case NS_rtf::LN_FMASSCOPY: break;
--//        case NS_rtf::LN_SGC: break;
--//        case NS_rtf::LN_ISTDBASE: break;
--//        case NS_rtf::LN_CUPX: break;
--//        case NS_rtf::LN_ISTDNEXT: break;
--//        case NS_rtf::LN_BCHUPE: break;
--//        case NS_rtf::LN_FAUTOREDEF: break;
--//        case NS_rtf::LN_FHIDDEN: break;
--//        case NS_rtf::LN_UNUSED8_3: break;
--//        case NS_rtf::LN_CSTD: break;
--//        case NS_rtf::LN_CBSTDBASEINFILE: break;
--//        case NS_rtf::LN_FSTDSTYLENAMESWRITTEN: break;
--//        case NS_rtf::LN_UNUSED4_2: break;
--//        case NS_rtf::LN_STIMAXWHENSAVED: break;
--//        case NS_rtf::LN_ISTDMAXFIXEDWHENSAVED: break;
--//        case NS_rtf::LN_NVERBUILTINNAMESWHENSAVED: break;
--//        case NS_rtf::LN_RGFTCSTANDARDCHPSTSH: break;
--//        case NS_rtf::LN_WIDENT: break;
--//        case NS_rtf::LN_NFIB: break;
--//        case NS_rtf::LN_NPRODUCT: break;
--//        case NS_rtf::LN_LID: break;
--//        case NS_rtf::LN_PNNEXT: break;
--//        case NS_rtf::LN_FDOT: break;
--//        case NS_rtf::LN_FGLSY: break;
--//        case NS_rtf::LN_FCOMPLEX: break;
--//        case NS_rtf::LN_FHASPIC: break;
--//        case NS_rtf::LN_CQUICKSAVES: break;
--//        case NS_rtf::LN_FENCRYPTED: break;
--//        case NS_rtf::LN_FWHICHTBLSTM: break;
--//        case NS_rtf::LN_FREADONLYRECOMMENDED: break;
--//        case NS_rtf::LN_FWRITERESERVATION: break;
--//        case NS_rtf::LN_FEXTCHAR: break;
--//        case NS_rtf::LN_FLOADOVERRIDE: break;
--//        case NS_rtf::LN_FFAREAST: break;
--//        case NS_rtf::LN_FCRYPTO: break;
--//        case NS_rtf::LN_NFIBBACK: break;
--//        case NS_rtf::LN_LKEY: break;
--//        case NS_rtf::LN_ENVR: break;
--//        case NS_rtf::LN_FMAC: break;
--//        case NS_rtf::LN_FEMPTYSPECIAL: break;
--//        case NS_rtf::LN_FLOADOVERRIDEPAGE: break;
--//        case NS_rtf::LN_FFUTURESAVEDUNDO: break;
--//        case NS_rtf::LN_FWORD97SAVED: break;
--//        case NS_rtf::LN_FSPARE0: break;
--//        case NS_rtf::LN_CHSTABLES: break;
--//        case NS_rtf::LN_FCMIN: break;
--//        case NS_rtf::LN_FCMAC: break;
--//        case NS_rtf::LN_CSW: break;
--//        case NS_rtf::LN_WMAGICCREATED: break;
--//        case NS_rtf::LN_WMAGICREVISED: break;
--//        case NS_rtf::LN_WMAGICCREATEDPRIVATE: break;
--//        case NS_rtf::LN_WMAGICREVISEDPRIVATE: break;
--//        case NS_rtf::LN_PNFBPCHPFIRST_W6: break;
--//        case NS_rtf::LN_PNCHPFIRST_W6: break;
--//        case NS_rtf::LN_CPNBTECHP_W6: break;
--//        case NS_rtf::LN_PNFBPPAPFIRST_W6: break;
--//        case NS_rtf::LN_PNPAPFIRST_W6: break;
--//        case NS_rtf::LN_CPNBTEPAP_W6: break;
--//        case NS_rtf::LN_PNFBPLVCFIRST_W6: break;
--//        case NS_rtf::LN_PNLVCFIRST_W6: break;
--//        case NS_rtf::LN_CPNBTELVC_W6: break;
--//        case NS_rtf::LN_LIDFE: break;
--//        case NS_rtf::LN_CLW: break;
--//        case NS_rtf::LN_CBMAC: break;
--//        case NS_rtf::LN_LPRODUCTCREATED: break;
--//        case NS_rtf::LN_LPRODUCTREVISED: break;
--//        case NS_rtf::LN_CCPTEXT: break;
--//        case NS_rtf::LN_CCPFTN: break;
--//        case NS_rtf::LN_CCPHDD: break;
--//        case NS_rtf::LN_CCPMCR: break;
--//        case NS_rtf::LN_CCPATN: break;
--//        case NS_rtf::LN_CCPEDN: break;
--//        case NS_rtf::LN_CCPTXBX: break;
--//        case NS_rtf::LN_CCPHDRTXBX: break;
--//        case NS_rtf::LN_PNFBPCHPFIRST: break;
--//        case NS_rtf::LN_PNCHPFIRST: break;
--//        case NS_rtf::LN_CPNBTECHP: break;
--//        case NS_rtf::LN_PNFBPPAPFIRST: break;
--//        case NS_rtf::LN_PNPAPFIRST: break;
--//        case NS_rtf::LN_CPNBTEPAP: break;
--//        case NS_rtf::LN_PNFBPLVCFIRST: break;
--//        case NS_rtf::LN_PNLVCFIRST: break;
--//        case NS_rtf::LN_CPNBTELVC: break;
--//        case NS_rtf::LN_FCISLANDFIRST: break;
--//        case NS_rtf::LN_FCISLANDLIM: break;
--//        case NS_rtf::LN_CFCLCB: break;
--//        case NS_rtf::LN_FCSTSHFORIG: break;
--//        case NS_rtf::LN_LCBSTSHFORIG: break;
--//        case NS_rtf::LN_FCSTSHF: break;
--//        case NS_rtf::LN_LCBSTSHF: break;
--//        case NS_rtf::LN_FCPLCFFNDREF: break;
--//        case NS_rtf::LN_LCBPLCFFNDREF: break;
--//        case NS_rtf::LN_FCPLCFFNDTXT: break;
--//        case NS_rtf::LN_LCBPLCFFNDTXT: break;
--//        case NS_rtf::LN_FCPLCFANDREF: break;
--//        case NS_rtf::LN_LCBPLCFANDREF: break;
--//        case NS_rtf::LN_FCPLCFANDTXT: break;
--//        case NS_rtf::LN_LCBPLCFANDTXT: break;
--//        case NS_rtf::LN_FCPLCFSED: break;
--//        case NS_rtf::LN_LCBPLCFSED: break;
--//        case NS_rtf::LN_FCPLCFPAD: break;
--//        case NS_rtf::LN_LCBPLCFPAD: break;
--//        case NS_rtf::LN_FCPLCFPHE: break;
--//        case NS_rtf::LN_LCBPLCFPHE: break;
--//        case NS_rtf::LN_FCSTTBFGLSY: break;
--//        case NS_rtf::LN_LCBSTTBFGLSY: break;
--//        case NS_rtf::LN_FCPLCFGLSY: break;
--//        case NS_rtf::LN_LCBPLCFGLSY: break;
--//        case NS_rtf::LN_FCPLCFHDD: break;
--//        case NS_rtf::LN_LCBPLCFHDD: break;
--//        case NS_rtf::LN_FCPLCFBTECHPX: break;
--//        case NS_rtf::LN_LCBPLCFBTECHPX: break;
--//        case NS_rtf::LN_FCPLCFBTEPAPX: break;
--//        case NS_rtf::LN_LCBPLCFBTEPAPX: break;
--//        case NS_rtf::LN_FCPLCFSEA: break;
--//        case NS_rtf::LN_LCBPLCFSEA: break;
--//        case NS_rtf::LN_FCSTTBFFFN: break;
--//        case NS_rtf::LN_LCBSTTBFFFN: break;
--//        case NS_rtf::LN_FCPLCFFLDMOM: break;
--//        case NS_rtf::LN_LCBPLCFFLDMOM: break;
--//        case NS_rtf::LN_FCPLCFFLDHDR: break;
--//        case NS_rtf::LN_LCBPLCFFLDHDR: break;
--//        case NS_rtf::LN_FCPLCFFLDFTN: break;
--//        case NS_rtf::LN_LCBPLCFFLDFTN: break;
--//        case NS_rtf::LN_FCPLCFFLDATN: break;
--//        case NS_rtf::LN_LCBPLCFFLDATN: break;
--//        case NS_rtf::LN_FCPLCFFLDMCR: break;
--//        case NS_rtf::LN_LCBPLCFFLDMCR: break;
--//        case NS_rtf::LN_FCSTTBFBKMK: break;
--//        case NS_rtf::LN_LCBSTTBFBKMK: break;
--//        case NS_rtf::LN_FCPLCFBKF: break;
--//        case NS_rtf::LN_LCBPLCFBKF: break;
--//        case NS_rtf::LN_FCPLCFBKL: break;
--//        case NS_rtf::LN_LCBPLCFBKL: break;
--//        case NS_rtf::LN_FCCMDS: break;
--//        case NS_rtf::LN_LCBCMDS: break;
--//        case NS_rtf::LN_FCPLCMCR: break;
--//        case NS_rtf::LN_LCBPLCMCR: break;
--//        case NS_rtf::LN_FCSTTBFMCR: break;
--//        case NS_rtf::LN_LCBSTTBFMCR: break;
--//        case NS_rtf::LN_FCPRDRVR: break;
--//        case NS_rtf::LN_LCBPRDRVR: break;
--//        case NS_rtf::LN_FCPRENVPORT: break;
--//        case NS_rtf::LN_LCBPRENVPORT: break;
--//        case NS_rtf::LN_FCPRENVLAND: break;
--//        case NS_rtf::LN_LCBPRENVLAND: break;
--//        case NS_rtf::LN_FCWSS: break;
--//        case NS_rtf::LN_LCBWSS: break;
--//        case NS_rtf::LN_FCDOP: break;
--//        case NS_rtf::LN_LCBDOP: break;
--//        case NS_rtf::LN_FCSTTBFASSOC: break;
--//        case NS_rtf::LN_LCBSTTBFASSOC: break;
--//        case NS_rtf::LN_FCCLX: break;
--//        case NS_rtf::LN_LCBCLX: break;
--//        case NS_rtf::LN_FCPLCFPGDFTN: break;
--//        case NS_rtf::LN_LCBPLCFPGDFTN: break;
--//        case NS_rtf::LN_FCAUTOSAVESOURCE: break;
--//        case NS_rtf::LN_LCBAUTOSAVESOURCE: break;
--//        case NS_rtf::LN_FCGRPXSTATNOWNERS: break;
--//        case NS_rtf::LN_LCBGRPXSTATNOWNERS: break;
--//        case NS_rtf::LN_FCSTTBFATNBKMK: break;
--//        case NS_rtf::LN_LCBSTTBFATNBKMK: break;
--//        case NS_rtf::LN_FCPLCDOAMOM: break;
--//        case NS_rtf::LN_LCBPLCDOAMOM: break;
--//        case NS_rtf::LN_FCPLCDOAHDR: break;
--//        case NS_rtf::LN_LCBPLCDOAHDR: break;
--//        case NS_rtf::LN_FCPLCSPAMOM: break;
--//        case NS_rtf::LN_LCBPLCSPAMOM: break;
--//        case NS_rtf::LN_FCPLCSPAHDR: break;
--//        case NS_rtf::LN_LCBPLCSPAHDR: break;
--//        case NS_rtf::LN_FCPLCFATNBKF: break;
--//        case NS_rtf::LN_LCBPLCFATNBKF: break;
--//        case NS_rtf::LN_FCPLCFATNBKL: break;
--//        case NS_rtf::LN_LCBPLCFATNBKL: break;
--//        case NS_rtf::LN_FCPMS: break;
--//        case NS_rtf::LN_LCBPMS: break;
--//        case NS_rtf::LN_FCFORMFLDSTTBF: break;
--//        case NS_rtf::LN_LCBFORMFLDSTTBF: break;
--//        case NS_rtf::LN_FCPLCFENDREF: break;
--//        case NS_rtf::LN_LCBPLCFENDREF: break;
--//        case NS_rtf::LN_FCPLCFENDTXT: break;
--//        case NS_rtf::LN_LCBPLCFENDTXT: break;
--//        case NS_rtf::LN_FCPLCFFLDEDN: break;
--//        case NS_rtf::LN_LCBPLCFFLDEDN: break;
--//        case NS_rtf::LN_FCPLCFPGDEDN: break;
--//        case NS_rtf::LN_LCBPLCFPGDEDN: break;
--//        case NS_rtf::LN_FCDGGINFO: break;
--//        case NS_rtf::LN_LCBDGGINFO: break;
--//        case NS_rtf::LN_FCSTTBFRMARK: break;
--//        case NS_rtf::LN_LCBSTTBFRMARK: break;
--//        case NS_rtf::LN_FCSTTBFCAPTION: break;
--//        case NS_rtf::LN_LCBSTTBFCAPTION: break;
--//        case NS_rtf::LN_FCSTTBFAUTOCAPTION: break;
--//        case NS_rtf::LN_LCBSTTBFAUTOCAPTION: break;
--//        case NS_rtf::LN_FCPLCFWKB: break;
--//        case NS_rtf::LN_LCBPLCFWKB: break;
--//        case NS_rtf::LN_FCPLCFSPL: break;
--//        case NS_rtf::LN_LCBPLCFSPL: break;
--//        case NS_rtf::LN_FCPLCFTXBXTXT: break;
--//        case NS_rtf::LN_LCBPLCFTXBXTXT: break;
--//        case NS_rtf::LN_FCPLCFFLDTXBX: break;
--//        case NS_rtf::LN_LCBPLCFFLDTXBX: break;
--//        case NS_rtf::LN_FCPLCFHDRTXBXTXT: break;
--//        case NS_rtf::LN_LCBPLCFHDRTXBXTXT: break;
--//        case NS_rtf::LN_FCPLCFFLDHDRTXBX: break;
--//        case NS_rtf::LN_LCBPLCFFLDHDRTXBX: break;
--//        case NS_rtf::LN_FCSTWUSER: break;
--//        case NS_rtf::LN_LCBSTWUSER: break;
--//        case NS_rtf::LN_FCSTTBTTMBD: break;
--//        case NS_rtf::LN_LCBSTTBTTMBD: break;
--//        case NS_rtf::LN_FCUNUSED: break;
--//        case NS_rtf::LN_LCBUNUSED: break;
--//        case NS_rtf::LN_FCPGDMOTHER: break;
--//        case NS_rtf::LN_LCBPGDMOTHER: break;
--//        case NS_rtf::LN_FCBKDMOTHER: break;
--//        case NS_rtf::LN_LCBBKDMOTHER: break;
--//        case NS_rtf::LN_FCPGDFTN: break;
--//        case NS_rtf::LN_LCBPGDFTN: break;
--//        case NS_rtf::LN_FCBKDFTN: break;
--//        case NS_rtf::LN_LCBBKDFTN: break;
--//        case NS_rtf::LN_FCPGDEDN: break;
--//        case NS_rtf::LN_LCBPGDEDN: break;
--//        case NS_rtf::LN_FCBKDEDN: break;
--//        case NS_rtf::LN_LCBBKDEDN: break;
--//        case NS_rtf::LN_FCSTTBFINTLFLD: break;
--//        case NS_rtf::LN_LCBSTTBFINTLFLD: break;
--//        case NS_rtf::LN_FCROUTESLIP: break;
--//        case NS_rtf::LN_LCBROUTESLIP: break;
--//        case NS_rtf::LN_FCSTTBSAVEDBY: break;
--//        case NS_rtf::LN_LCBSTTBSAVEDBY: break;
--//        case NS_rtf::LN_FCSTTBFNM: break;
--//        case NS_rtf::LN_LCBSTTBFNM: break;
--//        case NS_rtf::LN_FCPLCFLST: break;
--//        case NS_rtf::LN_LCBPLCFLST: break;
--//        case NS_rtf::LN_FCPLFLFO: break;
--//        case NS_rtf::LN_LCBPLFLFO: break;
--//        case NS_rtf::LN_FCPLCFTXBXBKD: break;
--//        case NS_rtf::LN_LCBPLCFTXBXBKD: break;
--//        case NS_rtf::LN_FCPLCFTXBXHDRBKD: break;
--//        case NS_rtf::LN_LCBPLCFTXBXHDRBKD: break;
--//        case NS_rtf::LN_FCDOCUNDO: break;
--//        case NS_rtf::LN_LCBDOCUNDO: break;
--//        case NS_rtf::LN_FCRGBUSE: break;
--//        case NS_rtf::LN_LCBRGBUSE: break;
--//        case NS_rtf::LN_FCUSP: break;
--//        case NS_rtf::LN_LCBUSP: break;
--//        case NS_rtf::LN_FCUSKF: break;
--//        case NS_rtf::LN_LCBUSKF: break;
--//        case NS_rtf::LN_FCPLCUPCRGBUSE: break;
--//        case NS_rtf::LN_LCBPLCUPCRGBUSE: break;
--//        case NS_rtf::LN_FCPLCUPCUSP: break;
--//        case NS_rtf::LN_LCBPLCUPCUSP: break;
--//        case NS_rtf::LN_FCSTTBGLSYSTYLE: break;
--//        case NS_rtf::LN_LCBSTTBGLSYSTYLE: break;
--//        case NS_rtf::LN_FCPLGOSL: break;
--//        case NS_rtf::LN_LCBPLGOSL: break;
--//        case NS_rtf::LN_FCPLCOCX: break;
--//        case NS_rtf::LN_LCBPLCOCX: break;
--//        case NS_rtf::LN_FCPLCFBTELVC: break;
--//        case NS_rtf::LN_LCBPLCFBTELVC: break;
--//        case NS_rtf::LN_DWLOWDATETIME: break;
--//        case NS_rtf::LN_DWHIGHDATETIME: break;
--//        case NS_rtf::LN_FCPLCFLVC: break;
--//        case NS_rtf::LN_LCBPLCFLVC: break;
--//        case NS_rtf::LN_FCPLCASUMY: break;
--//        case NS_rtf::LN_LCBPLCASUMY: break;
--//        case NS_rtf::LN_FCPLCFGRAM: break;
--//        case NS_rtf::LN_LCBPLCFGRAM: break;
--//        case NS_rtf::LN_FCSTTBLISTNAMES: break;
--//        case NS_rtf::LN_LCBSTTBLISTNAMES: break;
--//        case NS_rtf::LN_FCSTTBFUSSR: break;
--//        case NS_rtf::LN_LCBSTTBFUSSR: break;
--//        case NS_rtf::LN_FN: break;
--//        case NS_rtf::LN_FCSEPX: break;
--//        case NS_rtf::LN_FNMPR: break;
--//        case NS_rtf::LN_FCMPR: break;
--//        case NS_rtf::LN_ICOFORE: break;
--//        case NS_rtf::LN_ICOBACK: break;
--//        case NS_rtf::LN_IPAT: break;
--//        case NS_rtf::LN_SHDFORECOLOR: break;
--//        case NS_rtf::LN_SHDBACKCOLOR: break;
--//        case NS_rtf::LN_SHDPATTERN: break;
--//        case NS_rtf::LN_DPTLINEWIDTH: break;
--//        case NS_rtf::LN_BRCTYPE: break;
--//        case NS_rtf::LN_ICO: break;
--//        case NS_rtf::LN_DPTSPACE: break;
--//        case NS_rtf::LN_FSHADOW: break;
--//        case NS_rtf::LN_FFRAME: break;
--//        case NS_rtf::LN_UNUSED2_15: break;
--//        case NS_rtf::LN_FFIRSTMERGED: break;
--//        case NS_rtf::LN_FMERGED: break;
--//        case NS_rtf::LN_FVERTICAL: break;
--//        case NS_rtf::LN_FBACKWARD: break;
--//        case NS_rtf::LN_FROTATEFONT: break;
--//        case NS_rtf::LN_FVERTMERGE: break;
--//        case NS_rtf::LN_FVERTRESTART: break;
--//        case NS_rtf::LN_VERTALIGN: break;
--//        case NS_rtf::LN_FUNUSED: break;
--//        case NS_rtf::LN_WUNUSED: break;
--//        case NS_rtf::LN_BRCTOP: break;
--//        case NS_rtf::LN_BRCLEFT: break;
--//        case NS_rtf::LN_BRCBOTTOM: break;
--//        case NS_rtf::LN_BRCRIGHT: break;
--//        case NS_rtf::LN_IBKL: break;
--//        case NS_rtf::LN_ITCFIRST: break;
--//        case NS_rtf::LN_FPUB: break;
--//        case NS_rtf::LN_ITCLIM: break;
--//        case NS_rtf::LN_FCOL: break;
--//        case NS_rtf::LN_LINECOLOR: break;
--//        case NS_rtf::LN_LINEWIDTH: break;
--//        case NS_rtf::LN_LINETYPE: break;
--//        case NS_rtf::LN_MM: break;
--//        case NS_rtf::LN_XEXT: break;
--//        case NS_rtf::LN_YEXT: break;
--//        case NS_rtf::LN_HMF: break;
--//        case NS_rtf::LN_LCB: break;
--//        case NS_rtf::LN_CBHEADER: break;
--//        case NS_rtf::LN_MFP: break;
--//        case NS_rtf::LN_BM_RCWINMF: break;
--//        case NS_rtf::LN_DXAGOAL: break;
--//        case NS_rtf::LN_DYAGOAL: break;
--//        case NS_rtf::LN_MX: break;
--//        case NS_rtf::LN_MY: break;
--//        case NS_rtf::LN_DXACROPLEFT: break;
--//        case NS_rtf::LN_DYACROPTOP: break;
--//        case NS_rtf::LN_DXACROPRIGHT: break;
--//        case NS_rtf::LN_DYACROPBOTTOM: break;
--//        case NS_rtf::LN_BRCL: break;
--//        case NS_rtf::LN_FFRAMEEMPTY: break;
--//        case NS_rtf::LN_FBITMAP: break;
--//        case NS_rtf::LN_FDRAWHATCH: break;
--//        case NS_rtf::LN_FERROR: break;
--//        case NS_rtf::LN_BPP: break;
--//        case NS_rtf::LN_DXAORIGIN: break;
--//        case NS_rtf::LN_DYAORIGIN: break;
--//        case NS_rtf::LN_CPROPS: break;
--//        case NS_rtf::LN_LINEPROPSTOP: break;
--//        case NS_rtf::LN_LINEPROPSLEFT: break;
--//        case NS_rtf::LN_LINEPROPSBOTTOM: break;
--//        case NS_rtf::LN_LINEPROPSRIGHT: break;
--//        case NS_rtf::LN_LINEPROPSHORIZONTAL: break;
--//        case NS_rtf::LN_LINEPROPSVERTICAL: break;
--//        case NS_rtf::LN_headerr: break;
--//        case NS_rtf::LN_footerr: break;
--//        case NS_rtf::LN_endnote: break;
--//        case NS_rtf::LN_BOOKMARKNAME: break;
 -
--        /* WRITERFILTERSTATUS: done: 100, planned: 0, spent: 0 */
 -        case NS_rtf::LN_LISTLEVEL:
+-        /* WRITERFILTERSTATUS: done: 100, planned: 0, spent: 0 */
 -        {
 -            //add a new level to the level vector and make it the current one
 -            m_pImpl->AddLevel();
@@ -2023,30 +1736,8 @@ index 512aa93..0000000
 -                pProperties->resolve(*this);
 -        }
 -        break;
--//        case NS_rtf::LN_LFO: break;
--//        case NS_rtf::LN_F: break;
--//        case NS_rtf::LN_ALTFONTNAME: break;
--//        case NS_rtf::LN_XSZFFN: break;
--//        case NS_rtf::LN_XSTZNAME: break;
--//        case NS_rtf::LN_XSTZNAME1: break;
--//        case NS_rtf::LN_UPXSTART: break;
--//        case NS_rtf::LN_UPX: break;
--//        case NS_rtf::LN_sed: break;
--//        case NS_rtf::LN_picf: break;
--//        case NS_rtf::LN_rgbrc: break;
--//        case NS_rtf::LN_shd: break;
--//        case NS_rtf::LN_cellShd: break;
--//        case NS_rtf::LN_cellTopColor: break;
--//        case NS_rtf::LN_cellLeftColor: break;
--//        case NS_rtf::LN_cellBottomColor: break;
--//        case NS_rtf::LN_cellRightColor: break;
--
--//        case NS_rtf::LN_LISTTABLE: break;
--//        case NS_rtf::LN_LFOTABLE: break;
--//        case NS_rtf::LN_FONTTABLE: break;
--//        case NS_rtf::LN_STYLESHEET: break;
--        /* WRITERFILTERSTATUS: done: 100, planned: 0, spent: 0 */
 -        case NS_ooxml::LN_CT_AbstractNum_abstractNumId:
+-        /* WRITERFILTERSTATUS: done: 100, planned: 0, spent: 0 */
 -        {    
 -            sal_Int32 nVal = rVal.getString().toInt32();
 -            m_pImpl->m_pCurrentEntry->nAbstractNumId = nVal;
@@ -2109,8 +1800,8 @@ index 512aa93..0000000
 -        /* WRITERFILTERSTATUS: table: ListTable_sprm */
 -        switch( nSprmId )
 -        {
--            /* WRITERFILTERSTATUS: done: 100, planned: 0, spent: 0 */
 -            case NS_ooxml::LN_CT_Numbering_abstractNum:
+-            /* WRITERFILTERSTATUS: done: 100, planned: 0, spent: 0 */
 -            {
 -                writerfilter::Reference<Properties>::Pointer_t pProperties = rSprm.getProps();
 -                if(pProperties.get())
@@ -2125,8 +1816,8 @@ index 512aa93..0000000
 -                }
 -            }
 -            break;
--            /* WRITERFILTERSTATUS: done: 50, planned: 0, spent: 0 */
 -            case NS_ooxml::LN_CT_Numbering_num:
+-            /* WRITERFILTERSTATUS: done: 50, planned: 0, spent: 0 */
 -            {
 -                writerfilter::Reference<Properties>::Pointer_t pProperties = rSprm.getProps();
 -                if(pProperties.get())
@@ -2139,15 +1830,15 @@ index 512aa93..0000000
 -                }
 -            }
 -            break;
--            /* WRITERFILTERSTATUS: done: 0, planned: 0, spent: 0 */
 -            case NS_ooxml::LN_CT_AbstractNum_multiLevelType:
+-            /* WRITERFILTERSTATUS: done: 0, planned: 0, spent: 0 */
 -            break;
--            /* WRITERFILTERSTATUS: done: 50, planned: 0, spent: 0 */
 -            case NS_rtf::LN_TPLC:
+-            /* WRITERFILTERSTATUS: done: 50, planned: 0, spent: 0 */
 -                m_pImpl->m_pCurrentEntry->nTPLC = nIntValue;
 -            break;
--            /* WRITERFILTERSTATUS: done: 100, planned: 0, spent: 0 */
 -            case NS_ooxml::LN_CT_AbstractNum_lvl:
+-            /* WRITERFILTERSTATUS: done: 100, planned: 0, spent: 0 */
 -            {
 -                m_pImpl->AddLevel();
 -                writerfilter::Reference<Properties>::Pointer_t pProperties = rSprm.getProps();
@@ -2159,30 +1850,24 @@ index 512aa93..0000000
 -//            case NS_rtf::LN_LSID:
 -//                m_pImpl->m_pCurrentEntry->nListId = nIntValue;
 -//            break;
+-            case NS_rtf::LN_RGBXCHNUMS: 
 -            /* WRITERFILTERSTATUS: done: 0, planned: 0, spent: 0 */
--            case NS_rtf::LN_RGBXCHNUMS: break;
--            /* WRITERFILTERSTATUS: done: 75, planned: 0, spent: 0 */
+-                break;
 -            case NS_rtf::LN_ISTARTAT:
--            /* WRITERFILTERSTATUS: done: 75, planned: 0, spent: 0 */
 -            case NS_rtf::LN_NFC:
--            /* WRITERFILTERSTATUS: done: 75, planned: 0, spent: 0 */
 -            case NS_rtf::LN_JC:
--            /* WRITERFILTERSTATUS: done: 75, planned: 0, spent: 0 */
 -            case NS_rtf::LN_FLEGAL:
--            /* WRITERFILTERSTATUS: done: 75, planned: 0, spent: 0 */
 -            case NS_rtf::LN_FNORESTART:
--            /* WRITERFILTERSTATUS: done: 75, planned: 0, spent: 0 */
--            case NS_rtf::LN_FPREV:
--            /* WRITERFILTERSTATUS: done: 75, planned: 0, spent: 0 */
--            case NS_rtf::LN_FPREVSPACE:
--            /* WRITERFILTERSTATUS: done: 75, planned: 0, spent: 0 */
--            case NS_rtf::LN_FWORD6:
--            /* WRITERFILTERSTATUS: done: 75, planned: 0, spent: 0 */
+-            case NS_rtf::LN_FIDENTSAV:
+-            case NS_rtf::LN_FCONVERTED:
+-            case NS_rtf::LN_FTENTATIVE:
 -            case NS_rtf::LN_IXCHFOLLOW:
+-            /* WRITERFILTERSTATUS: done: 75, planned: 0, spent: 0 */
 -                ApplyLevelValues( nSprmId, nIntValue );
 -            break;
 -            case NS_ooxml::LN_CT_Lvl_lvlText:
 -            case NS_ooxml::LN_CT_Lvl_rPr : //contains LN_EG_RPrBase_rFonts
+-            /* WRITERFILTERSTATUS: done: 100, planned: 0, spent: 0 */
 -            {    
 -                writerfilter::Reference<Properties>::Pointer_t pProperties = rSprm.getProps();
 -                if(pProperties.get())
@@ -2190,6 +1875,7 @@ index 512aa93..0000000
 -            }
 -            break;
 -            case NS_ooxml::LN_CT_NumLvl_lvl:
+-            /* WRITERFILTERSTATUS: done: 100, planned: 0, spent: 0 */
 -            {   
 -                // overwrite level
 -                writerfilter::Reference<Properties>::Pointer_t pProperties = rSprm.getProps();
@@ -2212,6 +1898,7 @@ index 512aa93..0000000
 -            break;
 -            case NS_ooxml::LN_CT_Lvl_pPr:
 -            case NS_ooxml::LN_CT_PPrBase_ind:
+-            /* WRITERFILTERSTATUS: done: 50, planned: 0, spent: 0 */
 -            {    
 -                //todo: how to handle paragraph properties within numbering levels (except LeftIndent and FirstLineIndent)?
 -                writerfilter::Reference<Properties>::Pointer_t pProperties = rSprm.getProps();
@@ -2228,6 +1915,7 @@ index 512aa93..0000000
 -            }
 -            break;
 -            case NS_ooxml::LN_CT_Lvl_suff:
+-            /* WRITERFILTERSTATUS: done: 0, planned: 0, spent: 0 */
 -                //todo: currently unsupported suffix 
 -                //can be: "none", "space", "tab"
 -            break;
@@ -2237,6 +1925,7 @@ index 512aa93..0000000
 -            case NS_sprm::LN_CHps:    // sprmCHps
 -            case NS_ooxml::LN_EG_RPrBase_lang:
 -            case NS_ooxml::LN_EG_RPrBase_eastAsianLayout:
+-            /* WRITERFILTERSTATUS: done: 100, planned: 0, spent: 0 */
 -                //no break!
 -            default:
 -                if(m_pImpl->m_pCurrentEntry->pCurrentProperties.get())
@@ -2257,30 +1946,41 @@ index 512aa93..0000000
 -    switch(nId)
 -    {
 -        case NS_rtf::LN_ISTARTAT:
+-            /* WRITERFILTERSTATUS: */
 -                m_pImpl->m_pCurrentEntry->pCurrentProperties->nIStartAt = nIntValue;
 -        break;
 -        case NS_rtf::LN_NFC:
+-            /* WRITERFILTERSTATUS: */
 -            m_pImpl->m_pCurrentEntry->pCurrentProperties->nNFC = nIntValue;
 -        break;
 -        case NS_rtf::LN_JC:
+-            /* WRITERFILTERSTATUS: */
 -            m_pImpl->m_pCurrentEntry->pCurrentProperties->nJC = nIntValue;
 -        break;
 -        case NS_rtf::LN_FLEGAL:
+-            /* WRITERFILTERSTATUS: */
 -            m_pImpl->m_pCurrentEntry->pCurrentProperties->nFLegal = nIntValue;
 -        break;
 -        case NS_rtf::LN_FNORESTART:
+-            /* WRITERFILTERSTATUS: */
 -            m_pImpl->m_pCurrentEntry->pCurrentProperties->nFNoRestart = nIntValue;
 -        break;
--        case NS_rtf::LN_FPREV:
+-        case NS_rtf::LN_FIDENTSAV:
+-            /* WRITERFILTERSTATUS: */
 -            m_pImpl->m_pCurrentEntry->pCurrentProperties->nFPrev = nIntValue;
 -        break;
--        case NS_rtf::LN_FPREVSPACE:
+-        case NS_rtf::LN_FCONVERTED:
+-            /* WRITERFILTERSTATUS: */
 -            m_pImpl->m_pCurrentEntry->pCurrentProperties->nFPrevSpace = nIntValue;
 -        break;
+-#if 0
 -        case NS_rtf::LN_FWORD6:
+-            /* WRITERFILTERSTATUS: */
 -            m_pImpl->m_pCurrentEntry->pCurrentProperties->nFWord6 = nIntValue;
 -        break;
+-#endif
 -        case NS_rtf::LN_IXCHFOLLOW:
+-            /* WRITERFILTERSTATUS: */
 -            m_pImpl->m_pCurrentEntry->pCurrentProperties->nXChFollow = nIntValue;
 -        break;
 -        default:
@@ -2529,16 +2229,16 @@ index 512aa93..0000000
 -}//namespace dmapper
 -}//namespace writerfilter
 -
-diff --git a/writerfilter/source/dmapper/ListTable.hxx b/writerfilter/source/dmapper/ListTable.hxx
+diff --git writerfilter/source/dmapper/ListTable.hxx writerfilter/source/dmapper/ListTable.hxx
 deleted file mode 100644
-index b7db225..0000000
---- a/writerfilter/source/dmapper/ListTable.hxx
+index ab247bc..0000000
+--- writerfilter/source/dmapper/ListTable.hxx
 +++ /dev/null
 @@ -1,89 +0,0 @@
 -/*************************************************************************
 - *
 - * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
-- *
+- * 
 - * Copyright 2000, 2010 Oracle and/or its affiliates.
 - *
 - * OpenOffice.org - a multi-platform office productivity suite
@@ -2624,12 +2324,12 @@ index b7db225..0000000
 -}}
 -
 -#endif //
-diff --git a/writerfilter/source/dmapper/NumberingManager.cxx b/writerfilter/source/dmapper/NumberingManager.cxx
+diff --git writerfilter/source/dmapper/NumberingManager.cxx writerfilter/source/dmapper/NumberingManager.cxx
 new file mode 100644
-index 0000000..d00f8be
+index 0000000..4505bba
 --- /dev/null
-+++ b/writerfilter/source/dmapper/NumberingManager.cxx
-@@ -0,0 +1,1018 @@
++++ writerfilter/source/dmapper/NumberingManager.cxx
+@@ -0,0 +1,1017 @@
 +#include "ConversionHelper.hxx"
 +#include "NumberingManager.hxx"
 +#include "StyleSheetTable.hxx"
@@ -2666,21 +2366,21 @@ index 0000000..d00f8be
 +namespace dmapper {
 +
 +//---------------------------------------------------  Utility functions
-+
++    
 +void lcl_printProperties( uno::Sequence< beans::PropertyValue > aProps )
 +{
 +    sal_Int32 nLen = aProps.getLength( );
 +    for ( sal_Int32 i = 0; i < nLen; i++ )
 +    {
 +        uno::Any aValue = aProps[i].Value;
-+        sal_Int32 nValue;
++        sal_Int32 nValue = 0;
 +        OUString sValue;
 +
 +        if ( !( aValue >>= sValue ) && ( aValue >>= nValue ) )
 +            sValue = OUString::valueOf( nValue );
 +
 +#if DEBUG
-+        fprintf( stderr, "Property %s: %s\n",
++        fprintf( stderr, "Property %s: %s\n", 
 +                OUSTR_TO_C( aProps[i].Name ),
 +                OUSTR_TO_C( sValue ) );
 +#endif
@@ -2745,18 +2445,20 @@ index 0000000..d00f8be
 +        case NS_rtf::LN_FNORESTART:
 +            m_nFNoRestart = nValue;
 +        break;
-+        case NS_rtf::LN_FPREV:
++        case NS_rtf::LN_FIDENTSAV:
 +            m_nFPrev = nValue;
 +        break;
-+        case NS_rtf::LN_FPREVSPACE:
++        case NS_rtf::LN_FCONVERTED:
 +            m_nFPrevSpace = nValue;
 +        break;
++#if 0
 +        case NS_rtf::LN_FWORD6:
 +            m_nFWord6 = nValue;
 +        break;
++#endif
 +        case NS_rtf::LN_IXCHFOLLOW:
 +            m_nXChFollow = nValue;
-+        break;
++  break;
 +        case NS_ooxml::LN_CT_TabStop_pos:
 +            m_nTabstop = nValue;
 +        break;
@@ -2765,7 +2467,7 @@ index 0000000..d00f8be
 +    }
 +}
 +
-+sal_Int16 ListLevel::GetParentNumbering( OUString sText, sal_Int16 nLevel,
++sal_Int16 ListLevel::GetParentNumbering( OUString sText, sal_Int16 nLevel, 
 +        OUString& rPrefix, OUString& rSuffix )
 +{
 +    sal_Int16 nParentNumbering = nLevel;
@@ -2779,7 +2481,7 @@ index 0000000..d00f8be
 +    {
 +        rPrefix = sLevelText.copy( 0, nFound );
 +        sLevelText = sLevelText.copy( nFound );
-+    }
++    } 
 +    sal_Int32 nMinLevel = nLevel;
 +    //now the text should either be empty or start with %
 +    nFound = sLevelText.getLength( ) > 1 ? 0 : -1;
@@ -2795,8 +2497,8 @@ index 0000000..d00f8be
 +                //remove first char - next char is removed later
 +                sLevelText = sLevelText.copy( 1 );
 +            }
-+        }
-+        //remove old '%' or number
++        }    
++        //remove old '%' or number 
 +        sLevelText = sLevelText.copy( 1 );
 +        nCurrentIndex = 0;
 +        nFound = sLevelText.indexOf( '%', nCurrentIndex );
@@ -2845,11 +2547,11 @@ index 0000000..d00f8be
 +            case PROP_CHAR_FONT_NAME:
 +                // Do nothing: handled in the GetPropertyValues method
 +            break;
-+            default:
++            default: 
 +            {
 +                rProperties.push_back(
-+                        beans::PropertyValue(
-+                            aPropNameSupplier.GetName( aMapIter->first.eId ), 0,
++                        beans::PropertyValue( 
++                            aPropNameSupplier.GetName( aMapIter->first.eId ), 0, 
 +                            aMapIter->second, beans::PropertyState_DIRECT_VALUE ));
 +            }
 +        }
@@ -2932,14 +2634,14 @@ index 0000000..d00f8be
 +                aNumberingProperties.push_back(
 +                    beans::PropertyValue( aPropNameSupplier.GetName( PROP_BULLET_FONT_NAME ), 0, aMapIter->second, beans::PropertyState_DIRECT_VALUE ));
 +            break;
-+            default:
++            default: 
 +            {
 +                // Handled in GetCharStyleProperties method
 +            }
 +
 +        }
 +    }
-+
++    
 +    uno::Sequence< beans::PropertyValue > aRet(aNumberingProperties.size());
 +    beans::PropertyValue* pValues = aRet.getArray();
 +    PropertyValueVector_t::const_iterator aIt = aNumberingProperties.begin();
@@ -2961,13 +2663,13 @@ index 0000000..d00f8be
 +    // ParaFirstLineIndent -> FirstLineIndent
 +    // ParaLeftMargin -> IndentAt
 +
-+    OUString sParaIndent = aPropNameSupplier.GetName(
++    OUString sParaIndent = aPropNameSupplier.GetName( 
 +            PROP_PARA_FIRST_LINE_INDENT );
-+    OUString sFirstLineIndent = aPropNameSupplier.GetName(
++    OUString sFirstLineIndent = aPropNameSupplier.GetName( 
 +            PROP_FIRST_LINE_INDENT );
-+    OUString sParaLeftMargin = aPropNameSupplier.GetName(
++    OUString sParaLeftMargin = aPropNameSupplier.GetName( 
 +            PROP_PARA_LEFT_MARGIN );
-+    OUString sIndentAt = aPropNameSupplier.GetName(
++    OUString sIndentAt = aPropNameSupplier.GetName( 
 +            PROP_INDENT_AT );
 +
 +    sal_Int32 nLen = aParaProps.getLength( );
@@ -2985,7 +2687,7 @@ index 0000000..d00f8be
 +            aProps[aProps.getLength( ) - 1] = aParaProps[i];
 +            aProps[aProps.getLength( ) - 1].Name = sIndentAt;
 +        }
-+
++        
 +    }
 +
 +    return aProps;
@@ -3016,10 +2718,10 @@ index 0000000..d00f8be
 +        case NS_rtf::LN_FSIMPLELIST:
 +            m_nSimpleList = nValue;
 +        break;
-+        case NS_rtf::LN_FRESTARTHDN:
++        case NS_rtf::LN_fAutoNum:
 +            m_nRestart = nValue;
 +        break;
-+        case NS_rtf::LN_UNSIGNED26_2:
++        case NS_rtf::LN_fHybrid:
 +            m_nUnsigned = nValue;
 +        break;
 +        default:
@@ -3028,7 +2730,7 @@ index 0000000..d00f8be
 +}
 +
 +ListLevel::Pointer AbstractListDef::GetLevel( sal_uInt16 nLvl )
-+{
++{ 
 +    ListLevel::Pointer pLevel;
 +    if ( m_aLevels.size( ) > nLvl )
 +        pLevel = m_aLevels[ nLvl ];
@@ -3078,10 +2780,10 @@ index 0000000..d00f8be
 +{
 +    // [1] Call the same method on the abstract list
 +    uno::Sequence< uno::Sequence< beans::PropertyValue > > aAbstract = m_pAbstractDef->GetPropertyValues( );
-+
++    
 +    // [2] Call the upper class method
 +    uno::Sequence< uno::Sequence< beans::PropertyValue > > aThis = AbstractListDef::GetPropertyValues( );
-+
++    
 +    // Merge the results of [2] in [1]
 +    sal_Int32 nThisCount = aThis.getLength( );
 +    for ( sal_Int32 i = 0; i < nThisCount; i++ )
@@ -3097,7 +2799,7 @@ index 0000000..d00f8be
 +    return aAbstract;
 +}
 +
-+uno::Reference< container::XNameContainer > lcl_getUnoNumberingStyles(
++uno::Reference< container::XNameContainer > lcl_getUnoNumberingStyles( 
 +       uno::Reference< lang::XMultiServiceFactory > xFactory )
 +{
 +    uno::Reference< container::XNameContainer > xStyles;
@@ -3129,20 +2831,17 @@ index 0000000..d00f8be
 +        {
 +            // Create the numbering style
 +            uno::Reference< beans::XPropertySet > xStyle (
-+                xFactory->createInstance(
++                xFactory->createInstance( 
 +                    OUString::createFromAscii("com.sun.star.style.NumberingStyle")),
 +                uno::UNO_QUERY_THROW );
 +
 +            rtl::OUString sStyleName = GetStyleName( GetId( ) );
-+#if DEBUG
-+            fprintf( stderr, "Creating numbering style: %s\n", OUSTR_TO_C( sStyleName ) );
-+#endif
 +
 +            xStyles->insertByName( sStyleName, makeAny( xStyle ) );
-+
++            
 +            uno::Any oStyle = xStyles->getByName( sStyleName );
 +            xStyle.set( oStyle, uno::UNO_QUERY_THROW );
-+
++            
 +            PropertyNameSupplier& aPropNameSupplier = PropertyNameSupplier::GetPropertyNameSupplier();
 +
 +            // Get the default OOo Numbering style rules
@@ -3157,7 +2856,7 @@ index 0000000..d00f8be
 +            {
 +                ListLevel::Pointer pAbsLevel = m_pAbstractDef->GetLevel( nLevel );
 +                ListLevel::Pointer pLevel = GetLevel( nLevel );
-+
++                
 +                // Get the merged level properties
 +                uno::Sequence< beans::PropertyValue > aLvlProps = aProps[sal_Int32( nLevel )];
 +
@@ -3168,12 +2867,12 @@ index 0000000..d00f8be
 +                uno::Sequence< beans::PropertyValue >& rAbsCharStyleProps = aAbsCharStyleProps;
 +                if ( pLevel.get( ) )
 +                {
-+                    uno::Sequence< beans::PropertyValue > aCharStyleProps =
++                    uno::Sequence< beans::PropertyValue > aCharStyleProps = 
 +                        pLevel->GetCharStyleProperties( );
 +                    uno::Sequence< beans::PropertyValue >& rCharStyleProps = aCharStyleProps;
 +                    lcl_mergeProperties( rAbsCharStyleProps, rCharStyleProps );
 +                }
-+
++                    
 +                if( aAbsCharStyleProps.getLength() )
 +                {
 +                    // Change the sequence into a vector
@@ -3183,15 +2882,15 @@ index 0000000..d00f8be
 +                        aStyleProps.push_back( aAbsCharStyleProps[i] );
 +                    }
 +
-+                    //create (or find) a character style containing the character
++                    //create (or find) a character style containing the character 
 +                    // attributes of the symbol and apply it to the numbering level
 +                    OUString sStyle = rDMapper.getOrCreateCharStyle( aStyleProps );
 +                    aLvlProps.realloc( aLvlProps.getLength() + 1);
 +                    aLvlProps[aLvlProps.getLength() - 1].Name = aPropNameSupplier.GetName( PROP_CHAR_STYLE_NAME );
 +                    aLvlProps[aLvlProps.getLength() - 1].Value <<= sStyle;
-+                }
-+
-+                // Get the prefix / suffix / Parent numbering
++                }    
++ 
++                // Get the prefix / suffix / Parent numbering 
 +                // and add them to the level properties
 +                OUString sText = pAbsLevel->GetBulletChar( );
 +                if ( pLevel.get( ) )
@@ -3209,18 +2908,18 @@ index 0000000..d00f8be
 +                aLvlProps[ aLvlProps.getLength( ) - 3 ] = MAKE_PROPVAL( PROP_SUFFIX, rSuffix );
 +                aLvlProps[ aLvlProps.getLength( ) - 2 ] = MAKE_PROPVAL( PROP_PARENT_NUMBERING, nParentNum );
 +
-+                aLvlProps[ aLvlProps.getLength( ) - 1 ] = MAKE_PROPVAL( PROP_POSITION_AND_SPACE_MODE,
++                aLvlProps[ aLvlProps.getLength( ) - 1 ] = MAKE_PROPVAL( PROP_POSITION_AND_SPACE_MODE, 
 +                            sal_Int16( text::PositionAndSpaceMode::LABEL_ALIGNMENT ) );
 +                // Replace the numbering rules for the level
 +                m_xNumRules->replaceByIndex( nLevel, uno::makeAny( aLvlProps ) );
-+
++                
 +                // Handle the outline level here
 +                StyleSheetEntryPtr pParaStyle = pAbsLevel->GetParaStyle( );
 +                if ( pParaStyle.get( ) )
 +                {
 +                    uno::Reference< text::XChapterNumberingSupplier > xOutlines (
 +                        xFactory, uno::UNO_QUERY_THROW );
-+                    uno::Reference< container::XIndexReplace > xOutlineRules =
++                    uno::Reference< container::XIndexReplace > xOutlineRules = 
 +                        xOutlines->getChapterNumberingRules( );
 +
 +                    aLvlProps.realloc( aLvlProps.getLength() + 1 );
@@ -3232,7 +2931,7 @@ index 0000000..d00f8be
 +                nLevel++;
 +            }
 +
-+            // Create the numbering style for these rules
++            // Create the numbering style for these rules 
 +            OUString sNumRulesName = aPropNameSupplier.GetName( PROP_NUMBERING_RULES );
 +            xStyle->setPropertyValue( sNumRulesName, uno::makeAny( m_xNumRules ) );
 +        }
@@ -3247,7 +2946,7 @@ index 0000000..d00f8be
 +//-------------------------------------  NumberingManager implementation
 +
 +
-+ListsManager::ListsManager( DomainMapper& rDMapper,
++ListsManager::ListsManager( DomainMapper& rDMapper, 
 +        const uno::Reference< lang::XMultiServiceFactory > xFactory ) :
 +    m_rDMapper( rDMapper ),
 +    m_xFactory( xFactory )
@@ -3278,7 +2977,7 @@ index 0000000..d00f8be
 +        break;
 +        /* WRITERFILTERSTATUS: done: 0, planned: 0, spent: 0 */
 +        case NS_ooxml::LN_CT_LevelText_val:
-+        {
++        {    
 +            //this strings contains the definition of the level
 +            //the level number is marked as %n
 +            //these numbers can be mixed randomly toghether with seperators pre- and suffixes
@@ -3300,19 +2999,17 @@ index 0000000..d00f8be
 +        /* WRITERFILTERSTATUS: done: 75, planned: 0, spent: 0 */
 +        case NS_rtf::LN_FNORESTART:
 +        /* WRITERFILTERSTATUS: done: 75, planned: 0, spent: 0 */
-+        case NS_rtf::LN_FPREV:
++        case NS_rtf::LN_FIDENTSAV:
 +        /* WRITERFILTERSTATUS: done: 75, planned: 0, spent: 0 */
-+        case NS_rtf::LN_FPREVSPACE:
++        case NS_rtf::LN_FCONVERTED:
++#if 0
 +        /* WRITERFILTERSTATUS: done: 75, planned: 0, spent: 0 */
 +        case NS_rtf::LN_FWORD6:
++#endif
 +        /* WRITERFILTERSTATUS: done: 75, planned: 0, spent: 0 */
 +        case NS_rtf::LN_IXCHFOLLOW:
 +            if ( pCurrentLvl.get( ) )
 +                pCurrentLvl->SetValue( nName, sal_Int32( nIntValue ) );
-+        break;
-+        /* WRITERFILTERSTATUS: done: 100, planned: 0, spent: 0 */
-+        case NS_rtf::LN_UNUSED5_7:
-+            //unused
 +        break;
 +        /* WRITERFILTERSTATUS: done: 75, planned: 0, spent: 0 */
 +        case NS_rtf::LN_RGISTD:
@@ -3320,14 +3017,14 @@ index 0000000..d00f8be
 +        break;
 +        case NS_ooxml::LN_CT_Num_numId:
 +            m_pCurrentDefinition->SetId( rVal.getString().toInt32( ) );
-+        break;
++        break; 
 +        case NS_rtf::LN_LSID:
 +            m_pCurrentDefinition->SetId( nIntValue );
 +        break;
 +        case NS_rtf::LN_TPLC:
 +        case NS_rtf::LN_FSIMPLELIST:
-+        case NS_rtf::LN_FRESTARTHDN:
-+        case NS_rtf::LN_UNSIGNED26_2:
++        case NS_rtf::LN_fAutoNum:
++        case NS_rtf::LN_fHybrid:
 +            m_pCurrentDefinition->SetValue( nName, nIntValue );
 +        break;
 +        case NS_ooxml::LN_CT_NumLvl_ilvl:
@@ -3343,7 +3040,7 @@ index 0000000..d00f8be
 +        break;
 +        /* WRITERFILTERSTATUS: done: 100, planned: 0, spent: 0 */
 +        case NS_ooxml::LN_CT_AbstractNum_abstractNumId:
-+        {
++        {   
 +            // This one corresponds to the AbstractNum Id definition
 +            // The reference to the abstract num is in the sprm method
 +            sal_Int32 nVal = rVal.getString().toInt32();
@@ -3373,7 +3070,7 @@ index 0000000..d00f8be
 +        {
 +            //no paragraph attributes in ListTable char style sheets
 +            if ( pCurrentLvl.get( ) )
-+                pCurrentLvl->SetValue( nName,
++                pCurrentLvl->SetValue( nName, 
 +                    ConversionHelper::convertTwipToMM100( nIntValue ) );
 +        }
 +        break;
@@ -3404,7 +3101,7 @@ index 0000000..d00f8be
 +    //fill the attributes of the style sheet
 +    sal_uInt32 nSprmId = rSprm.getId();
 +    if( m_pCurrentDefinition.get() ||
-+        nSprmId == NS_ooxml::LN_CT_Numbering_abstractNum ||
++        nSprmId == NS_ooxml::LN_CT_Numbering_abstractNum || 
 +        nSprmId == NS_ooxml::LN_CT_Numbering_num )
 +    {
 +        sal_Int32 nIntValue = rSprm.getValue()->getInt();
@@ -3453,7 +3150,7 @@ index 0000000..d00f8be
 +                {
 +                    // The current def should be a ListDef
 +                    pListDef->SetAbstractDefinition(
-+                           GetAbstractList( nAbstractNumId ) );
++                           GetAbstractList( nAbstractNumId ) ); 
 +                }
 +            }
 +            break;
@@ -3486,25 +3183,27 @@ index 0000000..d00f8be
 +            /* WRITERFILTERSTATUS: done: 75, planned: 0, spent: 0 */
 +            case NS_rtf::LN_FNORESTART:
 +            /* WRITERFILTERSTATUS: done: 75, planned: 0, spent: 0 */
-+            case NS_rtf::LN_FPREV:
++            case NS_rtf::LN_FIDENTSAV:
 +            /* WRITERFILTERSTATUS: done: 75, planned: 0, spent: 0 */
-+            case NS_rtf::LN_FPREVSPACE:
++            case NS_rtf::LN_FCONVERTED:
++#if 0
 +            /* WRITERFILTERSTATUS: done: 75, planned: 0, spent: 0 */
 +            case NS_rtf::LN_FWORD6:
++#endif
 +            /* WRITERFILTERSTATUS: done: 75, planned: 0, spent: 0 */
 +            case NS_rtf::LN_IXCHFOLLOW:
 +                m_pCurrentDefinition->GetCurrentLevel( )->SetValue( nSprmId, nIntValue );
 +            break;
 +            case NS_ooxml::LN_CT_Lvl_lvlText:
 +            case NS_ooxml::LN_CT_Lvl_rPr : //contains LN_EG_RPrBase_rFonts
-+            {
++            {    
 +                writerfilter::Reference<Properties>::Pointer_t pProperties = rSprm.getProps();
 +                if(pProperties.get())
 +                    pProperties->resolve(*this);
 +            }
 +            break;
 +            case NS_ooxml::LN_CT_NumLvl_lvl:
-+            {
++            {   
 +                // overwrite level
 +                writerfilter::Reference<Properties>::Pointer_t pProperties = rSprm.getProps();
 +                if(pProperties.get())
@@ -3513,20 +3212,20 @@ index 0000000..d00f8be
 +            break;
 +            case NS_ooxml::LN_CT_Lvl_lvlJc:
 +            {
-+                static sal_Int16 aWWAlignments[ ] =
++                static sal_Int16 aWWAlignments[ ] = 
 +                {
 +                    text::HoriOrientation::LEFT,
 +                    text::HoriOrientation::CENTER,
 +                    text::HoriOrientation::RIGHT
 +                };
-+                m_pCurrentDefinition->GetCurrentLevel( )->Insert(
++                m_pCurrentDefinition->GetCurrentLevel( )->Insert( 
 +                    PROP_ADJUST, true, uno::makeAny( aWWAlignments[ nIntValue ] ) );
 +                    writerfilter::Reference<Properties>::Pointer_t pProperties = rSprm.getProps();
 +            }
 +            break;
 +            case NS_ooxml::LN_CT_Lvl_pPr:
 +            case NS_ooxml::LN_CT_PPrBase_ind:
-+            {
++            {    
 +                //todo: how to handle paragraph properties within numbering levels (except LeftIndent and FirstLineIndent)?
 +                writerfilter::Reference<Properties>::Pointer_t pProperties = rSprm.getProps();
 +                if(pProperties.get())
@@ -3542,7 +3241,7 @@ index 0000000..d00f8be
 +            }
 +            break;
 +            case NS_ooxml::LN_CT_Lvl_suff:
-+                //todo: currently unsupported suffix
++                //todo: currently unsupported suffix 
 +                //can be: "none", "space", "tab"
 +            break;
 +            case NS_ooxml::LN_CT_Lvl_pStyle:
@@ -3568,11 +3267,11 @@ index 0000000..d00f8be
 +                    m_rDMapper.sprm( rSprm );
 +                    m_rDMapper.PopListProperties();
 +                }
-+        }
++        }    
 +    }
 +}
 +
-+void ListsManager::entry( int /* pos */,
++void ListsManager::entry( int /* pos */, 
 +        writerfilter::Reference<Properties>::Pointer_t ref )
 +{
 +    if( m_rDMapper.IsOOXMLImport() )
@@ -3581,7 +3280,7 @@ index 0000000..d00f8be
 +    }
 +    else
 +    {
-+        if ( m_bIsLFOImport )
++        if ( m_bIsLFOImport ) 
 +        {
 +            // Create ListDef's
 +            OSL_ENSURE( !m_pCurrentDefinition.get(), "current entry has to be NULL here");
@@ -3648,12 +3347,12 @@ index 0000000..d00f8be
 +}
 +
 +} }
-diff --git a/writerfilter/source/dmapper/NumberingManager.hxx b/writerfilter/source/dmapper/NumberingManager.hxx
+diff --git writerfilter/source/dmapper/NumberingManager.hxx writerfilter/source/dmapper/NumberingManager.hxx
 new file mode 100644
-index 0000000..09e9829
+index 0000000..d5c6e6d
 --- /dev/null
-+++ b/writerfilter/source/dmapper/NumberingManager.hxx
-@@ -0,0 +1,225 @@
++++ writerfilter/source/dmapper/NumberingManager.hxx
+@@ -0,0 +1,226 @@
 +#ifndef INCLUDED_NUMBERINGMANAGER_HXX
 +#define INCLUDED_NUMBERINGMANAGER_HXX
 +
@@ -3712,9 +3411,9 @@ index 0000000..09e9829
 +    // Setters for the import
 +    void SetValue( Id nId, sal_Int32 nValue );
 +    void SetBulletChar( rtl::OUString sValue ) { m_sBulletChar = sValue; };
-+    void SetParaStyle( boost::shared_ptr< StyleSheetEntry > pStyle )
-+    {
-+        m_pParaStyle = pStyle;
++    void SetParaStyle( boost::shared_ptr< StyleSheetEntry > pStyle ) 
++    { 
++        m_pParaStyle = pStyle; 
 +    };
 +    void AddRGBXchNums( rtl::OUString sValue ) { m_sRGBXchNums += sValue; };
 +
@@ -3727,18 +3426,18 @@ index 0000000..09e9829
 +    // rPrefix and rSuffix are out parameters
 +    static sal_Int16 GetParentNumbering( rtl::OUString sText, sal_Int16 nLevel,
 +        rtl::OUString& rPrefix, rtl::OUString& rSuffix );
-+
-+    com::sun::star::uno::Sequence< com::sun::star::beans::PropertyValue >
++    
++    com::sun::star::uno::Sequence< com::sun::star::beans::PropertyValue >  
 +        GetProperties(  );
-+
-+    com::sun::star::uno::Sequence< com::sun::star::beans::PropertyValue>
++    
++    com::sun::star::uno::Sequence< com::sun::star::beans::PropertyValue> 
 +        GetCharStyleProperties( );
 +private:
 +
-+    com::sun::star::uno::Sequence< com::sun::star::beans::PropertyValue >
++    com::sun::star::uno::Sequence< com::sun::star::beans::PropertyValue >  
 +        GetLevelProperties(  );
-+
-+    com::sun::star::uno::Sequence< com::sun::star::beans::PropertyValue >
++    
++    com::sun::star::uno::Sequence< com::sun::star::beans::PropertyValue >  
 +        GetParaProperties(  );
 +};
 +
@@ -3755,7 +3454,7 @@ index 0000000..09e9829
 +    // depending on the use of the class
 +    sal_Int32                            m_nId;
 +
-+    // Properties of each level. This can also reflect the overridden
++    // Properties of each level. This can also reflect the overridden 
 +    // levels of a numbering.
 +    ::std::vector< ListLevel::Pointer >  m_aLevels;
 +
@@ -3770,7 +3469,7 @@ index 0000000..09e9829
 +
 +    // Setters using during the import
 +    void SetId( sal_Int32 nId ) { m_nId = nId; };
-+    void SetValue( sal_uInt32 nSprmId, sal_Int32 nValue );
++    void SetValue( sal_uInt32 nSprmId, sal_Int32 nValue );  
 +    void AddRGISTD( rtl::OUString sValue ) { m_sRGISTD += sValue; };
 +
 +    // Accessors
@@ -3782,8 +3481,8 @@ index 0000000..09e9829
 +
 +    ListLevel::Pointer    GetCurrentLevel( ) { return m_pCurrentLevel; };
 +
-+    virtual com::sun::star::uno::Sequence<
-+        com::sun::star::uno::Sequence<
++    virtual com::sun::star::uno::Sequence< 
++        com::sun::star::uno::Sequence< 
 +            com::sun::star::beans::PropertyValue > > GetPropertyValues( );
 +};
 +
@@ -3792,7 +3491,7 @@ index 0000000..09e9829
 +private:
 +    // Pointer to the abstract numbering
 +    AbstractListDef::Pointer             m_pAbstractDef;
-+
++    
 +    // Cache for the UNO numbering rules
 +    uno::Reference< container::XIndexReplace > m_xNumRules;
 +
@@ -3801,23 +3500,23 @@ index 0000000..09e9829
 +
 +    ListDef( );
 +    ~ListDef( );
-+
++    
 +    // Accessors
 +    void SetAbstractDefinition( AbstractListDef::Pointer pAbstract ) { m_pAbstractDef = pAbstract; };
 +    AbstractListDef::Pointer GetAbstractDefinition( ) { return m_pAbstractDef; };
-+
++    
 +    // Mapping functions
 +    static rtl::OUString GetStyleName( sal_Int32 nId );
-+
-+    com::sun::star::uno::Sequence<
-+        com::sun::star::uno::Sequence<
++    
++    com::sun::star::uno::Sequence< 
++        com::sun::star::uno::Sequence< 
 +            com::sun::star::beans::PropertyValue > > GetPropertyValues( );
-+
++    
 +    void CreateNumberingRules(
 +            DomainMapper& rDMapper,
-+            com::sun::star::uno::Reference<
++            com::sun::star::uno::Reference< 
 +                com::sun::star::lang::XMultiServiceFactory> xFactory );
-+
++    
 +    ::com::sun::star::uno::Reference< ::com::sun::star::container::XIndexReplace >
 +            GetNumberingRules( ) { return m_xNumRules; };
 +
@@ -3825,14 +3524,14 @@ index 0000000..09e9829
 +
 +/** This class provides access to the defined numbering styles.
 +  */
-+class WRITERFILTER_DLLPRIVATE ListsManager :
++class ListsManager : 
 +    public Properties,
 +    public Table
 +{
 +private:
 +
 +    DomainMapper&                                       m_rDMapper;
-+    com::sun::star::uno::Reference<
++    com::sun::star::uno::Reference< 
 +        com::sun::star::lang::XMultiServiceFactory >    m_xFactory;
 +
 +    // The numbering entries
@@ -3852,7 +3551,7 @@ index 0000000..09e9829
 +            DomainMapper& rDMapper,
 +            const ::com::sun::star::uno::Reference< ::com::sun::star::lang::XMultiServiceFactory > xFactory);
 +    virtual ~ListsManager();
-+
++    
 +    typedef boost::shared_ptr< ListsManager >  Pointer;
 +
 +    // Properties
@@ -3867,8 +3566,8 @@ index 0000000..09e9829
 +
 +    // Numberings accessors
 +    AbstractListDef::Pointer GetCurrentDef( ) { return m_pCurrentDefinition; };
-+
-+    sal_uInt32              Size() const
++    
++    sal_uInt32              Size() const 
 +        { return sal_uInt32( m_aLists.size( ) ); };
 +    ListDef::Pointer        GetList( sal_Int32 nId );
 +
@@ -3879,12 +3578,16 @@ index 0000000..09e9829
 +} }
 +
 +#endif
-diff --git a/writerfilter/source/dmapper/PropertyIds.cxx b/writerfilter/source/dmapper/PropertyIds.cxx
-index 51d5760..c941a60 100644
---- a/writerfilter/source/dmapper/PropertyIds.cxx
-+++ b/writerfilter/source/dmapper/PropertyIds.cxx
-@@ -319,7 +319,7 @@ const rtl::OUString& PropertyNameSupplier::GetName( PropertyIds eId ) const
-             case PROP_OUTLINE_LEVEL  :    sName = ::rtl::OUString(RTL_CONSTASCII_USTRINGPARAM("OutlineLevel")); break;
++
+diff --git writerfilter/source/dmapper/PropertyIds.cxx writerfilter/source/dmapper/PropertyIds.cxx
+index cd83d21..9f884b3 100644
+--- writerfilter/source/dmapper/PropertyIds.cxx
++++ writerfilter/source/dmapper/PropertyIds.cxx
+@@ -317,9 +317,10 @@ const rtl::OUString& PropertyNameSupplier::GetName( PropertyIds eId ) const
+             case PROP_INDENT_AT :    sName = ::rtl::OUString(RTL_CONSTASCII_USTRINGPARAM("IndentAt")); break;
+             case PROP_FIRST_LINE_INDENT :    sName = ::rtl::OUString(RTL_CONSTASCII_USTRINGPARAM("FirstLineIndent")); break;
+             case PROP_NUMBERING_STYLE_NAME  :    sName = ::rtl::OUString(RTL_CONSTASCII_USTRINGPARAM("NumberingStyleName")); break;
++            case PROP_OUTLINE_LEVEL  :    sName = ::rtl::OUString(RTL_CONSTASCII_USTRINGPARAM("OutlineLevel")); break;
              case PROP_LISTTAB_STOP_POSITION :    sName = ::rtl::OUString(RTL_CONSTASCII_USTRINGPARAM("ListtabStopPosition")); break;
              case PROP_POSITION_AND_SPACE_MODE :    sName = ::rtl::OUString(RTL_CONSTASCII_USTRINGPARAM("PositionAndSpaceMode")); break;
 -//            case       :    sName = ::rtl::OUString(RTL_CONSTASCII_USTRINGPARAM("")); break;
@@ -3892,53 +3595,316 @@ index 51d5760..c941a60 100644
  //            case       :    sName = ::rtl::OUString(RTL_CONSTASCII_USTRINGPARAM("")); break;
  //            case       :    sName = ::rtl::OUString(RTL_CONSTASCII_USTRINGPARAM("")); break;
  //            case       :    sName = ::rtl::OUString(RTL_CONSTASCII_USTRINGPARAM("")); break;
-diff --git a/writerfilter/source/dmapper/PropertyIds.hxx b/writerfilter/source/dmapper/PropertyIds.hxx
-index 2ed0f82..acff742 100644
---- a/writerfilter/source/dmapper/PropertyIds.hxx
-+++ b/writerfilter/source/dmapper/PropertyIds.hxx
-@@ -282,6 +282,7 @@ enum PropertyIds
- /*246*/ ,PROP_OUTLINE_LEVEL
- /*247*/ ,PROP_LISTTAB_STOP_POSITION
- /*248*/ ,PROP_POSITION_AND_SPACE_MODE
-+/*249*/ ,PROP_HEADING_STYLE_NAME
+diff --git writerfilter/source/dmapper/PropertyIds.hxx writerfilter/source/dmapper/PropertyIds.hxx
+index fd78381..68fbd24 100644
+--- writerfilter/source/dmapper/PropertyIds.hxx
++++ writerfilter/source/dmapper/PropertyIds.hxx
+@@ -280,8 +280,10 @@ enum PropertyIds
+ /*244*/ ,PROP_INDENT_AT
+ /*245*/ ,PROP_FIRST_LINE_INDENT
+ /*246*/ ,PROP_NUMBERING_STYLE_NAME
+-/*247*/ ,PROP_LISTTAB_STOP_POSITION
+-/*248*/ ,PROP_POSITION_AND_SPACE_MODE
++/*247*/ ,PROP_OUTLINE_LEVEL
++/*248*/ ,PROP_LISTTAB_STOP_POSITION
++/*249*/ ,PROP_POSITION_AND_SPACE_MODE
++/*250*/ ,PROP_HEADING_STYLE_NAME
  };
  struct PropertyNameSupplier_Impl;
  class PropertyNameSupplier
-diff --git a/writerfilter/source/dmapper/StyleSheetTable.cxx b/writerfilter/source/dmapper/StyleSheetTable.cxx
-index 99bc39d..246dc23 100644
---- a/writerfilter/source/dmapper/StyleSheetTable.cxx
-+++ b/writerfilter/source/dmapper/StyleSheetTable.cxx
-@@ -26,7 +26,7 @@
+diff --git writerfilter/source/dmapper/PropertyMap.cxx writerfilter/source/dmapper/PropertyMap.cxx
+index 16b8260..50cd8b3 100644
+--- writerfilter/source/dmapper/PropertyMap.cxx
++++ writerfilter/source/dmapper/PropertyMap.cxx
+@@ -32,12 +32,15 @@
+ #include <com/sun/star/beans/PropertyValue.hpp>
+ #include <com/sun/star/lang/XMultiServiceFactory.hpp>
+ #include <com/sun/star/table/BorderLine.hpp>
++#include <com/sun/star/container/XEnumeration.hpp>
++#include <com/sun/star/container/XEnumerationAccess.hpp>
+ #include <com/sun/star/container/XNameContainer.hpp>
+ #include <com/sun/star/style/BreakType.hpp>
+ #include <com/sun/star/text/RelOrientation.hpp>
+ #include <com/sun/star/text/WritingMode.hpp>
+ #include <com/sun/star/text/XTextColumns.hpp>
+ #include <com/sun/star/text/XText.hpp>
++#include <com/sun/star/text/XTextCopy.hpp>
+ #include "dmapperLoggers.hxx"
+ #include "PropertyMapHelper.hxx"
+ 
+@@ -425,14 +428,18 @@ void SectionPropertyMap::ApplyBorderToPageStyles(
+     switch( nValue & 0x07)
+     {
+         case 0: /*all styles*/
+-            xFirst = GetPageStyle( xPageStyles, xTextFactory, false );
+-            xSecond = GetPageStyle( xPageStyles, xTextFactory, true );
++            if ( m_sFollowPageStyleName.getLength( ) > 0 )
++                xFirst = GetPageStyle( xPageStyles, xTextFactory, false );
++            if ( m_sFirstPageStyleName.getLength( ) > 0 )
++                xSecond = GetPageStyle( xPageStyles, xTextFactory, true );
+         break;
+         case 1: /*first page*/
+-            xFirst = GetPageStyle( xPageStyles, xTextFactory, true );
++            if ( m_sFirstPageStyleName.getLength( ) > 0 )
++                xFirst = GetPageStyle( xPageStyles, xTextFactory, true );
+         break;
+         case 2: /*left and right*/
+-            xFirst  = GetPageStyle( xPageStyles, xTextFactory, false );
++            if ( m_sFollowPageStyleName.getLength( ) > 0 )
++                xFirst  = GetPageStyle( xPageStyles, xTextFactory, false );
+         break;
+         case 3: //whole document?
+             //todo: how to apply a border to the whole document - find all sections or access all page styles?
+@@ -609,6 +616,92 @@ bool SectionPropertyMap::HasFooter(bool bFirstPage) const
+   -----------------------------------------------------------------------*/
+ #define MIN_HEAD_FOOT_HEIGHT 100 //minimum header/footer height
+ 
++void SectionPropertyMap::CopyLastHeaderFooter( bool bFirstPage, DomainMapper_Impl& rDM_Impl )
++{
++#if DEBUG
++    clog << "START>>> SectionPropertyMap::CopyLastHeaderFooter()" << endl;
++#endif
++    SectionPropertyMap* pLastContext = rDM_Impl.GetLastSectionContext( );
++    if ( pLastContext )
++    {
++        uno::Reference< beans::XPropertySet > xPrevStyle = pLastContext->GetPageStyle(
++                rDM_Impl.GetPageStyles(),
++                rDM_Impl.GetTextFactory(),
++                bFirstPage );
++        uno::Reference< beans::XPropertySet > xStyle = GetPageStyle(
++                rDM_Impl.GetPageStyles(),
++                rDM_Impl.GetTextFactory(),
++                bFirstPage );
++
++        PropertyNameSupplier& rPropNameSupplier = PropertyNameSupplier::GetPropertyNameSupplier();
++
++        try {
++            // Loop over the Header and Footer properties to copy them
++            static PropertyIds aProperties[] =
++            {
++                PROP_HEADER_TEXT,
++                PROP_FOOTER_TEXT,
++            };
++
++            bool bHasPrevHeader = false;
++            bool bHasHeader = false;
++
++            rtl::OUString sHeaderIsOn = rPropNameSupplier.GetName( PROP_HEADER_IS_ON );
++            xPrevStyle->getPropertyValue( sHeaderIsOn ) >>= bHasPrevHeader;
++            xStyle->getPropertyValue( sHeaderIsOn ) >>= bHasHeader;
++            bool bCopyHeader = bHasPrevHeader && !bHasHeader;
++
++            if ( bCopyHeader )
++                xStyle->setPropertyValue( sHeaderIsOn, uno::makeAny( sal_True ) );
++
++            bool bHasPrevFooter = false;
++            bool bHasFooter = false;
++
++            rtl::OUString sFooterIsOn = rPropNameSupplier.GetName( PROP_FOOTER_IS_ON );
++            xPrevStyle->getPropertyValue( sFooterIsOn ) >>= bHasPrevFooter;
++            xStyle->getPropertyValue( sFooterIsOn ) >>= bHasFooter;
++            bool bCopyFooter = bHasPrevFooter && !bHasFooter;
++
++            if ( bCopyFooter )
++                xStyle->setPropertyValue( sFooterIsOn, uno::makeAny( sal_True ) );
++
++            // Copying the text properties
++            for ( int i = 0, nNbProps = 2; i < nNbProps; i++ )
++            {
++                bool bIsHeader = ( i < nNbProps / 2 );
++                PropertyIds aPropId = aProperties[i];
++                rtl::OUString sName = rPropNameSupplier.GetName( aPropId );
++
++                if ( ( bIsHeader && bCopyHeader ) || ( !bIsHeader && bCopyFooter ) )
++                {
++#if DEBUG
++                    clog << "Copying ";
++                    clog << rtl::OUStringToOString( sName, RTL_TEXTENCODING_UTF8 ).getStr( ) << endl;
++#endif
++                    // TODO has to be copied
++                    uno::Reference< text::XTextCopy > xTxt(
++                            xStyle->getPropertyValue( sName ), uno::UNO_QUERY_THROW );
++
++                    uno::Reference< text::XTextCopy > xPrevTxt(
++                            xPrevStyle->getPropertyValue( sName ), uno::UNO_QUERY_THROW );
++
++                    xTxt->copyText( xPrevTxt );
++                }
++            }
++        }
++        catch ( const uno::Exception& e )
++        {
++#if DEBUG
++            clog << "An exception occured in SectionPropertyMap::CopyLastHeaderFooter( ) - ";
++            clog << rtl::OUStringToOString( e.Message, RTL_TEXTENCODING_UTF8 ).getStr( ) << endl;
++#endif
++        }
++    }
++#if DEBUG
++    clog << "END>>> SectionPropertyMap::CopyLastHeaderFooter()" << endl;
++#endif
++}
++
+ void SectionPropertyMap::PrepareHeaderFooterProperties( bool bFirstPage )
+ {
+     sal_Int32 nTopMargin = m_nTopMargin;
+@@ -749,6 +842,7 @@ void SectionPropertyMap::CloseSectionGroup( DomainMapper_Impl& rDM_Impl )
+         /*** if headers/footers are available then the top/bottom margins of the
+             header/footer are copied to the top/bottom margin of the page
+           */
++        CopyLastHeaderFooter( false, rDM_Impl );
+         PrepareHeaderFooterProperties( false );
+ 
+         const ::rtl::OUString sTrayIndex = rPropNameSupplier.GetName( PROP_PRINTER_PAPER_TRAY_INDEX );
+@@ -821,6 +915,7 @@ void SectionPropertyMap::CloseSectionGroup( DomainMapper_Impl& rDM_Impl )
+         //todo: creating a "First Page" style depends on HasTitlePage und _fFacingPage_
+         if( m_bTitlePage )
+         {
++            CopyLastHeaderFooter( true, rDM_Impl );
+             PrepareHeaderFooterProperties( true );
+             uno::Reference< beans::XPropertySet > xFirstPageStyle = GetPageStyle(
+                                 rDM_Impl.GetPageStyles(), rDM_Impl.GetTextFactory(), true );
+@@ -843,28 +938,24 @@ void SectionPropertyMap::CloseSectionGroup( DomainMapper_Impl& rDM_Impl )
+                 //now apply this break at the first paragraph of this section
+                 uno::Reference< beans::XPropertySet > xRangeProperties;
+                 if( m_bIsFirstSection )
+-                    xRangeProperties = uno::Reference< beans::XPropertySet >( rDM_Impl.GetBodyText()->getStart(), uno::UNO_QUERY_THROW );
++                {
++                    uno::Reference< container::XEnumerationAccess > xEnumAccess( rDM_Impl.GetBodyText( ), uno::UNO_QUERY_THROW );
++                    uno::Reference< container::XEnumeration >  xEnum = xEnumAccess->createEnumeration( );
++                    xRangeProperties = uno::Reference< beans::XPropertySet >( xEnum->nextElement( ), uno::UNO_QUERY_THROW );
++                }
+                 else
+                     xRangeProperties = uno::Reference< beans::XPropertySet >( m_xStartingRange, uno::UNO_QUERY_THROW );
+             /* break type
+             0 - No break 1 - New Colunn 2 - New page 3 - Even page 4 - odd page */
+-                if( m_nBreakType == 2 || m_nBreakType == 3)
+-                {
+-                    xRangeProperties->setPropertyValue(rPropNameSupplier.GetName( PROP_BREAK_TYPE),
+-                        uno::makeAny( m_nBreakType == 2 ? style::BreakType_COLUMN_AFTER : style::BreakType_PAGE_AFTER  ) );
+-                }
+-                else
+-                {
+-                    xRangeProperties->setPropertyValue(rPropNameSupplier.GetName( PROP_PAGE_DESC_NAME ),
+-                        uno::makeAny( m_bTitlePage ? m_sFirstPageStyleName : m_sFollowPageStyleName ));
++                xRangeProperties->setPropertyValue(rPropNameSupplier.GetName( PROP_PAGE_DESC_NAME ),
++                    uno::makeAny( m_bTitlePage ? m_sFirstPageStyleName : m_sFollowPageStyleName ));
+     //  todo: page breaks with odd/even page numbering are not available - find out current page number to check how to change the number
+     //  or add even/odd page break types
+-                    if(m_bPageNoRestart || m_nPageNumber >= 0)
+-                    {
+-                        sal_Int16 nPageNumber = m_nPageNumber >= 0 ? static_cast< sal_Int16 >(m_nPageNumber) : 1;
+-                        xRangeProperties->setPropertyValue(rPropNameSupplier.GetName( PROP_PAGE_NUMBER_OFFSET ),
+-                            uno::makeAny( nPageNumber ));
+-                    }
++                if(m_bPageNoRestart || m_nPageNumber >= 0)
++                {
++                    sal_Int16 nPageNumber = m_nPageNumber >= 0 ? static_cast< sal_Int16 >(m_nPageNumber) : 1;
++                    xRangeProperties->setPropertyValue(rPropNameSupplier.GetName( PROP_PAGE_NUMBER_OFFSET ),
++                        uno::makeAny( nPageNumber ));
+                 }
+             }
+         }
+diff --git writerfilter/source/dmapper/PropertyMap.hxx writerfilter/source/dmapper/PropertyMap.hxx
+index b3a304a..68a1825 100644
+--- writerfilter/source/dmapper/PropertyMap.hxx
++++ writerfilter/source/dmapper/PropertyMap.hxx
+@@ -205,6 +205,7 @@ class SectionPropertyMap : public PropertyMap
+     void _ApplyProperties( ::com::sun::star::uno::Reference< ::com::sun::star::beans::XPropertySet > xStyle );
+     ::com::sun::star::uno::Reference< com::sun::star::text::XTextColumns > ApplyColumnProperties(
+             ::com::sun::star::uno::Reference< ::com::sun::star::beans::XPropertySet > xFollowPageStyle );
++    void CopyLastHeaderFooter( bool bFirstPage, DomainMapper_Impl& rDM_Impl );
+     void PrepareHeaderFooterProperties( bool bFirstPage );
+     bool HasHeader( bool bFirstPage ) const;
+     bool HasFooter( bool bFirstPage ) const;
+@@ -281,6 +282,7 @@ public:
+ 
+     void CloseSectionGroup( DomainMapper_Impl& rDM_Impl );
+ };
++typedef boost::shared_ptr<SectionPropertyMap> SectionPropertyMapPtr;
+ 
+ /*-- 28.12.2007 08:17:34---------------------------------------------------
+ 
+diff --git writerfilter/source/dmapper/SettingsTable.cxx writerfilter/source/dmapper/SettingsTable.cxx
+index 757c05f..07abc8b 100755
+--- writerfilter/source/dmapper/SettingsTable.cxx
++++ writerfilter/source/dmapper/SettingsTable.cxx
+@@ -28,11 +28,12 @@
+  *
+  ************************************************************************/
+ 
++#include <com/sun/star/beans/XPropertySet.hpp>
++
+ #include <SettingsTable.hxx>
+ #include <doctok/resourceids.hxx>
+ #include <ooxml/resourceids.hxx>
+ #include <stdio.h>
+-#include <ListTable.hxx>
+ #include <ConversionHelper.hxx>
+ #include <rtl/ustring.hxx>
+ 
+@@ -45,8 +46,6 @@ struct SettingsTable_Impl
+     DomainMapper&       m_rDMapper;
+     const uno::Reference< lang::XMultiServiceFactory > m_xTextFactory;
+             
+-    ListTablePtr        m_pListTable;
+-            
+     ::rtl::OUString     m_sCharacterSpacing;
+     ::rtl::OUString     m_sDecimalSymbol;
+     ::rtl::OUString     m_sListSeparatorForFields; //2.15.1.56 listSeparator (List Separator for Field Code Evaluation)
+@@ -67,14 +66,6 @@ struct SettingsTable_Impl
+     , m_doNotIncludeSubdocsInStats(false)
+     , m_bRecordChanges(false)
+     {}
+-            
+-    ListTablePtr GetListTable()
+-    {
+-    if(!m_pListTable)
+-        m_pListTable.reset(
+-                   new ListTable( m_rDMapper, m_xTextFactory ));
+-    return m_pListTable;
+-    }
+ };
+         
+ SettingsTable::SettingsTable(DomainMapper& rDMapper, const uno::Reference< lang::XMultiServiceFactory > xTextFactory) :
+@@ -151,14 +142,6 @@ void SettingsTable::sprm(Sprm& rSprm)
+     }
+     break;
+     /* WRITERFILTERSTATUS: done: 0, planned: 0, spent: 0 */
+-    case NS_ooxml::LN_CT_Numbering_num: // 92613;
+-    /* WRITERFILTERSTATUS: done: 0, planned: 0, spent: 0 */
+-    case NS_ooxml::LN_CT_Numbering_abstractNum: //  92612;
+-    {
+-        m_pImpl->GetListTable()->sprm( rSprm );
+-    }
+-    break;
+-    /* WRITERFILTERSTATUS: done: 0, planned: 0, spent: 0 */
+     case NS_ooxml::LN_CT_Settings_stylePaneFormatFilter: // 92493;
+     break;
+     /* WRITERFILTERSTATUS: done: 0, planned: 0, spent: 0 */
+diff --git writerfilter/source/dmapper/StyleSheetTable.cxx writerfilter/source/dmapper/StyleSheetTable.cxx
+index 2026310..549dd15 100644
+--- writerfilter/source/dmapper/StyleSheetTable.cxx
++++ writerfilter/source/dmapper/StyleSheetTable.cxx
+@@ -26,6 +26,7 @@
   ************************************************************************/
  #include <StyleSheetTable.hxx>
  #include <dmapper/DomainMapper.hxx>
--#include <ListTable.hxx>
 +#include <NumberingManager.hxx>
  #include <ConversionHelper.hxx>
  #include <TblStylePrHandler.hxx>
  #include <BorderHandler.hxx>
-@@ -1233,44 +1233,6 @@ void StyleSheetTable::ApplyStyleSheets( FontTablePtr rFontTable )
-                             }
-                         }
- 
+@@ -897,30 +898,23 @@ void StyleSheetTable::ApplyStyleSheets( FontTablePtr rFontTable )
+                     {
+                         // Set the outline levels
+                         const StyleSheetPropertyMap* pStyleSheetProperties = dynamic_cast<const StyleSheetPropertyMap*>(pEntry ? pEntry->pProperties.get() : 0);
 -                        if ( pStyleSheetProperties && pStyleSheetProperties->GetOutlineLevel( ) >= 0 )
--                        {
--                            ListTablePtr pListTable = m_pImpl->m_rDMapper.GetListTable( );
--                            sal_Int32 nNumId = pStyleSheetProperties->GetListId( );
--                            uno::Reference< container::XIndexReplace> xStyleRules = pListTable->GetNumberingRules( nNumId );
++                        if ( pStyleSheetProperties )
+                         {
 -                            sal_Int16 nLvl = pStyleSheetProperties->GetOutlineLevel( );
 -                            uno::Reference< text::XChapterNumberingSupplier > xOutlines ( m_pImpl->m_xTextDocument,
 -                                    uno::UNO_QUERY_THROW );
--
 -                            uno::Reference< container::XIndexReplace > xRules = xOutlines->getChapterNumberingRules( );
--                            if ( xStyleRules.is( ) )
--                            {
--                                for ( sal_Int32 i = 0, nCount = xStyleRules->getCount( ); i < nCount; i++ )
--                                {
--                                    xRules->replaceByIndex( i, xStyleRules->getByIndex( i ) );
--                                }
--                            }
--
 -                            uno::Any aLevel = xRules->getByIndex( nLvl );
 -                            uno::Sequence< beans::PropertyValue > aLevelProps;
 -                            aLevel >>= aLevelProps;
@@ -3948,43 +3914,66 @@ index 99bc39d..246dc23 100644
 -                            bool bPropFound = false;
 -                            rtl::OUString sPropName( rtl::OUString::createFromAscii( "HeadingStyleName" ) );
 -                            while ( i < nLen && !bPropFound )
--                            {
++                            aPropValues.realloc( aPropValues.getLength( ) + 1 );
++
++                            beans::PropertyValue aLvlVal( rPropNameSupplier.GetName( PROP_OUTLINE_LEVEL ), 0,
++                                    uno::makeAny( sal_Int16( pStyleSheetProperties->GetOutlineLevel( ) + 1 ) ),
++                                    beans::PropertyState_DIRECT_VALUE );
++                            aPropValues[ aPropValues.getLength( ) - 1 ] = aLvlVal;
++
++                            if ( pStyleSheetProperties->GetOutlineLevel( ) == 0 )
+                             {
 -                                if ( aLevelProps[i].Name.equals( sPropName ) )
 -                                {
 -                                    aLevelProps[i].Value = uno::makeAny( ConvertStyleName( pEntry->sStyleName ) );
 -                                    bPropFound = true;
 -                                }
 -                                i++;
--                            }
++                                aPropValues.realloc( aPropValues.getLength( ) + 1 );
++                                beans::PropertyValue aStyleVal( rPropNameSupplier.GetName( PROP_NUMBERING_STYLE_NAME ), 0,
++                                        uno::makeAny( rtl::OUString::createFromAscii( "" ) ),
++                                        beans::PropertyState_DIRECT_VALUE );
++                                aPropValues[ aPropValues.getLength( ) - 1 ] = aStyleVal;
+                             }
 -                            xRules->replaceByIndex( nLvl, uno::makeAny( aLevelProps ) );
--                        }
--
+                         }
+ 
                          uno::Reference< beans::XPropertyState >xState( xStyle, uno::UNO_QUERY_THROW );
-                         if( sConvertedStyleName.equalsAscii( "Contents Heading" ) ||
-                             sConvertedStyleName.equalsAscii( "User Index Heading" ) ||
-diff --git a/writerfilter/source/dmapper/makefile.mk b/writerfilter/source/dmapper/makefile.mk
-index 5077ef0..299a670 100644
---- a/writerfilter/source/dmapper/makefile.mk
-+++ b/writerfilter/source/dmapper/makefile.mk
-@@ -52,8 +52,7 @@ SLOFILES=           $(SLO)$/BorderHandler.obj \
-                     $(SLO)$/DomainMapperTableManager.obj \
-                     $(SLO)$/FontTable.obj   \
-                     $(SLO)$/GraphicImport.obj  \
--                    $(SLO)$/LFOTable.obj    \
--                    $(SLO)$/ListTable.obj  \
-+                    $(SLO)$/NumberingManager.obj  \
-                     $(SLO)$/MeasureHandler.obj \
-                     $(SLO)$/PropertyMap.obj  \
-                     $(SLO)$/PropertyIds.obj  \
-diff --git a/writerfilter/source/doctok/WW8DocumentImpl.cxx b/writerfilter/source/doctok/WW8DocumentImpl.cxx
-index 720eb61..54eaa02 100644
---- a/writerfilter/source/doctok/WW8DocumentImpl.cxx
-+++ b/writerfilter/source/doctok/WW8DocumentImpl.cxx
-@@ -1685,19 +1685,8 @@ void WW8DocumentImpl::resolve(Stream & rStream)
-         }
- #endif
-    
--        
+diff --git writerfilter/source/dmapper/StyleSheetTable.hxx writerfilter/source/dmapper/StyleSheetTable.hxx
+index 35ca573..1aa016b 100644
+--- writerfilter/source/dmapper/StyleSheetTable.hxx
++++ writerfilter/source/dmapper/StyleSheetTable.hxx
+@@ -87,7 +87,7 @@ public:
+ typedef boost::shared_ptr<StyleSheetEntry> StyleSheetEntryPtr;
+ 
+ class DomainMapper;
+-class WRITERFILTER_DLLPRIVATE StyleSheetTable :
++class StyleSheetTable :
+         public Properties,
+         public Table
+ {
+diff --git writerfilter/source/dmapper/makefile.mk writerfilter/source/dmapper/makefile.mk
+index dd94415..4b96368 100755
+--- writerfilter/source/dmapper/makefile.mk
++++ writerfilter/source/dmapper/makefile.mk
+@@ -50,8 +50,7 @@ SLOFILES= \
+     $(SLO)$/FontTable.obj \
+     $(SLO)$/GraphicHelpers.obj \
+     $(SLO)$/GraphicImport.obj \
+-    $(SLO)$/LFOTable.obj \
+-    $(SLO)$/ListTable.obj \
++    $(SLO)$/NumberingManager.obj  \
+     $(SLO)$/MeasureHandler.obj \
+     $(SLO)$/ModelEventListener.obj \
+     $(SLO)$/OLEHandler.obj \
+diff --git writerfilter/source/doctok/WW8DocumentImpl.cxx writerfilter/source/doctok/WW8DocumentImpl.cxx
+index 49b4503..5dbf986 100644
+--- writerfilter/source/doctok/WW8DocumentImpl.cxx
++++ writerfilter/source/doctok/WW8DocumentImpl.cxx
+@@ -1726,18 +1726,8 @@ void WW8DocumentImpl::resolve(Stream & rStream)
+         if (pSttbRgtplc.get() != NULL)
+             rStream.table(NS_rtf::LN_SttbRgtplc, pSttbRgtplc);
+         
 -        writerfilter::Reference<Table>::Pointer_t pListTable = getListTable();
 -        
 -        if (pListTable.get() != NULL)
@@ -3997,32 +3986,57 @@ index 720eb61..54eaa02 100644
 -        
          writerfilter::Reference<Table>::Pointer_t pFontTable = getFontTable();
 -        
-+
++         
          if (pFontTable.get() != NULL)
              rStream.table(NS_rtf::LN_FONTTABLE, pFontTable);
    
-@@ -1712,6 +1701,16 @@ void WW8DocumentImpl::resolve(Stream & rStream)
+@@ -1752,6 +1742,16 @@ void WW8DocumentImpl::resolve(Stream & rStream)
          {
              clog << e.getText() << endl;
          }
-+
++        
 +        writerfilter::Reference<Table>::Pointer_t pListTable = getListTable();
-+
++        
 +        if (pListTable.get() != NULL)
 +            rStream.table(NS_rtf::LN_LISTTABLE, pListTable);
-+
++        
 +        writerfilter::Reference<Table>::Pointer_t pLFOTable = getLFOTable();
-+
++        
 +        if (pLFOTable.get() != NULL)
 +            rStream.table(NS_rtf::LN_LFOTABLE, pLFOTable);
      }
  
      WW8DocumentIterator::Pointer_t pIt = begin();
-diff --git a/writerfilter/source/ooxml/OOXMLDocumentImpl.cxx b/writerfilter/source/ooxml/OOXMLDocumentImpl.cxx
-index dbb61bc..dc5b970 100644
---- a/writerfilter/source/ooxml/OOXMLDocumentImpl.cxx
-+++ b/writerfilter/source/ooxml/OOXMLDocumentImpl.cxx
-@@ -323,9 +323,9 @@ void OOXMLDocumentImpl::resolve(Stream & rStream)
+diff --git writerfilter/source/ooxml/OOXMLDocumentImpl.cxx writerfilter/source/ooxml/OOXMLDocumentImpl.cxx
+index 8b1adfe..a46496d 100644
+--- writerfilter/source/ooxml/OOXMLDocumentImpl.cxx
++++ writerfilter/source/ooxml/OOXMLDocumentImpl.cxx
+@@ -47,7 +47,7 @@ using namespace ::std;
+ 
+ OOXMLDocumentImpl::OOXMLDocumentImpl
+ (OOXMLStream::Pointer_t pStream)
+-: mpStream(pStream), mXNoteType(0)
++: mpStream(pStream), mXNoteType(0), mbIsSubstream( false )
+ {
+ }
+ 
+@@ -137,6 +137,7 @@ OOXMLDocumentImpl::getSubStream(const rtl::OUString & rId)
+     writerfilter::Reference<Stream>::Pointer_t pRet( pTemp = new OOXMLDocumentImpl(pStream) );
+     pTemp->setModel(mxModel);
+     pTemp->setDrawPage(mxDrawPage);
++    pTemp->setIsSubstream( true );
+     return pRet;
+ }
+ 
+@@ -320,6 +321,7 @@ void OOXMLDocumentImpl::resolve(Stream & rStream)
+         pDocHandler->setStream(&rStream);
+         pDocHandler->setDocument(this);
+         pDocHandler->setXNoteId(msXNoteId);
++        pDocHandler->setIsSubstream( mbIsSubstream );
+         uno::Reference < xml::sax::XFastDocumentHandler > xDocumentHandler
+             (pDocHandler);
+         uno::Reference < xml::sax::XFastTokenHandler > xTokenHandler
+@@ -327,9 +329,9 @@ void OOXMLDocumentImpl::resolve(Stream & rStream)
  
          resolveFastSubStream(rStream, OOXMLStream::SETTINGS);
          resolveFastSubStream(rStream, OOXMLStream::THEME);
@@ -4033,6 +4047,99 @@ index dbb61bc..dc5b970 100644
  
          xParser->setFastDocumentHandler( xDocumentHandler );
          xParser->setTokenHandler( xTokenHandler );
--- 
-1.7.0.1
-
+diff --git writerfilter/source/ooxml/OOXMLDocumentImpl.hxx writerfilter/source/ooxml/OOXMLDocumentImpl.hxx
+index e661dcf..7374638 100644
+--- writerfilter/source/ooxml/OOXMLDocumentImpl.hxx
++++ writerfilter/source/ooxml/OOXMLDocumentImpl.hxx
+@@ -51,6 +51,8 @@ class OOXMLDocumentImpl : public OOXMLDocument
+     uno::Reference<drawing::XDrawPage> mxDrawPage;
+     uno::Reference<xml::sax::XFastShapeContextHandler> mxShapeContext;
+ 
++    bool mbIsSubstream;
++
+ protected:
+     virtual void resolveFastSubStream(Stream & rStream,
+                                       OOXMLStream::StreamType_t nType);
+@@ -67,6 +69,8 @@ protected:
+                    const Id & rType,
+                    const rtl::OUString & rNoteId);
+ 
++    void setIsSubstream( bool bSubstream ) { mbIsSubstream = bSubstream; };
++
+ public:
+     OOXMLDocumentImpl(OOXMLStream::Pointer_t pStream);
+     virtual ~OOXMLDocumentImpl();
+diff --git writerfilter/source/ooxml/OOXMLFastContextHandler.cxx writerfilter/source/ooxml/OOXMLFastContextHandler.cxx
+index 946c29e..b430e6c 100644
+--- writerfilter/source/ooxml/OOXMLFastContextHandler.cxx
++++ writerfilter/source/ooxml/OOXMLFastContextHandler.cxx
+@@ -255,10 +255,6 @@ void SAL_CALL OOXMLFastContextHandler::startFastElement
+     snprintf(buffer, sizeof(buffer), "%ld: startFastElement", mnInstanceNumber);
+     logger("MEMORY", buffer);
+ #endif
+-
+-#if DEBUG
+-    clog << "Token: " << fastTokenToId(Element) << endl;
+-#endif
+     attributes(Attribs);
+     lcl_startFastElement(Element, Attribs);
+ }
+@@ -770,6 +766,7 @@ void OOXMLFastContextHandler::setLastParagraphInSection()
+ #endif
+ 
+     mpParserState->setLastParagraphInSection(true);
++    mpStream->markLastParagraphInSection( );
+ }
+ 
+ void OOXMLFastContextHandler::newProperty
+diff --git writerfilter/source/ooxml/OOXMLFastDocumentHandler.cxx writerfilter/source/ooxml/OOXMLFastDocumentHandler.cxx
+index 07d60f5..0cf7373 100644
+--- writerfilter/source/ooxml/OOXMLFastDocumentHandler.cxx
++++ writerfilter/source/ooxml/OOXMLFastDocumentHandler.cxx
+@@ -232,4 +232,9 @@ void OOXMLFastDocumentHandler::setXNoteId(const ::rtl::OUString & rXNoteId)
+     msXNoteId = rXNoteId;
+ }
+ 
++void OOXMLFastDocumentHandler::setIsSubstream( bool bSubstream )
++{
++    getContextHandler( )->getParserState( )->setInSectionGroup( bSubstream );
++}
++
+ }}
+diff --git writerfilter/source/ooxml/OOXMLFastDocumentHandler.hxx writerfilter/source/ooxml/OOXMLFastDocumentHandler.hxx
+index c1f2aa0..cd50a70 100644
+--- writerfilter/source/ooxml/OOXMLFastDocumentHandler.hxx
++++ writerfilter/source/ooxml/OOXMLFastDocumentHandler.hxx
+@@ -97,6 +97,8 @@ public:
+     
+     OOXMLParserState::Pointer_t getParserState() const;
+ 
++    void setIsSubstream( bool bSubstream );
++
+ private:
+     OOXMLFastDocumentHandler(OOXMLFastDocumentHandler &); // not defined
+     void operator =(OOXMLFastDocumentHandler &); // not defined
+diff --git writerfilter/source/ooxml/model.xml writerfilter/source/ooxml/model.xml
+index f571a50..15bb57e 100644
+--- writerfilter/source/ooxml/model.xml
++++ writerfilter/source/ooxml/model.xml
+@@ -22223,18 +22223,13 @@
+     <resource xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" name="CT_HdrFtrRef" resource="Properties">
+       <attribute name="type" tokenid="ooxml:CT_HdrFtrRef_type"/>
+       <attribute name="r:id" tokenid="ooxml:CT_HdrFtrRef_id"/>
+-      <action name="end" action="endCharacterGroup"/>
+-      <action name="end" action="endParagraphGroup"/>
+       <action name="end" action="handleHdrFtr"/>
+     </resource>
+     <resource name="EG_HdrFtrReferences" resource="Properties">
+       <element name="headerReference" tokenid="ooxml:EG_HdrFtrReferences_headerReference"/>
+       <element name="footerReference" tokenid="ooxml:EG_HdrFtrReferences_footerReference"/>
+     </resource>
+-    <resource name="CT_HdrFtr" resource="Stream">
+-      <action name="start" action="startSectionGroup"/>
+-      <action name="end" action="endSectionGroup"/>
+-    </resource>
++    <resource name="CT_HdrFtr" resource="Stream"/>
+     <resource name="EG_SectPrContents" resource="Properties">
+       <element name="bidi" tokenid="ooxml:EG_SectPrContents_bidi"/>
+       <element name="cols" tokenid="ooxml:EG_SectPrContents_cols"/>
