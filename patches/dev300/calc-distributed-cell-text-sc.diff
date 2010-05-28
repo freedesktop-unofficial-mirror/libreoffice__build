@@ -1,25 +1,15 @@
-From 73b2b6bac6d388d1ed160fcf92d472f0e139a780 Mon Sep 17 00:00:00 2001
-From: Jan Holesovsky <kendy@suse.cz>
-Date: Fri, 14 May 2010 17:07:59 +0200
-Subject: [PATCH 696/768] calc-distributed-cell-text-sc.diff
-
----
- sc/inc/scitems.hxx                 |  138 +++++-----
- sc/inc/unonames.hxx                |    2 +
- sc/source/core/data/docpool.cxx    |    4 +
- sc/source/filter/excel/xestyle.cxx |   26 ++-
- sc/source/filter/excel/xistyle.cxx |    2 +
- sc/source/filter/excel/xlstyle.cxx |   12 +-
- sc/source/filter/inc/xlstyle.hxx   |    4 +
- sc/source/filter/xml/xmlstyle.cxx  |  145 ++++++++--
- sc/source/filter/xml/xmlstyle.hxx  |   37 ++-
- sc/source/ui/unoobj/afmtuno.cxx    |    8 +-
- sc/source/ui/unoobj/cellsuno.cxx   |   38 ++-
- sc/source/ui/unoobj/styleuno.cxx   |    8 +-
- sc/source/ui/vba/vbaformat.cxx     |   22 +-
- sc/source/ui/view/output2.cxx      |  539 +++++++++++++++++++++++-------------
- 14 files changed, 660 insertions(+), 325 deletions(-)
-
+diff --git sc/inc/autoform.hxx sc/inc/autoform.hxx
+index 1fce4cb..3e4a94d 100644
+--- sc/inc/autoform.hxx
++++ sc/inc/autoform.hxx
+@@ -60,6 +60,7 @@ JP 20.07.95:
+ #include <editeng/shdditem.hxx>
+ #include <editeng/udlnitem.hxx>
+ #include <editeng/wghtitem.hxx>
++#include <editeng/justifyitem.hxx>
+ #include <svx/rotmodit.hxx>
+ #include <svl/intitem.hxx>
+ #include <editeng/bolnitem.hxx>
 diff --git sc/inc/scitems.hxx sc/inc/scitems.hxx
 index dbdb5d3..2da2bf1 100644
 --- sc/inc/scitems.hxx
@@ -171,7 +161,7 @@ index dbdb5d3..2da2bf1 100644
  #define ATTR_ENDINDEX           ATTR_PAGE_SCALETO        // Ende Pool-Range
  
 diff --git sc/inc/unonames.hxx sc/inc/unonames.hxx
-index 06fca63..8ba7114 100644
+index b9a3041..d556fa8 100644
 --- sc/inc/unonames.hxx
 +++ sc/inc/unonames.hxx
 @@ -106,6 +106,8 @@
@@ -183,11 +173,43 @@ index 06fca63..8ba7114 100644
  #define SC_UNONAME_CELLORI			"Orientation"
  #define SC_UNONAME_NUMFMT			"NumberFormat"
  #define SC_UNONAME_SHADOW			"ShadowFormat"
+diff --git sc/source/core/data/attarray.cxx sc/source/core/data/attarray.cxx
+index d0b457f..019f3e1 100644
+--- sc/source/core/data/attarray.cxx
++++ sc/source/core/data/attarray.cxx
+@@ -39,6 +39,7 @@
+ #include <editeng/frmdiritem.hxx>
+ #include <editeng/shaditem.hxx>
+ #include <editeng/editobj.hxx>
++#include <editeng/justifyitem.hxx>
+ #include <svl/poolcach.hxx>
+ #include <editeng/fontitem.hxx>
+ #include <unotools/fontcvt.hxx>
+diff --git sc/source/core/data/column2.cxx sc/source/core/data/column2.cxx
+index 83e25a7..08a59f1 100644
+--- sc/source/core/data/column2.cxx
++++ sc/source/core/data/column2.cxx
+@@ -44,6 +44,7 @@
+ #include <svx/rotmodit.hxx>
+ #include <editeng/scripttypeitem.hxx>
+ #include <editeng/unolingu.hxx>
++#include <editeng/justifyitem.hxx>
+ #include <svl/zforlist.hxx>
+ #include <svl/broadcast.hxx>
+ #include <svl/listeneriter.hxx>
 diff --git sc/source/core/data/docpool.cxx sc/source/core/data/docpool.cxx
-index 04741fc..30bf0e9 100644
+index 04741fc..70867a6 100644
 --- sc/source/core/data/docpool.cxx
 +++ sc/source/core/data/docpool.cxx
-@@ -127,8 +127,10 @@ static SfxItemInfo __READONLY_DATA  aItemInfos[] =
+@@ -67,6 +67,7 @@
+ #include <editeng/wghtitem.hxx>
+ #include <editeng/wrlmitem.hxx>
+ #include <editeng/xmlcnitm.hxx>
++#include <editeng/justifyitem.hxx>
+ 
+ #include "docpool.hxx"
+ #include "global.hxx"
+@@ -127,8 +128,10 @@ static SfxItemInfo __READONLY_DATA  aItemInfos[] =
      { 0,							SFX_ITEM_POOLABLE },	// ATTR_HANGPUNCTUATION		from 614d
      { SID_ATTR_PARA_FORBIDDEN_RULES,SFX_ITEM_POOLABLE },	// ATTR_FORBIDDEN_RULES		from 614d
      { SID_ATTR_ALIGN_HOR_JUSTIFY,	SFX_ITEM_POOLABLE },	// ATTR_HOR_JUSTIFY
@@ -198,7 +220,7 @@ index 04741fc..30bf0e9 100644
      { SID_ATTR_ALIGN_STACKED,       SFX_ITEM_POOLABLE },    // ATTR_STACKED         from 680/dr14 (replaces ATTR_ORIENTATION)
      { SID_ATTR_ALIGN_DEGREES,		SFX_ITEM_POOLABLE },	// ATTR_ROTATE_VALUE	ab 367
      { SID_ATTR_ALIGN_LOCKPOS,		SFX_ITEM_POOLABLE },	// ATTR_ROTATE_MODE		ab 367
-@@ -260,8 +262,10 @@ ScDocumentPool::ScDocumentPool( SfxItemPool* pSecPool, BOOL bLoadRefCounts )
+@@ -260,8 +263,10 @@ ScDocumentPool::ScDocumentPool( SfxItemPool* pSecPool, BOOL bLoadRefCounts )
      ppPoolDefaults[ ATTR_HANGPUNCTUATION - ATTR_STARTINDEX ] = new SvxHangingPunctuationItem( sal_False, ATTR_HANGPUNCTUATION);
      ppPoolDefaults[ ATTR_FORBIDDEN_RULES - ATTR_STARTINDEX ] = new SvxForbiddenRuleItem( sal_False, ATTR_FORBIDDEN_RULES);
      ppPoolDefaults[ ATTR_HOR_JUSTIFY     - ATTR_STARTINDEX ] = new SvxHorJustifyItem( SVX_HOR_JUSTIFY_STANDARD, ATTR_HOR_JUSTIFY);
@@ -209,11 +231,91 @@ index 04741fc..30bf0e9 100644
      ppPoolDefaults[ ATTR_STACKED         - ATTR_STARTINDEX ] = new SfxBoolItem( ATTR_STACKED, FALSE );
      ppPoolDefaults[	ATTR_ROTATE_VALUE	 - ATTR_STARTINDEX ] = new SfxInt32Item( ATTR_ROTATE_VALUE, 0 );
      ppPoolDefaults[	ATTR_ROTATE_MODE	 - ATTR_STARTINDEX ] = new SvxRotateModeItem( SVX_ROTATE_MODE_BOTTOM, ATTR_ROTATE_MODE );
+diff --git sc/source/core/data/dpoutput.cxx sc/source/core/data/dpoutput.cxx
+index e3e69cb..b2419f7 100755
+--- sc/source/core/data/dpoutput.cxx
++++ sc/source/core/data/dpoutput.cxx
+@@ -37,6 +37,7 @@
+ #include <editeng/boxitem.hxx>
+ #include <editeng/brshitem.hxx>
+ #include <editeng/wghtitem.hxx>
++#include <editeng/justifyitem.hxx>
+ #include <unotools/transliterationwrapper.hxx>
+ 
+ #include "dpoutput.hxx"
+diff --git sc/source/core/data/patattr.cxx sc/source/core/data/patattr.cxx
+index 7b63093..e7ac975 100644
+--- sc/source/core/data/patattr.cxx
++++ sc/source/core/data/patattr.cxx
+@@ -57,6 +57,7 @@
+ #include <editeng/udlnitem.hxx>
+ #include <editeng/wghtitem.hxx>
+ #include <editeng/wrlmitem.hxx>
++#include <editeng/justifyitem.hxx>
+ #include <svl/intitem.hxx>
+ #include <svl/zforlist.hxx>
+ #include <vcl/outdev.hxx>
+diff --git sc/source/core/data/stlpool.cxx sc/source/core/data/stlpool.cxx
+index 863ff1c..a02215d 100644
+--- sc/source/core/data/stlpool.cxx
++++ sc/source/core/data/stlpool.cxx
+@@ -46,6 +46,7 @@
+ #include <editeng/postitem.hxx>
+ #include <editeng/udlnitem.hxx>
+ #include <editeng/wghtitem.hxx>
++#include <editeng/justifyitem.hxx>
+ #include <svl/itemset.hxx>
+ #include <svl/zforlist.hxx>
+ #include <unotools/charclass.hxx>
+diff --git sc/source/core/data/table1.cxx sc/source/core/data/table1.cxx
+index 4b4441e..bd7276a 100644
+--- sc/source/core/data/table1.cxx
++++ sc/source/core/data/table1.cxx
+@@ -93,6 +93,7 @@
+ 
+ #include "scitems.hxx"
+ #include <svx/algitem.hxx>
++#include <editeng/justifyitem.hxx>
+ #include <unotools/textsearch.hxx>
+ #include <sfx2/objsh.hxx>
+ 
+diff --git sc/source/core/tool/editutil.cxx sc/source/core/tool/editutil.cxx
+index 66a275d..61ad3f8 100644
+--- sc/source/core/tool/editutil.cxx
++++ sc/source/core/tool/editutil.cxx
+@@ -44,6 +44,7 @@
+ #include <editeng/escpitem.hxx>
+ #include <editeng/flditem.hxx>
+ #include <editeng/numitem.hxx>
++#include <editeng/justifyitem.hxx>
+ #include <vcl/svapp.hxx>
+ #include <vcl/outdev.hxx>
+ #include <svl/inethist.hxx>
+diff --git sc/source/core/tool/interpr1.cxx sc/source/core/tool/interpr1.cxx
+index 39bd38a..9a79798 100644
+--- sc/source/core/tool/interpr1.cxx
++++ sc/source/core/tool/interpr1.cxx
+@@ -32,6 +32,7 @@
+ 
+ #include "scitems.hxx"
+ #include <editeng/langitem.hxx>
++#include <editeng/justifyitem.hxx>
+ #include <svx/algitem.hxx>
+ #include <unotools/textsearch.hxx>
+ #include <svl/zforlist.hxx>
 diff --git sc/source/filter/excel/xestyle.cxx sc/source/filter/excel/xestyle.cxx
-index 3800c2f..68d1cf9 100644
+index 3800c2f..3f99147 100644
 --- sc/source/filter/excel/xestyle.cxx
 +++ sc/source/filter/excel/xestyle.cxx
-@@ -1379,6 +1379,8 @@ bool XclExpCellAlign::FillFromItemSet(
+@@ -47,6 +47,7 @@
+ #include <editeng/frmdiritem.hxx>
+ #include <editeng/eeitem.hxx>
+ #include <editeng/escpitem.hxx>
++#include <editeng/justifyitem.hxx>
+ #include "document.hxx"
+ #include "stlpool.hxx"
+ #include "stlsheet.hxx"
+@@ -1379,6 +1380,8 @@ bool XclExpCellAlign::FillFromItemSet(
          const SfxItemSet& rItemSet, bool bForceLineBreak, XclBiff eBiff, bool bStyle )
  {
      bool bUsed = false;
@@ -222,7 +324,7 @@ index 3800c2f..68d1cf9 100644
  
      switch( eBiff )
      {
-@@ -1405,7 +1407,7 @@ bool XclExpCellAlign::FillFromItemSet(
+@@ -1405,7 +1408,7 @@ bool XclExpCellAlign::FillFromItemSet(
          case EXC_BIFF4: // attributes new in BIFF4
          {
              // vertical alignment
@@ -231,7 +333,7 @@ index 3800c2f..68d1cf9 100644
              bUsed |= ScfTools::CheckItem( rItemSet, ATTR_VER_JUSTIFY, bStyle );
  
              // stacked/rotation
-@@ -1435,7 +1437,7 @@ bool XclExpCellAlign::FillFromItemSet(
+@@ -1435,7 +1438,7 @@ bool XclExpCellAlign::FillFromItemSet(
          case EXC_BIFF2: // attributes new in BIFF2
          {
              // horizontal alignment
@@ -240,7 +342,7 @@ index 3800c2f..68d1cf9 100644
              bUsed |= ScfTools::CheckItem( rItemSet, ATTR_HOR_JUSTIFY, bStyle );
          }
  
-@@ -1443,6 +1445,26 @@ bool XclExpCellAlign::FillFromItemSet(
+@@ -1443,6 +1446,26 @@ bool XclExpCellAlign::FillFromItemSet(
          default:    DBG_ERROR_BIFF();
      }
  
@@ -268,10 +370,18 @@ index 3800c2f..68d1cf9 100644
  }
  
 diff --git sc/source/filter/excel/xistyle.cxx sc/source/filter/excel/xistyle.cxx
-index 6279033..7a87f01 100644
+index 9fa8158..8824e2f 100644
 --- sc/source/filter/excel/xistyle.cxx
 +++ sc/source/filter/excel/xistyle.cxx
-@@ -688,6 +688,7 @@ void XclImpCellAlign::FillToItemSet( SfxItemSet& rItemSet, const XclImpFont* pFo
+@@ -51,6 +51,7 @@
+ #include <editeng/frmdiritem.hxx>
+ #include <editeng/eeitem.hxx>
+ #include <editeng/flstitem.hxx>
++#include <editeng/justifyitem.hxx>
+ #include "document.hxx"
+ #include "docpool.hxx"
+ #include "attrib.hxx"
+@@ -688,6 +689,7 @@ void XclImpCellAlign::FillToItemSet( SfxItemSet& rItemSet, const XclImpFont* pFo
  {
      // horizontal alignment
      ScfTools::PutItem( rItemSet, SvxHorJustifyItem( GetScHorAlign(), ATTR_HOR_JUSTIFY ), bSkipPoolDefs );
@@ -279,7 +389,7 @@ index 6279033..7a87f01 100644
  
      // text wrap (#i74508# always if vertical alignment is justified or distributed)
      bool bLineBreak = mbLineBreak || (mnVerAlign == EXC_XF_VER_JUSTIFY) || (mnVerAlign == EXC_XF_VER_DISTRIB);
-@@ -695,6 +696,7 @@ void XclImpCellAlign::FillToItemSet( SfxItemSet& rItemSet, const XclImpFont* pFo
+@@ -695,6 +697,7 @@ void XclImpCellAlign::FillToItemSet( SfxItemSet& rItemSet, const XclImpFont* pFo
  
      // vertical alignment
      ScfTools::PutItem( rItemSet, SvxVerJustifyItem( GetScVerAlign(), ATTR_VER_JUSTIFY ), bSkipPoolDefs );
@@ -322,6 +432,30 @@ index b820d39..e32e351 100644
  SvxFrameDirection XclCellAlign::GetScFrameDir() const
  {
      SvxFrameDirection eFrameDir = FRMDIR_ENVIRONMENT;
+diff --git sc/source/filter/html/htmlexp.cxx sc/source/filter/html/htmlexp.cxx
+index ef2edad..1bf5131 100644
+--- sc/source/filter/html/htmlexp.cxx
++++ sc/source/filter/html/htmlexp.cxx
+@@ -48,6 +48,7 @@
+ #include <editeng/postitem.hxx>
+ #include <editeng/udlnitem.hxx>
+ #include <editeng/wghtitem.hxx>
++#include <editeng/justifyitem.hxx>
+ #include <svx/xoutbmp.hxx>
+ #include <editeng/editeng.hxx>
+ #include <svtools/htmlcfg.hxx>
+diff --git sc/source/filter/html/htmlpars.cxx sc/source/filter/html/htmlpars.cxx
+index 1b3379e..21f2492 100644
+--- sc/source/filter/html/htmlpars.cxx
++++ sc/source/filter/html/htmlpars.cxx
+@@ -45,6 +45,7 @@
+ #include <editeng/udlnitem.hxx>
+ #include <editeng/wghtitem.hxx>
+ #include <editeng/boxitem.hxx>
++#include <editeng/justifyitem.hxx>
+ #include <sfx2/objsh.hxx>
+ #include <svl/eitem.hxx>
+ #include <svtools/filter.hxx>
 diff --git sc/source/filter/inc/xlstyle.hxx sc/source/filter/inc/xlstyle.hxx
 index b7d0857..6216165 100644
 --- sc/source/filter/inc/xlstyle.hxx
@@ -339,8 +473,92 @@ index b7d0857..6216165 100644
      /** Returns the Calc frame direction. */
      SvxFrameDirection   GetScFrameDir() const;
  
+diff --git sc/source/filter/lotus/lotattr.cxx sc/source/filter/lotus/lotattr.cxx
+index 2253e51..72254e6 100644
+--- sc/source/filter/lotus/lotattr.cxx
++++ sc/source/filter/lotus/lotattr.cxx
+@@ -36,6 +36,7 @@
+ #include <svx/algitem.hxx>
+ #include <editeng/boxitem.hxx>
+ #include <editeng/brshitem.hxx>
++#include <editeng/justifyitem.hxx>
+ 
+ #include "document.hxx"
+ #include "patattr.hxx"
+diff --git sc/source/filter/lotus/memory.cxx sc/source/filter/lotus/memory.cxx
+index f158d84..6eae5cc 100644
+--- sc/source/filter/lotus/memory.cxx
++++ sc/source/filter/lotus/memory.cxx
+@@ -35,6 +35,7 @@
+ 
+ #include "scitems.hxx"
+ #include <svx/algitem.hxx>
++#include <editeng/justifyitem.hxx>
+ 
+ #include "attrib.hxx"
+ 
+diff --git sc/source/filter/lotus/op.cxx sc/source/filter/lotus/op.cxx
+index b51774f..9d225bc 100644
+--- sc/source/filter/lotus/op.cxx
++++ sc/source/filter/lotus/op.cxx
+@@ -48,6 +48,7 @@
+ #include <editeng/postitem.hxx>
+ #include <editeng/udlnitem.hxx>
+ #include <editeng/wghtitem.hxx>
++#include <editeng/justifyitem.hxx>
+ 
+ #include "cell.hxx"
+ #include "rangenam.hxx"
+diff --git sc/source/filter/lotus/tool.cxx sc/source/filter/lotus/tool.cxx
+index 5951523..fe2c5fa 100644
+--- sc/source/filter/lotus/tool.cxx
++++ sc/source/filter/lotus/tool.cxx
+@@ -34,6 +34,7 @@
+ 
+ #include "scitems.hxx"
+ #include <svx/algitem.hxx>
++#include <editeng/justifyitem.hxx>
+ #include <svl/zforlist.hxx>
+ #include <tools/solar.h>
+ 
+diff --git sc/source/filter/qpro/qprostyle.cxx sc/source/filter/qpro/qprostyle.cxx
+index 8e1b13b..fb0de1d 100644
+--- sc/source/filter/qpro/qprostyle.cxx
++++ sc/source/filter/qpro/qprostyle.cxx
+@@ -46,6 +46,7 @@
+ #include <editeng/crsditem.hxx>
+ #include <editeng/fhgtitem.hxx>
+ #include <editeng/fontitem.hxx>
++#include <editeng/justifyitem.hxx>
+ #include <map>
+ 
+ #include "global.hxx"
+diff --git sc/source/filter/rtf/rtfexp.cxx sc/source/filter/rtf/rtfexp.cxx
+index 7b8ba5c..a6c41e4 100644
+--- sc/source/filter/rtf/rtfexp.cxx
++++ sc/source/filter/rtf/rtfexp.cxx
+@@ -40,6 +40,7 @@
+ #include <editeng/udlnitem.hxx>
+ #include <editeng/fontitem.hxx>
+ #include <editeng/fhgtitem.hxx>
++#include <editeng/justifyitem.hxx>
+ #include <svl/style.hxx>
+ #include <svtools/rtfout.hxx>
+ #include <svtools/rtfkeywd.hxx>
+diff --git sc/source/filter/starcalc/scflt.cxx sc/source/filter/starcalc/scflt.cxx
+index 275f40c..f6f476a 100644
+--- sc/source/filter/starcalc/scflt.cxx
++++ sc/source/filter/starcalc/scflt.cxx
+@@ -52,6 +52,7 @@
+ #include <editeng/udlnitem.hxx>
+ #include <editeng/ulspitem.hxx>
+ #include <editeng/wghtitem.hxx>
++#include <editeng/justifyitem.hxx>
+ #include <svl/zforlist.hxx>
+ #include <svl/PasswordHelper.hxx>
+ #include <stdio.h>
 diff --git sc/source/filter/xml/xmlstyle.cxx sc/source/filter/xml/xmlstyle.cxx
-index 2967a27..c3397b6 100644
+index ef036e4..6481e6d 100644
 --- sc/source/filter/xml/xmlstyle.cxx
 +++ sc/source/filter/xml/xmlstyle.cxx
 @@ -35,6 +35,7 @@
@@ -362,7 +580,7 @@ index 2967a27..c3397b6 100644
  #include <com/sun/star/table/TableBorder.hpp>
  #include <com/sun/star/sheet/XSheetConditionalEntries.hpp>
  #include <com/sun/star/sheet/XSheetConditionalEntry.hpp>
-@@ -86,6 +89,7 @@ const XMLPropertyMapEntry aXMLScCellStylesProperties[] =
+@@ -87,6 +89,7 @@ const XMLPropertyMapEntry aXMLScCellStylesProperties[] =
      MAP( "HoriJustify", XML_NAMESPACE_FO, XML_TEXT_ALIGN, XML_TYPE_PROP_PARAGRAPH|XML_SC_TYPE_HORIJUSTIFY|MID_FLAG_MERGE_PROPERTY, 0 ),
      MAP( "HoriJustify", XML_NAMESPACE_STYLE, XML_TEXT_ALIGN_SOURCE, XML_TYPE_PROP_TABLE_CELL|XML_SC_TYPE_HORIJUSTIFYSOURCE|MID_FLAG_MERGE_PROPERTY, 0 ),
      MAP( "HoriJustify", XML_NAMESPACE_STYLE, XML_REPEAT_CONTENT, XML_TYPE_PROP_TABLE_CELL|XML_SC_TYPE_HORIJUSTIFYREPEAT|MID_FLAG_MERGE_PROPERTY, 0 ),
@@ -370,7 +588,7 @@ index 2967a27..c3397b6 100644
      MAP( "IsCellBackgroundTransparent", XML_NAMESPACE_FO, XML_BACKGROUND_COLOR, XML_TYPE_PROP_TABLE_CELL|XML_TYPE_ISTRANSPARENT|MID_FLAG_MULTI_PROPERTY|MID_FLAG_MERGE_ATTRIBUTE, 0 ),
      MAP( "IsTextWrapped", XML_NAMESPACE_FO, XML_WRAP_OPTION, XML_TYPE_PROP_TABLE_CELL|XML_SC_ISTEXTWRAPPED, 0 ),
      MAP( "LeftBorder", XML_NAMESPACE_FO, XML_BORDER, XML_TYPE_PROP_TABLE_CELL|XML_TYPE_BORDER, CTF_SC_ALLBORDER ),
-@@ -113,7 +117,9 @@ const XMLPropertyMapEntry aXMLScCellStylesProperties[] =
+@@ -114,7 +117,9 @@ const XMLPropertyMapEntry aXMLScCellStylesProperties[] =
      MAP( "UserDefinedAttributes", XML_NAMESPACE_TEXT, XML_XMLNS, XML_TYPE_PROP_TABLE_CELL|XML_TYPE_ATTRIBUTE_CONTAINER | MID_FLAG_SPECIAL_ITEM, 0 ),
      MAP( "ValidationXML", XML_NAMESPACE_TABLE, XML_CONTENT_VALIDATION, XML_TYPE_PROP_TABLE_CELL|XML_TYPE_BUILDIN_CMP_ONLY, CTF_SC_VALIDATION ),
      MAP( "VertJustify", XML_NAMESPACE_STYLE, XML_VERTICAL_ALIGN, XML_TYPE_PROP_TABLE_CELL|XML_SC_TYPE_VERTJUSTIFY, 0),
@@ -380,7 +598,7 @@ index 2967a27..c3397b6 100644
      MAP_END()
  };
  
-@@ -859,6 +865,12 @@ const XMLPropertyHandler* XMLScPropHdlFactory::GetPropertyHandler( sal_Int32 nTy
+@@ -862,6 +867,12 @@ const XMLPropertyHandler* XMLScPropHdlFactory::GetPropertyHandler( sal_Int32 nTy
                  pHdl = new XmlScPropHdl_PrintContent;
              }
              break;
@@ -393,7 +611,7 @@ index 2967a27..c3397b6 100644
              case XML_SC_TYPE_HORIJUSTIFY :
              {
                  pHdl = new XmlScPropHdl_HoriJustify;
-@@ -1132,6 +1144,81 @@ sal_Bool XmlScPropHdl_PrintContent::exportXML(
+@@ -1135,6 +1146,81 @@ sal_Bool XmlScPropHdl_PrintContent::exportXML(
      return bRetval;
  }
  
@@ -475,7 +693,7 @@ index 2967a27..c3397b6 100644
  XmlScPropHdl_HoriJustify::~XmlScPropHdl_HoriJustify()
  {
  }
-@@ -1487,7 +1574,7 @@ bool XmlScPropHdl_RotateReference::equals(
+@@ -1490,7 +1576,7 @@ bool XmlScPropHdl_RotateReference::equals(
      const ::com::sun::star::uno::Any& r1,
      const ::com::sun::star::uno::Any& r2 ) const
  {
@@ -484,7 +702,7 @@ index 2967a27..c3397b6 100644
  
      if((r1 >>= aReference1) && (r2 >>= aReference2))
          return (aReference1 == aReference2);
-@@ -1501,28 +1588,28 @@ sal_Bool XmlScPropHdl_RotateReference::importXML(
+@@ -1504,28 +1590,28 @@ sal_Bool XmlScPropHdl_RotateReference::importXML(
  {
      sal_Bool bRetval(sal_False);
  
@@ -518,7 +736,7 @@ index 2967a27..c3397b6 100644
          rValue <<= nValue;
          bRetval = sal_True;
      }
-@@ -1535,32 +1622,32 @@ sal_Bool XmlScPropHdl_RotateReference::exportXML(
+@@ -1538,32 +1624,32 @@ sal_Bool XmlScPropHdl_RotateReference::exportXML(
      const ::com::sun::star::uno::Any& rValue,
      const SvXMLUnitConverter& /* rUnitConverter */ ) const
  {
@@ -556,7 +774,7 @@ index 2967a27..c3397b6 100644
              {
                  rStrExpValue = GetXMLToken(XML_TOP);
                  bRetval = sal_True;
-@@ -1584,7 +1671,7 @@ bool XmlScPropHdl_VertJustify::equals(
+@@ -1587,7 +1673,7 @@ bool XmlScPropHdl_VertJustify::equals(
      const ::com::sun::star::uno::Any& r1,
      const ::com::sun::star::uno::Any& r2 ) const
  {
@@ -565,7 +783,7 @@ index 2967a27..c3397b6 100644
  
      if((r1 >>= aReference1) && (r2 >>= aReference2))
          return (aReference1 == aReference2);
-@@ -1598,28 +1685,34 @@ sal_Bool XmlScPropHdl_VertJustify::importXML(
+@@ -1601,28 +1687,34 @@ sal_Bool XmlScPropHdl_VertJustify::importXML(
  {
      sal_Bool bRetval(sal_False);
  
@@ -605,7 +823,7 @@ index 2967a27..c3397b6 100644
          rValue <<= nValue;
          bRetval = sal_True;
      }
-@@ -1632,37 +1725,43 @@ sal_Bool XmlScPropHdl_VertJustify::exportXML(
+@@ -1635,37 +1727,43 @@ sal_Bool XmlScPropHdl_VertJustify::exportXML(
      const ::com::sun::star::uno::Any& rValue,
      const SvXMLUnitConverter& /* rUnitConverter */ ) const
  {
@@ -709,6 +927,90 @@ index fa3513a..4f972f8 100644
  class XmlScPropHdl_HoriJustify : public XMLPropertyHandler
  {
  public:
+diff --git sc/source/ui/Accessibility/AccessibleText.cxx sc/source/ui/Accessibility/AccessibleText.cxx
+index 50e2484..3653b15 100644
+--- sc/source/ui/Accessibility/AccessibleText.cxx
++++ sc/source/ui/Accessibility/AccessibleText.cxx
+@@ -51,6 +51,7 @@
+ #include <vcl/virdev.hxx>
+ #include <editeng/editobj.hxx>
+ #include <editeng/adjitem.hxx>
++#include <editeng/justifyitem.hxx>
+ #include <svx/svdmodel.hxx>
+ #include <svx/algitem.hxx>
+ 
+diff --git sc/source/ui/app/inputhdl.cxx sc/source/ui/app/inputhdl.cxx
+index c500b5c..f9ec16a 100644
+--- sc/source/ui/app/inputhdl.cxx
++++ sc/source/ui/app/inputhdl.cxx
+@@ -49,6 +49,7 @@
+ #include <editeng/svxacorr.hxx>
+ #include <editeng/unolingu.hxx>
+ #include <editeng/wghtitem.hxx>
++#include <editeng/justifyitem.hxx>
+ #include <sfx2/bindings.hxx>
+ #include <sfx2/viewfrm.hxx>
+ #include <sfx2/dispatch.hxx>
+diff --git sc/source/ui/app/transobj.cxx sc/source/ui/app/transobj.cxx
+index 641b7bf..319a72c 100644
+--- sc/source/ui/app/transobj.cxx
++++ sc/source/ui/app/transobj.cxx
+@@ -34,6 +34,7 @@
+ 
+ #include "scitems.hxx"
+ #include <editeng/eeitem.hxx>
++#include <editeng/justifyitem.hxx>
+ 
+ 
+ #include <com/sun/star/uno/Sequence.hxx>
+diff --git sc/source/ui/app/typemap.cxx sc/source/ui/app/typemap.cxx
+index 33a8069..0378500 100644
+--- sc/source/ui/app/typemap.cxx
++++ sc/source/ui/app/typemap.cxx
+@@ -105,6 +105,7 @@
+ #include <svx/xftshxy.hxx>
+ #include <svx/xftsfit.hxx>
+ #include <editeng/langitem.hxx>
++#include <editeng/justifyitem.hxx>
+ #include <svx/grafctrl.hxx>
+ #include <editeng/shdditem.hxx>
+ #include <editeng/shaditem.hxx>
+diff --git sc/source/ui/docshell/docsh.cxx sc/source/ui/docshell/docsh.cxx
+index 9a37b83..b4821ac 100644
+--- sc/source/ui/docshell/docsh.cxx
++++ sc/source/ui/docshell/docsh.cxx
+@@ -34,6 +34,7 @@
+ #include "scitems.hxx"
+ #include <editeng/eeitem.hxx>
+ #include <editeng/svxenum.hxx>
++#include <editeng/justifyitem.hxx>
+ #include <svx/algitem.hxx>
+ 
+ 
+diff --git sc/source/ui/undo/undoblk.cxx sc/source/ui/undo/undoblk.cxx
+index 389d9b7..8657169 100644
+--- sc/source/ui/undo/undoblk.cxx
++++ sc/source/ui/undo/undoblk.cxx
+@@ -38,6 +38,7 @@
+ #include <vcl/virdev.hxx>
+ #include <vcl/waitobj.hxx>
+ #include <editeng/boxitem.hxx>
++#include <editeng/justifyitem.hxx>
+ #include <sfx2/app.hxx>
+ 
+ #include "undoblk.hxx"
+diff --git sc/source/ui/undo/undoblk3.cxx sc/source/ui/undo/undoblk3.cxx
+index 84fc105..8fd66cb 100644
+--- sc/source/ui/undo/undoblk3.cxx
++++ sc/source/ui/undo/undoblk3.cxx
+@@ -33,6 +33,7 @@
+ #include "scitems.hxx"
+ #include <svx/algitem.hxx>
+ #include <editeng/boxitem.hxx>
++#include <editeng/justifyitem.hxx>
+ #include <svl/srchitem.hxx>
+ #include <sfx2/linkmgr.hxx>
+ #include <sfx2/bindings.hxx>
 diff --git sc/source/ui/unoobj/afmtuno.cxx sc/source/ui/unoobj/afmtuno.cxx
 index 0a174c0..0e440f0 100644
 --- sc/source/ui/unoobj/afmtuno.cxx
@@ -743,10 +1045,18 @@ index 0a174c0..0e440f0 100644
      };
      return aAutoFieldMap_Impl;
 diff --git sc/source/ui/unoobj/cellsuno.cxx sc/source/ui/unoobj/cellsuno.cxx
-index 21b7c0c..c0b0d43 100644
+index 41a725c..cfe9b9d 100644
 --- sc/source/ui/unoobj/cellsuno.cxx
 +++ sc/source/ui/unoobj/cellsuno.cxx
-@@ -56,7 +56,7 @@
+@@ -38,6 +38,7 @@
+ #include <editeng/brshitem.hxx>
+ #include <editeng/editeng.hxx>
+ #include <editeng/flditem.hxx>
++#include <editeng/justifyitem.hxx>
+ #include <svx/fmdpage.hxx>
+ #include <editeng/langitem.hxx>
+ #include <sfx2/linkmgr.hxx>
+@@ -56,7 +57,7 @@
  #include <com/sun/star/util/CellProtection.hpp>
  #include <com/sun/star/table/CellHoriJustify.hpp>
  #include <com/sun/star/table/CellOrientation.hpp>
@@ -755,7 +1065,7 @@ index 21b7c0c..c0b0d43 100644
  #include <com/sun/star/table/ShadowFormat.hpp>
  #include <com/sun/star/table/TableBorder.hpp>
  #include <com/sun/star/sheet/CellFlags.hpp>
-@@ -213,6 +213,7 @@ const SfxItemPropertySet* lcl_GetCellsPropertySet()
+@@ -213,6 +214,7 @@ const SfxItemPropertySet* lcl_GetCellsPropertySet()
          {MAP_CHAR_LEN(SC_UNONAME_DIAGONAL_BLTR), ATTR_BORDER_BLTR, &::getCppuType((const table::BorderLine*)0), 0, 0 | CONVERT_TWIPS },
          {MAP_CHAR_LEN(SC_UNONAME_DIAGONAL_TLBR), ATTR_BORDER_TLBR, &::getCppuType((const table::BorderLine*)0), 0, 0 | CONVERT_TWIPS },
          {MAP_CHAR_LEN(SC_UNONAME_CELLHJUS),	ATTR_HOR_JUSTIFY,	&getCppuType((table::CellHoriJustify*)0), 0, MID_HORJUST_HORJUST },
@@ -763,7 +1073,7 @@ index 21b7c0c..c0b0d43 100644
          {MAP_CHAR_LEN(SC_UNONAME_CELLTRAN),	ATTR_BACKGROUND,	&getBooleanCppuType(),					0, MID_GRAPHIC_TRANSPARENT },
          {MAP_CHAR_LEN(SC_UNONAME_WRAP),		ATTR_LINEBREAK,		&getBooleanCppuType(),					0, 0 },
          {MAP_CHAR_LEN(SC_UNONAME_LEFTBORDER),ATTR_BORDER,		&::getCppuType((const table::BorderLine*)0), 0, LEFT_BORDER | CONVERT_TWIPS },
-@@ -232,7 +233,7 @@ const SfxItemPropertySet* lcl_GetCellsPropertySet()
+@@ -232,7 +234,7 @@ const SfxItemPropertySet* lcl_GetCellsPropertySet()
          {MAP_CHAR_LEN(SC_UNONAME_PTMARGIN),	ATTR_MARGIN,		&getCppuType((sal_Int32*)0),			0, MID_MARGIN_UP_MARGIN | CONVERT_TWIPS },
          {MAP_CHAR_LEN(SC_UNONAME_RIGHTBORDER),ATTR_BORDER,		&::getCppuType((const table::BorderLine*)0), 0, RIGHT_BORDER | CONVERT_TWIPS },
          {MAP_CHAR_LEN(SC_UNONAME_ROTANG),	ATTR_ROTATE_VALUE,	&getCppuType((sal_Int32*)0),			0, 0 },
@@ -772,7 +1082,7 @@ index 21b7c0c..c0b0d43 100644
          {MAP_CHAR_LEN(SC_UNONAME_SHADOW),	ATTR_SHADOW,		&getCppuType((table::ShadowFormat*)0),	0, 0 | CONVERT_TWIPS },
          {MAP_CHAR_LEN(SC_UNONAME_SHRINK_TO_FIT), ATTR_SHRINKTOFIT, &getBooleanCppuType(),			    0, 0 },
          {MAP_CHAR_LEN(SC_UNONAME_TBLBORD),	SC_WID_UNO_TBLBORD,	&getCppuType((table::TableBorder*)0),	0, 0 | CONVERT_TWIPS },
-@@ -241,7 +242,8 @@ const SfxItemPropertySet* lcl_GetCellsPropertySet()
+@@ -241,7 +243,8 @@ const SfxItemPropertySet* lcl_GetCellsPropertySet()
          {MAP_CHAR_LEN(SC_UNONAME_VALIDAT),	SC_WID_UNO_VALIDAT,	&getCppuType((uno::Reference<beans::XPropertySet>*)0), 0, 0 },
          {MAP_CHAR_LEN(SC_UNONAME_VALILOC),	SC_WID_UNO_VALILOC,	&getCppuType((uno::Reference<beans::XPropertySet>*)0), 0, 0 },
          {MAP_CHAR_LEN(SC_UNONAME_VALIXML),	SC_WID_UNO_VALIXML,	&getCppuType((uno::Reference<beans::XPropertySet>*)0), 0, 0 },
@@ -782,7 +1092,7 @@ index 21b7c0c..c0b0d43 100644
          {MAP_CHAR_LEN(SC_UNONAME_WRITING),	ATTR_WRITINGDIR,	&getCppuType((sal_Int16*)0),			0, 0 },
          {0,0,0,0,0,0}
      };
-@@ -312,6 +314,7 @@ const SfxItemPropertySet* lcl_GetRangePropertySet()
+@@ -312,6 +315,7 @@ const SfxItemPropertySet* lcl_GetRangePropertySet()
          {MAP_CHAR_LEN(SC_UNONAME_DIAGONAL_BLTR), ATTR_BORDER_BLTR, &::getCppuType((const table::BorderLine*)0), 0, 0 | CONVERT_TWIPS },
          {MAP_CHAR_LEN(SC_UNONAME_DIAGONAL_TLBR), ATTR_BORDER_TLBR, &::getCppuType((const table::BorderLine*)0), 0, 0 | CONVERT_TWIPS },
          {MAP_CHAR_LEN(SC_UNONAME_CELLHJUS),	ATTR_HOR_JUSTIFY,	&getCppuType((table::CellHoriJustify*)0),	0, MID_HORJUST_HORJUST },
@@ -790,7 +1100,7 @@ index 21b7c0c..c0b0d43 100644
          {MAP_CHAR_LEN(SC_UNONAME_CELLTRAN),	ATTR_BACKGROUND,	&getBooleanCppuType(),					0, MID_GRAPHIC_TRANSPARENT },
          {MAP_CHAR_LEN(SC_UNONAME_WRAP),		ATTR_LINEBREAK,		&getBooleanCppuType(),					0, 0 },
          {MAP_CHAR_LEN(SC_UNONAME_LEFTBORDER),ATTR_BORDER,		&::getCppuType((const table::BorderLine*)0), 0, LEFT_BORDER | CONVERT_TWIPS },
-@@ -332,7 +335,7 @@ const SfxItemPropertySet* lcl_GetRangePropertySet()
+@@ -332,7 +336,7 @@ const SfxItemPropertySet* lcl_GetRangePropertySet()
          {MAP_CHAR_LEN(SC_UNONAME_POS),		SC_WID_UNO_POS,		&getCppuType((awt::Point*)0),			0 | beans::PropertyAttribute::READONLY, 0 },
          {MAP_CHAR_LEN(SC_UNONAME_RIGHTBORDER),ATTR_BORDER,		&::getCppuType((const table::BorderLine*)0), 0, RIGHT_BORDER | CONVERT_TWIPS },
          {MAP_CHAR_LEN(SC_UNONAME_ROTANG),	ATTR_ROTATE_VALUE,	&getCppuType((sal_Int32*)0),			0, 0 },
@@ -799,7 +1109,7 @@ index 21b7c0c..c0b0d43 100644
          {MAP_CHAR_LEN(SC_UNONAME_SHADOW),	ATTR_SHADOW,		&getCppuType((table::ShadowFormat*)0),	0, 0 | CONVERT_TWIPS },
          {MAP_CHAR_LEN(SC_UNONAME_SHRINK_TO_FIT), ATTR_SHRINKTOFIT, &getBooleanCppuType(),			    0, 0 },
          {MAP_CHAR_LEN(SC_UNONAME_SIZE),		SC_WID_UNO_SIZE,	&getCppuType((awt::Size*)0),			0 | beans::PropertyAttribute::READONLY, 0 },
-@@ -342,7 +345,8 @@ const SfxItemPropertySet* lcl_GetRangePropertySet()
+@@ -342,7 +346,8 @@ const SfxItemPropertySet* lcl_GetRangePropertySet()
          {MAP_CHAR_LEN(SC_UNONAME_VALIDAT),	SC_WID_UNO_VALIDAT,	&getCppuType((uno::Reference<beans::XPropertySet>*)0), 0, 0 },
          {MAP_CHAR_LEN(SC_UNONAME_VALILOC),	SC_WID_UNO_VALILOC,	&getCppuType((uno::Reference<beans::XPropertySet>*)0), 0, 0 },
          {MAP_CHAR_LEN(SC_UNONAME_VALIXML),	SC_WID_UNO_VALIXML,	&getCppuType((uno::Reference<beans::XPropertySet>*)0), 0, 0 },
@@ -809,7 +1119,7 @@ index 21b7c0c..c0b0d43 100644
          {MAP_CHAR_LEN(SC_UNONAME_WRITING),	ATTR_WRITINGDIR,	&getCppuType((sal_Int16*)0),			0, 0 },
          {0,0,0,0,0,0}
      };
-@@ -415,6 +419,7 @@ const SfxItemPropertySet* lcl_GetCellPropertySet()
+@@ -415,6 +420,7 @@ const SfxItemPropertySet* lcl_GetCellPropertySet()
          {MAP_CHAR_LEN(SC_UNONAME_FORMLOC),	SC_WID_UNO_FORMLOC,	&getCppuType((rtl::OUString*)0),		0, 0 },
          {MAP_CHAR_LEN(SC_UNONAME_FORMRT),	SC_WID_UNO_FORMRT,	&getCppuType((table::CellContentType*)0), 0 | beans::PropertyAttribute::READONLY, 0 },
          {MAP_CHAR_LEN(SC_UNONAME_CELLHJUS),	ATTR_HOR_JUSTIFY,	&getCppuType((table::CellHoriJustify*)0), 0, MID_HORJUST_HORJUST },
@@ -817,7 +1127,7 @@ index 21b7c0c..c0b0d43 100644
          {MAP_CHAR_LEN(SC_UNONAME_CELLTRAN),	ATTR_BACKGROUND,	&getBooleanCppuType(),					0, MID_GRAPHIC_TRANSPARENT },
          {MAP_CHAR_LEN(SC_UNONAME_WRAP),		ATTR_LINEBREAK,		&getBooleanCppuType(),					0, 0 },
          {MAP_CHAR_LEN(SC_UNONAME_LEFTBORDER),ATTR_BORDER,		&::getCppuType((const table::BorderLine*)0), 0, LEFT_BORDER | CONVERT_TWIPS },
-@@ -435,7 +440,7 @@ const SfxItemPropertySet* lcl_GetCellPropertySet()
+@@ -435,7 +441,7 @@ const SfxItemPropertySet* lcl_GetCellPropertySet()
          {MAP_CHAR_LEN(SC_UNONAME_POS),		SC_WID_UNO_POS,		&getCppuType((awt::Point*)0),			0 | beans::PropertyAttribute::READONLY, 0 },
          {MAP_CHAR_LEN(SC_UNONAME_RIGHTBORDER),ATTR_BORDER,		&::getCppuType((const table::BorderLine*)0), 0, RIGHT_BORDER | CONVERT_TWIPS },
          {MAP_CHAR_LEN(SC_UNONAME_ROTANG),	ATTR_ROTATE_VALUE,	&getCppuType((sal_Int32*)0),			0, 0 },
@@ -826,7 +1136,7 @@ index 21b7c0c..c0b0d43 100644
          {MAP_CHAR_LEN(SC_UNONAME_SHADOW),	ATTR_SHADOW,		&getCppuType((table::ShadowFormat*)0),	0, 0 | CONVERT_TWIPS },
          {MAP_CHAR_LEN(SC_UNONAME_SHRINK_TO_FIT), ATTR_SHRINKTOFIT, &getBooleanCppuType(),			    0, 0 },
          {MAP_CHAR_LEN(SC_UNONAME_SIZE),		SC_WID_UNO_SIZE,	&getCppuType((awt::Size*)0),			0 | beans::PropertyAttribute::READONLY, 0 },
-@@ -445,7 +450,8 @@ const SfxItemPropertySet* lcl_GetCellPropertySet()
+@@ -445,7 +451,8 @@ const SfxItemPropertySet* lcl_GetCellPropertySet()
          {MAP_CHAR_LEN(SC_UNONAME_VALIDAT),	SC_WID_UNO_VALIDAT,	&getCppuType((uno::Reference<beans::XPropertySet>*)0), 0, 0 },
          {MAP_CHAR_LEN(SC_UNONAME_VALILOC),	SC_WID_UNO_VALILOC,	&getCppuType((uno::Reference<beans::XPropertySet>*)0), 0, 0 },
          {MAP_CHAR_LEN(SC_UNONAME_VALIXML),	SC_WID_UNO_VALIXML,	&getCppuType((uno::Reference<beans::XPropertySet>*)0), 0, 0 },
@@ -836,7 +1146,7 @@ index 21b7c0c..c0b0d43 100644
          {MAP_CHAR_LEN(SC_UNONAME_WRITING),	ATTR_WRITINGDIR,	&getCppuType((sal_Int16*)0),			0, 0 },
          {0,0,0,0,0,0}
      };
-@@ -516,6 +522,7 @@ const SfxItemPropertySet* lcl_GetColumnPropertySet()
+@@ -516,6 +523,7 @@ const SfxItemPropertySet* lcl_GetColumnPropertySet()
          {MAP_CHAR_LEN(SC_UNONAME_DIAGONAL_BLTR), ATTR_BORDER_BLTR, &::getCppuType((const table::BorderLine*)0), 0, 0 | CONVERT_TWIPS },
          {MAP_CHAR_LEN(SC_UNONAME_DIAGONAL_TLBR), ATTR_BORDER_TLBR, &::getCppuType((const table::BorderLine*)0), 0, 0 | CONVERT_TWIPS },
          {MAP_CHAR_LEN(SC_UNONAME_CELLHJUS),	ATTR_HOR_JUSTIFY,	&getCppuType((table::CellHoriJustify*)0), 0, MID_HORJUST_HORJUST },
@@ -844,7 +1154,7 @@ index 21b7c0c..c0b0d43 100644
          {MAP_CHAR_LEN(SC_UNONAME_CELLTRAN),	ATTR_BACKGROUND,	&getBooleanCppuType(),					0, MID_GRAPHIC_TRANSPARENT },
  //		{MAP_CHAR_LEN(SC_UNONAME_CELLFILT),	SC_WID_UNO_CELLFILT,&getBooleanCppuType(),					0, 0 },
          {MAP_CHAR_LEN(SC_UNONAME_MANPAGE),	SC_WID_UNO_MANPAGE,	&getBooleanCppuType(),					0, 0 },
-@@ -541,7 +548,7 @@ const SfxItemPropertySet* lcl_GetColumnPropertySet()
+@@ -541,7 +549,7 @@ const SfxItemPropertySet* lcl_GetColumnPropertySet()
          {MAP_CHAR_LEN(SC_UNONAME_POS),		SC_WID_UNO_POS,		&getCppuType((awt::Point*)0),			0 | beans::PropertyAttribute::READONLY, 0 },
          {MAP_CHAR_LEN(SC_UNONAME_RIGHTBORDER),ATTR_BORDER,		&::getCppuType((const table::BorderLine*)0), 0, RIGHT_BORDER | CONVERT_TWIPS },
          {MAP_CHAR_LEN(SC_UNONAME_ROTANG),	ATTR_ROTATE_VALUE,	&getCppuType((sal_Int32*)0),			0, 0 },
@@ -853,7 +1163,7 @@ index 21b7c0c..c0b0d43 100644
          {MAP_CHAR_LEN(SC_UNONAME_SHADOW),	ATTR_SHADOW,		&getCppuType((table::ShadowFormat*)0),	0, 0 | CONVERT_TWIPS },
          {MAP_CHAR_LEN(SC_UNONAME_SHRINK_TO_FIT), ATTR_SHRINKTOFIT, &getBooleanCppuType(),			    0, 0 },
          {MAP_CHAR_LEN(SC_UNONAME_SIZE),		SC_WID_UNO_SIZE,	&getCppuType((awt::Size*)0),			0 | beans::PropertyAttribute::READONLY, 0 },
-@@ -551,7 +558,8 @@ const SfxItemPropertySet* lcl_GetColumnPropertySet()
+@@ -551,7 +559,8 @@ const SfxItemPropertySet* lcl_GetColumnPropertySet()
          {MAP_CHAR_LEN(SC_UNONAME_VALIDAT),	SC_WID_UNO_VALIDAT,	&getCppuType((uno::Reference<beans::XPropertySet>*)0), 0, 0 },
          {MAP_CHAR_LEN(SC_UNONAME_VALILOC),	SC_WID_UNO_VALILOC,	&getCppuType((uno::Reference<beans::XPropertySet>*)0), 0, 0 },
          {MAP_CHAR_LEN(SC_UNONAME_VALIXML),	SC_WID_UNO_VALIXML,	&getCppuType((uno::Reference<beans::XPropertySet>*)0), 0, 0 },
@@ -863,7 +1173,7 @@ index 21b7c0c..c0b0d43 100644
          {MAP_CHAR_LEN(SC_UNONAME_CELLWID),	SC_WID_UNO_CELLWID,	&getCppuType((sal_Int32*)0),			0, 0 },
          {MAP_CHAR_LEN(SC_UNONAME_WRITING),	ATTR_WRITINGDIR,	&getCppuType((sal_Int16*)0),			0, 0 },
          {0,0,0,0,0,0}
-@@ -621,6 +629,7 @@ const SfxItemPropertySet* lcl_GetRowPropertySet()
+@@ -621,6 +630,7 @@ const SfxItemPropertySet* lcl_GetRowPropertySet()
          {MAP_CHAR_LEN(SC_UNONAME_DIAGONAL_TLBR), ATTR_BORDER_TLBR, &::getCppuType((const table::BorderLine*)0), 0, 0 | CONVERT_TWIPS },
          {MAP_CHAR_LEN(SC_UNONAME_CELLHGT),	SC_WID_UNO_CELLHGT,	&getCppuType((sal_Int32*)0),			0, 0 },
          {MAP_CHAR_LEN(SC_UNONAME_CELLHJUS),	ATTR_HOR_JUSTIFY,	&getCppuType((table::CellHoriJustify*)0), 0, MID_HORJUST_HORJUST },
@@ -871,7 +1181,7 @@ index 21b7c0c..c0b0d43 100644
          {MAP_CHAR_LEN(SC_UNONAME_CELLTRAN),	ATTR_BACKGROUND,	&getBooleanCppuType(),					0, MID_GRAPHIC_TRANSPARENT },
          {MAP_CHAR_LEN(SC_UNONAME_CELLFILT),	SC_WID_UNO_CELLFILT,&getBooleanCppuType(),					0, 0 },
          {MAP_CHAR_LEN(SC_UNONAME_MANPAGE),	SC_WID_UNO_MANPAGE,	&getBooleanCppuType(),					0, 0 },
-@@ -646,7 +655,7 @@ const SfxItemPropertySet* lcl_GetRowPropertySet()
+@@ -646,7 +656,7 @@ const SfxItemPropertySet* lcl_GetRowPropertySet()
          {MAP_CHAR_LEN(SC_UNONAME_POS),		SC_WID_UNO_POS,		&getCppuType((awt::Point*)0),			0 | beans::PropertyAttribute::READONLY, 0 },
          {MAP_CHAR_LEN(SC_UNONAME_RIGHTBORDER),ATTR_BORDER,		&::getCppuType((const table::BorderLine*)0), 0, RIGHT_BORDER | CONVERT_TWIPS },
          {MAP_CHAR_LEN(SC_UNONAME_ROTANG),	ATTR_ROTATE_VALUE,	&getCppuType((sal_Int32*)0),			0, 0 },
@@ -880,7 +1190,7 @@ index 21b7c0c..c0b0d43 100644
          {MAP_CHAR_LEN(SC_UNONAME_SHADOW),	ATTR_SHADOW,		&getCppuType((table::ShadowFormat*)0),	0, 0 | CONVERT_TWIPS },
          {MAP_CHAR_LEN(SC_UNONAME_SHRINK_TO_FIT), ATTR_SHRINKTOFIT, &getBooleanCppuType(),			    0, 0 },
          {MAP_CHAR_LEN(SC_UNONAME_SIZE),		SC_WID_UNO_SIZE,	&getCppuType((awt::Size*)0),			0 | beans::PropertyAttribute::READONLY, 0 },
-@@ -656,7 +665,8 @@ const SfxItemPropertySet* lcl_GetRowPropertySet()
+@@ -656,7 +666,8 @@ const SfxItemPropertySet* lcl_GetRowPropertySet()
          {MAP_CHAR_LEN(SC_UNONAME_VALIDAT),	SC_WID_UNO_VALIDAT,	&getCppuType((uno::Reference<beans::XPropertySet>*)0), 0, 0 },
          {MAP_CHAR_LEN(SC_UNONAME_VALILOC),	SC_WID_UNO_VALILOC,	&getCppuType((uno::Reference<beans::XPropertySet>*)0), 0, 0 },
          {MAP_CHAR_LEN(SC_UNONAME_VALIXML),	SC_WID_UNO_VALIXML,	&getCppuType((uno::Reference<beans::XPropertySet>*)0), 0, 0 },
@@ -890,7 +1200,7 @@ index 21b7c0c..c0b0d43 100644
          {MAP_CHAR_LEN(SC_UNONAME_WRITING),	ATTR_WRITINGDIR,	&getCppuType((sal_Int16*)0),			0, 0 },
          {0,0,0,0,0,0}
      };
-@@ -729,6 +739,7 @@ const SfxItemPropertySet* lcl_GetSheetPropertySet()
+@@ -729,6 +740,7 @@ const SfxItemPropertySet* lcl_GetSheetPropertySet()
          {MAP_CHAR_LEN(SC_UNONAME_DIAGONAL_BLTR), ATTR_BORDER_BLTR, &::getCppuType((const table::BorderLine*)0), 0, 0 | CONVERT_TWIPS },
          {MAP_CHAR_LEN(SC_UNONAME_DIAGONAL_TLBR), ATTR_BORDER_TLBR, &::getCppuType((const table::BorderLine*)0), 0, 0 | CONVERT_TWIPS },
          {MAP_CHAR_LEN(SC_UNONAME_CELLHJUS),	ATTR_HOR_JUSTIFY,	&getCppuType((table::CellHoriJustify*)0), 0, MID_HORJUST_HORJUST },
@@ -898,7 +1208,7 @@ index 21b7c0c..c0b0d43 100644
          {MAP_CHAR_LEN(SC_UNONAME_ISACTIVE),	SC_WID_UNO_ISACTIVE,&getBooleanCppuType(),					0, 0 },
          {MAP_CHAR_LEN(SC_UNONAME_CELLTRAN),	ATTR_BACKGROUND,	&getBooleanCppuType(),					0, MID_GRAPHIC_TRANSPARENT },
          {MAP_CHAR_LEN(SC_UNONAME_WRAP),		ATTR_LINEBREAK,		&getBooleanCppuType(),					0, 0 },
-@@ -756,7 +767,7 @@ const SfxItemPropertySet* lcl_GetSheetPropertySet()
+@@ -756,7 +768,7 @@ const SfxItemPropertySet* lcl_GetSheetPropertySet()
          {MAP_CHAR_LEN(SC_UNONAME_PROTECT),  SC_WID_UNO_PROTECT,	&getBooleanCppuType(),					0, 0 },
          {MAP_CHAR_LEN(SC_UNONAME_RIGHTBORDER),ATTR_BORDER,		&::getCppuType((const table::BorderLine*)0), 0, RIGHT_BORDER | CONVERT_TWIPS },
          {MAP_CHAR_LEN(SC_UNONAME_ROTANG),	ATTR_ROTATE_VALUE,	&getCppuType((sal_Int32*)0),			0, 0 },
@@ -907,7 +1217,7 @@ index 21b7c0c..c0b0d43 100644
          {MAP_CHAR_LEN(SC_UNONAME_SHADOW),	ATTR_SHADOW,		&getCppuType((table::ShadowFormat*)0),	0, 0 | CONVERT_TWIPS },
          {MAP_CHAR_LEN(SC_UNONAME_SHOWBORD), SC_WID_UNO_SHOWBORD,&getBooleanCppuType(),					0, 0 },
          {MAP_CHAR_LEN(SC_UNONAME_SHRINK_TO_FIT), ATTR_SHRINKTOFIT, &getBooleanCppuType(),               0, 0 },
-@@ -768,7 +779,8 @@ const SfxItemPropertySet* lcl_GetSheetPropertySet()
+@@ -768,7 +780,8 @@ const SfxItemPropertySet* lcl_GetSheetPropertySet()
          {MAP_CHAR_LEN(SC_UNONAME_VALIDAT),	SC_WID_UNO_VALIDAT,	&getCppuType((uno::Reference<beans::XPropertySet>*)0), 0, 0 },
          {MAP_CHAR_LEN(SC_UNONAME_VALILOC),	SC_WID_UNO_VALILOC,	&getCppuType((uno::Reference<beans::XPropertySet>*)0), 0, 0 },
          {MAP_CHAR_LEN(SC_UNONAME_VALIXML),	SC_WID_UNO_VALIXML,	&getCppuType((uno::Reference<beans::XPropertySet>*)0), 0, 0 },
@@ -956,7 +1266,7 @@ index 3ddccdb..f62f17c 100644
          {0,0,0,0,0,0}
      };
 diff --git sc/source/ui/vba/vbaformat.cxx sc/source/ui/vba/vbaformat.cxx
-index f9b54a0..ebf2169 100644
+index f9b54a0..d6f0c4b 100644
 --- sc/source/ui/vba/vbaformat.cxx
 +++ sc/source/ui/vba/vbaformat.cxx
 @@ -31,7 +31,7 @@
@@ -991,7 +1301,7 @@ index f9b54a0..ebf2169 100644
                  break;
              default:
 -                aVal = uno::makeAny( table::CellVertJustify_STANDARD ); 
-+                aVal = uno::makeAny( table::CellVertJustify2::STANDARD );
++                aVal = uno::makeAny( table::CellVertJustify2::STANDARD ); 
                  break;
          }
          mxPropertySet->setPropertyValue( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( SC_UNONAME_CELLVJUS ) ), aVal );
@@ -1021,11 +1331,43 @@ index f9b54a0..ebf2169 100644
                      aResult = uno::makeAny( excel::XlVAlign::xlVAlignTop );
                      break;
                  default:
+diff --git sc/source/ui/view/formatsh.cxx sc/source/ui/view/formatsh.cxx
+index 04a7236..5d2a946 100644
+--- sc/source/ui/view/formatsh.cxx
++++ sc/source/ui/view/formatsh.cxx
+@@ -83,6 +83,7 @@
+ #include <editeng/scripttypeitem.hxx>
+ #include <svtools/colorcfg.hxx>
+ #include <editeng/shaditem.hxx>
++#include <editeng/justifyitem.hxx>
+ 
+ #include "formatsh.hxx"
+ #include "sc.hrc"
+diff --git sc/source/ui/view/gridwin.cxx sc/source/ui/view/gridwin.cxx
+index f5bd98d..fd10804 100644
+--- sc/source/ui/view/gridwin.cxx
++++ sc/source/ui/view/gridwin.cxx
+@@ -37,6 +37,7 @@
+ #include <editeng/editview.hxx>
+ #include <editeng/editstat.hxx>
+ #include <editeng/flditem.hxx>
++#include <editeng/justifyitem.hxx>
+ #include <svx/svdetc.hxx>
+ #include <editeng/editobj.hxx>
+ #include <sfx2/dispatch.hxx>
 diff --git sc/source/ui/view/output2.cxx sc/source/ui/view/output2.cxx
-index 6707e6c..1594fc4 100644
+index dac20b5..a7bc217 100644
 --- sc/source/ui/view/output2.cxx
 +++ sc/source/ui/view/output2.cxx
-@@ -104,6 +104,8 @@ class ScDrawStringsVars
+@@ -48,6 +48,7 @@
+ #include <editeng/forbiddencharacterstable.hxx>
+ #include <editeng/frmdiritem.hxx>
+ #include <editeng/langitem.hxx>
++#include <editeng/justifyitem.hxx>
+ #include <svx/rotmodit.hxx>
+ #include <editeng/scripttypeitem.hxx>
+ #include <editeng/udlnitem.hxx>
+@@ -104,6 +105,8 @@ class ScDrawStringsVars
      SvxCellOrientation	eAttrOrient;
      SvxCellHorJustify	eAttrHorJust;
      SvxCellVerJustify	eAttrVerJust;
@@ -1034,7 +1376,7 @@ index 6707e6c..1594fc4 100644
      const SvxMarginItem* pMargin;
      USHORT				nIndent;
      BOOL				bRotated;
-@@ -145,6 +147,8 @@ public:
+@@ -145,6 +148,8 @@ public:
      SvxCellOrientation		GetOrient() const		{ return eAttrOrient; }
      SvxCellHorJustify		GetHorJust() const		{ return eAttrHorJust; }
      SvxCellVerJustify		GetVerJust() const		{ return eAttrVerJust; }
@@ -1043,7 +1385,7 @@ index 6707e6c..1594fc4 100644
      const SvxMarginItem*	GetMargin() const		{ return pMargin; }
  
      USHORT	GetLeftTotal() const		{ return pMargin->GetLeftMargin() + nIndent; }
-@@ -186,6 +190,8 @@ ScDrawStringsVars::ScDrawStringsVars(ScOutputData* pData, BOOL bPTL) :
+@@ -186,6 +191,8 @@ ScDrawStringsVars::ScDrawStringsVars(ScOutputData* pData, BOOL bPTL) :
      eAttrOrient	( SVX_ORIENTATION_STANDARD ),
      eAttrHorJust( SVX_HOR_JUSTIFY_STANDARD ),
      eAttrVerJust( SVX_VER_JUSTIFY_BOTTOM ),
@@ -1052,7 +1394,7 @@ index 6707e6c..1594fc4 100644
      pMargin		( NULL ),
      nIndent		( 0 ),
      bRotated	( FALSE ),
-@@ -256,6 +262,22 @@ void ScDrawStringsVars::SetShrinkScale( long nScale, BYTE nScript )
+@@ -256,6 +263,22 @@ void ScDrawStringsVars::SetShrinkScale( long nScale, BYTE nScript )
      SetAutoText( aString );     // same text again, to get text size
  }
  
@@ -1075,7 +1417,7 @@ index 6707e6c..1594fc4 100644
  void ScDrawStringsVars::SetPattern( const ScPatternAttr* pNew, const SfxItemSet* pSet,
                                      ScBaseCell* pCell, BYTE nScript )
  {
-@@ -305,6 +327,11 @@ void ScDrawStringsVars::SetPattern( const ScPatternAttr* pNew, const SfxItemSet*
+@@ -305,6 +328,11 @@ void ScDrawStringsVars::SetPattern( const ScPatternAttr* pNew, const SfxItemSet*
      if ( eAttrVerJust == SVX_VER_JUSTIFY_STANDARD )
          eAttrVerJust = SVX_VER_JUSTIFY_BOTTOM;
  
@@ -1087,7 +1429,7 @@ index 6707e6c..1594fc4 100644
      //	line break
  
      bLineBreak = ((const SfxBoolItem&)pPattern->GetItem( ATTR_LINEBREAK, pCondSet )).GetValue();
-@@ -946,8 +973,12 @@ inline BOOL StringDiffer( const ScPatternAttr*& rpOldPattern, const ScPatternAtt
+@@ -946,8 +974,12 @@ inline BOOL StringDiffer( const ScPatternAttr*& rpOldPattern, const ScPatternAtt
          return TRUE;
      else if ( &rpNewPattern->GetItem( ATTR_HOR_JUSTIFY ) != &rpOldPattern->GetItem( ATTR_HOR_JUSTIFY ) )
          return TRUE;
@@ -1100,7 +1442,7 @@ index 6707e6c..1594fc4 100644
      else if ( &rpNewPattern->GetItem( ATTR_STACKED ) != &rpOldPattern->GetItem( ATTR_STACKED ) )
          return TRUE;
      else if ( &rpNewPattern->GetItem( ATTR_LINEBREAK ) != &rpOldPattern->GetItem( ATTR_LINEBREAK ) )
-@@ -1632,6 +1663,12 @@ void ScOutputData::DrawStrings( BOOL bPixelToLogic )
+@@ -1633,6 +1665,12 @@ void ScOutputData::DrawStrings( BOOL bPixelToLogic )
                              bNeedEdit = ( nHeight > aAreaParam.maClipRect.GetHeight() );
                          }
                      }
@@ -1113,7 +1455,7 @@ index 6707e6c..1594fc4 100644
                  }
                  if (bNeedEdit)
                  {
-@@ -1724,6 +1761,7 @@ void ScOutputData::DrawStrings( BOOL bPixelToLogic )
+@@ -1725,6 +1763,7 @@ void ScOutputData::DrawStrings( BOOL bPixelToLogic )
                          switch (aVars.GetVerJust())
                          {
                              case SVX_VER_JUSTIFY_TOP:
@@ -1121,7 +1463,7 @@ index 6707e6c..1594fc4 100644
                                  {
                                      long nTop = (long)( aVars.GetMargin()->GetTopMargin() * nPPTY );
                                      nJustPosY += nTop;
-@@ -2070,6 +2108,253 @@ void ScOutputData::ShrinkEditEngine( EditEngine& rEngine, const Rectangle& rAlig
+@@ -2071,10 +2110,267 @@ void ScOutputData::ShrinkEditEngine( EditEngine& rEngine, const Rectangle& rAlig
      }
  }
  
@@ -1154,7 +1496,7 @@ index 6707e6c..1594fc4 100644
 +     */
 +    bool isVerticallyOriented() const;
 +
-+    void setAlignmentItems(ScFieldEditEngine* pEngine);
++    void setAlignmentItems(ScFieldEditEngine* pEngine, ScBaseCell* pCell);
 +    bool adjustHorAlignment(ScFieldEditEngine* pEngine);
 +
 +private:
@@ -1206,12 +1548,13 @@ index 6707e6c..1594fc4 100644
 +        rPaperSize.Height() = rAlignRect.GetHeight() - nTopM - nBottomM;
 +    }
 +
-+    if (mbAsianVertical && mbBreak)
++    if (mbAsianVertical)
 +    {
-+        //	add some extra height (default margin value) for safety
-+        //	as long as GetEditArea isn't used below
-+        long nExtraHeight = static_cast<long>(20*nPPTY);
-+        rPaperSize.Height() = rAlignRect.GetHeight() - nTopM - nBottomM + nExtraHeight;
++        rPaperSize.Height() = rAlignRect.GetHeight() - nTopM - nBottomM;
++        // Subtract some extra value from the height or else the text would go
++        // outside the cell area.  The value of 5 is arbitrary, and is based
++        // entirely on heuristics.
++        rPaperSize.Height() -= 5;
 +    }
 +}
 +
@@ -1255,7 +1598,7 @@ index 6707e6c..1594fc4 100644
 +    return (meOrient == SVX_ORIENTATION_TOPBOTTOM || meOrient == SVX_ORIENTATION_BOTTOMTOP);
 +}
 +
-+void EditAlignmentParam::setAlignmentItems(ScFieldEditEngine* pEngine)
++void EditAlignmentParam::setAlignmentItems(ScFieldEditEngine* pEngine, ScBaseCell* pCell)
 +{
 +    if (isVerticallyOriented() || mbAsianVertical)
 +    {
@@ -1352,6 +1695,16 @@ index 6707e6c..1594fc4 100644
 +    }
 +
 +    pEngine->SetVertical(mbAsianVertical);
++    if (pCell && pCell->GetCellType() == CELLTYPE_EDIT)
++    {
++        // We need to synchronize the vertical mode in the EditTextObject
++        // instance too.  No idea why we keep this state in two separate
++        // instances.
++        ScEditCell* pEditCell = static_cast<ScEditCell*>(pCell);
++        const EditTextObject* pData = pEditCell->GetData();
++        if (pData)
++            const_cast<EditTextObject*>(pData)->SetVertical(mbAsianVertical);
++    }
 +}
 +
 +bool EditAlignmentParam::adjustHorAlignment(ScFieldEditEngine* pEngine)
@@ -1375,7 +1728,11 @@ index 6707e6c..1594fc4 100644
  void ScOutputData::DrawEdit(BOOL bPixelToLogic)
  {
      vcl::PDFExtOutDevData* pPDFData = PTR_CAST( vcl::PDFExtOutDevData, pDev->GetExtOutDevData() );
-@@ -2222,86 +2507,55 @@ void ScOutputData::DrawEdit(BOOL bPixelToLogic)
+-
+     Size aMinSize = pRefDevice->PixelToLogic(Size(0,100));		// erst darueber wird ausgegeben
+ //    UINT32 nMinHeight = aMinSize.Height() / 200;                // 1/2 Pixel
+ 
+@@ -2223,86 +2519,55 @@ void ScOutputData::DrawEdit(BOOL bPixelToLogic)
                          else
                              lcl_ClearEdit( *pEngine );		// also calls SetUpdateMode(FALSE)
  
@@ -1482,7 +1839,7 @@ index 6707e6c..1594fc4 100644
  
                              SCCOL nXForPos = nX;
                              if ( nXForPos < nX1 )
-@@ -2323,31 +2577,17 @@ void ScOutputData::DrawEdit(BOOL bPixelToLogic)
+@@ -2324,31 +2589,17 @@ void ScOutputData::DrawEdit(BOOL bPixelToLogic)
                              //
  
                              Size aPaperSize = Size( 1000000, 1000000 );
@@ -1517,7 +1874,7 @@ index 6707e6c..1594fc4 100644
                              }
                              if (bPixelToLogic)
                                  pEngine->SetPaperSize(pRefDevice->PixelToLogic(aPaperSize));
-@@ -2358,12 +2598,9 @@ void ScOutputData::DrawEdit(BOOL bPixelToLogic)
+@@ -2359,12 +2610,9 @@ void ScOutputData::DrawEdit(BOOL bPixelToLogic)
                              //	Fill the EditEngine (cell attributes and text)
                              //
  
@@ -1532,7 +1889,7 @@ index 6707e6c..1594fc4 100644
  
                              // syntax highlighting mode is ignored here
                              // StringDiffer doesn't look at hyphenate, language items
-@@ -2377,7 +2614,7 @@ void ScOutputData::DrawEdit(BOOL bPixelToLogic)
+@@ -2378,7 +2626,7 @@ void ScOutputData::DrawEdit(BOOL bPixelToLogic)
                                  pOldCondSet = pCondSet;
  
                                  ULONG nControl = pEngine->GetControlWord();
@@ -1541,7 +1898,7 @@ index 6707e6c..1594fc4 100644
                                      nControl |= EE_CNTRL_ONECHARPERLINE;
                                  else
                                      nControl &= ~EE_CNTRL_ONECHARPERLINE;
-@@ -2398,53 +2635,7 @@ void ScOutputData::DrawEdit(BOOL bPixelToLogic)
+@@ -2399,53 +2647,7 @@ void ScOutputData::DrawEdit(BOOL bPixelToLogic)
                                  pEngine->SetBackgroundColor( aBackCol );
                              }
  
@@ -1592,11 +1949,11 @@ index 6707e6c..1594fc4 100644
 -                                    }
 -                            }
 -                            pEngine->SetDefaultItem( SvxAdjustItem( eSvxAdjust, EE_PARA_JUST ) );
-+                            aAlignParam.setAlignmentItems(pEngine);
++                            aAlignParam.setAlignmentItems(pEngine, pCell);
  
                              //	Read content from cell
  
-@@ -2460,7 +2651,7 @@ void ScOutputData::DrawEdit(BOOL bPixelToLogic)
+@@ -2461,7 +2663,7 @@ void ScOutputData::DrawEdit(BOOL bPixelToLogic)
                                      {
                                          pEngine->SetText(*pData);
  
@@ -1605,7 +1962,7 @@ index 6707e6c..1594fc4 100644
                                          {
                                              //	Fields aren't wrapped, so clipping is enabled to prevent
                                              //	a field from being drawn beyond the cell size
-@@ -2501,49 +2692,33 @@ void ScOutputData::DrawEdit(BOOL bPixelToLogic)
+@@ -2502,53 +2704,36 @@ void ScOutputData::DrawEdit(BOOL bPixelToLogic)
                                  DBG_ERROR("pCell == NULL");
                              }
  
@@ -1657,11 +2014,16 @@ index 6707e6c..1594fc4 100644
                                      ShrinkEditEngine( *pEngine, aAreaParam.maAlignRect,
                                          nLeftM, nTopM, nRightM, nBottomM, bWidth,
 -                                        sal::static_int_cast<USHORT>(eOrient), 0, bPixelToLogic,
+-                                        nEngineWidth, nEngineHeight, nNeededPixel, 
 +                                        sal::static_int_cast<USHORT>(aAlignParam.meOrient), 0, bPixelToLogic,
-                                         nEngineWidth, nEngineHeight, nNeededPixel,
++                                        nEngineWidth, nEngineHeight, nNeededPixel,
                                          aAreaParam.mbLeftClip, aAreaParam.mbRightClip );
                                  }
-@@ -2588,7 +2763,7 @@ void ScOutputData::DrawEdit(BOOL bPixelToLogic)
+-
+                                 if ( bRepeat && !aAreaParam.mbLeftClip && !aAreaParam.mbRightClip && pEngine->GetParagraphCount() == 1 )
+                                 {
+                                     // First check if twice the space for the formatted text is available
+@@ -2589,7 +2774,7 @@ void ScOutputData::DrawEdit(BOOL bPixelToLogic)
                                      }
                                  }
  
@@ -1670,7 +2032,7 @@ index 6707e6c..1594fc4 100644
                                  {
                                      pEngine->SetText( String::CreateFromAscii(RTL_CONSTASCII_STRINGPARAM("###")) );
                                      nEngineWidth = (long) pEngine->CalcTextWidth();
-@@ -2601,7 +2776,7 @@ void ScOutputData::DrawEdit(BOOL bPixelToLogic)
+@@ -2602,7 +2787,7 @@ void ScOutputData::DrawEdit(BOOL bPixelToLogic)
                                      //	No clip marks if "###" doesn't fit (same as in DrawStrings)
                                  }
  
@@ -1679,7 +2041,7 @@ index 6707e6c..1594fc4 100644
                                  {
                                      aPaperSize.Width() = nNeededPixel + 1;
                                      if (bPixelToLogic)
-@@ -2617,13 +2792,15 @@ void ScOutputData::DrawEdit(BOOL bPixelToLogic)
+@@ -2618,13 +2803,15 @@ void ScOutputData::DrawEdit(BOOL bPixelToLogic)
                              long nOutWidth = nCellWidth - 1 - nLeftM - nRightM;
                              long nOutHeight = aAreaParam.maAlignRect.GetHeight() - nTopM - nBottomM;
  
@@ -1696,7 +2058,7 @@ index 6707e6c..1594fc4 100644
                              }
                              else
                              {
-@@ -2699,8 +2876,8 @@ void ScOutputData::DrawEdit(BOOL bPixelToLogic)
+@@ -2700,8 +2887,8 @@ void ScOutputData::DrawEdit(BOOL bPixelToLogic)
                                      //	Only with automatic line breaks, to avoid having to find
                                      //	the cells with the horizontal end of the text again.
                                      if ( nEngineHeight - aCellSize.Height() > 100 &&
@@ -1707,7 +2069,7 @@ index 6707e6c..1594fc4 100644
                                           ( pEngine->GetParagraphCount() > 1 || pEngine->GetLineCount(0) > 1 ) )
                                      {
                                          CellInfo* pClipMarkCell = NULL;
-@@ -2763,50 +2940,35 @@ void ScOutputData::DrawEdit(BOOL bPixelToLogic)
+@@ -2764,50 +2951,35 @@ void ScOutputData::DrawEdit(BOOL bPixelToLogic)
                                      aLogicStart = pRefDevice->PixelToLogic( Point(nStartX,nStartY) );
                                  else
                                      aLogicStart = Point(nStartX, nStartY);
@@ -1765,14 +2127,14 @@ index 6707e6c..1594fc4 100644
                                  {
                                      // vertical adjustment is within the EditEngine
                                      if (bPixelToLogic)
-@@ -2815,11 +2977,11 @@ void ScOutputData::DrawEdit(BOOL bPixelToLogic)
+@@ -2816,11 +2988,11 @@ void ScOutputData::DrawEdit(BOOL bPixelToLogic)
                                          aLogicStart.Y() += nTopM;
                                  }
  
 -                                if ( ( eOrient==SVX_ORIENTATION_STANDARD && !bAsianVertical ) ||
 -                                     eOrient==SVX_ORIENTATION_STACKED || !bBreak )
-+                                if ( ( aAlignParam.meOrient==SVX_ORIENTATION_STANDARD && !aAlignParam.mbAsianVertical ) ||
-+                                     aAlignParam.meOrient==SVX_ORIENTATION_STACKED || !aAlignParam.mbBreak )
++                                if (!aAlignParam.mbAsianVertical &&
++                                    (aAlignParam.meOrient == SVX_ORIENTATION_STANDARD || aAlignParam.meOrient == SVX_ORIENTATION_STACKED || !aAlignParam.mbBreak))
                                  {
 -                                    if (eVerJust==SVX_VER_JUSTIFY_BOTTOM ||
 -                                        eVerJust==SVX_VER_JUSTIFY_STANDARD)
@@ -1781,7 +2143,7 @@ index 6707e6c..1594fc4 100644
                                      {
                                          //!	if pRefDevice != pFmtDevice, keep heights in logic units,
                                          //! only converting margin?
-@@ -2832,7 +2994,7 @@ void ScOutputData::DrawEdit(BOOL bPixelToLogic)
+@@ -2833,7 +3005,7 @@ void ScOutputData::DrawEdit(BOOL bPixelToLogic)
                                          else
                                              aLogicStart.Y() += nTopM + aCellSize.Height() - nEngineHeight;
                                      }
@@ -1790,7 +2152,7 @@ index 6707e6c..1594fc4 100644
                                      {
                                          if (bPixelToLogic)
                                              aLogicStart.Y() += pRefDevice->PixelToLogic( Size(0, nTopM + (
-@@ -2854,19 +3016,20 @@ void ScOutputData::DrawEdit(BOOL bPixelToLogic)
+@@ -2855,19 +3027,20 @@ void ScOutputData::DrawEdit(BOOL bPixelToLogic)
                                  Point aURLStart = aLogicStart;      // copy before modifying for orientation
  
                                  short nOriVal = 0;
@@ -1817,7 +2179,7 @@ index 6707e6c..1594fc4 100644
                                  {
                                      Size aPaperLogic = pEngine->GetPaperSize();
                                      aPaperLogic.Width() = nEngineWidth;
-@@ -2889,7 +3052,7 @@ void ScOutputData::DrawEdit(BOOL bPixelToLogic)
+@@ -2890,7 +3063,7 @@ void ScOutputData::DrawEdit(BOOL bPixelToLogic)
                                  // bMoveClipped handling has been replaced by complete alignment
                                  // handling (also extending to the left).
  
@@ -1826,7 +2188,7 @@ index 6707e6c..1594fc4 100644
                                  {
                                      //	kein hartes Clipping, aber nur die betroffenen
                                      //	Zeilen ausgeben
-@@ -2900,7 +3063,7 @@ void ScOutputData::DrawEdit(BOOL bPixelToLogic)
+@@ -2901,7 +3074,7 @@ void ScOutputData::DrawEdit(BOOL bPixelToLogic)
                                  }
                                  else
                                  {
@@ -1835,7 +2197,7 @@ index 6707e6c..1594fc4 100644
                                      {
                                          //	with SetVertical, the start position is top left of
                                          //	the whole output area, not the text itself
-@@ -2924,17 +3087,17 @@ void ScOutputData::DrawEdit(BOOL bPixelToLogic)
+@@ -2925,17 +3098,17 @@ void ScOutputData::DrawEdit(BOOL bPixelToLogic)
                                  {
                                      long nURLWidth = (long) pEngine->CalcTextWidth();
                                      long nURLHeight = pEngine->GetTextHeight();
@@ -1857,6 +2219,27 @@ index 6707e6c..1594fc4 100644
                                          aURLStart.X() -= nURLWidth;
  
                                      Rectangle aURLRect( aURLStart, Size( nURLWidth, nURLHeight ) );
--- 
-1.7.0.1
-
+diff --git sc/source/ui/view/viewdata.cxx sc/source/ui/view/viewdata.cxx
+index 4cdb64e..65d96f9 100644
+--- sc/source/ui/view/viewdata.cxx
++++ sc/source/ui/view/viewdata.cxx
+@@ -45,6 +45,7 @@
+ #include <editeng/editstat.hxx>
+ #include <editeng/outliner.hxx>
+ #include <editeng/unolingu.hxx>
++#include <editeng/justifyitem.hxx>
+ 
+ #include <vcl/svapp.hxx>
+ #include <rtl/math.hxx>
+diff --git sc/source/ui/view/viewfunc.cxx sc/source/ui/view/viewfunc.cxx
+index 3384fd6..a6aa9b8 100644
+--- sc/source/ui/view/viewfunc.cxx
++++ sc/source/ui/view/viewfunc.cxx
+@@ -44,6 +44,7 @@
+ #include <editeng/editview.hxx>
+ #include <editeng/langitem.hxx>
+ #include <editeng/scripttypeitem.hxx>
++#include <editeng/justifyitem.hxx>
+ #include <sfx2/bindings.hxx>
+ #include <svl/zforlist.hxx>
+ #include <svl/zformat.hxx>

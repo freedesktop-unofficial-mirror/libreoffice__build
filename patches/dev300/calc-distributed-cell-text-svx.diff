@@ -1,783 +1,133 @@
-From 1f7f10133ccc53d97a3ee003d8d0897dbed964b2 Mon Sep 17 00:00:00 2001
-From: Jan Holesovsky <kendy@suse.cz>
-Date: Fri, 14 May 2010 17:08:01 +0200
-Subject: [PATCH 697/768] calc-distributed-cell-text-svx.diff
-
----
- cui/source/inc/align.hxx            |    3 +
- cui/source/tabpages/align.cxx       |  105 +++++++++++++++++++++++++-
- cui/source/tabpages/align.hrc       |   11 ++-
- cui/source/tabpages/align.src       |    3 +
- editeng/inc/editeng/eeitem.hxx      |   86 +++++++++++----------
- editeng/inc/editeng/svxenum.hxx     |    9 ++-
- editeng/source/editeng/editdoc.cxx  |   16 ++--
- editeng/source/editeng/eerdll.cxx   |   93 ++++++++++++-----------
- editeng/source/editeng/impedit.hxx  |    4 +
- editeng/source/editeng/impedit2.cxx |   15 ++++
- editeng/source/editeng/impedit3.cxx |   99 +++++++++++++++++++++---
- editeng/source/items/frmitems.cxx   |    2 -
- svx/inc/svx/algitem.hxx             |   27 +++++++
- svx/inc/svx/svxids.hrc              |    4 +-
- svx/inc/svx/svxitems.hrc            |    5 +-
- svx/source/items/algitem.cxx        |  143 +++++++++++++++++++++++++++++++----
- svx/source/items/makefile.mk        |    2 +-
- svx/source/items/rotmodit.cxx       |   36 ++++-----
- 18 files changed, 509 insertions(+), 154 deletions(-)
-
-diff --git cui/source/inc/align.hxx cui/source/inc/align.hxx
-index 84c3cd6..b585c0c 100644
---- cui/source/inc/align.hxx
-+++ cui/source/inc/align.hxx
-@@ -54,6 +54,7 @@ public:
-     static SfxTabPage*  Create( Window* pParent, const SfxItemSet& rAttrSet );
-     static USHORT*      GetRanges();
+diff --git svx/inc/svx/algitem.hxx svx/inc/svx/algitem.hxx
+index faf381d..2663c47 100644
+--- svx/inc/svx/algitem.hxx
++++ svx/inc/svx/algitem.hxx
+@@ -39,77 +39,6 @@ class SvStream;
  
-+    virtual BOOL        FillItemSet( SfxItemSet& rSet );
-     virtual void        Reset( const SfxItemSet& rSet );
-     virtual int         DeactivatePage( SfxItemSet* pSet );
-     virtual void        DataChanged( const DataChangedEvent& rDCEvt );
-@@ -64,6 +65,8 @@ private:
-     void                InitVsRefEgde();
-     void                UpdateEnableControls();
- 
-+    bool                HasAlignmentChanged( const SfxItemSet& rNew, USHORT nWhich ) const;
-+
-     DECL_LINK( UpdateEnableHdl, void* );
- 
- private:
-diff --git cui/source/tabpages/align.cxx cui/source/tabpages/align.cxx
-index 0735c11..c778f16 100644
---- cui/source/tabpages/align.cxx
-+++ cui/source/tabpages/align.cxx
-@@ -70,6 +70,7 @@ static const HorJustConnection::MapEntryType s_pHorJustMap[] =
-     { ALIGNDLG_HORALIGN_RIGHT,  SVX_HOR_JUSTIFY_RIGHT       },
-     { ALIGNDLG_HORALIGN_BLOCK,  SVX_HOR_JUSTIFY_BLOCK       },
-     { ALIGNDLG_HORALIGN_FILL,   SVX_HOR_JUSTIFY_REPEAT      },
-+    { ALIGNDLG_HORALIGN_DISTRIBUTED, SVX_HOR_JUSTIFY_BLOCK  },
-     { LISTBOX_ENTRY_NOTFOUND,   SVX_HOR_JUSTIFY_STANDARD    }
- };
- 
-@@ -84,6 +85,8 @@ static const VerJustConnection::MapEntryType s_pVerJustMap[] =
-     { ALIGNDLG_VERALIGN_TOP,    SVX_VER_JUSTIFY_TOP         },
-     { ALIGNDLG_VERALIGN_MID,    SVX_VER_JUSTIFY_CENTER      },
-     { ALIGNDLG_VERALIGN_BOTTOM, SVX_VER_JUSTIFY_BOTTOM      },
-+    { ALIGNDLG_VERALIGN_BLOCK,  SVX_VER_JUSTIFY_BLOCK       },
-+    { ALIGNDLG_VERALIGN_DISTRIBUTED, SVX_VER_JUSTIFY_BLOCK  },
-     { LISTBOX_ENTRY_NOTFOUND,   SVX_VER_JUSTIFY_STANDARD    }
- };
- 
-@@ -118,6 +121,48 @@ static USHORT s_pRanges[] =
- 
- // ============================================================================
- 
-+namespace {
-+
-+template<typename _JustContainerType, typename _JustEnumType>
-+void lcl_MaybeResetAlignToDistro(
-+    ListBox& rLB, USHORT nListPos, const SfxItemSet& rCoreAttrs, USHORT nWhichAlign, USHORT nWhichJM, _JustEnumType eBlock)
-+{
-+    const SfxPoolItem* pItem;
-+    if (rCoreAttrs.GetItemState(nWhichAlign, TRUE, &pItem) != SFX_ITEM_SET)
-+        // alignment not set.
-+        return;
-+
-+    const SfxEnumItem* p = static_cast<const SfxEnumItem*>(pItem);
-+    _JustContainerType eVal = static_cast<_JustContainerType>(p->GetEnumValue());
-+    if (eVal != eBlock)
-+        // alignment is not 'justify'.  No need to go further.
-+        return;
-+
-+    if (rCoreAttrs.GetItemState(nWhichJM, TRUE, &pItem) != SFX_ITEM_SET)
-+        // justification method is not set.
-+        return;
-+
-+    p = static_cast<const SfxEnumItem*>(pItem);
-+    SvxCellJustifyMethod eMethod = static_cast<SvxCellJustifyMethod>(p->GetEnumValue());
-+    if (eMethod == SVX_JUSTIFY_METHOD_DISTRIBUTE)
-+        // Select the 'distribute' entry in the specified list box.
-+        rLB.SelectEntryPos(nListPos);
-+}
-+
-+void lcl_SetJustifyMethodToItemSet(SfxItemSet& rSet, USHORT nWhichJM, const ListBox& rLB, USHORT nListPos)
-+{
-+    SvxCellJustifyMethod eJM = SVX_JUSTIFY_METHOD_AUTO;
-+    if (rLB.GetSelectEntryPos() == nListPos)
-+        eJM = SVX_JUSTIFY_METHOD_DISTRIBUTE;
-+
-+    SvxJustifyMethodItem aItem(eJM, nWhichJM);
-+    rSet.Put(aItem);
-+}
-+
-+}
-+
-+// ============================================================================
-+
- AlignmentTabPage::AlignmentTabPage( Window* pParent, const SfxItemSet& rCoreAttrs ) :
- 
-     SfxTabPage( pParent, CUI_RES( RID_SVXPAGE_ALIGNMENT ), rCoreAttrs ),
-@@ -213,9 +258,43 @@ USHORT* AlignmentTabPage::GetRanges()
-     return s_pRanges;
- }
- 
-+BOOL AlignmentTabPage::FillItemSet( SfxItemSet& rSet )
-+{
-+    bool bChanged = SfxTabPage::FillItemSet(rSet);
-+
-+    // Special treatment for distributed alignment; we need to set the justify
-+    // method to 'distribute' to distinguish from the normal justification.
-+
-+    USHORT nWhichHorJM = GetWhich(SID_ATTR_ALIGN_HOR_JUSTIFY_METHOD);
-+    lcl_SetJustifyMethodToItemSet(rSet, nWhichHorJM, maLbHorAlign, ALIGNDLG_HORALIGN_DISTRIBUTED);
-+    if (!bChanged)
-+        bChanged = HasAlignmentChanged(rSet, nWhichHorJM);
-+
-+    USHORT nWhichVerJM = GetWhich(SID_ATTR_ALIGN_VER_JUSTIFY_METHOD);
-+    lcl_SetJustifyMethodToItemSet(rSet, nWhichVerJM, maLbVerAlign, ALIGNDLG_VERALIGN_DISTRIBUTED);
-+    if (!bChanged)
-+        bChanged = HasAlignmentChanged(rSet, nWhichVerJM);
-+
-+    return bChanged;
-+}
-+
- void AlignmentTabPage::Reset( const SfxItemSet& rCoreAttrs )
- {
-     SfxTabPage::Reset( rCoreAttrs );
-+
-+    // Special treatment for distributed alignment; we need to set the justify
-+    // method to 'distribute' to distinguish from the normal justification.
-+
-+    lcl_MaybeResetAlignToDistro<SvxCellHorJustify, SvxCellHorJustify>(
-+        maLbHorAlign, ALIGNDLG_HORALIGN_DISTRIBUTED, rCoreAttrs,
-+        GetWhich(SID_ATTR_ALIGN_HOR_JUSTIFY), GetWhich(SID_ATTR_ALIGN_HOR_JUSTIFY_METHOD),
-+        SVX_HOR_JUSTIFY_BLOCK);
-+
-+    lcl_MaybeResetAlignToDistro<SvxCellVerJustify, SvxCellVerJustify>(
-+        maLbVerAlign, ALIGNDLG_VERALIGN_DISTRIBUTED, rCoreAttrs,
-+        GetWhich(SID_ATTR_ALIGN_VER_JUSTIFY), GetWhich(SID_ATTR_ALIGN_VER_JUSTIFY_METHOD),
-+        SVX_VER_JUSTIFY_BLOCK);
-+
-     UpdateEnableControls();
- }
- 
-@@ -264,6 +343,7 @@ void AlignmentTabPage::UpdateEnableControls()
-     bool bHorLeft  = (nHorAlign == ALIGNDLG_HORALIGN_LEFT);
-     bool bHorBlock = (nHorAlign == ALIGNDLG_HORALIGN_BLOCK);
-     bool bHorFill  = (nHorAlign == ALIGNDLG_HORALIGN_FILL);
-+    bool bHorDist  = (nHorAlign == ALIGNDLG_HORALIGN_DISTRIBUTED);
- 
-     // indent edit field only for left alignment
-     maFtIndent.Enable( bHorLeft );
-@@ -275,8 +355,8 @@ void AlignmentTabPage::UpdateEnableControls()
-     // hyphenation only for automatic line breaks or for block alignment
-     maBtnHyphen.Enable( maBtnWrap.IsChecked() || bHorBlock );
- 
--    // shrink only without automatic line break, and not for block and fill
--    maBtnShrink.Enable( (maBtnWrap.GetState() == STATE_NOCHECK) && !bHorBlock && !bHorFill );
-+    // shrink only without automatic line break, and not for block, fill or distribute.
-+    maBtnShrink.Enable( (maBtnWrap.GetState() == STATE_NOCHECK) && !bHorBlock && !bHorFill && !bHorDist );
- 
-     // visibility of fixed lines
-     maFlAlignment.Show( maLbHorAlign.IsVisible() || maEdIndent.IsVisible() || maLbVerAlign.IsVisible() );
-@@ -284,6 +364,27 @@ void AlignmentTabPage::UpdateEnableControls()
-     maFlProperties.Show( maBtnWrap.IsVisible() || maBtnHyphen.IsVisible() || maBtnShrink.IsVisible() || maLbFrameDir.IsVisible() );
- }
- 
-+bool AlignmentTabPage::HasAlignmentChanged( const SfxItemSet& rNew, USHORT nWhich ) const
-+{
-+    const SfxItemSet& rOld = GetItemSet();
-+    const SfxPoolItem* pItem;
-+    SvxCellJustifyMethod eMethodOld = SVX_JUSTIFY_METHOD_AUTO;
-+    SvxCellJustifyMethod eMethodNew = SVX_JUSTIFY_METHOD_AUTO;
-+    if (rOld.GetItemState(nWhich, TRUE, &pItem) == SFX_ITEM_SET)
-+    {
-+        const SfxEnumItem* p = static_cast<const SfxEnumItem*>(pItem);
-+        eMethodOld = static_cast<SvxCellJustifyMethod>(p->GetEnumValue());
-+    }
-+
-+    if (rNew.GetItemState(nWhich, TRUE, &pItem) == SFX_ITEM_SET)
-+    {
-+        const SfxEnumItem* p = static_cast<const SfxEnumItem*>(pItem);
-+        eMethodNew = static_cast<SvxCellJustifyMethod>(p->GetEnumValue());
-+    }
-+
-+    return eMethodOld != eMethodNew;
-+}
-+
- IMPL_LINK( AlignmentTabPage, UpdateEnableHdl, void*, EMPTYARG )
- {
-     UpdateEnableControls();
-diff --git cui/source/tabpages/align.hrc cui/source/tabpages/align.hrc
-index 1e17021..1a38c86 100644
---- cui/source/tabpages/align.hrc
-+++ cui/source/tabpages/align.hrc
-@@ -63,11 +63,14 @@
- #define ALIGNDLG_HORALIGN_RIGHT     3
- #define ALIGNDLG_HORALIGN_BLOCK     4
- #define ALIGNDLG_HORALIGN_FILL      5
-+#define ALIGNDLG_HORALIGN_DISTRIBUTED 6
- 
--#define ALIGNDLG_VERALIGN_STD       0
--#define ALIGNDLG_VERALIGN_TOP       1
--#define ALIGNDLG_VERALIGN_MID       2
--#define ALIGNDLG_VERALIGN_BOTTOM    3
-+#define ALIGNDLG_VERALIGN_STD         0
-+#define ALIGNDLG_VERALIGN_TOP         1
-+#define ALIGNDLG_VERALIGN_MID         2
-+#define ALIGNDLG_VERALIGN_BOTTOM      3
-+#define ALIGNDLG_VERALIGN_BLOCK       4
-+#define ALIGNDLG_VERALIGN_DISTRIBUTED 5
- 
- // image list for ValueSets:
- #define IL_LOCK_BMPS                1100
-diff --git cui/source/tabpages/align.src cui/source/tabpages/align.src
-index 50cc9dc..efe3631 100644
---- cui/source/tabpages/align.src
-+++ cui/source/tabpages/align.src
-@@ -70,6 +70,7 @@ TabPage RID_SVXPAGE_ALIGNMENT
-             < "Right" ; ALIGNDLG_HORALIGN_RIGHT ; > ;
-             < "Justified" ; ALIGNDLG_HORALIGN_BLOCK ; > ;
-             < "Filled" ; ALIGNDLG_HORALIGN_FILL ; > ;
-+            < "Distributed" ; ALIGNDLG_HORALIGN_DISTRIBUTED ; > ;
-         };
-     };
-     FixedText FT_INDENT
-@@ -109,6 +110,8 @@ TabPage RID_SVXPAGE_ALIGNMENT
-             < "Top" ; ALIGNDLG_VERALIGN_TOP ; > ;
-             < "Middle" ; ALIGNDLG_VERALIGN_MID ; > ;
-             < "Bottom" ; ALIGNDLG_VERALIGN_BOTTOM ; > ;
-+            < "Justified" ; ALIGNDLG_VERALIGN_BLOCK ; > ;
-+            < "Distributed" ; ALIGNDLG_VERALIGN_DISTRIBUTED ; > ;
-         };
-     };
-     FixedLine FL_ORIENTATION
-diff --git editeng/inc/editeng/eeitem.hxx editeng/inc/editeng/eeitem.hxx
-index 695ec8a..64729a5 100644
---- editeng/inc/editeng/eeitem.hxx
-+++ editeng/inc/editeng/eeitem.hxx
-@@ -30,7 +30,7 @@
- 
- #define EE_ITEMS_START				3989
- 
--// Absatzattribute:
-+// Paragraph attributes:
- #define EE_PARA_START				(EE_ITEMS_START+0)
- #define EE_PARA_WRITINGDIR          (EE_ITEMS_START+0)
- #define EE_PARA_XMLATTRIBS	        (EE_ITEMS_START+1)
-@@ -48,51 +48,53 @@
- #define	EE_PARA_SBL					(EE_ITEMS_START+13)
- #define EE_PARA_JUST				(EE_ITEMS_START+14)
- #define EE_PARA_TABS				(EE_ITEMS_START+15)
--#define EE_PARA_END					(EE_ITEMS_START+15)
-+#define EE_PARA_JUST_METHOD         (EE_ITEMS_START+16)
-+#define EE_PARA_VER_JUST            (EE_ITEMS_START+17)
-+#define EE_PARA_END                 (EE_ITEMS_START+17)
- 
--// Zeichenattribute:
--#define EE_CHAR_START				(EE_ITEMS_START+16)
--#define EE_CHAR_COLOR				(EE_ITEMS_START+16)
--#define EE_CHAR_FONTINFO			(EE_ITEMS_START+17)
--#define EE_CHAR_FONTHEIGHT			(EE_ITEMS_START+18)
--#define EE_CHAR_FONTWIDTH			(EE_ITEMS_START+19)
--#define EE_CHAR_WEIGHT				(EE_ITEMS_START+20)
--#define EE_CHAR_UNDERLINE			(EE_ITEMS_START+21)
--#define EE_CHAR_STRIKEOUT			(EE_ITEMS_START+22)
--#define EE_CHAR_ITALIC				(EE_ITEMS_START+23)
--#define EE_CHAR_OUTLINE				(EE_ITEMS_START+24)
--#define EE_CHAR_SHADOW				(EE_ITEMS_START+25)
--#define EE_CHAR_ESCAPEMENT			(EE_ITEMS_START+26)
--#define EE_CHAR_PAIRKERNING			(EE_ITEMS_START+27)
--#define EE_CHAR_KERNING				(EE_ITEMS_START+28)
--#define EE_CHAR_WLM					(EE_ITEMS_START+29)
--#define EE_CHAR_LANGUAGE			(EE_ITEMS_START+30)
--#define EE_CHAR_LANGUAGE_CJK		(EE_ITEMS_START+31)
--#define EE_CHAR_LANGUAGE_CTL		(EE_ITEMS_START+32)
--#define EE_CHAR_FONTINFO_CJK		(EE_ITEMS_START+33)
--#define EE_CHAR_FONTINFO_CTL		(EE_ITEMS_START+34)
--#define EE_CHAR_FONTHEIGHT_CJK		(EE_ITEMS_START+35)
--#define EE_CHAR_FONTHEIGHT_CTL		(EE_ITEMS_START+36)
--#define EE_CHAR_WEIGHT_CJK			(EE_ITEMS_START+37)
--#define EE_CHAR_WEIGHT_CTL			(EE_ITEMS_START+38)
--#define EE_CHAR_ITALIC_CJK			(EE_ITEMS_START+39)
--#define EE_CHAR_ITALIC_CTL			(EE_ITEMS_START+40)
--#define EE_CHAR_EMPHASISMARK		(EE_ITEMS_START+41)
--#define EE_CHAR_RELIEF				(EE_ITEMS_START+42)
--#define EE_CHAR_RUBI_DUMMY			(EE_ITEMS_START+43)
--#define EE_CHAR_XMLATTRIBS			(EE_ITEMS_START+44)
--#define EE_CHAR_OVERLINE			(EE_ITEMS_START+45)
--#define EE_CHAR_END					(EE_ITEMS_START+45)
-+// Character attributes:
-+#define EE_CHAR_START               (EE_ITEMS_START+18)
-+#define EE_CHAR_COLOR               (EE_ITEMS_START+18)
-+#define EE_CHAR_FONTINFO            (EE_ITEMS_START+19)
-+#define EE_CHAR_FONTHEIGHT          (EE_ITEMS_START+20)
-+#define EE_CHAR_FONTWIDTH           (EE_ITEMS_START+21)
-+#define EE_CHAR_WEIGHT              (EE_ITEMS_START+22)
-+#define EE_CHAR_UNDERLINE           (EE_ITEMS_START+23)
-+#define EE_CHAR_STRIKEOUT           (EE_ITEMS_START+24)
-+#define EE_CHAR_ITALIC              (EE_ITEMS_START+25)
-+#define EE_CHAR_OUTLINE             (EE_ITEMS_START+26)
-+#define EE_CHAR_SHADOW              (EE_ITEMS_START+27)
-+#define EE_CHAR_ESCAPEMENT          (EE_ITEMS_START+28)
-+#define EE_CHAR_PAIRKERNING         (EE_ITEMS_START+29)
-+#define EE_CHAR_KERNING             (EE_ITEMS_START+30)
-+#define EE_CHAR_WLM                 (EE_ITEMS_START+31)
-+#define EE_CHAR_LANGUAGE            (EE_ITEMS_START+32)
-+#define EE_CHAR_LANGUAGE_CJK        (EE_ITEMS_START+33)
-+#define EE_CHAR_LANGUAGE_CTL        (EE_ITEMS_START+34)
-+#define EE_CHAR_FONTINFO_CJK        (EE_ITEMS_START+35)
-+#define EE_CHAR_FONTINFO_CTL        (EE_ITEMS_START+36)
-+#define EE_CHAR_FONTHEIGHT_CJK      (EE_ITEMS_START+37)
-+#define EE_CHAR_FONTHEIGHT_CTL      (EE_ITEMS_START+38)
-+#define EE_CHAR_WEIGHT_CJK          (EE_ITEMS_START+39)
-+#define EE_CHAR_WEIGHT_CTL          (EE_ITEMS_START+40)
-+#define EE_CHAR_ITALIC_CJK          (EE_ITEMS_START+41)
-+#define EE_CHAR_ITALIC_CTL          (EE_ITEMS_START+42)
-+#define EE_CHAR_EMPHASISMARK        (EE_ITEMS_START+43)
-+#define EE_CHAR_RELIEF              (EE_ITEMS_START+44)
-+#define EE_CHAR_RUBI_DUMMY          (EE_ITEMS_START+45)
-+#define EE_CHAR_XMLATTRIBS          (EE_ITEMS_START+46)
-+#define EE_CHAR_OVERLINE            (EE_ITEMS_START+47)
-+#define EE_CHAR_END                 (EE_ITEMS_START+47)
- 
- 
--#define EE_FEATURE_START			(EE_ITEMS_START+46)
--#define EE_FEATURE_TAB				(EE_ITEMS_START+46)
--#define EE_FEATURE_LINEBR			(EE_ITEMS_START+47)
--#define EE_FEATURE_NOTCONV			(EE_ITEMS_START+48)
--#define EE_FEATURE_FIELD			(EE_ITEMS_START+49)
--#define EE_FEATURE_END				(EE_ITEMS_START+49)
-+#define EE_FEATURE_START            (EE_ITEMS_START+48)
-+#define EE_FEATURE_TAB              (EE_ITEMS_START+48)
-+#define EE_FEATURE_LINEBR           (EE_ITEMS_START+49)
-+#define EE_FEATURE_NOTCONV          (EE_ITEMS_START+50)
-+#define EE_FEATURE_FIELD            (EE_ITEMS_START+51)
-+#define EE_FEATURE_END              (EE_ITEMS_START+51)
- 
--#define EE_ITEMS_END				(EE_ITEMS_START+49)
-+#define EE_ITEMS_END                (EE_ITEMS_START+51)
- 
- #define EDITITEMCOUNT ( EE_ITEMS_END - EE_ITEMS_START + 1 )
- 
-diff --git editeng/inc/editeng/svxenum.hxx editeng/inc/editeng/svxenum.hxx
-index 245929d..ed04754 100644
---- editeng/inc/editeng/svxenum.hxx
-+++ editeng/inc/editeng/svxenum.hxx
-@@ -124,12 +124,19 @@ enum SvxCellHorJustify
-     SVX_HOR_JUSTIFY_REPEAT
- };
- 
-+enum SvxCellJustifyMethod
-+{
-+    SVX_JUSTIFY_METHOD_AUTO,
-+    SVX_JUSTIFY_METHOD_DISTRIBUTE
-+};
-+
- enum SvxCellVerJustify
- {
-     SVX_VER_JUSTIFY_STANDARD,
-     SVX_VER_JUSTIFY_TOP,
-     SVX_VER_JUSTIFY_CENTER,
--    SVX_VER_JUSTIFY_BOTTOM
-+    SVX_VER_JUSTIFY_BOTTOM,
-+    SVX_VER_JUSTIFY_BLOCK
- };
- 
- enum SvxCellOrientation
-diff --git editeng/source/editeng/editdoc.cxx editeng/source/editeng/editdoc.cxx
-index 7b34d93..8a3c366 100644
---- editeng/source/editeng/editdoc.cxx
-+++ editeng/source/editeng/editdoc.cxx
-@@ -178,13 +178,15 @@ SfxItemInfo aItemInfos[EDITITEMCOUNT] = {
-         { 0, SFX_ITEM_POOLABLE },							    // EE_PARA_HYPHENATE
-         { 0, SFX_ITEM_POOLABLE },							    // EE_PARA_BULLETSTATE
-         { 0, SFX_ITEM_POOLABLE },							    // EE_PARA_OUTLLRSPACE
--        { SID_ATTR_PARA_OUTLLEVEL, SFX_ITEM_POOLABLE },
--        { SID_ATTR_PARA_BULLET, SFX_ITEM_POOLABLE },
--        { SID_ATTR_LRSPACE, SFX_ITEM_POOLABLE },
--        { SID_ATTR_ULSPACE, SFX_ITEM_POOLABLE },
--        { SID_ATTR_PARA_LINESPACE, SFX_ITEM_POOLABLE },
--        { SID_ATTR_PARA_ADJUST, SFX_ITEM_POOLABLE },
--        { SID_ATTR_TABSTOP, SFX_ITEM_POOLABLE },
-+        { SID_ATTR_PARA_OUTLLEVEL, SFX_ITEM_POOLABLE },         // EE_PARA_OUTLLEVEL
-+        { SID_ATTR_PARA_BULLET, SFX_ITEM_POOLABLE },            // EE_PARA_BULLET
-+        { SID_ATTR_LRSPACE, SFX_ITEM_POOLABLE },                // EE_PARA_LRSPACE
-+        { SID_ATTR_ULSPACE, SFX_ITEM_POOLABLE },                // EE_PARA_ULSPACE
-+        { SID_ATTR_PARA_LINESPACE, SFX_ITEM_POOLABLE },         // EE_PARA_SBL
-+        { SID_ATTR_PARA_ADJUST, SFX_ITEM_POOLABLE },            // EE_PARA_JUST
-+        { SID_ATTR_TABSTOP, SFX_ITEM_POOLABLE },                // EE_PARA_TABS
-+        { SID_ATTR_ALIGN_HOR_JUSTIFY_METHOD, SFX_ITEM_POOLABLE }, // EE_PARA_JUST_METHOD
-+        { SID_ATTR_ALIGN_VER_JUSTIFY, SFX_ITEM_POOLABLE },      // EE_PARA_VER_JUST
-         { SID_ATTR_CHAR_COLOR, SFX_ITEM_POOLABLE },
-         { SID_ATTR_CHAR_FONT, SFX_ITEM_POOLABLE },
-         { SID_ATTR_CHAR_FONTHEIGHT, SFX_ITEM_POOLABLE },
-diff --git editeng/source/editeng/eerdll.cxx editeng/source/editeng/eerdll.cxx
-index fa1510a..c26ae20 100644
---- editeng/source/editeng/eerdll.cxx
-+++ editeng/source/editeng/eerdll.cxx
-@@ -73,6 +73,7 @@
- #include <editeng/frmdiritem.hxx>
- #include <editeng/xmlcnitm.hxx>
- #include <editeng/forbiddencharacterstable.hxx>
-+#include <svx/algitem.hxx>
- #include <comphelper/processfactory.hxx>
- 
- static EditDLL* pDLL=0;
-@@ -107,7 +108,7 @@ SfxPoolItem** GlobalEditData::GetDefItems()
-     {
-         ppDefItems = new SfxPoolItem*[EDITITEMCOUNT];
- 
--        // Absatzattribute:
-+        // Paragraph attributes:
-         SvxNumRule aTmpNumRule( 0, 0, FALSE );
- 
-         ppDefItems[0]  = new SvxFrameDirectionItem( FRMDIR_HORI_LEFT_TOP, EE_PARA_WRITINGDIR );
-@@ -120,57 +121,59 @@ SfxPoolItem** GlobalEditData::GetDefItems()
-         ppDefItems[7]  = new SfxBoolItem( EE_PARA_BULLETSTATE, TRUE );
-         ppDefItems[8]  = new SvxLRSpaceItem( EE_PARA_OUTLLRSPACE );
-         ppDefItems[9]  = new SfxInt16Item( EE_PARA_OUTLLEVEL, -1 );
--        ppDefItems[10]  = new SvxBulletItem( EE_PARA_BULLET );
--        ppDefItems[11]  = new SvxLRSpaceItem( EE_PARA_LRSPACE );
--        ppDefItems[12]  = new SvxULSpaceItem( EE_PARA_ULSPACE );
--        ppDefItems[13]  = new SvxLineSpacingItem( 0, EE_PARA_SBL );
--        ppDefItems[14]  = new SvxAdjustItem( SVX_ADJUST_LEFT, EE_PARA_JUST );
--        ppDefItems[15]  = new SvxTabStopItem( 0, 0, SVX_TAB_ADJUST_LEFT, EE_PARA_TABS );
--
--        // Zeichenattribute:
--        ppDefItems[16]  = new SvxColorItem( Color( COL_AUTO ), EE_CHAR_COLOR );
--        ppDefItems[17]  = new SvxFontItem( EE_CHAR_FONTINFO );
--        ppDefItems[18] = new SvxFontHeightItem( 240, 100, EE_CHAR_FONTHEIGHT );
--        ppDefItems[19] = new SvxCharScaleWidthItem( 100, EE_CHAR_FONTWIDTH );
--        ppDefItems[20] = new SvxWeightItem( WEIGHT_NORMAL, EE_CHAR_WEIGHT );
--        ppDefItems[21] = new SvxUnderlineItem( UNDERLINE_NONE, EE_CHAR_UNDERLINE );
--        ppDefItems[22] = new SvxCrossedOutItem( STRIKEOUT_NONE, EE_CHAR_STRIKEOUT );
--        ppDefItems[23] = new SvxPostureItem( ITALIC_NONE, EE_CHAR_ITALIC );
--        ppDefItems[24] = new SvxContourItem( FALSE, EE_CHAR_OUTLINE );
--        ppDefItems[25] = new SvxShadowedItem( FALSE, EE_CHAR_SHADOW );
--        ppDefItems[26] = new SvxEscapementItem( 0, 100, EE_CHAR_ESCAPEMENT );
--        ppDefItems[27] = new SvxAutoKernItem( FALSE, EE_CHAR_PAIRKERNING );
--        ppDefItems[28] = new SvxKerningItem( 0, EE_CHAR_KERNING );
--        ppDefItems[29] = new SvxWordLineModeItem( FALSE, EE_CHAR_WLM );
--        ppDefItems[30] = new SvxLanguageItem( LANGUAGE_DONTKNOW, EE_CHAR_LANGUAGE );
--        ppDefItems[31] = new SvxLanguageItem( LANGUAGE_DONTKNOW, EE_CHAR_LANGUAGE_CJK );
--        ppDefItems[32] = new SvxLanguageItem( LANGUAGE_DONTKNOW, EE_CHAR_LANGUAGE_CTL );
--        ppDefItems[33] = new SvxFontItem( EE_CHAR_FONTINFO_CJK );
--        ppDefItems[34] = new SvxFontItem( EE_CHAR_FONTINFO_CTL );
--        ppDefItems[35] = new SvxFontHeightItem( 240, 100, EE_CHAR_FONTHEIGHT_CJK );
--        ppDefItems[36] = new SvxFontHeightItem( 240, 100, EE_CHAR_FONTHEIGHT_CTL );
--        ppDefItems[37] = new SvxWeightItem( WEIGHT_NORMAL, EE_CHAR_WEIGHT_CJK );
--         ppDefItems[38] = new SvxWeightItem( WEIGHT_NORMAL, EE_CHAR_WEIGHT_CTL );
--        ppDefItems[39] = new SvxPostureItem( ITALIC_NONE, EE_CHAR_ITALIC_CJK );
--        ppDefItems[40] = new SvxPostureItem( ITALIC_NONE, EE_CHAR_ITALIC_CTL );
--        ppDefItems[41] = new SvxEmphasisMarkItem( EMPHASISMARK_NONE, EE_CHAR_EMPHASISMARK );
--        ppDefItems[42] = new SvxCharReliefItem( RELIEF_NONE, EE_CHAR_RELIEF );
--        ppDefItems[43] = new SfxVoidItem( EE_CHAR_RUBI_DUMMY );
-+        ppDefItems[10] = new SvxBulletItem( EE_PARA_BULLET );
-+        ppDefItems[11] = new SvxLRSpaceItem( EE_PARA_LRSPACE );
-+        ppDefItems[12] = new SvxULSpaceItem( EE_PARA_ULSPACE );
-+        ppDefItems[13] = new SvxLineSpacingItem( 0, EE_PARA_SBL );
-+        ppDefItems[14] = new SvxAdjustItem( SVX_ADJUST_LEFT, EE_PARA_JUST );
-+        ppDefItems[15] = new SvxTabStopItem( 0, 0, SVX_TAB_ADJUST_LEFT, EE_PARA_TABS );
-+        ppDefItems[16] = new SvxJustifyMethodItem( SVX_JUSTIFY_METHOD_AUTO, EE_PARA_JUST_METHOD );
-+        ppDefItems[17] = new SvxVerJustifyItem( SVX_VER_JUSTIFY_STANDARD, EE_PARA_VER_JUST );
-+
-+        // Character attributes:
-+        ppDefItems[18] = new SvxColorItem( Color( COL_AUTO ), EE_CHAR_COLOR );
-+        ppDefItems[19] = new SvxFontItem( EE_CHAR_FONTINFO );
-+        ppDefItems[20] = new SvxFontHeightItem( 240, 100, EE_CHAR_FONTHEIGHT );
-+        ppDefItems[21] = new SvxCharScaleWidthItem( 100, EE_CHAR_FONTWIDTH );
-+        ppDefItems[22] = new SvxWeightItem( WEIGHT_NORMAL, EE_CHAR_WEIGHT );
-+        ppDefItems[23] = new SvxUnderlineItem( UNDERLINE_NONE, EE_CHAR_UNDERLINE );
-+        ppDefItems[24] = new SvxCrossedOutItem( STRIKEOUT_NONE, EE_CHAR_STRIKEOUT );
-+        ppDefItems[25] = new SvxPostureItem( ITALIC_NONE, EE_CHAR_ITALIC );
-+        ppDefItems[26] = new SvxContourItem( FALSE, EE_CHAR_OUTLINE );
-+        ppDefItems[27] = new SvxShadowedItem( FALSE, EE_CHAR_SHADOW );
-+        ppDefItems[28] = new SvxEscapementItem( 0, 100, EE_CHAR_ESCAPEMENT );
-+        ppDefItems[29] = new SvxAutoKernItem( FALSE, EE_CHAR_PAIRKERNING );
-+        ppDefItems[30] = new SvxKerningItem( 0, EE_CHAR_KERNING );
-+        ppDefItems[31] = new SvxWordLineModeItem( FALSE, EE_CHAR_WLM );
-+        ppDefItems[32] = new SvxLanguageItem( LANGUAGE_DONTKNOW, EE_CHAR_LANGUAGE );
-+        ppDefItems[33] = new SvxLanguageItem( LANGUAGE_DONTKNOW, EE_CHAR_LANGUAGE_CJK );
-+        ppDefItems[34] = new SvxLanguageItem( LANGUAGE_DONTKNOW, EE_CHAR_LANGUAGE_CTL );
-+        ppDefItems[35] = new SvxFontItem( EE_CHAR_FONTINFO_CJK );
-+        ppDefItems[36] = new SvxFontItem( EE_CHAR_FONTINFO_CTL );
-+        ppDefItems[37] = new SvxFontHeightItem( 240, 100, EE_CHAR_FONTHEIGHT_CJK );
-+        ppDefItems[38] = new SvxFontHeightItem( 240, 100, EE_CHAR_FONTHEIGHT_CTL );
-+        ppDefItems[39] = new SvxWeightItem( WEIGHT_NORMAL, EE_CHAR_WEIGHT_CJK );
-+        ppDefItems[40] = new SvxWeightItem( WEIGHT_NORMAL, EE_CHAR_WEIGHT_CTL );
-+        ppDefItems[41] = new SvxPostureItem( ITALIC_NONE, EE_CHAR_ITALIC_CJK );
-+        ppDefItems[42] = new SvxPostureItem( ITALIC_NONE, EE_CHAR_ITALIC_CTL );
-+        ppDefItems[43] = new SvxEmphasisMarkItem( EMPHASISMARK_NONE, EE_CHAR_EMPHASISMARK );
-+        ppDefItems[44] = new SvxCharReliefItem( RELIEF_NONE, EE_CHAR_RELIEF );
-+        ppDefItems[45] = new SfxVoidItem( EE_CHAR_RUBI_DUMMY );
- #ifndef SVX_LIGHT
--        ppDefItems[44] = new SvXMLAttrContainerItem( EE_CHAR_XMLATTRIBS );
-+        ppDefItems[46] = new SvXMLAttrContainerItem( EE_CHAR_XMLATTRIBS );
- #else
-         // no need to have alien attributes persistent
--        ppDefItems[44] = new SfxVoidItem( EE_CHAR_XMLATTRIBS );
-+        ppDefItems[46] = new SfxVoidItem( EE_CHAR_XMLATTRIBS );
- #endif // #ifndef SVX_LIGHT
--        ppDefItems[45] = new SvxOverlineItem( UNDERLINE_NONE, EE_CHAR_OVERLINE );
-+        ppDefItems[47] = new SvxOverlineItem( UNDERLINE_NONE, EE_CHAR_OVERLINE );
- 
-         // Features
--        ppDefItems[46] = new SfxVoidItem( EE_FEATURE_TAB );
--        ppDefItems[47] = new SfxVoidItem( EE_FEATURE_LINEBR );
--        ppDefItems[48] = new SvxCharSetColorItem( Color( COL_RED ), RTL_TEXTENCODING_DONTKNOW, EE_FEATURE_NOTCONV );
--        ppDefItems[49] = new SvxFieldItem( SvxFieldData(), EE_FEATURE_FIELD );
-+        ppDefItems[48] = new SfxVoidItem( EE_FEATURE_TAB );
-+        ppDefItems[49] = new SfxVoidItem( EE_FEATURE_LINEBR );
-+        ppDefItems[50] = new SvxCharSetColorItem( Color( COL_RED ), RTL_TEXTENCODING_DONTKNOW, EE_FEATURE_NOTCONV );
-+        ppDefItems[51] = new SvxFieldItem( SvxFieldData(), EE_FEATURE_FIELD );
- 
--        DBG_ASSERT( EDITITEMCOUNT == 50, "ITEMCOUNT geaendert, DefItems nicht angepasst!" );
-+        DBG_ASSERT( EDITITEMCOUNT == 52, "ITEMCOUNT geaendert, DefItems nicht angepasst!" );
- 
-         // Init DefFonts:
-         GetDefaultFonts( *(SvxFontItem*)ppDefItems[EE_CHAR_FONTINFO - EE_ITEMS_START],
-diff --git editeng/source/editeng/impedit.hxx editeng/source/editeng/impedit.hxx
-index 2be88db..e139fa9 100644
---- editeng/source/editeng/impedit.hxx
-+++ editeng/source/editeng/impedit.hxx
-@@ -664,6 +664,8 @@ private:
-     void				SetBackgroundColor( const Color& rColor ) { maBackgroundColor = rColor; }
-     Color				GetBackgroundColor() const { return maBackgroundColor; }
- 
-+    long                CalcVertLineSpacing(Point& rStartPos) const;
-+
-     Color				GetAutoColor() const;
-     void                EnableAutoColor( BOOL b ) { bUseAutoColor = b; }
-     BOOL                IsAutoColorEnabled() const { return bUseAutoColor; }
-@@ -984,6 +986,8 @@ public:
- 
-     const SvxLRSpaceItem&	GetLRSpaceItem( ContentNode* pNode );
-     SvxAdjust               GetJustification( USHORT nPara ) const;
-+    SvxCellJustifyMethod    GetJustifyMethod( USHORT nPara ) const;
-+    SvxCellVerJustify       GetVerJustification( USHORT nPara ) const;
- 
-     void				SetCharStretching( sal_uInt16 nX, sal_uInt16 nY );
-     inline void			GetCharStretching( sal_uInt16& rX, sal_uInt16& rY );
-diff --git editeng/source/editeng/impedit2.cxx editeng/source/editeng/impedit2.cxx
-index b57c6fe..fe964ee 100644
---- editeng/source/editeng/impedit2.cxx
-+++ editeng/source/editeng/impedit2.cxx
-@@ -58,6 +58,7 @@
- #include <editeng/scripttypeitem.hxx>
- #include <editeng/frmdiritem.hxx>
- #include <editeng/fontitem.hxx>
-+#include <svx/algitem.hxx>
- #include <vcl/cmdevt.h>
- 
- #include <com/sun/star/i18n/CharacterIteratorMode.hpp>
-@@ -2136,6 +2137,20 @@ SvxAdjust ImpEditEngine::GetJustification( USHORT nPara ) const
-     return eJustification;
- }
- 
-+SvxCellJustifyMethod ImpEditEngine::GetJustifyMethod( USHORT nPara ) const
-+{
-+    const SvxJustifyMethodItem& rItem = static_cast<const SvxJustifyMethodItem&>(
-+        GetParaAttrib(nPara, EE_PARA_JUST_METHOD));
-+    return static_cast<SvxCellJustifyMethod>(rItem.GetEnumValue());
-+}
-+
-+SvxCellVerJustify ImpEditEngine::GetVerJustification( USHORT nPara ) const
-+{
-+    const SvxVerJustifyItem& rItem = static_cast<const SvxVerJustifyItem&>(
-+        GetParaAttrib(nPara, EE_PARA_VER_JUST));
-+    return static_cast<SvxCellVerJustify>(rItem.GetEnumValue());
-+}
-+
- 
- //	----------------------------------------------------------------------
- //	Textaenderung
-diff --git editeng/source/editeng/impedit3.cxx editeng/source/editeng/impedit3.cxx
-index 2c2be37..77f60e9 100644
---- editeng/source/editeng/impedit3.cxx
-+++ editeng/source/editeng/impedit3.cxx
-@@ -61,6 +61,7 @@
- #include <editeng/scriptspaceitem.hxx>
- #include <editeng/charscaleitem.hxx>
- #include <editeng/numitem.hxx>
-+#include <svx/algitem.hxx>
- 
- #include <svtools/colorcfg.hxx>
- #include <svl/ctloptions.hxx>
-@@ -1434,9 +1435,10 @@ sal_Bool ImpEditEngine::CreateLines( USHORT nPara, sal_uInt32 nStartPosY )
-             break;
-             case SVX_ADJUST_BLOCK:
-             {
-+                bool bDistLastLine = (GetJustifyMethod(nPara) == SVX_JUSTIFY_METHOD_DISTRIBUTE);
-                 long nRemainingSpace = nMaxLineWidth - aTextSize.Width();
-                 pLine->SetStartPosX( (sal_uInt16)nStartX );
--                if ( !bEOC && ( nRemainingSpace > 0 ) ) // nicht die letzte Zeile...
-+                if ( nRemainingSpace > 0 && (!bEOC || bDistLastLine) )
-                     ImpAdjustBlocks( pParaPortion, pLine, nRemainingSpace );
-             }
-             break;
-@@ -2018,22 +2020,42 @@ void ImpEditEngine::ImpAdjustBlocks( ParaPortion* pParaPortion, EditLine* pLine,
- 
-     // Search blanks or Kashidas...
-     SvUShorts aPositions;
--    USHORT nChar;
--    for ( nChar = nFirstChar; nChar <= nLastChar; nChar++ )
-+    USHORT nLastScript = i18n::ScriptType::LATIN;
-+    for ( USHORT nChar = nFirstChar; nChar <= nLastChar; nChar++ )
-     {
-+        EditPaM aPaM( pNode, nChar+1 );
-+        LanguageType eLang = GetLanguage(aPaM);
-+        USHORT nScript = GetScriptType(aPaM);
-+        if ( MsLangId::getPrimaryLanguage( eLang) == LANGUAGE_ARABIC_PRIMARY_ONLY )
-+            // Arabic script is handled later.
-+            continue;
-+
-         if ( pNode->GetChar(nChar) == ' ' )
-         {
--            // Don't use blank if language is arabic
--            LanguageType eLang = GetLanguage( EditPaM( pNode, nChar ) );
--            if ( MsLangId::getPrimaryLanguage( eLang) != LANGUAGE_ARABIC_PRIMARY_ONLY )
--                aPositions.Insert( nChar, aPositions.Count() );
-+            // Normal latin script.
-+            aPositions.Insert( nChar, aPositions.Count() );
-+        }
-+        else if (nChar > nFirstChar)
-+        {
-+            if (nLastScript == i18n::ScriptType::ASIAN)
-+            {
-+                // Set break position between this and the last character if
-+                // the last character is asian script.
-+                aPositions.Insert( nChar-1, aPositions.Count() );
-+            }
-+            else if (nScript == i18n::ScriptType::ASIAN)
-+            {
-+                // Set break position between a latin script and asian script.
-+                aPositions.Insert( nChar-1, aPositions.Count() );
-+            }
-         }
-+
-+        nLastScript = nScript;
-     }
- 
-     // Kashidas ?
-     ImpFindKashidas( pNode, nFirstChar, nLastChar, aPositions );
+ //------------------------------------------------------------------------
  
 -
-     if ( !aPositions.Count() )
-         return;
- 
-@@ -2073,12 +2095,13 @@ void ImpEditEngine::ImpAdjustBlocks( ParaPortion* pParaPortion, EditLine* pLine,
-     // Letztes Zeichen wird schon nicht mehr beachtet...
-     for ( USHORT n = 0; n < aPositions.Count(); n++ )
-     {
--        nChar = aPositions[n];
-+        USHORT nChar = aPositions[n];
-         if ( nChar < nLastChar )
-         {
-             USHORT nPortionStart, nPortion;
--            nPortion = pParaPortion->GetTextPortions().FindPortion( nChar, nPortionStart );
-+            nPortion = pParaPortion->GetTextPortions().FindPortion( nChar, nPortionStart, true );
-             TextPortion* pLastPortion = pParaPortion->GetTextPortions()[ nPortion ];
-+            USHORT nPortionEnd = nPortionStart + pLastPortion->GetLen();
- 
-             // Die Breite der Portion:
-             pLastPortion->GetSize().Width() += nMore4Everyone;
-@@ -2087,7 +2110,7 @@ void ImpEditEngine::ImpAdjustBlocks( ParaPortion* pParaPortion, EditLine* pLine,
- 
-             // Correct positions in array
-             // Even for kashidas just change positions, VCL will then draw the kashida automaticly
--            USHORT nPortionEnd = nPortionStart + pLastPortion->GetLen();
-+
-             for ( USHORT _n = nChar; _n < nPortionEnd; _n++ )
-             {
-                 pLine->GetCharPosArray()[_n-nFirstChar] += nMore4Everyone;
-@@ -2890,6 +2913,8 @@ void ImpEditEngine::Paint( OutputDevice* pOutDev, Rectangle aClipRec, Point aSta
- //	if( GetStatus().DoOnlineSpelling() && pActiveView )
- //		aCurPos = pActiveView->pImpEditView->GetEditSelections().Max();
- 
-+    long nVertLineSpacing = CalcVertLineSpacing(aStartPos);
-+
-     // --------------------------------------------------
-     // Ueber alle Absaetze...
-     // --------------------------------------------------
-@@ -2938,12 +2963,16 @@ void ImpEditEngine::Paint( OutputDevice* pOutDev, Rectangle aClipRec, Point aSta
-                     aTmpPos.X() += pLine->GetStartPosX();
-                     aTmpPos.Y() += pLine->GetMaxAscent();
-                     aStartPos.Y() += pLine->GetHeight();
-+                    if (nLine != nLastLine)
-+                        aStartPos.Y() += nVertLineSpacing;
-                 }
-                 else
-                 {
-                     aTmpPos.Y() += pLine->GetStartPosX();
-                     aTmpPos.X() -= pLine->GetMaxAscent();
-                     aStartPos.X() -= pLine->GetHeight();
-+                    if (nLine != nLastLine)
-+                        aStartPos.X() -= nVertLineSpacing;
-                 }
- 
-                 if ( ( !IsVertical() && ( aStartPos.Y() > aClipRec.Top() ) )
-@@ -4026,6 +4055,54 @@ ParaPortion* ImpEditEngine::GetNextVisPortion( ParaPortion* pCurPortion )
-     return pPortion;
- }
- 
-+long ImpEditEngine::CalcVertLineSpacing(Point& rStartPos) const
-+{
-+    long nTotalOccupiedHeight = 0;
-+    sal_uInt16 nTotalLineCount = 0;
-+    const ParaPortionList& rParaPortions = GetParaPortions();
-+    sal_uInt16 nParaCount = rParaPortions.Count();
-+
-+    for (sal_uInt16 i = 0; i < nParaCount; ++i)
-+    {
-+        if (GetVerJustification(i) != SVX_VER_JUSTIFY_BLOCK)
-+            // All paragraphs must have the block justification set.
-+            return 0;
-+
-+        ParaPortion* pPortion = rParaPortions.GetObject(i);
-+        nTotalOccupiedHeight += pPortion->GetFirstLineOffset();
-+
-+        const SvxLineSpacingItem& rLSItem = (const SvxLineSpacingItem&)pPortion->GetNode()->GetContentAttribs().GetItem(EE_PARA_SBL);
-+        sal_uInt16 nSBL = ( rLSItem.GetInterLineSpaceRule() == SVX_INTER_LINE_SPACE_FIX )
-+                            ? GetYValue( rLSItem.GetInterLineSpace() ) : 0;
-+
-+        const SvxULSpaceItem& rULItem = (const SvxULSpaceItem&)pPortion->GetNode()->GetContentAttribs().GetItem(EE_PARA_ULSPACE);
-+        long nUL = GetYValue( rULItem.GetLower() );
-+
-+        EditLineList& rLines = pPortion->GetLines();
-+        sal_uInt16 nLineCount = rLines.Count();
-+        nTotalLineCount += nLineCount;
-+        for (sal_uInt16 j = 0; j < nLineCount; ++j)
-+        {
-+            EditLine* pLine = rLines.GetObject(j);
-+            nTotalOccupiedHeight += pLine->GetHeight();
-+            if (j < nLineCount-1)
-+                nTotalOccupiedHeight += nSBL;
-+            nTotalOccupiedHeight += nUL;
-+        }
-+    }
-+
-+    long nTotalSpace = IsVertical() ? aPaperSize.Width() : aPaperSize.Height();
-+    nTotalSpace -= nTotalOccupiedHeight;
-+    if (nTotalSpace <= 0 || nTotalLineCount <= 1)
-+        return 0;
-+
-+    if (IsVertical())
-+        // Shift the text to the right for the asian layout mode.
-+        rStartPos.X() += nTotalSpace;
-+
-+    return nTotalSpace / (nTotalLineCount-1);
-+}
-+
- EditPaM ImpEditEngine::InsertParagraph( sal_uInt16 nPara )
+-
+-class SVX_DLLPUBLIC SvxHorJustifyItem: public SfxEnumItem
+-{
+-public:
+-    TYPEINFO();
+-
+-    SvxHorJustifyItem( const USHORT nId );
+-
+-    SvxHorJustifyItem(
+-        const SvxCellHorJustify eJustify /*= SVX_HOR_JUSTIFY_STANDARD*/,
+-        const USHORT nId );
+-
+-    virtual SfxItemPresentation GetPresentation( SfxItemPresentation ePres,
+-                                    SfxMapUnit eCoreMetric,
+-                                    SfxMapUnit ePresMetric,
+-                                    String &rText, const IntlWrapper * = 0 ) const;
+-
+-    virtual	sal_Bool        	 QueryValue( com::sun::star::uno::Any& rVal, BYTE nMemberId = 0 ) const;
+-    virtual	sal_Bool			 PutValue( const com::sun::star::uno::Any& rVal, BYTE nMemberId = 0 );
+-
+-    virtual USHORT          GetValueCount() const;
+-    virtual String          GetValueText( USHORT nVal ) const;
+-    virtual SfxPoolItem*    Clone( SfxItemPool *pPool = 0 ) const;
+-    virtual SfxPoolItem*    Create( SvStream& rStream, USHORT nVer ) const;
+-
+-    inline  SvxHorJustifyItem& operator=(const SvxHorJustifyItem& rHorJustify)
+-            {
+-                SetValue( rHorJustify.GetValue() );
+-                return *this;
+-            }
+-};
+-
+-
+-//------------------------------------------------------------------------
+-
+-
+-class SVX_DLLPUBLIC SvxVerJustifyItem: public SfxEnumItem
+-{
+-public:
+-    TYPEINFO();
+-
+-    SvxVerJustifyItem( const USHORT nId  );
+-
+-    SvxVerJustifyItem(
+-        const SvxCellVerJustify eJustify /*= SVX_VER_JUSTIFY_STANDARD*/,
+-        const USHORT nId  );
+-
+-    virtual SfxItemPresentation GetPresentation( SfxItemPresentation ePres,
+-                                    SfxMapUnit eCoreMetric,
+-                                    SfxMapUnit ePresMetric,
+-                                    String &rText, const IntlWrapper * = 0 ) const;
+-
+-    virtual	sal_Bool        	 QueryValue( com::sun::star::uno::Any& rVal, BYTE nMemberId = 0 ) const;
+-    virtual	sal_Bool			 PutValue( const com::sun::star::uno::Any& rVal, BYTE nMemberId = 0 );
+-
+-    virtual USHORT          GetValueCount() const;
+-    virtual String          GetValueText( USHORT nVal ) const;
+-    virtual SfxPoolItem*    Clone( SfxItemPool *pPool = 0 ) const;
+-    virtual SfxPoolItem*    Create( SvStream& rStream, USHORT nVer ) const;
+-
+-    inline  SvxVerJustifyItem& operator=(const SvxVerJustifyItem& rVerJustify)
+-            {
+-                SetValue( rVerJustify.GetValue() );
+-                return *this;
+-            }
+-};
+-
+-
+-//------------------------------------------------------------------------
+-
+ class SVX_DLLPUBLIC SvxOrientationItem: public SfxEnumItem
  {
-     EditPaM aPaM;
-diff --git editeng/source/items/frmitems.cxx editeng/source/items/frmitems.cxx
-index a7cc6bd..00a7cfb 100644
---- editeng/source/items/frmitems.cxx
-+++ editeng/source/items/frmitems.cxx
-@@ -32,14 +32,12 @@
- #include <com/sun/star/uno/Any.hxx>
- #include <com/sun/star/script/XTypeConverter.hpp>
- #include <com/sun/star/lang/XMultiServiceFactory.hpp>
+ public:
+diff --git svx/inc/svx/svxids.hrc svx/inc/svx/svxids.hrc
+index 665ee7f..7f61d83 100644
+--- svx/inc/svx/svxids.hrc
++++ svx/inc/svx/svxids.hrc
+@@ -587,8 +587,8 @@
+ #define SID_ATTR_POSITION                               ( SID_SVX_START + 223 )
+ #define SID_ATTR_SIZE                                   ( SID_SVX_START + 224 )
+ #define SID_TABLE_CELL                                  ( SID_SVX_START + 225 )
+-#define SID_ATTR_ALIGN_HOR_JUSTIFY                      ( SID_SVX_START + 226 )
+-#define SID_ATTR_ALIGN_VER_JUSTIFY                      ( SID_SVX_START + 227 )
++//#define SID_ATTR_ALIGN_HOR_JUSTIFY                      ( SID_SVX_START + 226 )
++//#define SID_ATTR_ALIGN_VER_JUSTIFY                      ( SID_SVX_START + 227 )
+ #define SID_ATTR_ALIGN_MARGIN                           ( SID_SVX_START + 228 )
+ #define SID_ATTR_ALIGN_STACKED                          ( SID_SVX_START + 229 )
+ #define SID_ATTR_ALIGN_LINEBREAK                        ( SID_SVX_START + 230 )
+diff --git svx/inc/svx/svxitems.hrc svx/inc/svx/svxitems.hrc
+index 1909e2d..8a1a2cd 100644
+--- svx/inc/svx/svxitems.hrc
++++ svx/inc/svx/svxitems.hrc
+@@ -104,20 +104,6 @@
+ #define RID_SVXITEMS_CHARSET_SYSTEM			(RID_SVXITEMS_START + 154)
+ #define RID_SVXITEMS_CHARSET_SYMBOL			(RID_SVXITEMS_START + 155)
+ 
+-// enum SvxCellHorJustify
+-#define RID_SVXITEMS_HORJUST_STANDARD		(RID_SVXITEMS_START + 400)
+-#define RID_SVXITEMS_HORJUST_LEFT			(RID_SVXITEMS_START + 401)
+-#define RID_SVXITEMS_HORJUST_CENTER			(RID_SVXITEMS_START + 402)
+-#define RID_SVXITEMS_HORJUST_RIGHT			(RID_SVXITEMS_START + 403)
+-#define RID_SVXITEMS_HORJUST_BLOCK			(RID_SVXITEMS_START + 404)
+-#define RID_SVXITEMS_HORJUST_REPEAT			(RID_SVXITEMS_START + 405)
+-
+-// enum SvxCellVerJustify
+-#define RID_SVXITEMS_VERJUST_STANDARD		(RID_SVXITEMS_START + 406)
+-#define RID_SVXITEMS_VERJUST_TOP			(RID_SVXITEMS_START + 407)
+-#define RID_SVXITEMS_VERJUST_CENTER			(RID_SVXITEMS_START + 408)
+-#define RID_SVXITEMS_VERJUST_BOTTOM			(RID_SVXITEMS_START + 409)
+-
+ // enum SvxCellOrientation
+ #define RID_SVXITEMS_ORI_STANDARD			(RID_SVXITEMS_START + 410)
+ #define RID_SVXITEMS_ORI_TOPBOTTOM			(RID_SVXITEMS_START + 411)
+diff --git svx/source/items/algitem.cxx svx/source/items/algitem.cxx
+index ac96e23..a8551cc 100644
+--- svx/source/items/algitem.cxx
++++ svx/source/items/algitem.cxx
+@@ -33,16 +33,12 @@
+ 
+ #include <tools/stream.hxx>
+ #include <com/sun/star/table/BorderLine.hpp>
 -#include <com/sun/star/table/CellVertJustify.hpp>
  #include <com/sun/star/table/ShadowLocation.hpp>
  #include <com/sun/star/table/TableBorder.hpp>
@@ -786,266 +136,343 @@ index a7cc6bd..00a7cfb 100644
  #include <com/sun/star/table/CellContentType.hpp>
  #include <com/sun/star/table/TableOrientation.hpp>
 -#include <com/sun/star/table/CellHoriJustify.hpp>
+-#include <com/sun/star/style/ParagraphAdjust.hpp>
+-#include "com/sun/star/style/VerticalAlignment.hpp"
  #include <com/sun/star/util/SortField.hpp>
  #include <com/sun/star/util/SortFieldType.hpp>
  #include <com/sun/star/table/CellOrientation.hpp>
-diff --git svx/inc/svx/algitem.hxx svx/inc/svx/algitem.hxx
-index faf381d..2196c62 100644
---- svx/inc/svx/algitem.hxx
-+++ svx/inc/svx/algitem.hxx
-@@ -107,6 +107,33 @@ public:
-             }
- };
+@@ -63,334 +59,9 @@ using namespace ::com::sun::star;
+ // STATIC DATA -----------------------------------------------------------
  
-+//------------------------------------------------------------------------
-+
-+class SVX_DLLPUBLIC SvxJustifyMethodItem: public SfxEnumItem
-+{
-+public:
-+    SvxJustifyMethodItem( const USHORT nId );
-+
-+    SvxJustifyMethodItem(
-+        const SvxCellJustifyMethod eMethod,
-+        const USHORT nId );
-+
-+    virtual SfxItemPresentation GetPresentation( SfxItemPresentation ePres,
-+                                    SfxMapUnit eCoreMetric,
-+                                    SfxMapUnit ePresMetric,
-+                                    String &rText, const IntlWrapper * = 0 ) const;
-+
-+    virtual sal_Bool             QueryValue( com::sun::star::uno::Any& rVal, BYTE nMemberId = 0 ) const;
-+    virtual sal_Bool             PutValue( const com::sun::star::uno::Any& rVal, BYTE nMemberId = 0 );
-+
-+    virtual USHORT          GetValueCount() const;
-+    virtual String          GetValueText( USHORT nVal ) const;
-+    virtual SfxPoolItem*    Clone( SfxItemPool *pPool = 0 ) const;
-+    virtual SfxPoolItem*    Create( SvStream& rStream, USHORT nVer ) const;
-+
-+    SvxJustifyMethodItem& operator=(const SvxJustifyMethodItem& r);
-+};
-+
+ //TYPEINIT1_AUTOFACTORY( SvxHorJustifyItem, SfxEnumItem );
+-TYPEINIT1_FACTORY( SvxHorJustifyItem, SfxEnumItem, new SvxHorJustifyItem(SVX_HOR_JUSTIFY_STANDARD, 0))
+-TYPEINIT1_FACTORY( SvxVerJustifyItem, SfxEnumItem, new SvxVerJustifyItem(SVX_VER_JUSTIFY_STANDARD, 0) );
+ TYPEINIT1_FACTORY( SvxOrientationItem, SfxEnumItem, new SvxOrientationItem(SVX_ORIENTATION_STANDARD, 0) );
+ TYPEINIT1_FACTORY( SvxMarginItem, SfxPoolItem, new SvxMarginItem(0) );
  
- //------------------------------------------------------------------------
- 
-diff --git svx/inc/svx/svxids.hrc svx/inc/svx/svxids.hrc
-index 665ee7f..e41aa45 100644
---- svx/inc/svx/svxids.hrc
-+++ svx/inc/svx/svxids.hrc
-@@ -1248,9 +1248,11 @@
- #define SID_REPLYTO_POSTIT								(SID_SVX_START+1099)
- #define SID_DELETEALLBYAUTHOR_POSTIT					(SID_SVX_START+1100)
- #define SID_INSERT_POSTIT							    (SID_SVX_START+1101)
-+#define SID_ATTR_ALIGN_HOR_JUSTIFY_METHOD               (SID_SVX_START+1102)
-+#define SID_ATTR_ALIGN_VER_JUSTIFY_METHOD               (SID_SVX_START+1103)
- 
- // IMPORTANT NOTE: adjust SID_SVX_FIRSTFREE, when adding new slot id
--#define SID_SVX_FIRSTFREE								SID_INSERT_POSTIT + 1
-+#define SID_SVX_FIRSTFREE								SID_ATTR_ALIGN_VER_JUSTIFY_METHOD + 1
- 
- // --------------------------------------------------------------------------
- // Overflow check for slot IDs
-diff --git svx/inc/svx/svxitems.hrc svx/inc/svx/svxitems.hrc
-index 1909e2d..7833fd8 100644
---- svx/inc/svx/svxitems.hrc
-+++ svx/inc/svx/svxitems.hrc
-@@ -161,10 +161,13 @@
- #define RID_SVXITEMS_BRUSH_CHAR				(RID_SVXITEMS_START + 527)
- #define RID_ATTR_NAMES                      (RID_SVXITEMS_START + 528)
- 
-+#define RID_SVXITEMS_JUSTMETHOD_AUTO            (RID_SVXITEMS_START + 579)
-+#define RID_SVXITEMS_JUSTMETHOD_DISTRIBUTE      (RID_SVXITEMS_START + 580)
-+
- // Ueberlaufpruefung --------------------------------------------------------
- 
- // Resource-Id's
--#define ACT_RID_SVXITEMS_END    RID_ATTR_NAMES
-+#define ACT_RID_SVXITEMS_END    RID_SVXITEMS_JUSTMETHOD_DISTRIBUTE
- #if ACT_RID_SVXITEMS_END > RID_SVXITEMS_END
- #error Resource-Ueberlauf in #line, #file
- #endif
-diff --git svx/source/items/algitem.cxx svx/source/items/algitem.cxx
-index ac96e23..b2e09f7 100644
---- svx/source/items/algitem.cxx
-+++ svx/source/items/algitem.cxx
-@@ -33,7 +33,8 @@
- 
- #include <tools/stream.hxx>
- #include <com/sun/star/table/BorderLine.hpp>
--#include <com/sun/star/table/CellVertJustify.hpp>
-+#include <com/sun/star/table/CellJustifyMethod.hpp>
-+#include <com/sun/star/table/CellVertJustify2.hpp>
- #include <com/sun/star/table/ShadowLocation.hpp>
- #include <com/sun/star/table/TableBorder.hpp>
- #include <com/sun/star/table/ShadowFormat.hpp>
-@@ -293,16 +294,17 @@ sal_Bool SvxVerJustifyItem::QueryValue( uno::Any& rVal, BYTE nMemberId ) const
-             }
-         default:
-             {
+-// class SvxHorJustifyItem -----------------------------------------------
+-
+-
+-SvxHorJustifyItem::SvxHorJustifyItem( const USHORT nId ) :
+-    SfxEnumItem( nId, (USHORT)SVX_HOR_JUSTIFY_STANDARD )
+-{
+-}
+-
+-SvxHorJustifyItem::SvxHorJustifyItem( const SvxCellHorJustify eJustify,
+-                                      const USHORT nId ) :
+-    SfxEnumItem( nId, (USHORT)eJustify )
+-{
+-}
+-
+-//------------------------------------------------------------------------
+-
+-SfxItemPresentation SvxHorJustifyItem::GetPresentation
+-(
+-    SfxItemPresentation ePres,
+-    SfxMapUnit          /*eCoreUnit*/,
+-    SfxMapUnit          /*ePresUnit*/,
+-    XubString&              rText, const IntlWrapper *)    const
+-{
+-    switch ( ePres )
+-    {
+-        case SFX_ITEM_PRESENTATION_NONE:
+-            rText.Erase();
+-            return SFX_ITEM_PRESENTATION_NONE;
+-        case SFX_ITEM_PRESENTATION_NAMELESS:
+-        case SFX_ITEM_PRESENTATION_COMPLETE:
+-            rText = GetValueText( GetValue() );
+-            return SFX_ITEM_PRESENTATION_COMPLETE;
+-        default: ; //prevent warning
+-    }
+-    return SFX_ITEM_PRESENTATION_NONE;
+-}
+-
+-//------------------------------------------------------------------------
+-
+-sal_Bool SvxHorJustifyItem::QueryValue( uno::Any& rVal, BYTE nMemberId ) const
+-{
+-//    sal_Bool bConvert = 0!=(nMemberId&CONVERT_TWIPS);
+-    nMemberId &= ~CONVERT_TWIPS;
+-    switch ( nMemberId )
+-    {
+-        case MID_HORJUST_HORJUST:
+-            {
+-                table::CellHoriJustify eUno = table::CellHoriJustify_STANDARD;
+-                switch ( (SvxCellHorJustify)GetValue() )
+-                {
+-                    case SVX_HOR_JUSTIFY_STANDARD: eUno = table::CellHoriJustify_STANDARD; break;
+-                    case SVX_HOR_JUSTIFY_LEFT:	   eUno = table::CellHoriJustify_LEFT;	   break;
+-                    case SVX_HOR_JUSTIFY_CENTER:   eUno = table::CellHoriJustify_CENTER;   break;
+-                    case SVX_HOR_JUSTIFY_RIGHT:	   eUno = table::CellHoriJustify_RIGHT;	   break;
+-                    case SVX_HOR_JUSTIFY_BLOCK:	   eUno = table::CellHoriJustify_BLOCK;	   break;
+-                    case SVX_HOR_JUSTIFY_REPEAT:   eUno = table::CellHoriJustify_REPEAT;   break;
+-                }
+-                rVal <<= eUno;
+-            }
+-            break;
+-        case MID_HORJUST_ADJUST:
+-            {
+-                //	ParagraphAdjust values, as in SvxAdjustItem
+-                //	(same value for ParaAdjust and ParaLastLineAdjust)
+-
+-                sal_Int16 nAdjust = style::ParagraphAdjust_LEFT;
+-                switch ( (SvxCellHorJustify)GetValue() )
+-                {
+-                    // ParagraphAdjust_LEFT is used for STANDARD and REPEAT
+-                    case SVX_HOR_JUSTIFY_STANDARD:
+-                    case SVX_HOR_JUSTIFY_REPEAT:
+-                    case SVX_HOR_JUSTIFY_LEFT:	 nAdjust = style::ParagraphAdjust_LEFT;	  break;
+-                    case SVX_HOR_JUSTIFY_CENTER: nAdjust = style::ParagraphAdjust_CENTER; break;
+-                    case SVX_HOR_JUSTIFY_RIGHT:	 nAdjust = style::ParagraphAdjust_RIGHT;  break;
+-                    case SVX_HOR_JUSTIFY_BLOCK:	 nAdjust = style::ParagraphAdjust_BLOCK;  break;
+-                }
+-                rVal <<= nAdjust;		// as sal_Int16
+-            }
+-            break;
+-    }
+-    return sal_True;
+-}
+-
+-sal_Bool SvxHorJustifyItem::PutValue( const uno::Any& rVal, BYTE nMemberId )
+-{
+-//    sal_Bool bConvert = 0!=(nMemberId&CONVERT_TWIPS);
+-    nMemberId &= ~CONVERT_TWIPS;
+-    switch ( nMemberId )
+-    {
+-        case MID_HORJUST_HORJUST:
+-            {
+-                table::CellHoriJustify eUno;
+-                if(!(rVal >>= eUno))
+-                {
+-                    sal_Int32 nValue = 0;
+-                    if(!(rVal >>= nValue))
+-                        return sal_False;
+-                    eUno = (table::CellHoriJustify)nValue;
+-                }
+-                SvxCellHorJustify eSvx = SVX_HOR_JUSTIFY_STANDARD;
+-                switch (eUno)
+-                {
+-                    case table::CellHoriJustify_STANDARD: eSvx = SVX_HOR_JUSTIFY_STANDARD; break;
+-                    case table::CellHoriJustify_LEFT:	  eSvx = SVX_HOR_JUSTIFY_LEFT;	   break;
+-                    case table::CellHoriJustify_CENTER:   eSvx = SVX_HOR_JUSTIFY_CENTER;   break;
+-                    case table::CellHoriJustify_RIGHT:	  eSvx = SVX_HOR_JUSTIFY_RIGHT;	   break;
+-                    case table::CellHoriJustify_BLOCK:	  eSvx = SVX_HOR_JUSTIFY_BLOCK;	   break;
+-                    case table::CellHoriJustify_REPEAT:   eSvx = SVX_HOR_JUSTIFY_REPEAT;   break;
+-                    default: ; //prevent warning
+-                }
+-                SetValue( (USHORT)eSvx );
+-            }
+-            break;
+-        case MID_HORJUST_ADJUST:
+-            {
+-                //	property contains ParagraphAdjust values as sal_Int16
+-                sal_Int16 nVal = sal_Int16();
+-                if(!(rVal >>= nVal))
+-                    return sal_False;
+-
+-                SvxCellHorJustify eSvx = SVX_HOR_JUSTIFY_STANDARD;
+-                switch (nVal)
+-                {
+-                    //	STRETCH is treated as BLOCK
+-                    case style::ParagraphAdjust_LEFT:    eSvx = SVX_HOR_JUSTIFY_LEFT;   break;
+-                    case style::ParagraphAdjust_RIGHT:   eSvx = SVX_HOR_JUSTIFY_RIGHT;  break;
+-                    case style::ParagraphAdjust_STRETCH:
+-                    case style::ParagraphAdjust_BLOCK:   eSvx = SVX_HOR_JUSTIFY_BLOCK;  break;
+-                    case style::ParagraphAdjust_CENTER:  eSvx = SVX_HOR_JUSTIFY_CENTER; break;
+-                }
+-                SetValue( (USHORT)eSvx );
+-            }
+-    }
+-    return sal_True;
+-}
+-
+-//------------------------------------------------------------------------
+-
+-XubString SvxHorJustifyItem::GetValueText( USHORT nVal ) const
+-{
+-    DBG_ASSERT( nVal <= SVX_HOR_JUSTIFY_REPEAT, "enum overflow!" );
+-    return SVX_RESSTR(RID_SVXITEMS_HORJUST_STANDARD + nVal);
+-}
+-
+-//------------------------------------------------------------------------
+-
+-SfxPoolItem* SvxHorJustifyItem::Clone( SfxItemPool* ) const
+-{
+-    return new SvxHorJustifyItem( *this );
+-}
+-
+-//------------------------------------------------------------------------
+-
+-SfxPoolItem* SvxHorJustifyItem::Create( SvStream& rStream, USHORT ) const
+-{
+-    USHORT nVal;
+-    rStream >> nVal;
+-    return new SvxHorJustifyItem( (SvxCellHorJustify)nVal, Which() );
+-}
+-//------------------------------------------------------------------------
+-
+-USHORT SvxHorJustifyItem::GetValueCount() const
+-{
+-    return SVX_HOR_JUSTIFY_REPEAT + 1;	// letzter Enum-Wert + 1
+-}
+-
+-// class SvxVerJustifyItem -----------------------------------------------
+-
+-SvxVerJustifyItem::SvxVerJustifyItem( const USHORT nId ) :
+-    SfxEnumItem( nId, (USHORT)SVX_VER_JUSTIFY_STANDARD )
+-{
+-}
+-
+-SvxVerJustifyItem::SvxVerJustifyItem( const SvxCellVerJustify eJustify,
+-                                      const USHORT nId ) :
+-    SfxEnumItem( nId, (USHORT)eJustify )
+-{
+-}
+-
+-//------------------------------------------------------------------------
+-
+-SfxItemPresentation SvxVerJustifyItem::GetPresentation
+-(
+-    SfxItemPresentation ePres,
+-    SfxMapUnit          /*eCoreUnit*/,
+-    SfxMapUnit          /*ePresUnit*/,
+-    XubString&              rText,
+-    const IntlWrapper * )    const
+-{
+-    switch ( ePres )
+-    {
+-        case SFX_ITEM_PRESENTATION_NONE:
+-            rText.Erase();
+-            return SFX_ITEM_PRESENTATION_NONE;
+-        case SFX_ITEM_PRESENTATION_NAMELESS:
+-        case SFX_ITEM_PRESENTATION_COMPLETE:
+-            rText = GetValueText( GetValue() );
+-            return SFX_ITEM_PRESENTATION_COMPLETE;
+-        default: ; //prevent warning
+-    }
+-    return SFX_ITEM_PRESENTATION_NONE;
+-}
+-
+-//------------------------------------------------------------------------
+-
+-sal_Bool SvxVerJustifyItem::QueryValue( uno::Any& rVal, BYTE nMemberId ) const
+-{
+-    nMemberId &= ~CONVERT_TWIPS;
+-    switch ( nMemberId )
+-    {
+-        case MID_HORJUST_ADJUST:
+-            {
+-                style::VerticalAlignment eUno = style::VerticalAlignment_TOP;
+-                switch ( (SvxCellVerJustify)GetValue() )
+-                {
+-                    case SVX_VER_JUSTIFY_TOP:	   eUno = style::VerticalAlignment_TOP;	    break;
+-                    case SVX_VER_JUSTIFY_CENTER:   eUno = style::VerticalAlignment_MIDDLE;	break;
+-                    case SVX_VER_JUSTIFY_BOTTOM:   eUno = style::VerticalAlignment_BOTTOM;	break;
+-                    default: ; //prevent warning
+-                }
+-                rVal <<= eUno;
+-                break;
+-            }
+-        default:
+-            {
 -                table::CellVertJustify eUno = table::CellVertJustify_STANDARD;
-+                sal_Int32 nUno = table::CellVertJustify2::STANDARD;
-                 switch ( (SvxCellVerJustify)GetValue() )
-                 {
+-                switch ( (SvxCellVerJustify)GetValue() )
+-                {
 -                    case SVX_VER_JUSTIFY_STANDARD: eUno = table::CellVertJustify_STANDARD; break;
 -                    case SVX_VER_JUSTIFY_TOP:	   eUno = table::CellVertJustify_TOP;	    break;
 -                    case SVX_VER_JUSTIFY_CENTER:   eUno = table::CellVertJustify_CENTER;	break;
 -                    case SVX_VER_JUSTIFY_BOTTOM:   eUno = table::CellVertJustify_BOTTOM;	break;
-+                    case SVX_VER_JUSTIFY_STANDARD: nUno = table::CellVertJustify2::STANDARD; break;
-+                    case SVX_VER_JUSTIFY_TOP:      nUno = table::CellVertJustify2::TOP;     break;
-+                    case SVX_VER_JUSTIFY_CENTER:   nUno = table::CellVertJustify2::CENTER;  break;
-+                    case SVX_VER_JUSTIFY_BOTTOM:   nUno = table::CellVertJustify2::BOTTOM;  break;
-+                    case SVX_VER_JUSTIFY_BLOCK:    nUno = table::CellVertJustify2::BLOCK;  break;
-                     default: ; //prevent warning
-                 }
+-                    default: ; //prevent warning
+-                }
 -                rVal <<= eUno;
-+                rVal <<= nUno;
-                 break;
-             }
-     }
-@@ -334,22 +336,20 @@ sal_Bool SvxVerJustifyItem::PutValue( const uno::Any& rVal, BYTE nMemberId )
-             }
-         default:
-             {
+-                break;
+-            }
+-    }
+-    return sal_True;
+-}
+-
+-sal_Bool SvxVerJustifyItem::PutValue( const uno::Any& rVal, BYTE nMemberId )
+-{
+-    nMemberId &= ~CONVERT_TWIPS;
+-    switch ( nMemberId )
+-    {
+-        case MID_HORJUST_ADJUST:
+-            {
+-                //	property contains ParagraphAdjust values as sal_Int16
+-                style::VerticalAlignment nVal = style::VerticalAlignment_TOP;
+-                if(!(rVal >>= nVal))
+-                    return sal_False;
+-
+-                SvxCellVerJustify eSvx = SVX_VER_JUSTIFY_STANDARD;
+-                switch (nVal)
+-                {
+-                    case style::VerticalAlignment_TOP:      eSvx = SVX_VER_JUSTIFY_TOP;     break;
+-                    case style::VerticalAlignment_MIDDLE:   eSvx = SVX_VER_JUSTIFY_CENTER;  break;
+-                    case style::VerticalAlignment_BOTTOM:   eSvx = SVX_VER_JUSTIFY_BOTTOM;  break;
+-                    default:;
+-                }
+-                SetValue( (USHORT)eSvx );
+-                break;
+-            }
+-        default:
+-            {
 -                table::CellVertJustify eUno;
-+                sal_Int32 eUno;
-                 if(!(rVal >>= eUno))
-                 {
+-                if(!(rVal >>= eUno))
+-                {
 -                    sal_Int32 nValue = 0;
 -                    if(!(rVal >>= nValue))
 -                        return sal_False;
 -                    eUno = (table::CellVertJustify)nValue;
-+                    eUno = table::CellVertJustify2::STANDARD;
-                 }
- 
-                 SvxCellVerJustify eSvx = SVX_VER_JUSTIFY_STANDARD;
-                 switch (eUno)
-                 {
+-                }
+-
+-                SvxCellVerJustify eSvx = SVX_VER_JUSTIFY_STANDARD;
+-                switch (eUno)
+-                {
 -                    case table::CellVertJustify_STANDARD: eSvx = SVX_VER_JUSTIFY_STANDARD;  break;
 -                    case table::CellVertJustify_TOP:	  eSvx = SVX_VER_JUSTIFY_TOP;	  	break;
 -                    case table::CellVertJustify_CENTER:   eSvx = SVX_VER_JUSTIFY_CENTER;	break;
 -                    case table::CellVertJustify_BOTTOM:   eSvx = SVX_VER_JUSTIFY_BOTTOM;	break;
-+                    case table::CellVertJustify2::STANDARD: eSvx = SVX_VER_JUSTIFY_STANDARD;  break;
-+                    case table::CellVertJustify2::TOP:      eSvx = SVX_VER_JUSTIFY_TOP;       break;
-+                    case table::CellVertJustify2::CENTER:   eSvx = SVX_VER_JUSTIFY_CENTER;    break;
-+                    case table::CellVertJustify2::BOTTOM:   eSvx = SVX_VER_JUSTIFY_BOTTOM;    break;
-+                    case table::CellVertJustify2::BLOCK:    eSvx = SVX_VER_JUSTIFY_BLOCK;     break;
-                     default: ; //prevent warning
-                 }
-                 SetValue( (USHORT)eSvx );
-@@ -391,6 +391,117 @@ USHORT SvxVerJustifyItem::GetValueCount() const
-     return SVX_VER_JUSTIFY_BOTTOM + 1;	// letzter Enum-Wert + 1
- }
- 
-+
-+// class SvxJustifyMethodItem -----------------------------------------------
-+
-+SvxJustifyMethodItem::SvxJustifyMethodItem( const USHORT nId ) :
-+    SfxEnumItem( nId, (USHORT)SVX_JUSTIFY_METHOD_AUTO )
-+{
-+}
-+
-+SvxJustifyMethodItem::SvxJustifyMethodItem( const SvxCellJustifyMethod eJustify,
-+                                      const USHORT nId ) :
-+    SfxEnumItem( nId, (USHORT)eJustify )
-+{
-+}
-+
-+//------------------------------------------------------------------------
-+
-+SfxItemPresentation SvxJustifyMethodItem::GetPresentation
-+(
-+    SfxItemPresentation ePres,
-+    SfxMapUnit          /*eCoreUnit*/,
-+    SfxMapUnit          /*ePresUnit*/,
-+    XubString&              rText,
-+    const IntlWrapper * )    const
-+{
-+    switch ( ePres )
-+    {
-+        case SFX_ITEM_PRESENTATION_NONE:
-+            rText.Erase();
-+            return SFX_ITEM_PRESENTATION_NONE;
-+        case SFX_ITEM_PRESENTATION_NAMELESS:
-+        case SFX_ITEM_PRESENTATION_COMPLETE:
-+            rText = GetValueText( GetValue() );
-+            return SFX_ITEM_PRESENTATION_COMPLETE;
-+        default: ; //prevent warning
-+    }
-+    return SFX_ITEM_PRESENTATION_NONE;
-+}
-+
-+//------------------------------------------------------------------------
-+
-+sal_Bool SvxJustifyMethodItem::QueryValue( uno::Any& rVal, BYTE /*nMemberId*/ ) const
-+{
-+    sal_Int32 nUno = table::CellJustifyMethod::AUTO;
-+    switch (static_cast<SvxCellJustifyMethod>(GetValue()))
-+    {
-+        case SVX_JUSTIFY_METHOD_AUTO:       nUno = table::CellJustifyMethod::AUTO;       break;
-+        case SVX_JUSTIFY_METHOD_DISTRIBUTE: nUno = table::CellJustifyMethod::DISTRIBUTE; break;
-+        default:;
-+    }
-+    rVal <<= nUno;
-+    return true;
-+}
-+
-+sal_Bool SvxJustifyMethodItem::PutValue( const uno::Any& rVal, BYTE /*nMemberId*/ )
-+{
-+    sal_Int32 nVal = table::CellJustifyMethod::AUTO;
-+    if (!(rVal >>= nVal))
-+        return false;
-+
-+    SvxCellJustifyMethod eSvx = SVX_JUSTIFY_METHOD_AUTO;
-+    switch (nVal)
-+    {
-+        case table::CellJustifyMethod::AUTO:
-+            eSvx = SVX_JUSTIFY_METHOD_AUTO;
-+        break;
-+        case table::CellJustifyMethod::DISTRIBUTE:
-+            eSvx = SVX_JUSTIFY_METHOD_DISTRIBUTE;
-+        break;
-+        default:;
-+    }
-+    SetValue(static_cast<USHORT>(eSvx));
-+    return true;
-+}
-+
-+//------------------------------------------------------------------------
-+
-+XubString SvxJustifyMethodItem::GetValueText( USHORT nVal ) const
-+{
-+    DBG_ASSERT( nVal <= SVX_VER_JUSTIFY_BOTTOM, "enum overflow!" );
-+    return SVX_RESSTR(RID_SVXITEMS_JUSTMETHOD_AUTO + nVal);
-+}
-+
-+//------------------------------------------------------------------------
-+
-+SfxPoolItem* SvxJustifyMethodItem::Clone( SfxItemPool* ) const
-+{
-+    return new SvxJustifyMethodItem( *this );
-+}
-+
-+//------------------------------------------------------------------------
-+
-+SfxPoolItem* SvxJustifyMethodItem::Create( SvStream& rStream, USHORT ) const
-+{
-+    USHORT nVal;
-+    rStream >> nVal;
-+    return new SvxJustifyMethodItem( (SvxCellJustifyMethod)nVal, Which() );
-+}
-+
-+//------------------------------------------------------------------------
-+
-+USHORT SvxJustifyMethodItem::GetValueCount() const
-+{
-+    return SVX_JUSTIFY_METHOD_DISTRIBUTE + 1;	// letzter Enum-Wert + 1
-+}
-+
-+SvxJustifyMethodItem& SvxJustifyMethodItem::operator=(const SvxJustifyMethodItem& r)
-+{
-+    SetValue( r.GetValue() );
-+    return *this;
-+}
-+
+-                    default: ; //prevent warning
+-                }
+-                SetValue( (USHORT)eSvx );
+-                break;
+-            }
+-    }
+-
+-    return sal_True;
+-}
+-
+-//------------------------------------------------------------------------
+-
+-XubString SvxVerJustifyItem::GetValueText( USHORT nVal ) const
+-{
+-    DBG_ASSERT( nVal <= SVX_VER_JUSTIFY_BOTTOM, "enum overflow!" );
+-    return SVX_RESSTR(RID_SVXITEMS_VERJUST_STANDARD + nVal);
+-}
+-
+-//------------------------------------------------------------------------
+-
+-SfxPoolItem* SvxVerJustifyItem::Clone( SfxItemPool* ) const
+-{
+-    return new SvxVerJustifyItem( *this );
+-}
+-
+-//------------------------------------------------------------------------
+-
+-SfxPoolItem* SvxVerJustifyItem::Create( SvStream& rStream, USHORT ) const
+-{
+-    USHORT nVal;
+-    rStream >> nVal;
+-    return new SvxVerJustifyItem( (SvxCellVerJustify)nVal, Which() );
+-}
+-
+-//------------------------------------------------------------------------
+-
+-USHORT SvxVerJustifyItem::GetValueCount() const
+-{
+-    return SVX_VER_JUSTIFY_BOTTOM + 1;	// letzter Enum-Wert + 1
+-}
+-
  // class SvxOrientationItem ----------------------------------------------
  
  SvxOrientationItem::SvxOrientationItem( const SvxCellOrientation eOrientation,
@@ -1144,6 +571,54 @@ index f15f714..d8e4556 100644
          default: ;//prevent warning
      }
      SetValue( (USHORT)eSvx );
--- 
-1.7.0.1
-
+diff --git svx/source/items/svxitems.src svx/source/items/svxitems.src
+index d70e69e..91923c2 100644
+--- svx/source/items/svxitems.src
++++ svx/source/items/svxitems.src
+@@ -216,46 +216,6 @@ String RID_SVXITEMS_BRUSHSTYLE_BITMAP
+     Text [ en-US ] = "Image" ;
+ };
+  
+-String RID_SVXITEMS_HORJUST_STANDARD
+-{
+-    Text [ en-US ] = "Horizontal alignment default" ;
+-};
+-String RID_SVXITEMS_HORJUST_LEFT
+-{
+-    Text [ en-US ] = "Align left" ;
+-};
+-String RID_SVXITEMS_HORJUST_CENTER
+-{
+-    Text [ en-US ] = "Centered horizontally" ;
+-};
+-String RID_SVXITEMS_HORJUST_RIGHT
+-{
+-    Text [ en-US ] = "Align right" ;
+-};
+-String RID_SVXITEMS_HORJUST_BLOCK
+-{
+-    Text [ en-US ] = "Justify" ;
+-};
+-String RID_SVXITEMS_HORJUST_REPEAT
+-{
+-    Text [ en-US ] = "Repeat alignment" ;
+-};
+-String RID_SVXITEMS_VERJUST_STANDARD
+-{
+-    Text [ en-US ] = "Vertical alignment default" ;
+-};
+-String RID_SVXITEMS_VERJUST_TOP
+-{
+-    Text [ en-US ] = "Align to top" ;
+-};
+-String RID_SVXITEMS_VERJUST_CENTER
+-{
+-    Text [ en-US ] = "Centered vertically" ;
+-};
+-String RID_SVXITEMS_VERJUST_BOTTOM
+-{
+-    Text [ en-US ] = "Align to bottom" ;
+-};
+ String RID_SVXITEMS_ORI_STANDARD
+ {
+     Text [ en-US ] = "Default orientation" ;
