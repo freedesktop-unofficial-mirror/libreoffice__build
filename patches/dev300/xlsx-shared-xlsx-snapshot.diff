@@ -134,24 +134,26 @@
              lcl_AddBookviews( aRecList, *this );
          }
  
-@@ -443,7 +435,7 @@ void ExcTable::FillAsTable( size_t nCode
+@@ -443,6 +435,10 @@ void ExcTable::FillAsTable( size_t nCode
  
-     if ( eBiff == EXC_BIFF8 )
-         // list holding OBJ records and creating MSODRAWING per-sheet data
--        rR.pObjRecs = new XclObjList( GetRoot() );
-+        rR.pObjRecs = new XclObjList( GetRoot(), mnScTab );
+     // create a new OBJ list for this sheet (may be used by notes, autofilter, data validation)
+     GetObjectManager().StartSheet();
++ 
++     if ( eBiff == EXC_BIFF8 )
++         // list holding OBJ records and creating MSODRAWING per-sheet data
++        rR.pObjRecs = new XclExpObjList( GetRoot(), mnScTab );
  
      // cell table: DEFROWHEIGHT, DEFCOLWIDTH, COLINFO, DIMENSIONS, ROW, cell records
      mxCellTable.reset( new XclExpCellTable( GetRoot() ) );
-@@ -597,8 +589,6 @@ void ExcTable::FillAsXmlTable( size_t nC
-     //! close Escher group shape and ESCHER_DgContainer
-     //! opened by XclObjList ctor MSODRAWING
-     rR.pObjRecs->EndSheet();
--    // all MSODRAWING and OBJ stuff of this sheet goes here
--    Add( rR.pObjRecs );
- 
-     // pivot tables
-     aRecList.AppendRecord( GetPivotTableManager().CreatePivotTablesRecord( mnScTab ) );
+#@@ -597,8 +589,6 @@ void ExcTable::FillAsXmlTable( size_t nC
+#     //! close Escher group shape and ESCHER_DgContainer
+#     //! opened by XclObjList ctor MSODRAWING
+#     rR.pObjRecs->EndSheet();
+#-    // all MSODRAWING and OBJ stuff of this sheet goes here
+#-    Add( rR.pObjRecs );
+# 
+#     // pivot tables
+#     aRecList.AppendRecord( GetPivotTableManager().CreatePivotTablesRecord( mnScTab ) );
 @@ -649,6 +639,9 @@ void ExcTable::FillAsXmlTable( size_t nC
          }
      }
@@ -162,7 +164,7 @@
      // EOF
      Add( new ExcEof );
  }
-@@ -804,27 +797,35 @@ void ExcDocument::Write( SvStream& rSvSt
+@@ -804,25 +797,33 @@ void ExcDocument::Write( SvStream& rSvSt
  
  void ExcDocument::WriteXml( SvStream& rStrm )
  {
@@ -195,8 +197,8 @@
  
 -        XclExpXmlStream aStrm( ::comphelper::getProcessServiceFactory(), rStrm, GetRoot() );
 -
-         GetOldRoot().pEscher->GetStrm().Seek(0);   // ready for take off
- 
+#         GetOldRoot().pEscher->GetStrm().Seek(0);   // ready for take off
+# 
 -        sax_fastparser::FSHelperPtr& rWorkbook = aStrm.GetCurrentStream();
 -        rWorkbook->startElement( XML_workbook,
 -                XML_xmlns, "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
@@ -274,7 +276,7 @@
 --- sc/source/filter/excel/xeescher.cxx.old	2010-03-03 17:00:05.000000000 +0100
 +++ sc/source/filter/excel/xeescher.cxx	2010-03-03 17:00:06.000000000 +0100
 @@ -71,6 +71,7 @@
- #include "svx/unoapi.hxx"
+ #include "xestyle.hxx"
  
  #include <oox/core/tokens.hxx>
 +#include <oox/export/drawingml.hxx>
@@ -287,7 +289,7 @@
  using ::com::sun::star::table::CellRangeAddress;
 +using ::oox::drawingml::DrawingML;
  
- // ============================================================================
+ // Escher client anchor =======================================================
  
 @@ -142,6 +144,17 @@ void XclExpImgData::Save( XclExpStream&
      }
@@ -311,8 +313,8 @@
              if( pScNote )
                  if( SdrCaptionObj* pCaption = pScNote->GetOrCreateCaption( maScPos ) )
                      if( const OutlinerParaObject* pOPO = pCaption->GetOutlinerParaObject() )
--                        mnObjId = rRoot.GetOldRoot().pObjRecs->Add( new XclObjComment( rRoot, pCaption->GetLogicRect(), pOPO->GetTextObject(), pCaption, mbVisible ) );
-+                        mnObjId = rRoot.GetOldRoot().pObjRecs->Add( new XclObjComment( rRoot, pCaption->GetLogicRect(), pOPO->GetTextObject(), pCaption, mbVisible, maScPos ) );
+-                        mnObjId = rRoot.GetObjectManager().AddObj( new XclObjComment( rRoot.GetObjectManager(), pCaption->GetLogicRect(), pOPO->GetTextObject(), pCaption, mbVisible ) );
++                        mnObjId = rRoot.GetObjectManager().AddObj( new XclObjComment( rRoot.GetObjectManager(), pCaption->GetLogicRect(), pOPO->GetTextObject(), pCaption, mbVisible, maScPos ) );
  
              SetRecSize( 9 + maAuthor.GetSize() );
          }
@@ -331,15 +333,15 @@
      rComments->endElement( XML_text );
      rComments->endElement( XML_comment );
  }
-@@ -990,7 +1008,7 @@ XclMacroHelper::SetMacroLink( const Stri
- }
- 
- XclExpShapeObj::XclExpShapeObj( const XclExpRoot& rRoot, ::com::sun::star::uno::Reference< ::com::sun::star::drawing::XShape > xShape ) : 
--    XclObjAny( rRoot ),
-+    XclObjAny( rRoot, xShape ),
-     XclMacroHelper( rRoot )
- {
-     if( SdrObject* pSdrObj = ::GetSdrObjectFromXShape( xShape ) )
+#@@ -990,7 +1008,7 @@ XclMacroHelper::SetMacroLink( const Stri
+# }
+# 
+# XclExpShapeObj::XclExpShapeObj( const XclExpRoot& rRoot, ::com::sun::star::uno::Reference< ::com::sun::star::drawing::XShape > xShape ) : 
+#-    XclObjAny( rRoot ),
+#+    XclObjAny( rRoot, xShape ),
+#     XclMacroHelper( rRoot )
+# {
+#     if( SdrObject* pSdrObj = ::GetSdrObjectFromXShape( xShape ) )
 @@ -1022,7 +1040,7 @@ struct OUStringLess : public std::binary
  {
      bool operator()(const OUString& x, const OUString& y) const
@@ -1135,7 +1137,7 @@
 --- sc/source/filter/inc/xcl97esc.hxx.old	2010-03-03 17:00:05.000000000 +0100
 +++ sc/source/filter/inc/xcl97esc.hxx	2010-03-03 17:00:06.000000000 +0100
 @@ -36,6 +36,7 @@
- #include <tools/stack.hxx>
+ #include <filter/msfilter/escherex.hxx>
  #include "xlescher.hxx"
  #include "xeroot.hxx"
 +#include <vector>
@@ -1144,53 +1146,46 @@
  #define EXC_EXP_OCX_CTRL 0
 --- sc/source/filter/inc/xcl97rec.hxx.old	2010-03-03 17:00:05.000000000 +0100
 +++ sc/source/filter/inc/xcl97rec.hxx	2010-03-03 17:00:06.000000000 +0100
-@@ -35,7 +35,7 @@
- #include "xcl97esc.hxx"
- #include "xlstyle.hxx"
- 
--#include <vector>
+@@ -36,11 +36,12 @@
+
+ class XclObj;
+ class XclExpMsoDrawing;
 +class SdrCaptionObj;
- 
- // --- class XclMsodrawing_Base --------------------------------------
- 
-@@ -97,11 +97,15 @@ class XclMsodrawing;
- class XclObjList : public List, public ExcEmptyRec, protected XclExpRoot
+
+ class XclExpObjList : public List, public ExcEmptyRec, protected XclExpRoot
  {
- private:
-+    static  sal_Int32           mnDrawingMLCount, mnVmlCount;
-+
-+            SCTAB               mnScTab;
-+
-         XclMsodrawing*			pMsodrawingPerSheet;
-         XclMsodrawing*          pSolverContainer;
- 
  public:
--                                XclObjList( const XclExpRoot& rRoot );
-+                                XclObjList( const XclExpRoot& rRoot, SCTAB nScTab );
-     virtual						~XclObjList();
- 
-             XclObj*				First()	{ return (XclObj*) List::First(); }
-@@ -117,6 +121,9 @@ public:
-             void				EndSheet();
- 
-     virtual	void				Save( XclExpStream& rStrm );
-+    virtual	void				SaveXml( XclExpXmlStream& rStrm );
+-    explicit            XclExpObjList( const XclExpRoot& rRoot, XclEscherEx& rEscherEx );
++    explicit            XclExpObjList( const XclExpRoot& rRoot, XclEscherEx& rEscherEx, SCTAB nScTab );
+     virtual             ~XclExpObjList();
+
+     XclObj*             First() { return (XclObj*) List::First(); }
+@@ -56,8 +57,14 @@
+     void                EndSheet();
+
+     virtual void        Save( XclExpStream& rStrm );
++    virtual void        SaveXml( XclExpXmlStream& rStrm );
 +
-+    static  void                ResetCounters();
- };
- 
- 
++    static void        ResetCounters();
+
+ private:
++    static  sal_Int32   mnDrawingMLCount, mnVmlCount;
++    SCTAB               mnScTab;
++
+     XclEscherEx&        mrEscherEx;
+     XclExpMsoDrawing*   pMsodrawingPerSheet;
+     XclExpMsoDrawing*   pSolverContainer;
 @@ -134,6 +141,7 @@ protected:
          sal_uInt16          mnObjType;
          UINT16				nObjId;
          UINT16				nGrbit;
 +        SCTAB               mnScTab;
          BOOL				bFirstOnSheet;
- 
+
          bool                    mbOwnEscher;    /// true = Escher part created on the fly.
 @@ -153,6 +161,10 @@ public:
      inline sal_uInt16           GetObjType() const { return mnObjType; }
- 
+
      inline	void				SetId( UINT16 nId )	{ nObjId = nId; }
 +    inline  sal_uInt16          GetId() const       { return nObjId; }
 +
@@ -1198,7 +1193,7 @@
 +    inline  SCTAB               GetTab() const          { return mnScTab; }
  
      inline	void				SetLocked( BOOL b )
-                                     { b ? nGrbit |= 0x0001 : nGrbit &= ~0x0001; }
+                                                { b ? nGrbit |= 0x0001 : nGrbit &= ~0x0001; }
 @@ -201,9 +213,13 @@ inline void XclObj::UpdateStopPos()
  
  class XclObjComment : public XclObj
@@ -1208,7 +1203,7 @@
 +                                mpCaption;
 +    bool                        mbVisible;
  public:
-                                 XclObjComment( const XclExpRoot& rRoot,
+                                 XclObjComment( XclExpObjectManager& rObjMgr,
 -                                    const Rectangle& rRect, const EditTextObject& rEditObj, SdrObject* pCaption, bool bVisible );
 +                                    const Rectangle& rRect, const EditTextObject& rEditObj, SdrCaptionObj* pCaption, bool bVisible, const ScAddress& rAddress );
      virtual						~XclObjComment();
@@ -1226,11 +1221,11 @@
      virtual void                WriteSubRecs( XclExpStream& rStrm );
  
  public:
--                                XclObjAny( const XclExpRoot& rRoot );
-+                                XclObjAny( const XclExpRoot& rRoot, 
+-                                XclObjAny( XclExpObjectManager& rObjMgr );
++                                XclObjAny( XclExpObjectManager& rObjMgr, 
 +                                    const com::sun::star::uno::Reference< com::sun::star::drawing::XShape >& rShape );
      virtual						~XclObjAny();
- 
+
 +    com::sun::star::uno::Reference< com::sun::star::drawing::XShape >
 +                                GetShape() const { return mxShape; }
 +
@@ -1244,6 +1239,7 @@
  };
  
  
+
 --- sc/source/filter/inc/xeescher.hxx.old	2010-03-03 17:00:05.000000000 +0100
 +++ sc/source/filter/inc/xeescher.hxx	2010-03-03 17:00:06.000000000 +0100
 @@ -49,6 +49,7 @@ public:
@@ -1961,32 +1957,45 @@
 +++ sc/source/filter/xcl97/xcl97esc.cxx	2010-03-03 17:00:06.000000000 +0100
 @@ -201,7 +201,7 @@ EscherExHostAppData* XclEscherEx::StartS
      pCurrAppData = new XclEscherHostAppData;
-     SdrObject* pObj = GetSdrObjectFromXShape( rShape );
+     SdrObject* pObj = GetSdrObjectFromXShape( rxShape );
      if ( !pObj )
--        pCurrXclObj = new XclObjAny( GetRoot() );  // just what is it?!?
-+        pCurrXclObj = new XclObjAny( GetRoot(), rShape );  // just what is it?!?
+-        pCurrXclObj = new XclObjAny( mrObjMgr );  // just what is it?!?
++        pCurrXclObj = new XclObjAny( mrObjMgr, rxShape );  // just what is it?!?
      else
      {
          pCurrXclObj = NULL;
-@@ -223,13 +223,13 @@ EscherExHostAppData* XclEscherEx::StartS
-                     pCurrXclObj = new XclObjOle( GetRoot(), *pObj );
+@@ -235,10 +235,10 @@
+                         pCurrXclObj = new XclObjOle( mrObjMgr, *pObj );
+                 }
+                 else    // just a metafile
+-                    pCurrXclObj = new XclObjAny( mrObjMgr );
++                    pCurrXclObj = new XclObjAny( mrObjMgr, rxShape );
              }
-             else    // just a metafile
--                pCurrXclObj = new XclObjAny( GetRoot() );
-+                pCurrXclObj = new XclObjAny( GetRoot(), rShape );
+             else
+-                pCurrXclObj = new XclObjAny( mrObjMgr );
++                pCurrXclObj = new XclObjAny( mrObjMgr, rxShape );
          }
          else if( nObjType == OBJ_UNO )
          {
-             pCurrXclObj = CreateCtrlObj( rShape );
+@@ -250,13 +250,13 @@
+             pCurrXclObj = CreateCtrlObj( rxShape, pChildAnchor );
+ #endif
              if( !pCurrXclObj )
--                pCurrXclObj = new XclObjAny( GetRoot() );   // just a metafile
-+                pCurrXclObj = new XclObjAny( GetRoot(), rShape );   // just a metafile
+-                pCurrXclObj = new XclObjAny( mrObjMgr );   // just a metafile
++                pCurrXclObj = new XclObjAny( mrObjMgr, rxShape );   // just a metafile
          }
          else if( !ScDrawLayer::IsNoteCaption( pObj ) )
          {
+             // #107540# ignore permanent note shapes
+             // #i12190# do not ignore callouts (do not filter by object type ID)
+-            pCurrXclObj = new XclObjAny( mrObjMgr );   // just a metafile
++            pCurrXclObj = new XclObjAny( mrObjMgr, rxShape );   // just a metafile
+         }
+        }
+        if ( pCurrXclObj )
 --- sc/source/filter/xcl97/xcl97rec.cxx.old	2010-03-03 17:00:05.000000000 +0100
 +++ sc/source/filter/xcl97/xcl97rec.cxx	2010-03-03 17:00:06.000000000 +0100
-@@ -79,7 +79,12 @@
+@@ -77,7 +77,12 @@
  #include "patattr.hxx"
  #include "tabprotection.hxx"
  
@@ -1999,7 +2008,7 @@
  
  using ::rtl::OString;
  using ::rtl::OUString;
-@@ -88,6 +93,13 @@ using ::com::sun::star::uno::Reference;
+@@ -86,9 +91,19 @@
  using ::com::sun::star::uno::UNO_QUERY;
  using ::com::sun::star::beans::XPropertySet;
  using ::com::sun::star::drawing::XShape;
@@ -2011,33 +2020,25 @@
 +using ::oox::drawingml::ShapeExport;
 +using ::oox::vml::VMLExport;
  
+ // ============================================================================
  
- //___________________________________________________________________
-@@ -232,8 +244,12 @@ void XclMsodrawing::WriteBody( XclExpStr
- 
- // --- class XclObjList ----------------------------------------------
- 
--XclObjList::XclObjList( const XclExpRoot& rRoot ) :
-+sal_Int32 XclObjList::mnDrawingMLCount;
-+sal_Int32 XclObjList::mnVmlCount;
++sal_Int32 XclExpObjList::mnDrawingMLCount;
++sal_Int32 XclExpObjList::mnVmlCount;
 +
-+XclObjList::XclObjList( const XclExpRoot& rRoot, SCTAB nScTab ) :
+ XclExpObjList::XclExpObjList( const XclExpRoot& rRoot, XclEscherEx& rEscherEx ) :
      XclExpRoot( rRoot ),
-+    mnScTab( nScTab ),
-     pMsodrawingPerSheet( new XclMsodrawing( rRoot, ESCHER_DgContainer ) ),
-     pSolverContainer( NULL )
- {
-@@ -257,6 +273,7 @@ UINT16 XclObjList::Add( XclObj* pObj )
-         Insert( pObj, LIST_APPEND );
-         UINT16 nCnt = (UINT16) Count();
-         pObj->SetId( nCnt );
-+        pObj->SetTab( mnScTab );
-         return nCnt;
-     }
-     else
-@@ -294,6 +311,129 @@ void XclObjList::Save( XclExpStream& rSt
+     mrEscherEx( rEscherEx ),
+@@ -118,6 +133,7 @@
+        Insert( pObj, LIST_APPEND );
+        UINT16 nCnt = (UINT16) Count();
+        pObj->SetId( nCnt );
++        //pObj->SetTab( mnScTab );
+        return nCnt;
+        }
+        else
+@@ -149,6 +165,128 @@
+         pSolverContainer->Save( rStrm );
  }
- 
  
 +static bool IsVmlObject( const XclObj& rObj )
 +{
@@ -2051,7 +2052,7 @@
 +}
 +
 +
-+static sal_Int32 GetVmlObjectCount( XclObjList& rList )
++static sal_Int32 GetVmlObjectCount( XclExpObjList& rList )
 +{
 +    sal_Int32 nNumVml = 0;
 +
@@ -2063,7 +2064,7 @@
 +}
 +
 +
-+static void SaveDrawingMLObjects( XclObjList& rList, XclExpXmlStream& rStrm, sal_Int32& nDrawingMLCount )
++static void SaveDrawingMLObjects( XclExpObjList& rList, XclExpXmlStream& rStrm, sal_Int32& nDrawingMLCount )
 +{
 +    sal_Int32 nVmlObjects = GetVmlObjectCount( rList );
 +    if( (rList.Count() - nVmlObjects) == 0 )
@@ -2103,7 +2104,7 @@
 +}
 +
 +
-+static void SaveVmlObjects( XclObjList& rList, XclExpXmlStream& rStrm, sal_Int32& nVmlCount )
++static void SaveVmlObjects( XclExpObjList& rList, XclExpXmlStream& rStrm, sal_Int32& nVmlCount )
 +{
 +    if( GetVmlObjectCount( rList ) == 0 )
 +        return;
@@ -2142,7 +2143,7 @@
 +}
 +
 +
-+void XclObjList::SaveXml( XclExpXmlStream& rStrm )
++void XclExpObjList::SaveXml( XclExpXmlStream& rStrm )
 +{
 +    if( pSolverContainer )
 +        pSolverContainer->SaveXml( rStrm );
@@ -2155,31 +2156,32 @@
 +}
 +
 +
-+void XclObjList::ResetCounters()
++void XclExpObjList::ResetCounters()
 +{
 +    mnDrawingMLCount    = 0;
 +    mnVmlCount          = 0;
 +}
 +
-+
- 
  // --- class XclObj --------------------------------------------------
  
-@@ -428,69 +568,78 @@ void XclObj::SaveTextRecs( XclExpStream&
- // --- class XclObjComment -------------------------------------------
+ XclObj::XclObj( XclExpObjectManager& rObjMgr, sal_uInt16 nObjType, bool bOwnEscher ) :
+@@ -286,69 +424,78 @@
+                 pTxo->Save( rStrm );
+ }
  
+-// --- class XclObjComment -------------------------------------------
++  // --- class XclObjComment ------------------------------------------
  
--XclObjComment::XclObjComment( const XclExpRoot& rRoot, const Rectangle& rRect, const EditTextObject& rEditObj, SdrObject* pCaption, bool bVisible )
-+XclObjComment::XclObjComment( const XclExpRoot& rRoot, const Rectangle& rRect, const EditTextObject& rEditObj, SdrCaptionObj* pCaption, bool bVisible, const ScAddress& rAddress )
-             :
-             XclObj( rRoot, EXC_OBJTYPE_NOTE, true )
+-XclObjComment::XclObjComment( XclExpObjectManager& rObjMgr, const Rectangle& rRect, const EditTextObject& rEditObj, SdrObject* pCaption, bool bVisible ) :
++XclObjComment::XclObjComment( XclExpObjectManager& rObjMgr, const Rectangle& rRect, const EditTextObject& rEditObj, SdrCaptionObj* pCaption, bool bVisible, const ScAddress& rAddress ) :
+     XclObj( rObjMgr, EXC_OBJTYPE_NOTE, true )
 +            , maScPos( rAddress )
 +            , mpCaption( static_cast< SdrCaptionObj* >( pCaption->Clone() ) )
 +            , mbVisible( bVisible )
  {
-     ProcessEscherObj(rRoot, rRect, pCaption, bVisible);
+     ProcessEscherObj( rObjMgr.GetRoot(), rRect, pCaption, bVisible);
      // TXO
-     pTxo = new XclTxo( rRoot, rEditObj, pCaption );
+     pTxo = new XclTxo( rObjMgr.GetRoot(), rEditObj, pCaption );
  }
  
 -void XclObjComment::ProcessEscherObj( const XclExpRoot& rRoot, const Rectangle& rRect, SdrObject* pCaption, const bool bVisible )
@@ -2200,7 +2202,7 @@
 +            rPropOpt.CreateFillProperties( aXPropSet,  sal_True);
  
 -            aPropOpt.AddOpt( ESCHER_Prop_lTxid, 0 );						// undocumented
--        aPropOpt.AddOpt( 0x0158, 0x00000000 );							// undocumented
+-            aPropOpt.AddOpt( 0x0158, 0x00000000 );							// undocumented
 +            rPropOpt.AddOpt( ESCHER_Prop_lTxid, 0 );						// undocumented
 +            rPropOpt.AddOpt( 0x0158, 0x00000000 );							// undocumented
  
@@ -2233,11 +2235,11 @@
  
 -            if(!aPropOpt.GetOpt( ESCHER_Prop_fillBackColor, nValue ))
 -                aPropOpt.AddOpt( ESCHER_Prop_fillBackColor, 0x08000050 );
--        if(!aPropOpt.GetOpt( ESCHER_Prop_fNoFillHitTest, nValue ))
+-            if(!aPropOpt.GetOpt( ESCHER_Prop_fNoFillHitTest, nValue ))
 -                aPropOpt.AddOpt( ESCHER_Prop_fNoFillHitTest, 0x00110010 );		// bool field
--        if(!aPropOpt.GetOpt( ESCHER_Prop_shadowColor, nValue ))
+-            if(!aPropOpt.GetOpt( ESCHER_Prop_shadowColor, nValue ))
 -                aPropOpt.AddOpt( ESCHER_Prop_shadowColor, 0x00000000 );
--        if(!aPropOpt.GetOpt( ESCHER_Prop_fshadowObscured, nValue ))		// bool field
+-            if(!aPropOpt.GetOpt( ESCHER_Prop_fshadowObscured, nValue ))		// bool field
 -                aPropOpt.AddOpt( ESCHER_Prop_fshadowObscured, 0x00030003 );		// bool field
 +            if( !rPropOpt.GetOpt( ESCHER_Prop_fillBackColor, nValue ) )
 +                rPropOpt.AddOpt( ESCHER_Prop_fillBackColor, 0x08000050 );
@@ -2263,18 +2265,17 @@
 +    lcl_FillProps( aPropOpt, pCaption, bVisible );
 +
      nGrbit = 0;		// all off: AutoLine, AutoFill, Printable, Locked
-     XclEscherEx* pEx = pMsodrawing->GetEscherEx();
-     pEx->OpenContainer( ESCHER_SpContainer );
-     pEx->AddShape( ESCHER_ShpInst_TextBox, SHAPEFLAG_HAVEANCHOR | SHAPEFLAG_HAVESPT );
+     mrEscherEx.OpenContainer( ESCHER_SpContainer );
+     mrEscherEx.AddShape( ESCHER_ShpInst_TextBox, SHAPEFLAG_HAVEANCHOR | SHAPEFLAG_HAVESPT );
 -    sal_uInt32 nFlags = 0x000A0000;
 -    ::set_flag( nFlags, sal_uInt32(2), !bVisible );
 -    aPropOpt.AddOpt( ESCHER_Prop_fPrint, nFlags );                  // bool field
-     aPropOpt.Commit( pEx->GetStream() );
+     aPropOpt.Commit( mrEscherEx.GetStream() );
  
-     XclExpDffNoteAnchor( rRoot, rRect ).WriteData( *pEx);
-@@ -518,6 +667,72 @@ void XclObjComment::Save( XclExpStream&
+     XclExpDffNoteAnchor( rRoot, rRect ).WriteDffData( mrEscherEx );
+@@ -374,6 +521,72 @@
+    XclObj::Save( rStrm );
  }
- 
  
 +class VmlCommentExporter : public VMLExport
 +{
@@ -2344,22 +2345,22 @@
 +
  // --- class XclObjDropDown ------------------------------------------
  
- XclObjDropDown::XclObjDropDown( const XclExpRoot& rRoot, const ScAddress& rPos, BOOL bFilt ) :
-@@ -823,8 +1038,9 @@ void XclObjOle::Save( XclExpStream& rStr
+ XclObjDropDown::XclObjDropDown( XclExpObjectManager& rObjMgr, const ScAddress& rPos, BOOL bFilt ) :
+@@ -672,8 +885,9 @@
  
  // --- class XclObjAny -------------------------------------------
  
--XclObjAny::XclObjAny( const XclExpRoot& rRoot ) :
--    XclObj( rRoot, EXC_OBJTYPE_UNKNOWN )
-+XclObjAny::XclObjAny( const XclExpRoot& rRoot, const Reference< XShape >& rShape )
-+    : XclObj( rRoot, EXC_OBJTYPE_UNKNOWN )
+-XclObjAny::XclObjAny( XclExpObjectManager& rObjMgr ) :
+-    XclObj( rObjMgr, EXC_OBJTYPE_UNKNOWN )
++XclObjAny::XclObjAny( XclExpObjectManager& rObjMgr, const Reference< XShape >& rShape )
++    : XclObj( rObjMgr, EXC_OBJTYPE_UNKNOWN )
 +    , mxShape( rShape )
  {
  }
  
-@@ -850,6 +1066,120 @@ void XclObjAny::Save( XclExpStream& rStr
+@@ -710,6 +924,120 @@
+         nLowestBiffVer	= 0x00000006;	// Biff8
  }
- 
  
 +static void
 +WriteFromTo( XclExpXmlStream& rStrm, const XclObjAny& rObj )
@@ -2475,9 +2476,9 @@
 +}
 +
 +
- // --- class ExcBof8_Base --------------------------------------------
  
- ExcBof8_Base::ExcBof8_Base()
+ void ExcBof8_Base::SaveCont( XclExpStream& rStrm )
+ {
 --- sc/source/ui/docshell/docsh.cxx.old	2010-03-03 16:59:38.000000000 +0100
 +++ sc/source/ui/docshell/docsh.cxx	2010-03-03 17:00:06.000000000 +0100
 @@ -169,7 +169,7 @@ static const sal_Char __FAR_DATA pFilter
