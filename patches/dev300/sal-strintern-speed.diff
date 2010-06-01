@@ -1,40 +1,29 @@
-From cc943f09808ed204d700b18aa064da789fe8d124 Mon Sep 17 00:00:00 2001
-From: Jan Holesovsky <kendy@suse.cz>
-Date: Fri, 14 May 2010 16:53:13 +0200
-Subject: [PATCH 027/768] sal-strintern-speed.diff
-
----
- sal/rtl/source/hash.cxx |  196 ++++++++++++++++++++++++++++++++++++++++++++++-
- 1 files changed, 194 insertions(+), 2 deletions(-)
-
 diff --git sal/rtl/source/hash.cxx sal/rtl/source/hash.cxx
-index 63de2b4..60ba180 100644
+index 63de2b4..38eb5e8 100644
 --- sal/rtl/source/hash.cxx
 +++ sal/rtl/source/hash.cxx
-@@ -26,12 +26,15 @@
+@@ -26,12 +26,16 @@
   ************************************************************************/
  
  // MARKER(update_precomp.py): autogen include statement, do not remove
--#include "precompiled_sal.hxx"
--#include "rtl/allocator.hxx"
-+// #include "precompiled_sal.hxx"
++#if 0
+ #include "precompiled_sal.hxx"
+ #include "rtl/allocator.hxx"
++#endif
  
  #include "hash.h"
  #include "strimp.h"
 +#include <osl/diagnose.h>
-+
-+#if 0
  
-+#include "rtl/allocator.hxx"
++#if 0
  
  #include <hash_set>
  
-@@ -111,3 +114,192 @@ rtl_str_hash_remove (rtl_uString       *pString)
+@@ -110,4 +114,221 @@ rtl_str_hash_remove (rtl_uString       *pString)
+     getHashTable()->erase(pString);
  }
  
- }
-+
-+#else
++#endif
 +
 +// --------------------------- start here ---------------------------
 +
@@ -43,6 +32,29 @@ index 63de2b4..60ba180 100644
 +    sal_uInt32    nSize;
 +    rtl_uString **pData;
 +};
++
++typedef StringHashTableImpl StringHashTable;
++
++extern "C" {
++
++// Only for use in the implementation
++StringHashTable *rtl_str_hash_new (sal_uInt32 nSize);
++void rtl_str_hash_free (StringHashTable *pHash);
++
++}
++
++StringHashTable *
++getHashTable ()
++{
++    static StringHashTable *pInternPool = NULL;
++    if (pInternPool == NULL) {
++        static StringHashTable* pHash = rtl_str_hash_new(1024);
++        pInternPool = pHash;
++    }
++    return pInternPool;
++}
++
++extern "C" {
 +
 +// Better / smaller / faster hash set ....
 +
@@ -57,7 +69,7 @@ index 63de2b4..60ba180 100644
 +                                          2097143, 4194301, 8388593, 16777213,
 +                                          33554393, 67108859, 134217689 };
 +    #define NUM_PRIMES (sizeof (nPrimes)/ sizeof (nPrimes[0]))
-+    for (int i = 0; i < NUM_PRIMES; i++)
++    for (sal_uInt32 i = 0; i < NUM_PRIMES; i++)
 +    {
 +        if (nPrimes[i] > nSize)
 +            return nPrimes[i];
@@ -84,6 +96,16 @@ index 63de2b4..60ba180 100644
 +    return pHash;
 +}
 +
++void
++rtl_str_hash_free (StringHashTable *pHash)
++{
++    if (!pHash)
++        return;
++    if (pHash->pData)
++        free (pHash->pData);
++    free (pHash);
++}
++
 +static void
 +rtl_str_hash_insert_nonequal (StringHashTable   *pHash,
 +                              rtl_uString       *pString)
@@ -102,11 +124,11 @@ index 63de2b4..60ba180 100644
 +}
 +
 +static void
-+rtl_str_hash_resize (StringHashTable  *pHash,
-+                     sal_uInt32        nNewSize)
++rtl_str_hash_resize (sal_uInt32        nNewSize)
 +{
 +    sal_uInt32 i;
 +    StringHashTable *pNewHash;
++    StringHashTable *pHash = getHashTable();
 +
 +    OSL_ASSERT (nNewSize > pHash->nEntries);
 +
@@ -124,16 +146,6 @@ index 63de2b4..60ba180 100644
 +    rtl_str_hash_free (pNewHash);
 +}
 +
-+void
-+rtl_str_hash_free (StringHashTable *pHash)
-+{
-+    if (!pHash)
-+        return;
-+    if (pHash->pData)
-+        free (pHash->pData);
-+    free (pHash);
-+}
-+
 +static int
 +compareEqual (rtl_uString *pStringA, rtl_uString *pStringB)
 +{
@@ -145,18 +157,20 @@ index 63de2b4..60ba180 100644
 +                                         pStringB->buffer, pStringB->length);
 +}
 +
++
 +rtl_uString *
-+rtl_str_hash_intern (StringHashTable   *pHash,
-+                     rtl_uString       *pString,
++rtl_str_hash_intern (rtl_uString       *pString,
 +                     int                can_return)
 +{
 +    sal_uInt32  nHash = hashString (pString);
 +    sal_uInt32  n;
 +    rtl_uString *pHashStr;
++    
++    StringHashTable *pHash = getHashTable();
 +
 +    // Should we resize ?
 +    if (pHash->nEntries >= pHash->nSize/2)
-+        rtl_str_hash_resize (pHash, getNextSize(pHash->nSize));
++        rtl_str_hash_resize (getNextSize(pHash->nSize));
 +
 +    n = nHash % pHash->nSize;
 +    while ((pHashStr = pHash->pData[n]) != NULL) {
@@ -188,12 +202,13 @@ index 63de2b4..60ba180 100644
 +}
 +
 +void
-+rtl_str_hash_remove (StringHashTable   *pHash,
-+                     rtl_uString       *pString)
++rtl_str_hash_remove (rtl_uString       *pString)
 +{
 +    sal_uInt32   n;
 +    sal_uInt32   nHash = hashString (pString);
 +    rtl_uString *pHashStr;
++
++    StringHashTable *pHash = getHashTable();
 +
 +    n = nHash % pHash->nSize;
 +    while ((pHashStr = pHash->pData[n]) != NULL) {
@@ -210,6 +225,9 @@ index 63de2b4..60ba180 100644
 +    pHash->pData[n++] = NULL;
 +    pHash->nEntries--;
 +
++    if (n >= pHash->nSize)
++        n = 0;
++
 +    while ((pHashStr = pHash->pData[n]) != NULL) {
 +        pHash->pData[n] = NULL;
 +        // FIXME: rather unsophisticated and N^2 in chain-length, but robust.
@@ -221,7 +239,5 @@ index 63de2b4..60ba180 100644
 +    // FIXME: Should we down-size ?
 +}
 +
-+#endif
--- 
-1.7.0.1
-
++
+ }
