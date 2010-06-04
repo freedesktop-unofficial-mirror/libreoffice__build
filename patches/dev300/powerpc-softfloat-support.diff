@@ -1,0 +1,353 @@
+
+# HG changeset patch
+# User Caolán McNamara <cmc@openoffice.org>
+# Date 1259668046 0
+# Node ID 461f556673a244a5208b5d0e23bb810fe7406845
+# Parent  0d1746fada9b675ea9c7a85bbd4470788323a329
+cmcfixes68: #i107183# ppc-linux: add support for softfloat toolchains
+
+diff -r 0d1746fada9b -r 461f556673a2 bridges/source/cpp_uno/gcc3_linux_powerpc/cpp2uno.cxx
+--- bridges/source/cpp_uno/gcc3_linux_powerpc/cpp2uno.cxx	Tue Dec 01 11:43:22 2009 +0000
++++ bridges/source/cpp_uno/gcc3_linux_powerpc/cpp2uno.cxx	Tue Dec 01 11:47:26 2009 +0000
+@@ -61,7 +61,9 @@
+ 	sal_Int64 * pRegisterReturn /* space for register return */ )
+ {
+         int ng = 0; //number of gpr registers used 
++#ifndef __NO_FPRS__
+         int nf = 0; //number of fpr regsiters used
++#endif
+         void ** pCppStack; //temporary stack pointer
+        
+         // gpreg:  [ret *], this, [gpr params]
+@@ -123,11 +125,23 @@
+ 			{
+ 
+ 			  case typelib_TypeClass_DOUBLE:
++#ifndef __NO_FPRS__
+ 			   if (nf < 8) {
+ 			      pCppArgs[nPos] = fpreg;
+ 			      pUnoArgs[nPos] = fpreg;
+ 			      nf++;
+ 			      fpreg += 2;
++#else
++               if (ng & 1) {
++                   ng++;
++                   gpreg++;
++               }
++               if (ng < 8) {
++                   pCppArgs[nPos] = gpreg;
++                   pUnoArgs[nPos] = gpreg;
++                   ng += 2;
++                   gpreg += 2;
++#endif
+ 			   } else {
+ 				if (((long)ovrflw) & 4) ovrflw++;
+ 				pCppArgs[nPos] = ovrflw;
+@@ -139,6 +153,7 @@
+ 			   case typelib_TypeClass_FLOAT:
+ 			    // fpreg are all double values so need to
+ 			    // modify fpreg to be a single word float value
++#ifndef __NO_FPRS__
+ 			    if (nf < 8) {
+ 			       float tmp = (float) (*((double *)fpreg));
+ 			       (*((float *) fpreg)) = tmp;
+@@ -146,6 +161,13 @@
+ 			       pUnoArgs[nPos] = fpreg;
+ 			       nf++;
+ 			       fpreg += 2;
++#else
++                if (ng < 8) {
++                   pCppArgs[nPos] = gpreg;
++                   pUnoArgs[nPos] = gpreg;
++                   ng++;
++                   gpreg++;
++#endif
+ 			    } else {
+ #if 0 /* abi is not being followed correctly */
+ 			      if (((long)ovrflw) & 4) ovrflw++;
+@@ -488,10 +510,12 @@
+ static void cpp_vtable_call( int nFunctionIndex, int nVtableOffset, void** gpregptr, void** fpregptr, void** ovrflw)
+ {
+         sal_Int32     gpreg[8];
++        memcpy( gpreg, gpregptr, 32);
++
++#ifndef __NO_FPRS__
+         double        fpreg[8];
+-
+-        memcpy( gpreg, gpregptr, 32);
+         memcpy( fpreg, fpregptr, 64);
++#endif
+ 
+ 	volatile long nRegReturn[2];
+ 
+@@ -499,10 +523,14 @@
+         // fprintf(stderr,"in cpp_vtable_call nVtableOffset is %x\n",nVtableOffset);
+         // fflush(stderr);
+ 
+-        sal_Bool bComplex = nFunctionIndex & 0x80000000 ? sal_True : sal_False;
+-
+ 	typelib_TypeClass aType = 
+-             cpp_mediate( nFunctionIndex, nVtableOffset, (void**)gpreg, (void**)fpreg, ovrflw, (sal_Int64*)nRegReturn );
++             cpp_mediate( nFunctionIndex, nVtableOffset, (void**)gpreg,
++#ifndef __NO_FPRS__
++                 (void**)fpreg, 
++#else
++                 NULL,
++#endif
++                 ovrflw, (sal_Int64*)nRegReturn );
+     
+ 	switch( aType )
+ 	{
+@@ -524,13 +552,25 @@
+                   break;
+ 
+ 		case typelib_TypeClass_FLOAT:
++#ifndef __NO_FPRS__
+                   __asm__( "lfs 1,%0\n\t" : :
+                            "m" (*((float*)nRegReturn)) );
++ #else
++                  __asm__( "lwz 3,%0\n\t" : :
++                           "m"(nRegReturn[0]) );
++#endif
+ 		  break;
+ 
+ 		case typelib_TypeClass_DOUBLE:
++#ifndef __NO_FPRS__
+ 		  __asm__( "lfd 1,%0\n\t" : :
+                            "m" (*((double*)nRegReturn)) );
++#else
++          __asm__( "lwz 3,%0\n\t" : :
++                           "m"(nRegReturn[0]) );
++          __asm__( "lwz 4,%0\n\t" : :
++                           "m"(nRegReturn[1]) );
++#endif
+ 		  break;
+ 
+ 		case typelib_TypeClass_HYPER:
+@@ -577,6 +617,7 @@
+ 
+ 
+     // # next save fpr 1 to fpr 8 (aligned to 8)
++    // if dedicated floating point registers are used
+     //	stfd	f1,-2016(r1)
+     //	stfd	f2,-2008(r1)
+     //	stfd	f3,-2000(r1)
+@@ -604,6 +645,10 @@
+ 
+     // #now load up the pointer to the saved fpr registers
+     //	addi	r6,r1,-2016
++    // if no dedicated floating point registers are used than we have NULL
++    // pointer there
++    //  li      r6, 0
++    //
+ 
+     // #now load up the pointer to the overflow call stack
+     //	addi	r7,r1,8
+@@ -617,6 +662,7 @@
+       * p++ = 0x9101f814;
+       * p++ = 0x9121f818;
+       * p++ = 0x9141f81c;
++#ifndef __NO_FPRS__
+       * p++ = 0xd821f820;
+       * p++ = 0xd841f828;
+       * p++ = 0xd861f830;
+@@ -625,6 +671,17 @@
+       * p++ = 0xd8c1f848;
+       * p++ = 0xd8e1f850;
+       * p++ = 0xd901f858;
++#else
++      /* these nops could be replaced with a smaller codeSnippetSize - 8 * 4 */
++      * p++ = 0x60000000;
++      * p++ = 0x60000000;
++      * p++ = 0x60000000;
++      * p++ = 0x60000000;
++      * p++ = 0x60000000;
++      * p++ = 0x60000000;
++      * p++ = 0x60000000;
++      * p++ = 0x60000000;
++#endif
+       * p++ = 0x3c600000 | (((unsigned long)cpp_vtable_call) >> 16);
+       * p++ = 0x60630000 | (((unsigned long)cpp_vtable_call) & 0x0000FFFF);
+       * p++ = 0x7c6903a6;
+@@ -633,7 +690,11 @@
+       * p++ = 0x3c800000 | (((unsigned long)vtableOffset) >> 16);
+       * p++ = 0x60840000 | (((unsigned long)vtableOffset) & 0x0000FFFF);
+       * p++ = 0x38a1f800;
++#ifndef __NO_FPRS__
+       * p++ = 0x38c1f820;
++#else
++      * p++ = 0x38c00000;
++#endif
+       * p++ = 0x38e10008;
+       * p++ = 0x4e800420;
+       return (code + codeSnippetSize);
+diff -r 0d1746fada9b -r 461f556673a2 bridges/source/cpp_uno/gcc3_linux_powerpc/except.cxx
+--- bridges/source/cpp_uno/gcc3_linux_powerpc/except.cxx	Tue Dec 01 11:43:22 2009 +0000
++++ bridges/source/cpp_uno/gcc3_linux_powerpc/except.cxx	Tue Dec 01 11:47:26 2009 +0000
+@@ -137,8 +137,8 @@
+     OUString const & unoName = *(OUString const *)&pTypeDescr->aBase.pTypeName;
+ 
+     MutexGuard guard( m_mutex );
+-    t_rtti_map::const_iterator iFind( m_rttis.find( unoName ) );
+-    if (iFind == m_rttis.end())
++    t_rtti_map::const_iterator iRttiFind( m_rttis.find( unoName ) );
++    if (iRttiFind == m_rttis.end())
+     {
+         // RTTI symbol
+         OStringBuffer buf( 64 );
+@@ -202,7 +202,7 @@
+     }
+     else
+     {
+-        rtti = iFind->second;
++        rtti = iRttiFind->second;
+     }
+ 
+     return rtti;
+diff -r 0d1746fada9b -r 461f556673a2 bridges/source/cpp_uno/gcc3_linux_powerpc/uno2cpp.cxx
+--- bridges/source/cpp_uno/gcc3_linux_powerpc/uno2cpp.cxx	Tue Dec 01 11:43:22 2009 +0000
++++ bridges/source/cpp_uno/gcc3_linux_powerpc/uno2cpp.cxx	Tue Dec 01 11:47:26 2009 +0000
+@@ -74,12 +74,14 @@
+      void (*ptr)();
+      int gpr[8];                   // storage for gpregisters, map to r3-r10
+      int off;                      // offset used to find function
++#ifndef __NO_FPRS__
+      double fpr[8];                // storage for fpregisters, map to f1-f8
++     int f;                        // number of fprs mapped so far
++     double dret;                  // temporary function return values
++#endif
+      int n;                        // number of gprs mapped so far
+-     int f;                        // number of fprs mapped so far
+      long *p;                      // pointer to parameter overflow area
+      int c;                        // character of parameter type being decoded
+-     double dret;                  // temporary function return values
+      int iret, iret2;
+ 
+      // Because of the Power PC calling conventions we could be passing
+@@ -93,7 +95,7 @@
+ 
+      // Note: could require up to  2*nStackLongs words of parameter stack area 
+      // if the call has many float parameters (i.e. floats take up only 1 
+-     // word on the stack but take 2 words in parameter area in the 
++     // word on the stack but double takes 2 words in parameter area in the
+      // stack frame .
+ 
+      // Update! floats on the outgoing parameter stack only take up 1 word
+@@ -119,7 +121,9 @@
+ 
+      // now begin to load the C++ function arguments into storage
+      n = 0;
++#ifndef __NO_FPRS__
+      f = 0;
++#endif
+ 
+      // now we need to parse the entire signature string */
+      // until we get the END indicator */
+@@ -143,8 +147,16 @@
+        c = *pPT;
+        switch (c) {
+        case 'D':                   /* type is double */
++#ifndef __NO_FPRS__
+             if (f < 8) {
+                fpr[f++] = *((double *)pStackLongs);   /* store in register */
++#else
++            if (n & 1)
++               n++;
++            if (n < 8) {
++               gpr[n++] = *pStackLongs;
++               gpr[n++] = *(pStackLongs+1);
++#endif
+ 	    } else {
+ 	       if (((long) p) & 4)          
+ 	          p++;
+@@ -163,8 +175,13 @@
+             store floats as a *single* word on outgoing parameter stack
+             to match what gcc actually does
+ 	 */
++#ifndef __NO_FPRS__
+             if (f < 8) {
+                fpr[f++] = *((float *)pStackLongs);
++#else
++            if (n < 8) {
++               gpr[n++] = *pStackLongs;
++#endif
+ 	    } else {
+ #if 0 /* if abi were followed */
+ 	       if (((long) p) & 4)          
+@@ -243,6 +260,7 @@
+ 		"lwz	8,	20(%0)\n\t"
+ 		"lwz	9,	24(%0)\n\t"
+ 		"lwz	10,	28(%0)\n\t"
++#ifndef __NO_FPRS__
+ 		"lfd	1,	0(%1)\n\t"
+ 		"lfd	2,	8(%1)\n\t"
+ 		"lfd	3,	16(%1)\n\t"
+@@ -252,16 +270,24 @@
+ 		"lfd	7,	48(%1)\n\t"
+ 		"lfd	8,	56(%1)\n\t"
+ 	        : : "r" (gpr), "r" (fpr)
++#else
++	        : : "r" (gpr)
++#endif
+ 		: "0", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12"
+     );
+ 
+     (*ptr)();
+ 
+     __asm__ __volatile__ (
+-		"mr	%1,	3\n\t"
+-		"mr	%2,	4\n\t"
+-		"fmr	%0,	1\n\t"
+-		: "=f" (dret), "=r" (iret), "=r" (iret2) : );
++       "mr     %0,     3\n\t"
++       "mr     %1,     4\n\t"
++#ifndef __NO_FPRS__
++       "fmr    %2,     1\n\t"
++       : "=r" (iret), "=r" (iret2), "=f" (dret)
++#else
++       : "=r" (iret), "=r" (iret2)
++#endif
++       : );
+ 
+     switch( eReturnType )
+ 	{
+@@ -284,10 +310,21 @@
+ 		        *(unsigned char*)pRegisterReturn = (unsigned char)iret;
+ 			break;
+ 		case typelib_TypeClass_FLOAT:
++#ifndef __NO_FPRS__
+ 		        *(float*)pRegisterReturn = (float)dret;
++#else
++		        ((unsigned int*)pRegisterReturn)[0] = iret;
++#endif
+ 			break;
+ 		case typelib_TypeClass_DOUBLE:
++#ifndef __NO_FPRS__
+ 			*(double*)pRegisterReturn = dret;
++#else
++			((unsigned int*)pRegisterReturn)[0] = iret;
++			((unsigned int*)pRegisterReturn)[1] = iret2;
++#endif
++			break;
++		default:
+ 			break;
+ 	}
+ }
+@@ -399,6 +436,8 @@
+ 			case typelib_TypeClass_UNSIGNED_HYPER:
+ 			    *pPT++ = 'H';
+ 			    pCppStack += sizeof(sal_Int32); // extra long
++			default:
++			    break;
+ 			}
+ 
+ 			// no longer needed
+@@ -518,7 +557,6 @@
+ 	// is my surrogate
+         bridges::cpp_uno::shared::UnoInterfaceProxy * pThis 
+             = static_cast< bridges::cpp_uno::shared::UnoInterfaceProxy *> (pUnoI);
+-	typelib_InterfaceTypeDescription * pTypeDescr = pThis->pTypeDescr;
+ 	
+ 	switch (pMemberDescr->eTypeClass)
+ 	{
+
