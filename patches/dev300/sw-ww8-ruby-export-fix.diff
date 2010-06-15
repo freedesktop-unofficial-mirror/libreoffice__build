@@ -1,35 +1,14 @@
-diff --git sw/source/filter/ww8/wrtw8nds.cxx sw/source/filter/ww8/wrtw8nds.cxx
-index f207dd8..57e4920 100644
---- sw/source/filter/ww8/wrtw8nds.cxx
-+++ sw/source/filter/ww8/wrtw8nds.cxx
-@@ -36,6 +36,7 @@
- #include <functional>
- #include <iostream>
- #include <hintids.hxx>
-+#include <comphelper/processfactory.hxx>
- #include <tools/urlobj.hxx>
- #include <editeng/boxitem.hxx>
- #include <editeng/cmapitem.hxx>
-@@ -50,8 +51,10 @@
- #include <editeng/brkitem.hxx>
- #include <editeng/frmdiritem.hxx>
- #include <editeng/tstpitem.hxx>
-+#include <editeng/unolingu.hxx>
- #include "svl/urihelper.hxx"
- #include <svl/whiter.hxx>
-+#include <unotools/localedatawrapper.hxx>
- #include <fmtpdsc.hxx>
- #include <fmtfsize.hxx>
- #include <fmtornt.hxx>
-@@ -109,6 +112,7 @@
- 
- using namespace ::com::sun::star;
- using namespace ::com::sun::star::i18n;
-+using namespace ::com::sun::star::lang;
- using namespace sw::util;
- using namespace sw::types;
- using namespace sw::mark;
-@@ -739,7 +743,17 @@ void WW8AttributeOutput::StartRuby( const SwTxtNode& rNode, xub_StrLen /*nPos*/,
+commit fcda032d53a1d766a5d3fd6af373b4f55ab52401
+Author: Cédric Bosdonnat <cedricbosdo@openoffice.org>
+Date:   Tue Jun 15 16:30:36 2010 +0200
+
+    Fix the ruby export in ww8 filter
+
+diff --git a/sw/source/filter/ww8/wrtw8nds.cxx b/sw/source/filter/ww8/wrtw8nds.cxx
+index f207dd8..65e43a7 100644
+--- a/sw/source/filter/ww8/wrtw8nds.cxx
++++ b/sw/source/filter/ww8/wrtw8nds.cxx
+@@ -739,7 +739,14 @@ void WW8AttributeOutput::StartRuby( const SwTxtNode& rNode, xub_StrLen /*nPos*/,
      aStr += String::CreateFromInt32(nHeight);
      aStr += '(';
      aStr += rRuby.GetText();
@@ -37,10 +16,7 @@ index f207dd8..57e4920 100644
 +    aStr.APPEND_CONST_ASC( ")" );
 +
 +    // The parameter separator depends on the FIB.lid
-+    Locale aTempLocale;
-+    SvxLanguageToLocale( aTempLocale, m_rWW8Export.pFib->lid );
-+    LocaleDataWrapper aLocaleWrapper( ::comphelper::getProcessServiceFactory(), aTempLocale );
-+    if ( aLocaleWrapper.getNumDecimalSep().EqualsAscii( "." ) )
++    if ( m_rWW8Export.pFib->getNumDecimalSep() == '.' )
 +        aStr.APPEND_CONST_ASC( "," );
 +    else
 +        aStr.APPEND_CONST_ASC( ";" );
@@ -48,3 +24,67 @@ index f207dd8..57e4920 100644
      m_rWW8Export.OutputField( 0, ww::eEQ, aStr,
              WRITEFIELD_START | WRITEFIELD_CMD_START );
  }
+diff --git a/sw/source/filter/ww8/ww8scan.cxx b/sw/source/filter/ww8/ww8scan.cxx
+index 59de57e..98adeba 100644
+--- a/sw/source/filter/ww8/ww8scan.cxx
++++ b/sw/source/filter/ww8/ww8scan.cxx
+@@ -47,8 +47,11 @@
+ #include <swtypes.hxx>      // DELETEZ
+ 
+ #endif                      // dump
++#include <comphelper/processfactory.hxx>
++#include <unotools/localedatawrapper.hxx>
+ #include <tools/debug.hxx>
+ #include <i18npool/lang.h>
++#include <editeng/unolingu.hxx>
+ #include <vcl/svapp.hxx>    // Application  #i90932#
+ 
+ #include <stdio.h>
+@@ -58,6 +61,8 @@
+     if (!(aCon)) \
+         return aRet;
+ 
++using namespace ::com::sun::star::lang;
++
+ //-begin
+ namespace SL
+ {
+@@ -5652,6 +5657,16 @@ WW8Fib::WW8Fib(BYTE nVer)
+             break;
+     };
+     // <-- #i90932# 
++    
++    Locale aTempLocale;
++    SvxLanguageToLocale( aTempLocale, lid );
++    LocaleDataWrapper aLocaleWrapper( ::comphelper::getProcessServiceFactory(), aTempLocale );
++    nNumDecimalSep = aLocaleWrapper.getNumDecimalSep().GetChar( 0 );
++}
++
++sal_Unicode WW8Fib::getNumDecimalSep() const
++{
++    return nNumDecimalSep;
+ }
+ 
+ bool WW8Fib::WriteHeader(SvStream& rStrm)
+diff --git a/sw/source/filter/ww8/ww8scan.hxx b/sw/source/filter/ww8/ww8scan.hxx
+index 9e8c9ce..f9db96c 100644
+--- a/sw/source/filter/ww8/ww8scan.hxx
++++ b/sw/source/filter/ww8/ww8scan.hxx
+@@ -987,6 +987,9 @@ public:
+ */
+ class WW8Fib
+ {
++private:
++    sal_Unicode nNumDecimalSep;
++
+ public:
+     /**
+         Program-Version asked for by us:
+@@ -1444,6 +1447,7 @@ public:
+     static rtl_TextEncoding GetFIBCharset(UINT16 chs);
+     ww::WordVersion GetFIBVersion() const;
+     WW8_CP GetBaseCp(ManTypes nType) const;
++    sal_Unicode getNumDecimalSep() const;
+ };
+ 
+ class WW8Style
