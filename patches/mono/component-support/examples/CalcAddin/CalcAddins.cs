@@ -19,7 +19,7 @@ static class ServiceInfoHelper
 }
 
 
-public class CalcAddins : uno.util.WeakBase, unoidl.com.sun.star.lang.XServiceInfo, unoidl.com.sun.star.lang.XServiceName
+public class CalcAddins : uno.util.WeakBase, unoidl.org.openoffice.sheet.addin.XCalcAddins, unoidl.com.sun.star.sheet.XAddIn, unoidl.com.sun.star.lang.XServiceInfo, unoidl.com.sun.star.lang.XServiceName
 
 {
         
@@ -129,10 +129,10 @@ unoidl.com.sun.star.beans.XPropertySet xOptions
  * Enter a description for each of your methods that office users will understand.
  */
                 case shortGETMYFIRSTVALUE:
-                    stringReturn = "This is your first method.";
+                    stringReturn = "(message from mono) This is your first method.";
                     break;
                 case shortGETMYSECONDVALUE:
-                    stringReturn = "This is your second method.";
+                    stringReturn = "(message from mono) This is your second method.";
                     break;
             }
             
@@ -219,7 +219,8 @@ unoidl.com.sun.star.beans.XPropertySet xOptions
     public static unoidl.com.sun.star.lang.XSingleComponentFactory __getComponentFactory(String implName )
     {
         unoidl.com.sun.star.lang.XSingleComponentFactory xFactory = null;
-        if ( implName == ServiceInfoHelper.getImplementationName() )
+        //if ( implName == ServiceInfoHelper.getImplementationName() )
+        if ( implName == ServiceInfoHelper.getServiceName() )
         {
 
             xFactory = uno.util.Factory.createComponentFactory( typeof ( CalcAddins ),
@@ -229,7 +230,7 @@ unoidl.com.sun.star.beans.XPropertySet xOptions
     }
     public static bool __writeRegistryServiceInfo(unoidl.com.sun.star.registry.XRegistryKey regKey)
     {
-        return uno.util.Factory.writeRegistryServiceInfo( ServiceInfoHelper.getImplementationName(),
+        return uno.util.Factory.writeRegistryServiceInfo( ServiceInfoHelper.getServiceName(),
                                                 ServiceInfoHelper.getSupportedServiceNames(),
                                                 regKey);
     }
