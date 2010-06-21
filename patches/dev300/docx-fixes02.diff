@@ -1,3 +1,17 @@
+---
+ sax/source/tools/fastserializer.cxx          |   45 +++
+ sax/source/tools/fastserializer.hxx          |    7 +
+ sw/source/filter/ww8/attributeoutputbase.hxx |    5 +-
+ sw/source/filter/ww8/docxattributeoutput.cxx |  408 +++++++++++++++++++++++++-
+ sw/source/filter/ww8/docxattributeoutput.hxx |    8 +-
+ sw/source/filter/ww8/makefile.mk             |    1 +
+ sw/source/filter/ww8/wrtw8nds.cxx            |   88 +-----
+ sw/source/filter/ww8/wrtw8sty.cxx            |   15 +-
+ sw/source/filter/ww8/wrtww8.hxx              |   69 +++++
+ sw/source/filter/ww8/ww8atr.cxx              |   21 +-
+ sw/source/filter/ww8/ww8attributeoutput.hxx  |    5 +-
+ 11 files changed, 560 insertions(+), 112 deletions(-)
+
 diff --git sax/source/tools/fastserializer.cxx sax/source/tools/fastserializer.cxx
 index 6b0736d..edff7cb 100644
 --- sax/source/tools/fastserializer.cxx
@@ -94,7 +108,7 @@ index a616f69..0132306 100644
  
      void writeFastAttributeList( const ::com::sun::star::uno::Reference< ::com::sun::star::xml::sax::XFastAttributeList >& Attribs );
 diff --git sw/source/filter/ww8/attributeoutputbase.hxx sw/source/filter/ww8/attributeoutputbase.hxx
-index 47a42b2..9def7ac 100644
+index e5f40b9..ff8c062 100644
 --- sw/source/filter/ww8/attributeoutputbase.hxx
 +++ sw/source/filter/ww8/attributeoutputbase.hxx
 @@ -176,7 +176,7 @@ public:
@@ -106,7 +120,7 @@ index 47a42b2..9def7ac 100644
  
      /// Output ruby end.
      virtual void EndRuby() = 0;
-@@ -245,7 +245,8 @@ public:
+@@ -247,7 +247,8 @@ public:
  
      /// Start of a style in the styles table.
      virtual void StartStyle( const String& rName, bool bPapFmt,
@@ -117,7 +131,7 @@ index 47a42b2..9def7ac 100644
      /// End of a style in the styles table.
      virtual void EndStyle() = 0;
 diff --git sw/source/filter/ww8/docxattributeoutput.cxx sw/source/filter/ww8/docxattributeoutput.cxx
-index 76eea38..a691c29 100644
+index 291a6a7..430c1e4 100644
 --- sw/source/filter/ww8/docxattributeoutput.cxx
 +++ sw/source/filter/ww8/docxattributeoutput.cxx
 @@ -31,6 +31,13 @@
@@ -175,16 +189,14 @@ index 76eea38..a691c29 100644
      if ( m_pSpacingAttrList )
      {
          XFastAttributeListRef xAttrList( m_pSpacingAttrList );
-@@ -749,11 +783,69 @@ void DocxAttributeOutput::RawText( const String& /*rText*/, bool /*bForceUnicode
- #endif
+@@ -745,14 +779,82 @@ void DocxAttributeOutput::RawText( const String& /*rText*/, bool /*bForceUnicode
+     OSL_TRACE("TODO DocxAttributeOutput::RawText( const String& rText, bool bForceUnicode, rtl_TextEncoding eCharSet )\n" );
  }
  
 -void DocxAttributeOutput::StartRuby( const SwTxtNode& /*rNode*/, const SwFmtRuby& /*rRuby*/ )
 +void DocxAttributeOutput::StartRuby( const SwTxtNode& rNode, xub_StrLen nPos, const SwFmtRuby& rRuby )
  {
- #if OSL_DEBUG_LEVEL > 0
-     fprintf( stderr, "TODO DocxAttributeOutput::StartRuby( const SwTxtNode& rNode, const SwFmtRuby& rRuby )\n" );
- #endif
+     OSL_TRACE("TODO DocxAttributeOutput::StartRuby( const SwTxtNode& rNode, const SwFmtRuby& rRuby )\n" );
 +    m_pSerializer->startElementNS( XML_w, XML_ruby, FSEND );
 +    m_pSerializer->startElementNS( XML_w, XML_rubyPr, FSEND );
 +    // hps
@@ -243,20 +255,25 @@ index 76eea38..a691c29 100644
 +   
 +    m_pSerializer->startElementNS( XML_w, XML_rubyBase, FSEND );
 +    StartRun( NULL );
++>>>>>>> 3caf808... docx-fixes02.diff
  }
  
  void DocxAttributeOutput::EndRuby()
-@@ -761,6 +853,9 @@ void DocxAttributeOutput::EndRuby()
- #if OSL_DEBUG_LEVEL > 0
-     fprintf( stderr, "TODO DocxAttributeOutput::EndRuby()\n" );
- #endif
+ {
++<<<<<<< HEAD
+     OSL_TRACE( "TODO DocxAttributeOutput::EndRuby()\n" );
++=======
++#if OSL_DEBUG_LEVEL > 0
++    fprintf( stderr, "TODO DocxAttributeOutput::EndRuby()\n" );
++#endif
 +    EndRun( );
 +    m_pSerializer->endElementNS( XML_w, XML_rubyBase );
 +    m_pSerializer->endElementNS( XML_w, XML_ruby );
++>>>>>>> 3caf808... docx-fixes02.diff
  }
  
  bool DocxAttributeOutput::AnalyzeURL( const String& rUrl, const String& rTarget, String* pLinkURL, String* pMark )
-@@ -1708,6 +1803,12 @@ void DocxAttributeOutput::OutputFlyFrame_Impl( const sw::Frame &rFrame, const Po
+@@ -1693,6 +1795,12 @@ void DocxAttributeOutput::OutputFlyFrame_Impl( const sw::Frame &rFrame, const Po
                  }
              }
              break;
@@ -268,8 +285,8 @@ index 76eea38..a691c29 100644
 +            break;
          default:
  #if OSL_DEBUG_LEVEL > 0
-             fprintf( stderr, "TODO DocxAttributeOutput::OutputFlyFrame_Impl( const sw::Frame& rFrame, const Point& rNdTopLeft ) - frame type '%s'\n",
-@@ -1722,7 +1823,7 @@ void DocxAttributeOutput::OutputFlyFrame_Impl( const sw::Frame &rFrame, const Po
+             OSL_TRACE( "TODO DocxAttributeOutput::OutputFlyFrame_Impl( const sw::Frame& rFrame, const Point& rNdTopLeft ) - frame type '%s'\n",
+@@ -1707,7 +1815,7 @@ void DocxAttributeOutput::OutputFlyFrame_Impl( const sw::Frame &rFrame, const Po
  }
  
  void DocxAttributeOutput::StartStyle( const String& rName, bool bPapFmt,
@@ -278,7 +295,7 @@ index 76eea38..a691c29 100644
  {
      OString aStyle( "style" );
  
-@@ -1745,6 +1846,9 @@ void DocxAttributeOutput::StartStyle( const String& rName, bool bPapFmt,
+@@ -1730,6 +1838,9 @@ void DocxAttributeOutput::StartStyle( const String& rName, bool bPapFmt,
      m_pSerializer->singleElementNS( XML_w, XML_next,
              FSNS( XML_w, XML_val ), ( aStyle + OString::valueOf( sal_Int32( nNext ) ) ).getStr(),
              FSEND );
@@ -288,15 +305,17 @@ index 76eea38..a691c29 100644
  }
  
  void DocxAttributeOutput::EndStyle()
-@@ -2262,11 +2366,43 @@ void DocxAttributeOutput::CharCrossedOut( const SvxCrossedOutItem& rCrossedOut )
+@@ -2247,11 +2358,51 @@ void DocxAttributeOutput::CharCrossedOut( const SvxCrossedOutItem& rCrossedOut )
      }
  }
  
--void DocxAttributeOutput::CharEscapement( const SvxEscapementItem& /*rEscapement*/ )
--{
--#if OSL_DEBUG_LEVEL > 0
--    fprintf( stderr, "TODO DocxAttributeOutput::CharEscapement()\n" );
--#endif
++<<<<<<< HEAD
+ void DocxAttributeOutput::CharEscapement( const SvxEscapementItem& /*rEscapement*/ )
+ {
+ #if OSL_DEBUG_LEVEL > 0
+     OSL_TRACE( "TODO DocxAttributeOutput::CharEscapement()\n" );
+ #endif
++=======
 +void DocxAttributeOutput::CharEscapement( const SvxEscapementItem& rEscapement )
 +{ 
 +    OString sIss;
@@ -334,10 +353,11 @@ index 76eea38..a691c29 100644
 +                    FSNS( XML_w, XML_val ), sSize.getStr( ), FSEND );
 +        }
 +    }
++>>>>>>> 3caf808... docx-fixes02.diff
  }
  
  void DocxAttributeOutput::CharFont( const SvxFontItem& rFont)
-@@ -2298,7 +2434,7 @@ void DocxAttributeOutput::CharFontSize( const SvxFontHeightItem& rFontSize)
+@@ -2283,7 +2434,7 @@ void DocxAttributeOutput::CharFontSize( const SvxFontHeightItem& rFontSize)
  void DocxAttributeOutput::CharKerning( const SvxKerningItem& rKerning )
  {
      OString aKerning = OString::valueOf( ( sal_Int32 ) rKerning.GetValue() );
@@ -346,30 +366,35 @@ index 76eea38..a691c29 100644
  }
  
  void DocxAttributeOutput::CharLanguage( const SvxLanguageItem& rLanguage )
-@@ -2551,11 +2687,12 @@ void DocxAttributeOutput::TextINetFormat( const SwFmtINetFmt& rLink )
+@@ -2536,11 +2687,18 @@ void DocxAttributeOutput::TextINetFormat( const SwFmtINetFmt& rLink )
      m_pSerializer->singleElementNS( XML_w, XML_rStyle, FSNS( XML_w, XML_val ), aStyleId.getStr(), FSEND );
  }
  
 -void DocxAttributeOutput::TextCharFormat( const SwFmtCharFmt& )
 +void DocxAttributeOutput::TextCharFormat( const SwFmtCharFmt& rCharFmt )
  {
--#if OSL_DEBUG_LEVEL > 0
--    fprintf( stderr, "TODO DocxAttributeOutput::TextCharFormat()\n" );
--#endif
++<<<<<<< HEAD
+ #if OSL_DEBUG_LEVEL > 0
+     OSL_TRACE( "TODO DocxAttributeOutput::TextCharFormat()\n" );
+ #endif
++=======
 +    OString aStyleId( "style" );
 +    aStyleId += OString::valueOf( sal_Int32( m_rExport.GetId( *rCharFmt.GetCharFmt() ) ) );
 +
 +    m_pSerializer->singleElementNS( XML_w, XML_rStyle, FSNS( XML_w, XML_val ), aStyleId.getStr(), FSEND );
++>>>>>>> 3caf808... docx-fixes02.diff
  }
  
  void DocxAttributeOutput::RefField( const SwField&  rFld, const String& rRef )
-@@ -2969,9 +3106,22 @@ void DocxAttributeOutput::FormatFrameSize( const SwFmtFrmSize& rSize )
+@@ -2954,9 +3112,28 @@ void DocxAttributeOutput::FormatFrameSize( const SwFmtFrmSize& rSize )
  {
      if ( m_rExport.bOutFlyFrmAttrs )
      {
-- #if OSL_DEBUG_LEVEL > 0
--    fprintf( stderr, "TODO DocxAttributeOutput::FormatFrameSize() - Fly frames\n" );
-- #endif
++<<<<<<< HEAD
+  #if OSL_DEBUG_LEVEL > 0
+     OSL_TRACE( "TODO DocxAttributeOutput::FormatFrameSize() - Fly frames\n" );
+  #endif
++=======
 +        if ( !m_pFlyAttrList )
 +            m_pFlyAttrList = m_pSerializer->createAttrList( );
 +      
@@ -386,26 +411,30 @@ index 76eea38..a691c29 100644
 +            m_pFlyAttrList->add( FSNS( XML_w, XML_hRule ), sRule );
 +            m_pFlyAttrList->add( FSNS( XML_w, XML_h ), OString::valueOf( rSize.GetHeight( ) ) );
 +        }
++>>>>>>> 3caf808... docx-fixes02.diff
      }
      else if ( m_rExport.bOutPageDescs ) 
      {
-@@ -3001,9 +3151,12 @@ void DocxAttributeOutput::FormatLRSpace( const SvxLRSpaceItem& rLRSpace )
+@@ -2986,9 +3163,18 @@ void DocxAttributeOutput::FormatLRSpace( const SvxLRSpaceItem& rLRSpace )
  {
      if ( m_rExport.bOutFlyFrmAttrs )
      {
--#if OSL_DEBUG_LEVEL > 0
--        fprintf( stderr, "DocxAttributeOutput::FormatLRSpace() - Fly frames\n" );
--#endif
++<<<<<<< HEAD
+ #if OSL_DEBUG_LEVEL > 0
+         OSL_TRACE( "DocxAttributeOutput::FormatLRSpace() - Fly frames\n" );
+ #endif
++=======
 +        if ( !m_pFlyAttrList )
 +            m_pFlyAttrList = m_pSerializer->createAttrList();
 +
 +        m_pFlyAttrList->add( FSNS( XML_w, XML_hSpace ), 
 +                OString::valueOf( 
 +                    sal_Int32( ( rLRSpace.GetLeft() + rLRSpace.GetRight() ) / 2 ) ) );
++>>>>>>> 3caf808... docx-fixes02.diff
      }
      else if ( m_rExport.bOutPageDescs ) 
      {
-@@ -3044,11 +3197,17 @@ void DocxAttributeOutput::FormatLRSpace( const SvxLRSpaceItem& rLRSpace )
+@@ -3029,11 +3215,17 @@ void DocxAttributeOutput::FormatLRSpace( const SvxLRSpaceItem& rLRSpace )
  
  void DocxAttributeOutput::FormatULSpace( const SvxULSpaceItem& rULSpace )
  {
@@ -424,16 +453,18 @@ index 76eea38..a691c29 100644
      } 
      else if (m_rExport.bOutPageDescs )
      {
-@@ -3090,32 +3249,150 @@ void DocxAttributeOutput::FormatULSpace( const SvxULSpaceItem& rULSpace )
+@@ -3075,32 +3267,174 @@ void DocxAttributeOutput::FormatULSpace( const SvxULSpaceItem& rULSpace )
      }
  }
  
 -void DocxAttributeOutput::FormatSurround( const SwFmtSurround& )
 +void DocxAttributeOutput::FormatSurround( const SwFmtSurround& rSurround )
  {
--#if OSL_DEBUG_LEVEL > 0
--    fprintf( stderr, "TODO DocxAttributeOutput::FormatSurround()\n" );
--#endif
++<<<<<<< HEAD
+ #if OSL_DEBUG_LEVEL > 0
+     OSL_TRACE( "TODO DocxAttributeOutput::FormatSurround()\n" );
+ #endif
++=======
 +    if ( m_rExport.bOutFlyFrmAttrs )
 +    {
 +        if ( !m_pFlyAttrList )
@@ -458,14 +489,17 @@ index 76eea38..a691c29 100644
 +
 +        m_pFlyAttrList->add( FSNS( XML_w, XML_wrap ), sWrap );
 +    }
++>>>>>>> 3caf808... docx-fixes02.diff
  }
  
 -void DocxAttributeOutput::FormatVertOrientation( const SwFmtVertOrient& )
 +void DocxAttributeOutput::FormatVertOrientation( const SwFmtVertOrient& rFlyVert )
  {
--#if OSL_DEBUG_LEVEL > 0
--    fprintf( stderr, "TODO DocxAttributeOutput::FormatVertOrientation()\n" );
--#endif
++<<<<<<< HEAD
+ #if OSL_DEBUG_LEVEL > 0
+     OSL_TRACE( "TODO DocxAttributeOutput::FormatVertOrientation()\n" );
+ #endif
++=======
 +    if ( m_rExport.bOutFlyFrmAttrs )
 +    {
 +        if ( !m_pFlyAttrList )
@@ -520,14 +554,17 @@ index 76eea38..a691c29 100644
 +
 +        m_pFlyAttrList->add( FSNS( XML_w, XML_vAnchor ), sVAnchor );
 +    }
++>>>>>>> 3caf808... docx-fixes02.diff
  }
  
 -void DocxAttributeOutput::FormatHorizOrientation( const SwFmtHoriOrient& )
 +void DocxAttributeOutput::FormatHorizOrientation( const SwFmtHoriOrient& rFlyHori )
  {
--#if OSL_DEBUG_LEVEL > 0
--    fprintf( stderr, "TODO DocxAttributeOutput::FormatHorizOrientation()\n" );
--#endif
++<<<<<<< HEAD
+ #if OSL_DEBUG_LEVEL > 0
+     OSL_TRACE( "TODO DocxAttributeOutput::FormatHorizOrientation()\n" );
+ #endif
++=======
 +    if ( m_rExport.bOutFlyFrmAttrs )
 +    {
 +        if ( !m_pFlyAttrList )
@@ -579,38 +616,45 @@ index 76eea38..a691c29 100644
 +
 +        m_pFlyAttrList->add( FSNS( XML_w, XML_hAnchor ), sHAnchor );
 +    }
++>>>>>>> 3caf808... docx-fixes02.diff
  }
  
  void DocxAttributeOutput::FormatAnchor( const SwFmtAnchor& )
  {
--#if OSL_DEBUG_LEVEL > 0
--    fprintf( stderr, "TODO DocxAttributeOutput::FormatAnchor()\n" );
--#endif
++<<<<<<< HEAD
+ #if OSL_DEBUG_LEVEL > 0
+     OSL_TRACE( "TODO DocxAttributeOutput::FormatAnchor()\n" );
+ #endif
++=======
 +    // Fly frames: anchors here aren't matching the anchors in docx
++>>>>>>> 3caf808... docx-fixes02.diff
  }
  
  void DocxAttributeOutput::FormatBackground( const SvxBrushItem& rBrush )
-@@ -3127,10 +3404,6 @@ void DocxAttributeOutput::FormatBackground( const SvxBrushItem& rBrush )
+@@ -3112,10 +3446,13 @@ void DocxAttributeOutput::FormatBackground( const SvxBrushItem& rBrush )
                  FSNS( XML_w, XML_fill ), sColor.getStr( ),
                  FSEND );
      }
--
--#if OSL_DEBUG_LEVEL > 0
--    fprintf( stderr, "TODO DocxAttributeOutput::FormatBackground()\n" );
--#endif
++<<<<<<< HEAD
+ 
+ #if OSL_DEBUG_LEVEL > 0
+     OSL_TRACE( "TODO DocxAttributeOutput::FormatBackground()\n" );
+ #endif
++=======
++>>>>>>> 3caf808... docx-fixes02.diff
  }
  
  void DocxAttributeOutput::FormatBox( const SvxBoxItem& rBox )
-@@ -3213,11 +3486,52 @@ void DocxAttributeOutput::FormatKeep( const SvxFmtKeepItem& )
+@@ -3198,9 +3535,56 @@ void DocxAttributeOutput::FormatKeep( const SvxFmtKeepItem& )
      m_pSerializer->singleElementNS( XML_w, XML_keepNext, FSEND );
  }
  
 -void DocxAttributeOutput::FormatTextGrid( const SwTextGridItem& )
 +void DocxAttributeOutput::FormatTextGrid( const SwTextGridItem& rGrid )
  {
--#if OSL_DEBUG_LEVEL > 0
--    fprintf( stderr, "TODO DocxAttributeOutput::FormatTextGrid()\n" );
--#endif
++<<<<<<< HEAD
+     OSL_TRACE( "TODO DocxAttributeOutput::FormatTextGrid()\n" );
++=======
 +    FastAttributeList *pGridAttrList = m_pSerializer->createAttrList();
 +
 +    OString sGridType;
@@ -655,10 +699,11 @@ index 76eea38..a691c29 100644
 +            OString::valueOf( sal_Int32( nCharSpace ) ).getStr( ) );
 +
 +    m_pSerializer->singleElementNS( XML_w, XML_docGrid, pGridAttrList );
++>>>>>>> 3caf808... docx-fixes02.diff
  }
  
  void DocxAttributeOutput::FormatLineNumbering( const SwFmtLineNumber& rNumbering )
-@@ -3275,6 +3589,7 @@ DocxAttributeOutput::DocxAttributeOutput( DocxExport &rExport, FSHelperPtr pSeri
+@@ -3258,6 +3642,7 @@ DocxAttributeOutput::DocxAttributeOutput( DocxExport &rExport, FSHelperPtr pSeri
        m_pCharLangAttrList( NULL ),
        m_pSpacingAttrList( NULL ),
        m_pHyperlinkAttrList( NULL ),
@@ -666,7 +711,7 @@ index 76eea38..a691c29 100644
        m_pFootnotesList( new ::docx::FootnotesList() ),
        m_pEndnotesList( new ::docx::FootnotesList() ),
        m_pSectionInfo( NULL ),
-@@ -3287,7 +3602,8 @@ DocxAttributeOutput::DocxAttributeOutput( DocxExport &rExport, FSHelperPtr pSeri
+@@ -3270,7 +3655,8 @@ DocxAttributeOutput::DocxAttributeOutput( DocxExport &rExport, FSHelperPtr pSeri
        m_bTableCellOpen( false ),
        m_nTableDepth( 0 ),
        m_bParagraphOpened( false ),
@@ -676,7 +721,7 @@ index 76eea38..a691c29 100644
  {
  }
  
-@@ -3298,11 +3614,13 @@ DocxAttributeOutput::~DocxAttributeOutput()
+@@ -3281,11 +3667,13 @@ DocxAttributeOutput::~DocxAttributeOutput()
      delete m_pCharLangAttrList, m_pCharLangAttrList = NULL;
      delete m_pSpacingAttrList, m_pSpacingAttrList = NULL;
      delete m_pHyperlinkAttrList, m_pHyperlinkAttrList = NULL;
@@ -743,10 +788,10 @@ index 653c36f..e5a0998 100644
          $(SLO)$/ww8atr.obj \
          $(SLO)$/ww8par.obj \
 diff --git sw/source/filter/ww8/wrtw8nds.cxx sw/source/filter/ww8/wrtw8nds.cxx
-index 2a40e6a..f207dd8 100644
+index da8ac07..5c42823 100644
 --- sw/source/filter/ww8/wrtw8nds.cxx
 +++ sw/source/filter/ww8/wrtw8nds.cxx
-@@ -166,76 +166,6 @@ MSWordAttrIter::~MSWordAttrIter()
+@@ -168,76 +168,6 @@ MSWordAttrIter::~MSWordAttrIter()
      m_rExport.pChpIter = pOld;
  }
  
@@ -823,7 +868,7 @@ index 2a40e6a..f207dd8 100644
  class sortswflys :
      public std::binary_function<const sw::Frame&, const sw::Frame&, bool>
  {
-@@ -454,7 +384,14 @@ xub_StrLen SwAttrIter::SearchNext( xub_StrLen nStartPos )
+@@ -456,7 +386,14 @@ xub_StrLen SwAttrIter::SearchNext( xub_StrLen nStartPos )
      return nMinPos;
  }
  
@@ -839,7 +884,7 @@ index 2a40e6a..f207dd8 100644
  {
      m_rExport.AttrOutput().RTLAndCJKState( IsCharRTL(), GetScript() );
  
-@@ -542,7 +479,10 @@ void SwAttrIter::OutAttr( xub_StrLen nSwPos )
+@@ -544,7 +481,10 @@ void SwAttrIter::OutAttr( xub_StrLen nSwPos )
  
      sw::cPoolItemIter aEnd = aRangeItems.end();
      for ( sw::cPoolItemIter aI = aRangeItems.begin(); aI != aEnd; ++aI )
@@ -851,7 +896,7 @@ index 2a40e6a..f207dd8 100644
  
      if ( !aExportItems.empty() )
      {
-@@ -695,7 +635,7 @@ const SfxPoolItem& SwAttrIter::GetItem(USHORT nWhich) const
+@@ -697,7 +637,7 @@ const SfxPoolItem& SwAttrIter::GetItem(USHORT nWhich) const
      return pRet ? *pRet : rNd.SwCntntNode::GetAttr(nWhich);
  }
  
@@ -860,7 +905,7 @@ index 2a40e6a..f207dd8 100644
  {
      String aStr( FieldString( ww::eEQ ) );
      aStr.APPEND_CONST_ASC( "\\* jc" );
-@@ -1224,7 +1164,7 @@ int SwAttrIter::OutAttrWithRange(xub_StrLen nPos)
+@@ -1233,7 +1173,7 @@ int SwAttrIter::OutAttrWithRange(xub_StrLen nPos)
                  case RES_TXTATR_CJK_RUBY:
                      if ( nPos == *pHt->GetStart() )
                      {
@@ -870,7 +915,7 @@ index 2a40e6a..f207dd8 100644
                      }
                      if ( 0 != ( pEnd = pHt->GetEnd() ) && nPos == *pEnd )
 diff --git sw/source/filter/ww8/wrtw8sty.cxx sw/source/filter/ww8/wrtw8sty.cxx
-index a9478be..2dc02f9 100644
+index 42b829a..cc5c557 100644
 --- sw/source/filter/ww8/wrtw8sty.cxx
 +++ sw/source/filter/ww8/wrtw8sty.cxx
 @@ -299,7 +299,7 @@ void WW8AttributeOutput::EndStyle()
@@ -897,7 +942,7 @@ index a9478be..2dc02f9 100644
      }
  
  
-@@ -523,8 +523,13 @@ void MSWordStyles::OutputStyle( SwFmt* pFmt, USHORT nPos )
+@@ -524,8 +524,13 @@ void MSWordStyles::OutputStyle( SwFmt* pFmt, USHORT nPos )
          
          GetStyleData( pFmt, bFmtColl, nBase, nWwNext );
  
@@ -914,10 +959,10 @@ index a9478be..2dc02f9 100644
          if ( bFmtColl )
              WriteProperties( pFmt, true, nPos, nBase==0xfff );           // UPX.papx
 diff --git sw/source/filter/ww8/wrtww8.hxx sw/source/filter/ww8/wrtww8.hxx
-index fafe06b..a8d536c 100644
+index d73ebae..20db21f 100644
 --- sw/source/filter/ww8/wrtww8.hxx
 +++ sw/source/filter/ww8/wrtww8.hxx
-@@ -1343,6 +1343,75 @@ public:
+@@ -1346,6 +1346,75 @@ public:
      virtual const SfxPoolItem& GetItem( USHORT nWhich ) const = 0;
  };
  
@@ -994,7 +1039,7 @@ index fafe06b..a8d536c 100644
  class MSWordStyles
  {
 diff --git sw/source/filter/ww8/ww8atr.cxx sw/source/filter/ww8/ww8atr.cxx
-index 61e8d60..6736075 100644
+index 1e5d011..8582df5 100644
 --- sw/source/filter/ww8/ww8atr.cxx
 +++ sw/source/filter/ww8/ww8atr.cxx
 @@ -3774,25 +3774,12 @@ void WW8AttributeOutput::FormatTextGrid( const SwTextGridItem& rGrid )
@@ -1028,7 +1073,7 @@ index 61e8d60..6736075 100644
          m_rWW8Export.InsUInt32( nCharSpace );
      }
 diff --git sw/source/filter/ww8/ww8attributeoutput.hxx sw/source/filter/ww8/ww8attributeoutput.hxx
-index c8b3926..201cd8c 100644
+index c064da2..cd0c986 100644
 --- sw/source/filter/ww8/ww8attributeoutput.hxx
 +++ sw/source/filter/ww8/ww8attributeoutput.hxx
 @@ -74,7 +74,7 @@ public:
@@ -1040,7 +1085,7 @@ index c8b3926..201cd8c 100644
  
      /// Output ruby end.
      virtual void EndRuby();
-@@ -137,7 +137,8 @@ public:
+@@ -139,7 +139,8 @@ public:
  
      /// Start of a style in the styles table.
      virtual void StartStyle( const String& rName, bool bPapFmt,
@@ -1050,3 +1095,6 @@ index c8b3926..201cd8c 100644
  
      /// End of a style in the styles table.
      virtual void EndStyle();
+-- 
+1.7.0.1
+
