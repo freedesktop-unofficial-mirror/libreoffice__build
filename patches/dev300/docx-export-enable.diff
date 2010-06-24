@@ -166,6 +166,85 @@ index acaea04..c7402e8 100644
  
  #if ! defined UNX
  File gid_File_Lib_Sysdtrans
+--- sw/source/filter/ww8/WW8TableInfo.hxx	2010-06-24 16:56:52.000000000 +0200
++++ sw/source/filter/ww8/WW8TableInfo.hxx	2010-06-24 16:56:44.000000000 +0200
+@@ -30,6 +30,7 @@
+ #include <hash_map>
+ #include <string>
+ #include <map>
++#include <set>
+ #include <functional>
+ #include <boost/shared_ptr.hpp>
+ #include <sal/types.h>
+--- sw/source/filter/ww8/docxattributeoutput.cxx
++++ sw/source/filter/ww8/docxattributeoutput.cxx
+@@ -454,7 +454,7 @@ void DocxAttributeOutput::StartField_Impl( FieldInfos& rInfos, sal_Bool bWriteRu
+     if ( rInfos.pField && rInfos.eType == ww::eUNKNOWN )
+     {
+         // Expand unsupported fields
+-        RunText( rInfos.pField->Expand( ) );
++        RunText( rInfos.pField->GetCntnt() );
+     }
+     else if ( rInfos.eType != ww::eNONE ) // HYPERLINK fields are just commands
+     {
+@@ -559,7 +559,7 @@ void DocxAttributeOutput::EndField_Impl( FieldInfos& rInfos )
+         m_pSerializer->startElementNS( XML_w, XML_r, FSEND );
+ 
+         // Find another way for hyperlinks
+-        RunText( rInfos.pField->Expand( ) );
++        RunText( rInfos.pField->GetCntnt() );
+         m_pSerializer->endElementNS( XML_w, XML_r );
+     }
+ 
+@@ -1146,7 +1146,7 @@ void DocxAttributeOutput::TableCellProperties( ww8::WW8TableNodeInfoInner::Point
+     TableBackgrounds( pTableTextNodeInfoInner );
+ 
+     // Cell prefered width
+-    SwTwips nWidth = GetGridCols( pTableTextNodeInfoInner )[ pTableTextNodeInfoInner->getCell() ];
++    SwTwips nWidth = GetGridCols( pTableTextNodeInfoInner )->at( pTableTextNodeInfoInner->getCell() );
+     m_pSerializer->singleElementNS( XML_w, XML_tcW, 
+            FSNS( XML_w, XML_w ), OString::valueOf( sal_Int32( nWidth ) ).getStr( ),
+            FSNS( XML_w, XML_type ), "dxa",
+@@ -1190,7 +1190,7 @@ void DocxAttributeOutput::InitTableHelper( ww8::WW8TableNodeInfoInner::Pointer_t
+     bool bRelBoxSize = false;
+ 
+     // Create the SwWriteTable instance to use col spans (and maybe other infos)
+-    GetTablePageSize( pTableTextNodeInfoInner, nPageSize, bRelBoxSize );
++    GetTablePageSize( pTableTextNodeInfoInner.get(), nPageSize, bRelBoxSize );
+     
+     const SwTable* pTable = pTableTextNodeInfoInner->getTable( );
+     const SwFrmFmt *pFmt = pTable->GetFrmFmt( );
+@@ -1290,7 +1290,7 @@ void DocxAttributeOutput::TableDefinition( ww8::WW8TableNodeInfoInner::Pointer_t
+     bool bRelBoxSize = false;
+     
+     // Create the SwWriteTable instance to use col spans (and maybe other infos)
+-    GetTablePageSize( pTableTextNodeInfoInner, nPageSize, bRelBoxSize );
++    GetTablePageSize( pTableTextNodeInfoInner.get(), nPageSize, bRelBoxSize );
+     
+     // Output the table prefered width
+     if ( nPageSize != 0 )
+@@ -1342,8 +1342,8 @@ void DocxAttributeOutput::TableDefinition( ww8::WW8TableNodeInfoInner::Pointer_t
+     // Write the table grid infos
+     m_pSerializer->startElementNS( XML_w, XML_tblGrid, FSEND );
+     
+-    std::vector<SwTwips> gridCols = GetGridCols( pTableTextNodeInfoInner );
+-    for ( std::vector<SwTwips>::const_iterator it = gridCols.begin(); it != gridCols.end(); ++it )
++    ww8::GridColsPtr pGridCols = GetGridCols( pTableTextNodeInfoInner );
++    for ( ww8::GridCols::const_iterator it = pGridCols->begin(); it != pGridCols->end(); ++it )
+         m_pSerializer->singleElementNS( XML_w, XML_gridCol,
+                FSNS( XML_w, XML_w ), OString::valueOf( sal_Int32( *it ) ).getStr( ),
+                FSEND );
+--- sw/source/filter/ww8/docxattributeoutput.hxx	2010-06-24 17:02:20.000000000 +0200
++++ sw/source/filter/ww8/docxattributeoutput.hxx	2010-06-24 17:02:13.000000000 +0200
+@@ -160,6 +160,8 @@ public:
+ 
+     virtual void TableOrientation( ww8::WW8TableNodeInfoInner::Pointer_t pTableTextNodeInfoInner );
+ 
++    virtual void TableSpacing( ww8::WW8TableNodeInfoInner::Pointer_t pTableTextNodeInfoInner );
++
+     virtual void TableRowEnd( sal_uInt32 nDepth = 1 );
+ 
+     /// Start of the styles table.
 diff --git sw/source/filter/ww8/docxexport.cxx sw/source/filter/ww8/docxexport.cxx
 index 8752ff2..07e2b54 100644
 --- sw/source/filter/ww8/docxexport.cxx
@@ -310,6 +389,15 @@ diff --git sw/source/filter/ww8/docxexportfilter.cxx sw/source/filter/ww8/docxex
 index 3d7d44f..7bc2e78 100644
 --- sw/source/filter/ww8/docxexportfilter.cxx
 +++ sw/source/filter/ww8/docxexportfilter.cxx
+@@ -47,7 +47,7 @@ DocxExportFilter::DocxExportFilter( cons
+ 
+ bool DocxExportFilter::exportDocument()
+ {
+-    OSL_TRACE(, "DocxExportFilter::exportDocument()\n" ); // DEBUG remove me
++    OSL_TRACE( "DocxExportFilter::exportDocument()\n" ); // DEBUG remove me
+ 
+     // get SwDoc*
+     uno::Reference< uno::XInterface > xIfc( getModel(), uno::UNO_QUERY );
 @@ -76,7 +76,7 @@ bool DocxExportFilter::exportDocument()
          aExport.ExportDocument( true ); // FIXME support exporting selection only
      }
