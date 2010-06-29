@@ -1,0 +1,276 @@
+--- sc/source/filter/excel/excrecds.cxx	2010-06-16 16:47:12.000000000 +0530
++++ sc/source/filter/excel/excrecds.cxx	2010-06-16 16:58:30.000000000 +0530
+@@ -360,6 +360,7 @@ Exc1904::Exc1904( ScDocument& rDoc )
+ {
+     Date* pDate = rDoc.GetFormatTable()->GetNullDate();
+     bVal = pDate ? (*pDate == Date( 1, 1, 1904 )) : FALSE;
++    bDateCompatibility = pDate ? !( *pDate == Date( 30, 12, 1899 )) : FALSE;
+ }
+ 
+ 
+@@ -371,9 +372,21 @@ UINT16 Exc1904::GetNum( void ) const
+ 
+ void Exc1904::SaveXml( XclExpXmlStream& rStrm )
+ {
+-    rStrm.WriteAttributes(
++    bool bISOIEC = ( rStrm.getVersion() == oox::core::ISOIEC_29500_2008 );
++
++    if( bISOIEC )
++    {
++        rStrm.WriteAttributes( 
++            XML_dateCompatibility, XclXmlUtils::ToPsz( bDateCompatibility ),
++            FSEND );
++    }
++    
++    if( !bISOIEC || bDateCompatibility )
++    {
++        rStrm.WriteAttributes(
+             XML_date1904, XclXmlUtils::ToPsz( bVal ),
+             FSEND );
++    }
+ }
+ 
+ 
+diff -upr sc/source/filter/excel/xepage.cxx sc/source/filter/excel/xepage.cxx
+--- sc/source/filter/excel/xepage.cxx	2010-06-16 16:47:12.000000000 +0530
++++ sc/source/filter/excel/xepage.cxx	2010-06-16 17:01:37.000000000 +0530
+@@ -96,25 +96,37 @@ XclExpSetup::XclExpSetup( const XclPageD
+ 
+ void XclExpSetup::SaveXml( XclExpXmlStream& rStrm )
+ {
+-    rStrm.GetCurrentStream()->singleElement( XML_pageSetup,
+-            XML_paperSize,          OString::valueOf( (sal_Int32) mrData.mnPaperSize ).getStr(),
+-            XML_scale,              OString::valueOf( (sal_Int32) mrData.mnScaling ).getStr(),
+-            XML_firstPageNumber,    OString::valueOf( (sal_Int32) mrData.mnStartPage ).getStr(),
+-            XML_fitToWidth,         OString::valueOf( (sal_Int32) mrData.mnFitToWidth ).getStr(),
+-            XML_fitToHeight,        OString::valueOf( (sal_Int32) mrData.mnFitToHeight ).getStr(),
+-            XML_pageOrder,          mrData.mbPrintInRows ? "overThenDown" : "downThenOver",
+-            XML_orientation,        mrData.mbPortrait ? "portrait" : "landscape",   // OOXTODO: "default"?
+-            XML_usePrinterDefaults, XclXmlUtils::ToPsz( !mrData.mbValid ),
+-            XML_blackAndWhite,      XclXmlUtils::ToPsz( mrData.mbBlackWhite ),
+-            XML_draft,              XclXmlUtils::ToPsz( mrData.mbDraftQuality ),
+-            XML_cellComments,       mrData.mbPrintNotes ? "atEnd" : "none",         // OOXTODO: "asDisplayed"?
+-            XML_useFirstPageNumber, XclXmlUtils::ToPsz( mrData.mbManualStart ),
+-            // OOXTODO: XML_errors, // == displayed|blank|dash|NA
+-            XML_horizontalDpi,      OString::valueOf( (sal_Int32) mrData.mnHorPrintRes ).getStr(),
+-            XML_verticalDpi,        OString::valueOf( (sal_Int32) mrData.mnVerPrintRes ).getStr(),
+-            XML_copies,             OString::valueOf( (sal_Int32) mrData.mnCopies ).getStr(),
+-            // OOXTODO: devMode settings part RelationshipId: FSNS( XML_r, XML_id ),
+-            FSEND );
++    sax_fastparser::FastAttributeList* pAttrList=rStrm.GetCurrentStream()->createAttrList();
++    if( rStrm.getVersion() != oox::core::ISOIEC_29500_2008 || 
++        mrData.mnStrictPaperSize != EXC_PAPERSIZE_USER )
++    {
++        pAttrList->add( XML_paperSize,           OString::valueOf( (sal_Int32) mrData.mnPaperSize ).getStr() );
++    }
++    else
++    {
++        pAttrList->add( XML_paperWidth,          OString::valueOf( (sal_Int32) mrData.mnPaperWidth ).getStr() );
++        pAttrList->add( XML_paperHeight,         OString::valueOf( (sal_Int32) mrData.mnPaperHeight ).getStr() );
++        pAttrList->add( XML_paperUnits,          "mm" );
++    }
++    pAttrList->add( XML_scale,              OString::valueOf( (sal_Int32) mrData.mnScaling ).getStr() );
++    pAttrList->add( XML_firstPageNumber,    OString::valueOf( (sal_Int32) mrData.mnStartPage ).getStr() );
++    pAttrList->add( XML_fitToWidth,         OString::valueOf( (sal_Int32) mrData.mnFitToWidth ).getStr() );
++    pAttrList->add( XML_fitToHeight,        OString::valueOf( (sal_Int32) mrData.mnFitToHeight ).getStr() );
++    pAttrList->add( XML_pageOrder,          mrData.mbPrintInRows ? "overThenDown" : "downThenOver" );
++    pAttrList->add( XML_orientation,        mrData.mbPortrait ? "portrait" : "landscape" );   // OOXTODO: "default"?
++    pAttrList->add( XML_usePrinterDefaults, XclXmlUtils::ToPsz( !mrData.mbValid ) );
++    pAttrList->add( XML_blackAndWhite,      XclXmlUtils::ToPsz( mrData.mbBlackWhite ) );
++    pAttrList->add( XML_draft,              XclXmlUtils::ToPsz( mrData.mbDraftQuality ) );
++    pAttrList->add( XML_cellComments,       mrData.mbPrintNotes ? "atEnd" : "none" );         // OOXTODO: "asDisplayed"?
++    pAttrList->add( XML_useFirstPageNumber, XclXmlUtils::ToPsz( mrData.mbManualStart ) );
++    // OOXTODO: XML_errors, // == displayed|blank|dash|NA
++    pAttrList->add( XML_horizontalDpi,      OString::valueOf( (sal_Int32) mrData.mnHorPrintRes ).getStr() );
++    pAttrList->add( XML_verticalDpi,        OString::valueOf( (sal_Int32) mrData.mnVerPrintRes ).getStr() );
++    pAttrList->add( XML_copies,             OString::valueOf( (sal_Int32) mrData.mnCopies ).getStr() );
++    // OOXTODO: devMode settings part RelationshipId: FSNS( XML_r, XML_id ),
++
++    ::com::sun::star::uno::Reference< ::com::sun::star::xml::sax::XFastAttributeList > aAttrs(pAttrList);
++    rStrm.GetCurrentStream()->singleElement( XML_pageSetup, aAttrs );
+ }
+ 
+ void XclExpSetup::WriteBody( XclExpStream& rStrm )
+diff -upr sc/source/filter/excel/xlpage.cxx sc/source/filter/excel/xlpage.cxx
+--- sc/source/filter/excel/xlpage.cxx	2010-06-16 16:47:12.000000000 +0530
++++ sc/source/filter/excel/xlpage.cxx	2010-06-16 17:05:16.000000000 +0530
+@@ -36,6 +36,7 @@
+ #include <editeng/brshitem.hxx>
+ #include "global.hxx"
+ #include "xlconst.hxx"
++#include <oox/core/xmlfilterbase.hxx>
+ 
+ // Paper size =================================================================
+ 
+@@ -48,6 +49,8 @@ struct XclPaperSize
+ 
+ #define IN2TWIPS( v )      ((long)((v) * EXC_TWIPS_PER_INCH + 0.5))
+ #define MM2TWIPS( v )      ((long)((v) * EXC_TWIPS_PER_INCH / CM_PER_INCH / 10.0 + 0.5))
++#define TWIPS2MM( v )      ((long)((v - 0.5) / EXC_TWIPS_PER_INCH * CM_PER_INCH * 10.0))
++
+ 
+ static const XclPaperSize pPaperSizeTable[] =
+ {
+@@ -189,6 +192,8 @@ void XclPageData::SetDefaults()
+     mfHdrLeftMargin = mfHdrRightMargin = XclTools::GetInchFromHmm( EXC_MARGIN_DEFAULT_HLR );
+     mfFtrLeftMargin = mfFtrRightMargin = XclTools::GetInchFromHmm( EXC_MARGIN_DEFAULT_FLR );
+     mnPaperSize = EXC_PAPERSIZE_DEFAULT;
++    mnPaperWidth = 0;
++    mnPaperHeight = 0;
+     mnCopies = 1;
+     mnStartPage = 0;
+     mnScaling = 100;
+@@ -222,7 +227,7 @@ Size XclPageData::GetScPaperSize() const
+     return aSize;
+ }
+ 
+-void XclPageData::SetScPaperSize( const Size& rSize, bool bPortrait )
++void XclPageData::SetScPaperSize( const Size& rSize, bool bPortrait, bool bStrictSize )
+ {
+     mbPortrait = bPortrait;
+     mnPaperSize = 0;
+@@ -230,6 +235,20 @@ void XclPageData::SetScPaperSize( const
+     long nHeight = bPortrait ? rSize.Height() : rSize.Width();
+     long nMaxWDiff = 80;
+     long nMaxHDiff = 50;
++
++    mnPaperWidth = TWIPS2MM( nWidth );
++    mnPaperHeight = TWIPS2MM( nHeight );
++    if( bStrictSize )
++    {
++        nMaxWDiff = 5;
++        nMaxHDiff = 5;
++        mnStrictPaperSize = EXC_PAPERSIZE_USER;
++    }
++    else
++    {
++        mnPaperSize = 0;
++    }
++
+     for( const XclPaperSize* pEntry = pPaperSizeTable; pEntry != STATIC_TABLE_END( pPaperSizeTable ); ++pEntry )
+     {
+         long nWDiff = Abs( pEntry->mnWidth - nWidth );
+@@ -237,11 +256,18 @@ void XclPageData::SetScPaperSize( const
+         if( ((nWDiff <= nMaxWDiff) && (nHDiff < nMaxHDiff)) ||
+             ((nWDiff < nMaxWDiff) && (nHDiff <= nMaxHDiff)) )
+         {
+-            mnPaperSize = static_cast< sal_uInt16 >( pEntry - pPaperSizeTable );
++            sal_uInt16 nIndex = static_cast< sal_uInt16 >( pEntry - pPaperSizeTable );
++            if( !bStrictSize )
++                mnPaperSize = nIndex;
++            else
++                mnStrictPaperSize = mnPaperSize = nIndex;
++
+             nMaxWDiff = nWDiff;
+             nMaxHDiff = nHDiff;
+         }
+     }
++    if( !bStrictSize )
++        SetScPaperSize( rSize, bPortrait, sal_True );
+ }
+ 
+ // ============================================================================
+diff -upr sc/source/filter/inc/excrecds.hxx sc/source/filter/inc/excrecds.hxx
+--- sc/source/filter/inc/excrecds.hxx	2010-06-16 16:47:12.000000000 +0530
++++ sc/source/filter/inc/excrecds.hxx	2010-06-16 16:53:42.000000000 +0530
+@@ -286,6 +286,8 @@ public:
+     virtual UINT16			GetNum( void ) const;
+ 
+     virtual void            SaveXml( XclExpXmlStream& rStrm );
++private:
++    BOOL                    bDateCompatibility;
+ };
+ 
+ 
+diff -upr sc/source/filter/inc/xlpage.hxx sc/source/filter/inc/xlpage.hxx
+--- sc/source/filter/inc/xlpage.hxx	2010-06-16 16:47:12.000000000 +0530
++++ sc/source/filter/inc/xlpage.hxx	2010-06-16 16:52:20.000000000 +0530
+@@ -89,6 +89,7 @@ const sal_uInt16 EXC_SETUP_STARTPAGE
+ const sal_uInt16 EXC_SETUP_NOTES_END        = 0x0200;
+ 
+ const sal_uInt16 EXC_PAPERSIZE_DEFAULT      = 0;
++const sal_uInt16 EXC_PAPERSIZE_USER         = 0xFFFF;
+ 
+ // ============================================================================
+ 
+@@ -118,6 +119,9 @@ struct XclPageData : ScfNoCopy
+     double              mfFtrLeftMargin;    /// Left margin to footer.
+     double              mfFtrRightMargin;   /// Right margin to footer.
+     sal_uInt16          mnPaperSize;        /// Index into paper size table.
++    sal_uInt16          mnStrictPaperSize;  /// Same as papersize - but for ooxml (considering stricter dimensions)
++    sal_uInt16          mnPaperWidth;       /// Paper Width in mm
++    sal_uInt16          mnPaperHeight;      /// Paper Height in mm
+     sal_uInt16          mnCopies;           /// Number of copies.
+     sal_uInt16          mnStartPage;        /// Start page number.
+     sal_uInt16          mnScaling;          /// Scaling in percent.
+@@ -147,7 +151,7 @@ struct XclPageData : ScfNoCopy
+     /** Returns the real paper size (twips) from the paper size index and paper orientation. */
+     Size                GetScPaperSize() const;
+     /** Sets the Excel paper size index and paper orientation from Calc paper size (twips). */
+-    void                SetScPaperSize( const Size& rSize, bool bPortrait );
++    void                SetScPaperSize( const Size& rSize, bool bPortrait, bool bStrict = sal_False );
+ };
+ 
+ // ============================================================================
+--- oox/source/token/tokens.txt	2010-05-11 19:09:37.000000000 +0530
++++ oox/source/token/tokens.txt	2010-06-04 19:55:41.000000000 +0530
+@@ -478,6 +478,7 @@ alg
+ algIdExt
+ algIdExtSource
+ algn
++algorithmName
+ alias
+ aliases
+ aliceBlue
+@@ -1091,6 +1092,7 @@ char
+ charRg
+ charSpace
+ character
++characterSet
+ characterSpacingControl
+ characteristic
+ charset
+@@ -1270,6 +1272,7 @@ confettiGrays
+ confettiOutline
+ confettiStreamers
+ confettiWhite
++conformance
+ conn
+ connDist
+ connRout
+@@ -1576,6 +1579,7 @@ date
+ date1904
+ dateAx
+ dateBetween
++dateCompatibility
+ dateEqual
+ dateFormat
+ dateGroupItem
+@@ -2495,6 +2499,7 @@ harsh
+ hasCustomPrompt
+ hash
+ hashData
++hashValue
+ hdr
+ hdrShapeDefaults
+ hdrs
+@@ -3700,8 +3705,11 @@ panose
+ panose1
+ papayaWhip
+ paperClips
++paperHeight
+ paperSize
+ paperSrc
++paperUnits
++paperWidth
+ papyrus
+ par
+ parOf
+@@ -4277,6 +4285,7 @@ saka
+ salmon
+ salt
+ saltData
++saltValue
+ sameClick
+ sameDir
+ sampData
