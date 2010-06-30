@@ -1,0 +1,168 @@
+Fix for the VBA use of fields
+
+From: Cédric Bosdonnat <cedricbosdo@openoffice.org>
+
+
+---
+
+ sw/source/ui/vba/vbacheckbox.cxx   |   23 ++++++++++-------------
+ sw/source/ui/vba/vbaformfield.cxx  |   28 ++++++++++++----------------
+ sw/source/ui/vba/vbaformfields.cxx |   15 +++++----------
+ 3 files changed, 27 insertions(+), 39 deletions(-)
+
+
+diff --git sw/source/ui/vba/vbacheckbox.cxx sw/source/ui/vba/vbacheckbox.cxx
+index 307f7a2..d16cf54 100644
+--- sw/source/ui/vba/vbacheckbox.cxx
++++ sw/source/ui/vba/vbacheckbox.cxx
+@@ -34,7 +34,7 @@
+ #include <com/sun/star/text/XTextContent.hpp>
+ #include <com/sun/star/text/XTextViewCursor.hpp>
+ #include <com/sun/star/text/XTextViewCursorSupplier.hpp>
+-#include <ecmaflds.hxx>
++#include <xmloff/odffields.hxx>
+ 
+ using namespace ::ooo::vba;
+ using namespace ::com::sun::star;
+@@ -42,7 +42,7 @@ using namespace ::com::sun::star;
+ SwVbaCheckBox::SwVbaCheckBox( const uno::Reference< ooo::vba::XHelperInterface >& rParent, const uno::Reference< uno::XComponentContext >& rContext, const uno::Reference< frame::XModel >& rModel, const uno::Reference< text::XFormField >& xFormField ) throw ( uno::RuntimeException ) : SwVbaCheckBox_BASE( rParent, rContext ), mxModel( rModel ), mxFormField( xFormField )
+ {
+     rtl::OUString sType = mxFormField->getFieldType();
+-    if( !sType.equalsIgnoreAsciiCaseAscii( ECMA_FORMCHECKBOX ) )
++    if( !sType.equalsIgnoreAsciiCaseAscii( ODF_FORMCHECKBOX ) )
+     {
+         throw uno::RuntimeException( rtl::OUString(
+             RTL_CONSTASCII_USTRINGPARAM("It is not a CheckBox")), uno::Reference< uno::XInterface >() );
+@@ -56,17 +56,14 @@ SwVbaCheckBox::~SwVbaCheckBox()
+ sal_Bool SAL_CALL SwVbaCheckBox::getValue() throw ( uno::RuntimeException )
+ {
+     sal_Bool bValue = sal_False;
+-    sal_Int32 nCount = mxFormField->getParamCount();
+-    for( sal_Int32 i = 0; i < nCount; i++ )
++    uno::Any aVal = mxFormField->getParameters()->getByName( rtl::OUString::createFromAscii( ODF_FORMCHECKBOX_RESULT ) );
++    rtl::OUString sVal;
++    if ( aVal >>= sVal )
+     {
+-        if( mxFormField->getParamName(i).equalsIgnoreAsciiCaseAscii( ECMA_FORMCHECKBOX_CHECKED ) )
+-        {
+-            if( mxFormField->getParamValue(i).equalsIgnoreAsciiCaseAscii("on") )
+-                bValue = sal_True;
+-            else
+-                bValue = sal_False;
+-            break;    
+-        }
++        if ( sVal.equalsIgnoreAsciiCaseAscii("on") )
++            bValue = sal_True;
++        else
++            bValue = sal_False;
+     }
+     return bValue;
+ }
+@@ -74,7 +71,7 @@ sal_Bool SAL_CALL SwVbaCheckBox::getValue() throw ( uno::RuntimeException )
+ void SAL_CALL SwVbaCheckBox::setValue( sal_Bool value ) throw ( uno::RuntimeException )
+ {
+     rtl::OUString sValue = rtl::OUString::createFromAscii( value ? "on" : "off" );
+-    mxFormField->addParam( rtl::OUString::createFromAscii( ECMA_FORMCHECKBOX_CHECKED ), sValue, sal_True );
++    mxFormField->getParameters()->insertByName( rtl::OUString::createFromAscii( ODF_FORMCHECKBOX_RESULT ), uno::makeAny( sValue ) );
+ }
+ 
+ rtl::OUString& 
+diff --git sw/source/ui/vba/vbaformfield.cxx sw/source/ui/vba/vbaformfield.cxx
+index 944ffbb..ba6aec5 100644
+--- sw/source/ui/vba/vbaformfield.cxx
++++ sw/source/ui/vba/vbaformfield.cxx
+@@ -34,7 +34,7 @@
+ #include <com/sun/star/text/XTextContent.hpp>
+ #include <com/sun/star/text/XTextViewCursor.hpp>
+ #include <com/sun/star/text/XTextViewCursorSupplier.hpp>
+-#include <ecmaflds.hxx>
++#include <xmloff/odffields.hxx>
+ #include "vbacheckbox.hxx"
+ 
+ using namespace ::ooo::vba;
+@@ -52,27 +52,23 @@ rtl::OUString SAL_CALL SwVbaFormField::getResult() throw ( uno::RuntimeException
+ {
+     rtl::OUString sResult;
+     rtl::OUString sType = mxFormField->getFieldType();
+-    if( sType.equalsIgnoreAsciiCaseAscii( ECMA_FORMTEXT ) )
++    if( sType.equalsIgnoreAsciiCaseAscii( ODF_FORMTEXT ) )
+     {
+         uno::Reference< text::XTextContent > xTextContent( mxFormField, uno::UNO_QUERY_THROW );
+         uno::Reference< text::XTextRange > xTextRange = xTextContent->getAnchor();
+         sResult = xTextRange->getString();
+     }
+-    else if( sType.equalsIgnoreAsciiCaseAscii( ECMA_FORMCHECKBOX ) )
++    else if( sType.equalsIgnoreAsciiCaseAscii( ODF_FORMCHECKBOX ) )
+     {
+         sal_Int32 nValue = 0;
+-        sal_Int32 nCount = mxFormField->getParamCount();
+-        for( sal_Int32 i = 0; i < nCount; i++ )
++        uno::Any aVal = mxFormField->getParameters()->getByName( rtl::OUString::createFromAscii( ODF_FORMCHECKBOX_RESULT ) );
++        rtl::OUString sVal;
++        if ( aVal >>= sVal )
+         {
+-            if( mxFormField->getParamName(i).equalsIgnoreAsciiCaseAscii( ECMA_FORMCHECKBOX_CHECKED ) )
+-            {
+-                if( mxFormField->getParamValue(i).equalsIgnoreAsciiCaseAscii("on") )
+-                    nValue = 1;
+-                else
+-                    nValue = 0;
+-                break;    
+-            }
+-
++            if ( sVal.equalsIgnoreAsciiCaseAscii("on") )
++                nValue = 1;
++            else
++                nValue = 0;
+         }
+         sResult = rtl::OUString::valueOf( nValue );
+     }
+@@ -86,13 +82,13 @@ rtl::OUString SAL_CALL SwVbaFormField::getResult() throw ( uno::RuntimeException
+ void SAL_CALL SwVbaFormField::setResult( const rtl::OUString& result ) throw ( uno::RuntimeException )
+ {
+     rtl::OUString sType = mxFormField->getFieldType();
+-    if( sType.equalsIgnoreAsciiCaseAscii( ECMA_FORMTEXT ) )
++    if( sType.equalsIgnoreAsciiCaseAscii( ODF_FORMTEXT ) )
+     {
+         uno::Reference< text::XTextContent > xTextContent( mxFormField, uno::UNO_QUERY_THROW );
+         uno::Reference< text::XTextRange > xTextRange = xTextContent->getAnchor();
+         xTextRange->setString( result );
+     }
+-    else if( sType.equalsIgnoreAsciiCaseAscii( ECMA_FORMCHECKBOX ) )
++    else if( sType.equalsIgnoreAsciiCaseAscii( ODF_FORMCHECKBOX ) )
+     {
+         // do nothing
+     }
+diff --git sw/source/ui/vba/vbaformfields.cxx sw/source/ui/vba/vbaformfields.cxx
+index b56cff8..a5bd6f5 100644
+--- sw/source/ui/vba/vbaformfields.cxx
++++ sw/source/ui/vba/vbaformfields.cxx
+@@ -35,6 +35,7 @@
+ #include <com/sun/star/text/XTextViewCursorSupplier.hpp>
+ #include "wordvbahelper.hxx"
+ #include <cppuhelper/implbase3.hxx>
++#include <xmloff/odffields.hxx>
+ 
+ using namespace ::ooo::vba;
+ using namespace ::com::sun::star;
+@@ -46,16 +47,10 @@ typedef ::cppu::WeakImplHelper3< container::XNameAccess, container::XIndexAccess
+ rtl::OUString lcl_getFormFieldName( const uno::Reference< text::XFormField >& xFormField )
+ {
+     rtl::OUString sName;
+-    sal_Int32 nCount = xFormField->getParamCount();
+-    for( sal_Int32 i = 0; i < nCount; i++ )
+-    {
+-        if( xFormField->getParamName(i).equalsIgnoreAsciiCaseAscii( "Name" ) )
+-        {
+-            sName = xFormField->getParamValue(i);
+-            OSL_TRACE("lcl_getFormFieldName: %s", rtl::OUStringToOString( sName, RTL_TEXTENCODING_UTF8 ).getStr() );
+-            break;
+-        }
+-    }
++    // FIXME What about Textfields? the name property has been removed when upstreaming cbosdo02
++    uno::Any aVal = xFormField->getParameters()->getByName( rtl::OUString::createFromAscii( ODF_FORMCHECKBOX_NAME ) );
++    if ( aVal >>= sName )
++        OSL_TRACE("lcl_getFormFieldName: %s", rtl::OUStringToOString( sName, RTL_TEXTENCODING_UTF8 ).getStr() );
+     return sName;
+ }
+ 
