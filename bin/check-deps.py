@@ -17,6 +17,9 @@ When no arguments are given, it prints dependencies of all discovered
 modules.  When module names are given as arguments, it only traces 
 dependencies of those modules."""
 
+err_missing_modules = """
+The following modules are mentioned but not present in the source tree:"""
+
 class Module(object):
 
     def __init__ (self, name):
@@ -102,7 +105,7 @@ class DepsCheker(object):
                 # no build.lst found
                 continue
 
-            self.modules_present[mod] = True
+            self.modules_present[self.__normalize_name(mod)] = True
             self.__parse_build_lst(build_lst)
             
     def print_dot_all (self):
@@ -159,7 +162,7 @@ class DepsCheker(object):
         if len(absent) == 0:
             return
 
-        sys.stderr.write("The following modules are mentioned but not present in the source tree:\n")
+        sys.stderr.write(err_missing_modules + "\n")
         absent.sort()
         for mod in absent:
             sys.stderr.write("    " + mod + "\n")
