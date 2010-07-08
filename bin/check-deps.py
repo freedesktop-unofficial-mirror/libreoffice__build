@@ -1,10 +1,12 @@
 #!/usr/bin/env python
 
-import sys, os, os.path, optparse
+import sys, os, os.path, optparse, subprocess
 
 class ParseError(Exception): pass
 
 class SingleModeError(Exception): pass
+
+class ViewerError(Exception): pass
 
 arg_desc = "module1 module2 ..."
 
@@ -109,14 +111,14 @@ class DepsCheker(object):
             self.__parse_build_lst(build_lst)
             
     def print_dot_all (self):
-        print ("digraph modules {")
+        s = "digraph modules {\n"
 
         if len(self.selected) == 0:
             mods = self.modules.keys()
             for mod in mods:
                 deps = self.modules[mod].deps.keys()
                 for dep in deps:
-                    self.__print_dot_dep_line(mod, dep)
+                    s += self.__print_dot_dep_line(mod, dep)
         else:
             # determine involved modules.
             self.__processed_mods = {}
@@ -125,14 +127,15 @@ class DepsCheker(object):
                     raise ParseError()
 
                 if len(self.modules[selected].deps) > 0:
-                    self.__trace_deps(self.modules[selected])
+                    s += self.__trace_deps(self.modules[selected])
                 else:
-                    print ("    " + selected + ";")
+                    s += "    " + selected + ";\n"
 
-        print ("}")
+        s += "}\n"
+        return s
 
     def print_dot_single (self, mods):
-        print ("digraph modules {")
+        s = "digraph modules {\n"
         for mod in mods:
 
             if not self.modules.has_key(mod):
@@ -142,15 +145,16 @@ class DepsCheker(object):
 
             if len(obj.precs) == 0 and len(obj.deps) == 0:
                 # No dependencies.  Just print the module.
-                print ("    " + mod + ";")
+                s += "    " + mod + ";\n"
                 continue
 
             for prec in obj.precs.keys():
-                self.__print_dot_dep_line(prec, obj.name)
+                s += self.__print_dot_dep_line(prec, obj.name)
             for dep in obj.deps.keys():
-                self.__print_dot_dep_line(obj.name, dep)
+                s += self.__print_dot_dep_line(obj.name, dep)
 
-        print ("}")
+        s += "}\n"
+        return s
 
     def print_missing_modules (self):
         present = self.modules_present.keys()
@@ -168,38 +172,81 @@ class DepsCheker(object):
             sys.stderr.write("    " + mod + "\n")
 
     def __trace_deps (self, obj):
+        s = ""
         if self.__processed_mods.has_key(obj.name):
-            return
+            return s
 
         self.__processed_mods[obj.name] = True
 
         for dep_name in obj.deps.keys():
             if not self.modules.has_key(dep_name):
                 raise ParseError()
-            self.__print_dot_dep_line(obj.name, dep_name)
-            self.__trace_deps(self.modules[dep_name])
+            s += self.__print_dot_dep_line(obj.name, dep_name)
+            s += self.__trace_deps(self.modules[dep_name])
+
+        return s
 
     def __print_dot_dep_line (self, prec, dep):
-        print ("    " + prec + " -> " + dep + ";")
+        return "    " + prec + " -> " + dep + ";\n"
+
+def exec_exists (cmd):
+    retcode = subprocess.call("which %s >/dev/null 2>/dev/null"%cmd, shell=True)
+    return retcode == 0
+
+def error (msg):
+    sys.stderr.write(msg + "\n")
+    sys.exit(1)
+
+def launch_viewer (code):
+    tmpfile = '/tmp/check-deps.tmp'
+    tmpimage = '/tmp/check-deps-image.png'
+    file = open(tmpfile, 'w')
+    file.write(code)
+    file.close()
+    retcode = subprocess.call("dot -Tpng %s -o %s"%(tmpfile, tmpimage), shell=True)
+    if retcode != 0:
+        raise ViewerError()
+
+    retcode = subprocess.call("eog %s"%tmpimage, shell=True)
+    if retcode != 0:
+        raise ViewerError()
 
 
 if __name__ == '__main__':
+
+    # Process commnad line arguments.
     parser = optparse.OptionParser()
     parser.usage += " " + arg_desc + "\n" + desc
     parser.add_option("-s", "--single", action="store_true", dest="single", default=False,
         help="Print only immediate dependencies of specified modules.")
+    parser.add_option("-g", "--gui", action="store_true", dest="gui", default=False,
+        help="Display dependency graph in image viewer.")
     options, args = parser.parse_args()
 
+    if options.gui:
+        # Check to make sure 'dot' and 'eog' are present.
+        if not exec_exists('dot'):
+            error("'dot' not found.  Make sure you have 'dot' in your path.")
+        if not exec_exists('eog'):
+            error("'eog' not found.  Make sure you have 'eog' in your path.")
+
     checker = DepsCheker()
+    s = ''
     if options.single:
         if len(args) == 0:
             # single mode requires module names.
             raise SingleModeError()
         checker.run(args)
-        checker.print_dot_single(args)
+        s = checker.print_dot_single(args)
 
     else:
         checker.run(args)
-        checker.print_dot_all()
+        s = checker.print_dot_all()
 
     checker.print_missing_modules()
+
+    if options.gui:
+        launch_viewer(s)
+    else:
+        print (s)
+
