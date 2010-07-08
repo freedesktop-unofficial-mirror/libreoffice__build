@@ -27,8 +27,9 @@ class Module(object):
 class DepsCheker(object):
 
     def __init__ (self):
-        self.modules = {}
-        self.selected = []
+        self.modules = {}         # all mentioned modules, whether present or not.
+        self.modules_present = {} # modules actually present in the source tree.
+        self.selected = []        # selected modules from the command line args.
 
     def __normalize_name (self, name):
         # Replace prohibited characters with someone sane.
@@ -100,7 +101,8 @@ class DepsCheker(object):
             if not os.path.isfile(build_lst):
                 # no build.lst found
                 continue
-    
+
+            self.modules_present[mod] = True
             self.__parse_build_lst(build_lst)
             
     def print_dot_all (self):
@@ -118,6 +120,7 @@ class DepsCheker(object):
             for selected in self.selected:
                 if not self.modules.has_key(selected):
                     raise ParseError()
+
                 if len(self.modules[selected].deps) > 0:
                     self.__trace_deps(self.modules[selected])
                 else:
@@ -146,9 +149,25 @@ class DepsCheker(object):
 
         print ("}")
 
+    def print_missing_modules (self):
+        present = self.modules_present.keys()
+        absent = []
+        for mod in self.modules.keys():
+            if not self.modules_present.has_key(mod):
+                absent.append(mod)
+
+        if len(absent) == 0:
+            return
+
+        sys.stderr.write("The following modules are mentioned but not present in the source tree:\n")
+        absent.sort()
+        for mod in absent:
+            sys.stderr.write("    " + mod + "\n")
+
     def __trace_deps (self, obj):
         if self.__processed_mods.has_key(obj.name):
             return
+
         self.__processed_mods[obj.name] = True
 
         for dep_name in obj.deps.keys():
@@ -179,3 +198,5 @@ if __name__ == '__main__':
     else:
         checker.run(args)
         checker.print_dot_all()
+
+    checker.print_missing_modules()
