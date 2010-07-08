@@ -17,7 +17,10 @@ in the dot compatible format.
 
 When no arguments are given, it prints dependencies of all discovered 
 modules.  When module names are given as arguments, it only traces 
-dependencies of those modules."""
+dependencies of those modules.
+
+Sometimes modules are referenced in the build.lst but are absent from the 
+source tree.  Those missing modules are displayed red in the dependency graph."""
 
 err_missing_modules = """
 The following modules are mentioned but not present in the source tree:"""
@@ -34,7 +37,10 @@ class DepsCheker(object):
     def __init__ (self):
         self.modules = {}         # all mentioned modules, whether present or not.
         self.modules_present = {} # modules actually present in the source tree.
+        self.modules_used = {}    # modules displayed in the graph.
         self.selected = []        # selected modules from the command line args.
+
+        self.modules_missing = None
 
     def __normalize_name (self, name):
         # Replace prohibited characters with someone sane.
@@ -111,6 +117,7 @@ class DepsCheker(object):
             self.__parse_build_lst(build_lst)
             
     def print_dot_all (self):
+
         s = "digraph modules {\n"
 
         if len(self.selected) == 0:
@@ -131,6 +138,7 @@ class DepsCheker(object):
                 else:
                     s += "    " + selected + ";\n"
 
+        s += self.__print_dot_missing_modules()
         s += "}\n"
         return s
 
@@ -153,22 +161,31 @@ class DepsCheker(object):
             for dep in obj.deps.keys():
                 s += self.__print_dot_dep_line(obj.name, dep)
 
+        s += self.__print_dot_missing_modules()
         s += "}\n"
         return s
 
-    def print_missing_modules (self):
+    def __calc_missing_modules (self):
+        if self.modules_missing != None:
+            # already calculated.
+            return
+
         present = self.modules_present.keys()
-        absent = []
+        self.modules_missing = {}
         for mod in self.modules.keys():
             if not self.modules_present.has_key(mod):
-                absent.append(mod)
+                self.modules_missing[mod] = True
 
-        if len(absent) == 0:
+    def print_missing_modules (self):
+        self.__calc_missing_modules()
+
+        if len(self.modules_missing) == 0:
             return
 
         sys.stderr.write(err_missing_modules + "\n")
-        absent.sort()
-        for mod in absent:
+        keys = self.modules_missing.keys()
+        keys.sort()
+        for mod in keys:
             sys.stderr.write("    " + mod + "\n")
 
     def __trace_deps (self, obj):
@@ -186,7 +203,21 @@ class DepsCheker(object):
 
         return s
 
+    def __print_dot_missing_modules (self):
+        self.__calc_missing_modules()
+        s = ''
+        for mod in self.modules_missing.keys():
+            if not self.modules_used.has_key(mod):
+                continue
+
+            s += "    %s [color=red,style=filled];\n"%mod
+
+        return s
+
+
     def __print_dot_dep_line (self, prec, dep):
+        self.modules_used[prec] = True
+        self.modules_used[dep] = True
         return "    " + prec + " -> " + dep + ";\n"
 
 def exec_exists (cmd):
