@@ -1,0 +1,262 @@
+diff --git oox/inc/oox/ole/vbamodule.hxx oox/inc/oox/ole/vbamodule.hxx
+index 3b529ce..cef676d 100755
+--- oox/inc/oox/ole/vbamodule.hxx
++++ oox/inc/oox/ole/vbamodule.hxx
+@@ -74,6 +74,10 @@ public:
+                             const ::com::sun::star::uno::Reference< ::com::sun::star::container::XNameContainer >& rxBasicLib,
+                             const ::com::sun::star::uno::Reference< ::com::sun::star::container::XNameAccess >& rxDocObjectNA ) const;
+ 
++    /** Creates empty document module for the passed Basic library/project. */
++    void                createEmptyDocModule(
++                            const ::com::sun::star::uno::Reference< ::com::sun::star::container::XNameContainer >& rxBasicLib,
++                            const ::com::sun::star::uno::Reference< ::com::sun::star::container::XNameAccess >& rxDocObjectNA ) const;
+ private:
+     ::com::sun::star::uno::Reference< ::com::sun::star::frame::XModel >
+                         mxDocModel;         /// Document model used to import/export the VBA project.
+diff --git oox/inc/oox/ole/vbaproject.hxx oox/inc/oox/ole/vbaproject.hxx
+index 6087942..6198ae7 100755
+--- oox/inc/oox/ole/vbaproject.hxx
++++ oox/inc/oox/ole/vbaproject.hxx
+@@ -85,6 +85,7 @@ public:
+     void                importVbaProject(
+                             StorageBase& rVbaPrjStrg,
+                             const GraphicHelper& rGraphicHelper,
++                            const ::com::sun::star::uno::Sequence< rtl::OUString >& sGeneratedCNames = ::com::sun::star::uno::Sequence< rtl::OUString >(0),
+                             bool bDefaultColorBgr = true );
+ 
+     /** Returns true, if the document contains at least one code module. */
+@@ -265,7 +266,7 @@ private:
+     ::com::sun::star::uno::Reference< ::com::sun::star::container::XNameContainer >
+                         createDialogLibrary();
+     /** Imports the VBA code modules and forms. */
+-    void                importVba( StorageBase& rVbaPrjStrg, const GraphicHelper& rGraphicHelper, bool bDefaultColorBgr );
++    void                importVba( StorageBase& rVbaPrjStrg, const GraphicHelper& rGraphicHelper, const ::com::sun::star::uno::Sequence< rtl::OUString >& sGeneratedCNames, bool bDefaultColorBgr );
+     /** Copies the entire VBA project storage to the passed document model. */
+     void                copyStorage( StorageBase& rVbaPrjStrg );
+ 
+diff --git oox/source/ole/vbamodule.cxx oox/source/ole/vbamodule.cxx
+index 851bacc..156dc12 100755
+--- oox/source/ole/vbamodule.cxx
++++ oox/source/ole/vbamodule.cxx
+@@ -234,6 +234,46 @@ void VbaModule::importSourceCode( StorageBase& rVbaStrg,
+         OSL_ENSURE( false, "VbaModule::importSourceCode - cannot insert module into library" );
+     }
+ }
++void VbaModule::createEmptyDocModule( const Reference< XNameContainer >& rxBasicLib, const Reference< XNameAccess >& rxDocObjectNA ) const
++{
++    if( maName.getLength() == 0 ) 
++        return;
++        
++    // prepare the Basic module
++    ModuleInfo aModuleInfo;
++    aModuleInfo.ModuleType = mnType;
++    OUStringBuffer aSourceCode;
++    aSourceCode.appendAscii( RTL_CONSTASCII_STRINGPARAM( "Rem Attribute VBA_ModuleType=VBADocumentModule" ) );
++
++    // get the VBA object associated to the document module
++    if( rxDocObjectNA.is() ) try
++    {
++        aModuleInfo.ModuleObject.set( rxDocObjectNA->getByName( maName ), UNO_QUERY );
++    }
++    catch( Exception& )
++    {
++    }
++
++    // insert extended module info
++    try
++    {
++        Reference< XVBAModuleInfo > xVBAModuleInfo( rxBasicLib, UNO_QUERY_THROW );
++        xVBAModuleInfo->insertModuleInfo( maName, aModuleInfo );
++    }
++    catch( Exception& )
++    {
++    }
++
++    // insert the module into the passed Basic library
++    try
++    {
++        rxBasicLib->insertByName( maName, Any( aSourceCode.makeStringAndClear() ) );
++    }
++    catch( Exception& )
++    {
++        OSL_ENSURE( false, "VbaModule::importSourceCode - cannot insert module into library" );
++    }
++}
+ 
+ // ============================================================================
+ 
+diff --git oox/source/ole/vbaproject.cxx oox/source/ole/vbaproject.cxx
+index 10a7dc6..22a7019 100755
+--- oox/source/ole/vbaproject.cxx
++++ oox/source/ole/vbaproject.cxx
+@@ -65,6 +65,7 @@ using ::com::sun::star::script::XLibraryContainer;
+ using ::com::sun::star::script::XVBACompat;
+ using ::com::sun::star::uno::Any;
+ using ::com::sun::star::uno::Exception;
++using ::com::sun::star::uno::Sequence;
+ using ::com::sun::star::uno::Reference;
+ using ::com::sun::star::uno::UNO_QUERY;
+ using ::com::sun::star::uno::UNO_QUERY_THROW;
+@@ -149,13 +150,13 @@ VbaProject::~VbaProject()
+ {
+ }
+ 
+-void VbaProject::importVbaProject( StorageBase& rVbaPrjStrg, const GraphicHelper& rGraphicHelper, bool bDefaultColorBgr )
++void VbaProject::importVbaProject( StorageBase& rVbaPrjStrg, const GraphicHelper& rGraphicHelper, const Sequence< OUString >& rGeneratedCNames, bool bDefaultColorBgr )
+ {
+     if( rVbaPrjStrg.isStorage() )
+     {
+         // load the code modules and forms
+         if( isImportVba() )
+-            importVba( rVbaPrjStrg, rGraphicHelper, bDefaultColorBgr );
++            importVba( rVbaPrjStrg, rGraphicHelper, rGeneratedCNames, bDefaultColorBgr );
+         // copy entire storage into model
+         if( isExportVba() )
+             copyStorage( rVbaPrjStrg );
+@@ -286,7 +287,7 @@ Reference< XNameContainer > VbaProject::createDialogLibrary()
+     return mxDialogLib;
+ }
+ 
+-void VbaProject::importVba( StorageBase& rVbaPrjStrg, const GraphicHelper& rGraphicHelper, bool bDefaultColorBgr )
++void VbaProject::importVba( StorageBase& rVbaPrjStrg, const GraphicHelper& rGraphicHelper, const Sequence< OUString >& rGeneratedCNames, bool bDefaultColorBgr )
+ {
+     StorageRef xVbaStrg = rVbaPrjStrg.openSubStorage( CREATE_OUSTRING( "VBA" ), false );
+     OSL_ENSURE( xVbaStrg.get(), "VbaProject::importVba - cannot open 'VBA' substorage" );
+@@ -310,7 +311,7 @@ void VbaProject::importVba( StorageBase& rVbaPrjStrg, const GraphicHelper& rGrap
+     bool bExecutable = isImportVbaExecutable();
+ 
+     typedef RefMap< OUString, VbaModule > VbaModuleMap;
+-    VbaModuleMap aModules, aModulesByStrm;
++    VbaModuleMap aModules, aModulesByStrm, aGeneratedModules;
+ 
+     sal_uInt16 nRecId = 0;
+     StreamDataSequence aRecData;
+@@ -424,11 +425,21 @@ void VbaProject::importVba( StorageBase& rVbaPrjStrg, const GraphicHelper& rGrap
+         }
+     }
+ 
++    // populate aModules with modules from generated codenames ( if they exist )
++    const rtl::OUString* pGenModName = rGeneratedCNames.getConstArray();
++    const rtl::OUString* pEnd = rGeneratedCNames.getConstArray() + rGeneratedCNames.getLength();
++    for ( ; pGenModName != pEnd; ++pGenModName )
++    {
++        VbaModuleMap::mapped_type& rxModule = aGeneratedModules[ *pGenModName ];
++        rxModule.reset( new VbaModule( mxDocModel, *pGenModName, eTextEnc, bExecutable ) );
++        rxModule->setType( ApiModuleType::DOCUMENT );
++    }
++    
+     /*  Now it is time to load the source code. All modules will be inserted
+         into the Basic library of the document specified by the 'maPrjName'
+         member. Do not create the Basic library, if there are no modules
+         specified. */
+-    if( !aModules.empty() ) try
++    if( !aModules.empty() || !aGeneratedModules.empty() ) try
+     {
+         // get the basic library
+         Reference< XNameContainer > xBasicLib( createBasicLibrary(), UNO_SET_THROW );
+@@ -458,8 +469,12 @@ void VbaProject::importVba( StorageBase& rVbaPrjStrg, const GraphicHelper& rGrap
+ 
+         // call Basic source code import for each module, boost::[c]ref enforces pass-by-ref
+         if( xBasicLib.is() )
++        {
++            aGeneratedModules.forEachMem( &VbaModule::createEmptyDocModule,
++                ::boost::cref( xBasicLib ), ::boost::cref( xDocObjectNA ) );
+             aModules.forEachMem( &VbaModule::importSourceCode,
+                 ::boost::ref( *xVbaStrg ), ::boost::cref( xBasicLib ), ::boost::cref( xDocObjectNA ) );
++        }
+     }
+     catch( Exception& )
+     {
+diff --git oox/source/xls/excelfilter.cxx oox/source/xls/excelfilter.cxx
+index ffed051..5ae1148 100644
+--- oox/source/xls/excelfilter.cxx
++++ oox/source/xls/excelfilter.cxx
+@@ -276,12 +276,14 @@ bool SimpleExcelVBAProjFilter::importDocument() throw()
+     OSL_ENSURE( eBiff != BIFF_UNKNOWN, "ExcelBiffFilter::ExcelBiffFilter - invalid file format" );
+     if( eBiff != BIFF_UNKNOWN )
+     {
++        Sequence< rtl::OUString > sGeneratedCNames;
++        getArgument( CREATE_OUSTRING( "GeneratedCodeNames" ) ) >>= sGeneratedCNames;
+         WorkbookHelperRoot aHelper( *this, eBiff );
+         StorageRef xVbaPrjStrg = openSubStorage( CREATE_OUSTRING( "_VBA_PROJECT_CUR" ), false )    ;
+         if( xVbaPrjStrg.get() && xVbaPrjStrg->isStorage() )
+         {
+             VbaProject aVbaProject( getGlobalFactory(), aHelper.getDocument() );
+-            aVbaProject.importVbaProject( *xVbaPrjStrg, getGraphicHelper() );
++            aVbaProject.importVbaProject( *xVbaPrjStrg, getGraphicHelper(), sGeneratedCNames );
+             bRet = true;
+         }
+     }
+diff --git sc/source/filter/excel/excimp8.cxx sc/source/filter/excel/excimp8.cxx
+index 7e1a181..29d6e69 100644
+--- sc/source/filter/excel/excimp8.cxx
++++ sc/source/filter/excel/excimp8.cxx
+@@ -121,7 +121,7 @@ using namespace ::comphelper;
+ script::ModuleInfo lcl_InitModuleInfo( SfxObjectShell& rDocSh, String& sModule );
+ 
+ ImportExcel8::ImportExcel8( XclImpRootData& rImpData, SvStream& rStrm ) :
+-    ImportExcel( rImpData, rStrm ), mnTab(0)
++    ImportExcel( rImpData, rStrm )
+ {
+     delete pFormConv;
+ 
+@@ -251,7 +251,7 @@ void ImportExcel8::Codename( BOOL bWorkbookGlobals )
+             else
+             {
+                 GetExtDocOptions().AppendCodeName( aName );
+-                GetDoc().SetCodeName( mnTab++, aName );
++                GetDoc().SetCodeName( GetCurrScTab(), aName );
+             }
+         }
+     }
+@@ -291,8 +291,28 @@ void ImportExcel8::ReadBasic( void )
+             try
+             {
+                 uno::Reference< lang::XComponent > xComponent( pShell->GetModel(), uno::UNO_QUERY_THROW );
+-                
+-                uno::Reference< document::XImporter > xImporter( ScfApiHelper::CreateInstance( CREATE_OUSTRING( "com.sun.star.comp.xls.SimpleExcelVBAProjFilter" ) ), uno::UNO_QUERY_THROW );
++                uno::Sequence< beans::NamedValue > aArgSeq(1);
++                // I guess we could actually handle the GeneratedCodeNames here
++                // ( e.g. after import create the required modules ) but...
++                // better to reuse the code in the filter right?
++                uno::Sequence< rtl::OUString > sGeneratedCNames;
++                aArgSeq[ 0 ].Name = CREATE_OUSTRING( "GeneratedCodeNames");
++                if (  AutoGeneratedCodeNames.size() )
++                {
++                    sGeneratedCNames.realloc( AutoGeneratedCodeNames.size() );
++                    std::vector< String >::iterator it_end = AutoGeneratedCodeNames.end();
++                    rtl::OUString* pItem = sGeneratedCNames.getArray();
++                    for ( std::vector< String >::iterator it = AutoGeneratedCodeNames.begin(); it != it_end; ++it, ++pItem )
++                        *pItem = *it;
++                }
++                aArgSeq[ 0 ].Value <<= sGeneratedCNames;
++
++                uno::Sequence< uno::Any > aArgs( 2 );
++                aArgs[ 0 ] <<= getProcessServiceFactory();
++                aArgs[ 1 ] <<= aArgSeq;
++
++                uno::Reference< document::XImporter > xImporter( ScfApiHelper::CreateInstanceWithArgs( CREATE_OUSTRING( "com.sun.star.comp.xls.SimpleExcelVBAProjFilter" ), aArgs ), uno::UNO_QUERY_THROW );
++
+                 xImporter->setTargetDocument( xComponent );
+     
+                 MediaDescriptor aMediaDesc;
+@@ -318,7 +338,6 @@ void ImportExcel8::ReadBasic( void )
+ 
+             if ( !bAsComment )
+             {
+-                ScDocument& rDoc = GetDoc();
+ #if 1
+                 // see if we have the XCB stream
+                 SvStorageStreamRef xXCB = xRootStrg->OpenSotStream( String( RTL_CONSTASCII_USTRINGPARAM( "XCB" ) ), STREAM_STD_READ | STREAM_NOCREATE  );
+diff --git sc/source/filter/inc/excimp8.hxx sc/source/filter/inc/excimp8.hxx
+index 4447768..0f84fd3 100644
+--- sc/source/filter/inc/excimp8.hxx
++++ sc/source/filter/inc/excimp8.hxx
+@@ -50,7 +50,6 @@ class XclImpStream;
+ 
+ class ImportExcel8 : public ImportExcel
+ {
+-        SCTAB mnTab;
+     protected:
+         // represents codename ( and associated modules ) 
+         // not speficied directly in the binary format
