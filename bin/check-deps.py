@@ -4,6 +4,8 @@ import sys, os, os.path, optparse
 
 class ParseError(Exception): pass
 
+class SingleModeError(Exception): pass
+
 arg_desc = "module1 module2 ..."
 
 desc = """
@@ -83,13 +85,10 @@ class DepsCheker(object):
             dep = self.__normalize_name(dep)
             self.__insert_depend(mod_name, dep)
 
-    def run (self):
-        parser = optparse.OptionParser()
-        parser.usage += " " + arg_desc + "\n" + desc
-        options, args = parser.parse_args()
+    def run (self, selected):
     
         # modules we want to print dependency on.
-        self.selected = args
+        self.selected = selected
 
         # Find all build.lst files.
         for mod in os.listdir(os.getcwd()):
@@ -104,7 +103,7 @@ class DepsCheker(object):
     
             self.__parse_build_lst(build_lst)
             
-    def print_dot (self):
+    def print_dot_all (self):
         print ("digraph modules {")
 
         if len(self.selected) == 0:
@@ -126,6 +125,27 @@ class DepsCheker(object):
 
         print ("}")
 
+    def print_dot_single (self, mods):
+        print ("digraph modules {")
+        for mod in mods:
+
+            if not self.modules.has_key(mod):
+                continue
+
+            obj = self.modules[mod]
+
+            if len(obj.precs) == 0 and len(obj.deps) == 0:
+                # No dependencies.  Just print the module.
+                print ("    " + mod + ";")
+                continue
+
+            for prec in obj.precs.keys():
+                self.__print_dot_dep_line(prec, obj.name)
+            for dep in obj.deps.keys():
+                self.__print_dot_dep_line(obj.name, dep)
+
+        print ("}")
+
     def __trace_deps (self, obj):
         if self.__processed_mods.has_key(obj.name):
             return
@@ -142,6 +162,20 @@ class DepsCheker(object):
 
 
 if __name__ == '__main__':
+    parser = optparse.OptionParser()
+    parser.usage += " " + arg_desc + "\n" + desc
+    parser.add_option("-s", "--single", action="store_true", dest="single", default=False,
+        help="Print only immediate dependencies of specified modules.")
+    options, args = parser.parse_args()
+
     checker = DepsCheker()
-    checker.run()
-    checker.print_dot()
+    if options.single:
+        if len(args) == 0:
+            # single mode requires module names.
+            raise SingleModeError()
+        checker.run(args)
+        checker.print_dot_single(args)
+
+    else:
+        checker.run(args)
+        checker.print_dot_all()
