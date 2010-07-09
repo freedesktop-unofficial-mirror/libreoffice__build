@@ -128,10 +128,8 @@ class DepsCheker(object):
             self.modules_present[self.__normalize_name(mod)] = True
             self.__parse_build_lst(build_lst)
             
-    def print_dot_all (self):
+    def __build_depset_all (self):
         self.dep_set = DependSet() # reset
-        s = "digraph modules {\n"
-
         if len(self.selected) == 0:
             mods = self.modules.keys()
             for mod in mods:
@@ -148,6 +146,27 @@ class DepsCheker(object):
                 if len(self.modules[selected].deps) > 0:
                     self.__trace_deps(self.modules[selected])
 
+    def __build_depset_single (self, mods):
+        self.dep_set = DependSet() # reset
+        for mod in mods:
+
+            if not self.modules.has_key(mod):
+                continue
+
+            obj = self.modules[mod]
+            if len(obj.precs) == 0 and len(obj.deps) == 0:
+                # No dependencies.  Just print the module.
+                self.dep_set.insert_depend(mod, None)
+                continue
+
+            for prec in obj.precs.keys():
+                self.dep_set.insert_depend(prec, obj.name)
+            for dep in obj.deps.keys():
+                self.dep_set.insert_depend(obj.name, dep)
+
+    def print_dot_all (self):
+        self.__build_depset_all()
+        s = "digraph modules {\n"
         s += self.__print_dot_depset()
         s += self.__print_dot_selected()
         s += self.__print_dot_missing_modules()
@@ -155,26 +174,8 @@ class DepsCheker(object):
         return s
 
     def print_dot_single (self, mods):
-        self.dep_set = DependSet() # reset
+        self.__build_depset_single(mods)
         s = "digraph modules {\n"
-
-        for mod in mods:
-
-            if not self.modules.has_key(mod):
-                continue
-
-            obj = self.modules[mod]
-
-            if len(obj.precs) == 0 and len(obj.deps) == 0:
-                # No dependencies.  Just print the module.
-                self.dep_set.insert_depend(mod, None)
-                continue
-
-            for prec in obj.precs.keys():
-                self.dep_set.insert_depend(prec, obj.name)
-            for dep in obj.deps.keys():
-                self.dep_set.insert_depend(obj.name, dep)
-
         s += self.__print_dot_depset()
         s += self.__print_dot_selected()
         s += self.__print_dot_missing_modules()
@@ -182,51 +183,12 @@ class DepsCheker(object):
         return s
 
     def print_flat_all (self):
-        s = ''
-        self.dep_set = DependSet() # reset
-
-        if len(self.selected) == 0:
-            mods = self.modules.keys()
-            for mod in mods:
-                deps = self.modules[mod].deps.keys()
-                for dep in deps:
-                    self.dep_set.insert_depend(mod, dep)
-        else:
-            # determine involved modules.
-            self.__processed_mods = {}
-            for selected in self.selected:
-                if not self.modules.has_key(selected):
-                    raise ParseError()
-
-                if len(self.modules[selected].deps) > 0:
-                    self.__trace_deps(self.modules[selected])
-
-        s += self.__print_flat_depset()
-        return s
+        self.__build_depset_all()
+        return self.__print_flat_depset()
 
     def print_flat_single (self, mods):
-        s = ''
-        self.dep_set = DependSet() # reset
-
-        for mod in mods:
-
-            if not self.modules.has_key(mod):
-                continue
-
-            obj = self.modules[mod]
-
-            if len(obj.precs) == 0 and len(obj.deps) == 0:
-                # No dependencies.  Just print the module.
-                self.dep_set.insert_depend(mod, None)
-                continue
-
-            for prec in obj.precs.keys():
-                self.dep_set.insert_depend(prec, obj.name)
-            for dep in obj.deps.keys():
-                self.dep_set.insert_depend(obj.name, dep)
-
-        s += self.__print_flat_depset()
-        return s
+        self.__build_depset_single(mods)
+        return self.__print_flat_depset()
 
     def __calc_missing_modules (self):
         if self.modules_missing != None:
