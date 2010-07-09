@@ -32,6 +32,18 @@ class Module(object):
         self.deps  = {} # dependents
         self.precs = {} # precedents
 
+# Store all unique dependency set, with no duplicates.
+class DependSet(object):
+
+    def __init__ (self):
+        self.modules = {}
+
+    def insert_depend (self, prec, dep):
+        if not self.modules.has_key(prec):
+            self.modules[prec] = {}
+        if dep != None:
+            self.modules[prec][dep] = True
+
 class DepsCheker(object):
 
     def __init__ (self):
@@ -117,7 +129,7 @@ class DepsCheker(object):
             self.__parse_build_lst(build_lst)
             
     def print_dot_all (self):
-
+        self.dep_set = DependSet() # reset
         s = "digraph modules {\n"
 
         if len(self.selected) == 0:
@@ -125,7 +137,7 @@ class DepsCheker(object):
             for mod in mods:
                 deps = self.modules[mod].deps.keys()
                 for dep in deps:
-                    s += self.__print_dot_dep_line(mod, dep)
+                    self.dep_set.insert_depend(mod, dep)
         else:
             # determine involved modules.
             self.__processed_mods = {}
@@ -134,16 +146,18 @@ class DepsCheker(object):
                     raise ParseError()
 
                 if len(self.modules[selected].deps) > 0:
-                    s += self.__trace_deps(self.modules[selected])
-                else:
-                    s += "    " + selected + ";\n"
+                    self.__trace_deps(self.modules[selected])
 
+        s += self.__print_dot_depset()
+        s += self.__print_dot_selected()
         s += self.__print_dot_missing_modules()
         s += "}\n"
         return s
 
     def print_dot_single (self, mods):
+        self.dep_set = DependSet() # reset
         s = "digraph modules {\n"
+
         for mod in mods:
 
             if not self.modules.has_key(mod):
@@ -153,14 +167,16 @@ class DepsCheker(object):
 
             if len(obj.precs) == 0 and len(obj.deps) == 0:
                 # No dependencies.  Just print the module.
-                s += "    " + mod + ";\n"
+                self.dep_set.insert_depend(mod, None)
                 continue
 
             for prec in obj.precs.keys():
-                s += self.__print_dot_dep_line(prec, obj.name)
+                self.dep_set.insert_depend(prec, obj.name)
             for dep in obj.deps.keys():
-                s += self.__print_dot_dep_line(obj.name, dep)
+                self.dep_set.insert_depend(obj.name, dep)
 
+        s += self.__print_dot_depset()
+        s += self.__print_dot_selected()
         s += self.__print_dot_missing_modules()
         s += "}\n"
         return s
@@ -189,19 +205,38 @@ class DepsCheker(object):
             sys.stderr.write("    " + mod + "\n")
 
     def __trace_deps (self, obj):
-        s = ""
         if self.__processed_mods.has_key(obj.name):
-            return s
+            return
 
         self.__processed_mods[obj.name] = True
 
         for dep_name in obj.deps.keys():
             if not self.modules.has_key(dep_name):
                 raise ParseError()
-            s += self.__print_dot_dep_line(obj.name, dep_name)
-            s += self.__trace_deps(self.modules[dep_name])
+            self.dep_set.insert_depend(obj.name, dep_name)
+            self.__trace_deps(self.modules[dep_name])
 
+    def __print_dot_depset (self):
+        s = ''
+        mods = self.dep_set.modules.keys()
+        for mod in mods:
+            deps = self.dep_set.modules[mod].keys()
+            if len(deps) == 0:
+                # this module has no dependency.
+                s += self.__print_dot_dep_line(mod, None)
+            else:
+                for dep in deps:
+                    s += self.__print_dot_dep_line(mod, dep)
         return s
+
+    def __print_dot_selected (self):
+        s = ''
+        for mod in self.selected:
+            if not self.modules_used.has_key(mod):
+                continue
+            s += "    %s [color=lightblue,style=filled];\n"%mod
+        return s
+
 
     def __print_dot_missing_modules (self):
         self.__calc_missing_modules()
@@ -209,16 +244,21 @@ class DepsCheker(object):
         for mod in self.modules_missing.keys():
             if not self.modules_used.has_key(mod):
                 continue
-
             s += "    %s [color=red,style=filled];\n"%mod
 
         return s
 
 
     def __print_dot_dep_line (self, prec, dep):
+        if prec == None:
+            raise ParseError()
+
         self.modules_used[prec] = True
+        if dep == None:
+            # this module has no dependency.  I still need to mention the module name.
+            return "    %s;\n"%prec
         self.modules_used[dep] = True
-        return "    " + prec + " -> " + dep + ";\n"
+        return "    %s -> %s;\n"%(prec, dep)
 
 def exec_exists (cmd):
     retcode = subprocess.call("which %s >/dev/null 2>/dev/null"%cmd, shell=True)
