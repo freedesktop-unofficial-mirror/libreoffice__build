@@ -181,6 +181,53 @@ class DepsCheker(object):
         s += "}\n"
         return s
 
+    def print_flat_all (self):
+        s = ''
+        self.dep_set = DependSet() # reset
+
+        if len(self.selected) == 0:
+            mods = self.modules.keys()
+            for mod in mods:
+                deps = self.modules[mod].deps.keys()
+                for dep in deps:
+                    self.dep_set.insert_depend(mod, dep)
+        else:
+            # determine involved modules.
+            self.__processed_mods = {}
+            for selected in self.selected:
+                if not self.modules.has_key(selected):
+                    raise ParseError()
+
+                if len(self.modules[selected].deps) > 0:
+                    self.__trace_deps(self.modules[selected])
+
+        s += self.__print_flat_depset()
+        return s
+
+    def print_flat_single (self, mods):
+        s = ''
+        self.dep_set = DependSet() # reset
+
+        for mod in mods:
+
+            if not self.modules.has_key(mod):
+                continue
+
+            obj = self.modules[mod]
+
+            if len(obj.precs) == 0 and len(obj.deps) == 0:
+                # No dependencies.  Just print the module.
+                self.dep_set.insert_depend(mod, None)
+                continue
+
+            for prec in obj.precs.keys():
+                self.dep_set.insert_depend(prec, obj.name)
+            for dep in obj.deps.keys():
+                self.dep_set.insert_depend(obj.name, dep)
+
+        s += self.__print_flat_depset()
+        return s
+
     def __calc_missing_modules (self):
         if self.modules_missing != None:
             # already calculated.
@@ -215,6 +262,21 @@ class DepsCheker(object):
                 raise ParseError()
             self.dep_set.insert_depend(obj.name, dep_name)
             self.__trace_deps(self.modules[dep_name])
+
+    def __print_flat_depset (self):
+        s = ''
+        mods = self.dep_set.modules.keys()
+        mods.sort()
+        for mod in mods:
+            deps = self.dep_set.modules[mod].keys()
+            if len(deps) == 0:
+                # this module has no dependency.
+                s += "%s\n"%mod
+            else:
+                deps.sort()
+                for dep in deps:
+                    s += "%s:%s\n"%(mod, dep)
+        return s
 
     def __print_dot_depset (self):
         s = ''
@@ -288,6 +350,8 @@ if __name__ == '__main__':
     # Process commnad line arguments.
     parser = optparse.OptionParser()
     parser.usage += " " + arg_desc + "\n" + desc
+    parser.add_option("-m", "--outout-mode", dest="output_mode", default="dot", metavar="MODE",
+        help="Specify output format mode.  Supported modes are 'dot' and 'flat'.")
     parser.add_option("-s", "--single", action="store_true", dest="single", default=False,
         help="Print only immediate dependencies of specified modules.")
     parser.add_option("-g", "--gui", action="store_true", dest="gui", default=False,
@@ -301,6 +365,12 @@ if __name__ == '__main__':
         if not exec_exists('eog'):
             error("'eog' not found.  Make sure you have 'eog' in your path.")
 
+        # GUI mode requires dot-compatible output.
+        options.output_mode = 'dot'
+
+    if options.output_mode != 'dot' and options.output_mode != 'flat':
+        error("Unrecognized output mode: %s"%options.output_mode)
+
     checker = DepsCheker()
     s = ''
     if options.single:
@@ -308,11 +378,17 @@ if __name__ == '__main__':
             # single mode requires module names.
             raise SingleModeError()
         checker.run(args)
-        s = checker.print_dot_single(args)
+        if options.output_mode == 'dot':
+            s = checker.print_dot_single(args)
+        else:
+            s = checker.print_flat_single(args)
 
     else:
         checker.run(args)
-        s = checker.print_dot_all()
+        if options.output_mode == 'dot':
+            s = checker.print_dot_all()
+        else:
+            s = checker.print_flat_all()
 
     checker.print_missing_modules()
 
