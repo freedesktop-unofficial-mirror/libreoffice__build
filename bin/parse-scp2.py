@@ -83,6 +83,7 @@ class Scp2Parser(object):
             t = self.token()
             if t in Scp2Parser.NodeTypes:
                 name, attrs = self.__parseEntity()
+                attrs['__node_type__'] = t # special attribute name
                 if self.nodes.has_key(name):
                     raise ParseError("node named %s already exists"%name, 1)
                 self.nodes[name] = attrs
@@ -202,6 +203,18 @@ class Scp2Processor(object):
                 # This is a severe error.  Exit right away.
                 sys.exit(1)
 
+    def print_summary (self):
+        names = self.nodes.keys()
+        names.sort()
+        for name in names:
+            attrs = self.nodes[name]
+            node_type = attrs['__node_type__']
+            print ("%s (%s)"%(name, node_type))
+            attr_names = attrs.keys()
+            attr_names.sort()
+            for attr_name in attr_names:
+                print ("  %s = %s"%(attr_name, attrs[attr_name]))
+
     @staticmethod
     def visit (arg, dirname, names):
         instance = arg
@@ -223,5 +236,6 @@ if __name__ == '__main__':
     try:
         processor = Scp2Processor(cur_dir, options.mod_output_dir)
         processor.run()
+        processor.print_summary()
     except ParseError as e:
         print (e.value)
