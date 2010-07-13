@@ -140,6 +140,12 @@ class Scp2Processor(object):
     tmpin  = "/tmp/parse-scp2.py.cpp"
     tmpout = "/tmp/parse-scp2.py.out"
 
+    SkipList = {
+        'scp2/source/ooo/ure_standalone.scp': True,
+        'scp2/source/sdkoo/sdkoo.scp': True,
+        'scp2/source/ooo/starregistry_ooo.scp': True
+    }
+
     def __init__ (self, cur_dir, mod_output_dir):
         self.cur_dir = cur_dir
         self.mod_output_dir = mod_output_dir
@@ -152,12 +158,24 @@ class Scp2Processor(object):
         if not os.path.isdir("%s/scp2/%s/inc"%(self.cur_dir, self.mod_output_dir)):
             raise ParseError("You don't appear to be at the root of OOo's source tree.")
 
+    def to_relative (self, fullpath):
+        i = fullpath.find("/scp2/")
+        if i < 0:
+            return fullpath
+        i += 1 # skip '/' before 'scp2'
+        return fullpath[i:]
+
     def run (self):
         # Collect all .scp files under scp2.
         os.path.walk(self.cur_dir + "/scp2", Scp2Processor.visit, self)
 
         # Process each .scp file.
         for scp in self.scp_files:
+            relpath = self.to_relative(scp)
+            if Scp2Processor.SkipList.has_key(relpath):
+                error("skipping %s"%scp)
+                continue
+
             self.process_scp(scp)
 
     def process_scp (self, scp):
