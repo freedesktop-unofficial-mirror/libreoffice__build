@@ -12,16 +12,17 @@ def error (msg):
 
 class ErrorBase(Exception):
     
-    def __init__ (self, name, msg):
+    def __init__ (self, name, msg, sev):
         self.value = "%s: %s"%(name, msg)
+        self.sev = sev                    # error severity, 0 = least severe
 
     def __str__ (self):
         return repr(self.value)
 
 class ParseError(ErrorBase):
     
-    def __init__ (self, msg):
-        ErrorBase.__init__(self, "ParseError", msg)
+    def __init__ (self, msg, sev = 0):
+        ErrorBase.__init__(self, "ParseError", msg, sev)
 
 # Parse each .scp file.
 class Scp2Parser(object):
@@ -51,6 +52,7 @@ class Scp2Parser(object):
 
     def __init__ (self, content):
         self.content = content
+        self.nodes = {}
 
     def tokenize (self):
         self.tokens = []
@@ -81,12 +83,19 @@ class Scp2Parser(object):
             t = self.token()
             if t in Scp2Parser.NodeTypes:
                 name, attrs = self.__parseEntity()
-                print name
-                print attrs
+                if self.nodes.has_key(name):
+                    raise ParseError("node named %s already exists"%name, 1)
+                self.nodes[name] = attrs
             else:
                 raise ParseError("Unknown block type: %s"%t)
 
             self.next()
+
+    def append_nodes (self, nodes):
+        for key in self.nodes.keys():
+            if nodes.has_key(key):
+                raise ParseError("node named %s already exists"%key, 1)
+            nodes[key] = self.nodes[key]
 
     def next (self):
         self.i += 1
@@ -135,6 +144,9 @@ class Scp2Processor(object):
         self.cur_dir = cur_dir
         self.mod_output_dir = mod_output_dir
         self.scp_files = []
+        self.nodes = {}
+
+        # Check file paths first.
         if not os.path.isfile("%s/scp2/inc/macros.inc"%self.cur_dir):
             raise ParseError("You don't appear to be at the root of OOo's source tree.")
         if not os.path.isdir("%s/scp2/%s/inc"%(self.cur_dir, self.mod_output_dir)):
@@ -163,9 +175,14 @@ class Scp2Processor(object):
         parser.tokenize()
         try:
             parser.parse()
+            parser.append_nodes(self.nodes)
         except ParseError as e:
+            # Skip mal-formed files, instead of exit with error.
             error (e.value)
             error ("Error parsing %s"%scp)
+            if e.sev > 0:
+                # This is a severe error.  Exit right away.
+                sys.exit(1)
 
     @staticmethod
     def visit (arg, dirname, names):
@@ -178,12 +195,12 @@ class Scp2Processor(object):
 
 if __name__ == '__main__':
 
-    processor = optparse.OptionParser()
-    processor.usage += " " + arg_desc + "\n" + desc
-    processor.add_option("", "--module-output-dir", dest="mod_output_dir", default="unxlngi6.pro", metavar="DIR",
+    parser = optparse.OptionParser()
+    parser.usage += " " + arg_desc + "\n" + desc
+    parser.add_option("", "--module-output-dir", dest="mod_output_dir", default="unxlngi6.pro", metavar="DIR",
         help="Specify the name of module output directory.  The default value is 'unxlngi6.pro'.")
 
-    options, args = processor.parse_args()
+    options, args = parser.parse_args()
     cur_dir = os.getcwd()
     try:
         processor = Scp2Processor(cur_dir, options.mod_output_dir)
