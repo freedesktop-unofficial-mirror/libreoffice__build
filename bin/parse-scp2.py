@@ -7,6 +7,9 @@ arg_desc = ""
 desc = """
 Run this script at the root of OOo source tree."""
 
+def error (msg):
+    sys.stderr.write(msg + "\n")
+
 class ErrorBase(Exception):
     
     def __init__ (self, name, msg):
@@ -27,6 +30,24 @@ class Scp2Parser(object):
         File       = 0
         Directory  = 1
         FolderItem = 2
+
+    NodeTypes = [
+        'DataCarrier',
+        'Directory', 
+        'File', 
+        'Folder',
+        'FolderItem', 
+        'Installation', 
+        'Module',
+        'Profile',
+        'ProfileItem',
+        'RegistryItem', 
+        'ScpAction',
+        'Shortcut',
+        'StarRegistry',
+        'Unixlink',
+        'WindowsCustomAction'
+    ]
 
     def __init__ (self, content):
         self.content = content
@@ -58,7 +79,7 @@ class Scp2Parser(object):
         self.n = len(self.tokens)
         while self.i < self.n:
             t = self.token()
-            if t in ['File', 'Directory', 'FolderItem', 'RegistryItem', 'Installation', 'Module']:
+            if t in Scp2Parser.NodeTypes:
                 name, attrs = self.__parseEntity()
                 print name
                 print attrs
@@ -143,9 +164,8 @@ class Scp2Processor(object):
         try:
             parser.parse()
         except ParseError as e:
-            print (e.value)
-            print ("Error parsing %s"%scp)
-            sys.exit(1)
+            error (e.value)
+            error ("Error parsing %s"%scp)
 
     @staticmethod
     def visit (arg, dirname, names):
