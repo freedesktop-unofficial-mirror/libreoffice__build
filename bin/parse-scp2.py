@@ -58,19 +58,7 @@ class Scp2Parser(object):
         self.n = len(self.tokens)
         while self.i < self.n:
             t = self.token()
-            if t in ['File', 'Directory', 'FolderItem', 'RegistryItem', 'Installation']:
-                name, attrs = self.__parseEntity()
-                print name
-                print attrs
-            elif t == 'Directory':
-                name, attrs = self.__parseEntity()
-                print name
-                print attrs
-            elif t == 'FolderItem':
-                name, attrs = self.__parseEntity()
-                print name
-                print attrs
-            elif t == 'Module':
+            if t in ['File', 'Directory', 'FolderItem', 'RegistryItem', 'Installation', 'Module']:
                 name, attrs = self.__parseEntity()
                 print name
                 print attrs
