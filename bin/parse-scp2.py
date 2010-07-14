@@ -85,9 +85,10 @@ class Scp2Parser(object):
         while self.i < self.n:
             t = self.token()
             if t in Scp2Parser.NodeTypes:
-                name, attrs = self.__parseEntity()
+                name, attrs, values = self.__parseEntity()
                 attrs['__node_type__'] = t                 # type of node
                 attrs['__node_location__'] = self.filename # file where the node is defined
+                attrs['__node_values__'] = values
                 if self.nodes.has_key(name):
                     raise ParseError("node named %s already exists"%name, 1)
                 self.nodes[name] = attrs
@@ -115,6 +116,7 @@ class Scp2Parser(object):
         attr_name = ''
         attr_value = ''
         attrs = {}
+        values = []
         self.next()
         while self.token() != 'End':
             if self.token() == '=':
@@ -127,7 +129,12 @@ class Scp2Parser(object):
                 left = False
             
             elif left:
-                attr_name = self.token()
+                if self.token() == ';':
+                    # Not a valid attribute.  Ignore this for now.
+                    values.append(attr_name)
+                    attr_name = ''
+                else:
+                    attr_name += self.token()
             else:
                 # Parse all the way up to ';'
                 attr_value = ''
@@ -136,10 +143,11 @@ class Scp2Parser(object):
                     self.next()
                 attrs[attr_name] = attr_value
                 left = True
+                attr_name = ''
 
             self.next()
 
-        return name, attrs
+        return name, attrs, values
 
 
 
@@ -220,10 +228,17 @@ class Scp2Processor(object):
             print ('-'*70)
             print ("%s (%s)"%(name, node_type))
             print ("[node location: %s]"%attrs['__node_location__'])
+
+            # Print values first.
+            values = attrs['__node_values__']
+            for value in values:
+                print("  %s"%value)
+
+            # Print all attributes.
             attr_names = attrs.keys()
             attr_names.sort()
             for attr_name in attr_names:
-                if attr_name in ['__node_type__', '__node_location__']:
+                if attr_name in ['__node_type__', '__node_location__', '__node_values__']:
                     # Skip special attribute.
                     continue
                 print ("  %s = %s"%(attr_name, attrs[attr_name]))
