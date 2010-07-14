@@ -34,6 +34,45 @@ class LinkedNode(object):
         self.parent = None
         self.children = []
 
+class Scp2Tokenizer(object):
+
+    def __init__ (self, content):
+        self.content = content
+        self.tokens = []
+
+    def flush_buffer (self):
+        if len(self.buf) > 0:
+            self.tokens.append(self.buf)
+            self.buf = ''
+
+    def run (self):
+        self.tokens = []
+        i = 0
+        n = len(self.content)
+        self.buf = ''
+        while i < n:
+            c = self.content[i]
+            if c in '\t\n':
+                c = ' '
+
+            if c in ' ;':
+                self.flush_buffer()
+                if c == ';':
+                    self.tokens.append(c)
+            elif c == '"':
+                # String literal.  Parse until reaching the closing quote.
+                self.flush_buffer()
+                i += 1
+                c = self.content[i]
+                while c != '"':
+                    self.buf += c
+                    i += 1
+                    c = self.content[i]
+                self.flush_buffer()
+            else:
+                self.buf += c
+            i += 1
+
 # Parse each .scp file.
 class Scp2Parser(object):
 
@@ -66,27 +105,9 @@ class Scp2Parser(object):
         self.nodedata = {}
 
     def tokenize (self):
-        self.tokens = []
-        i = 0
-        n = len(self.content)
-        token = ''
-        while i < n:
-            c = self.content[i]
-            if c in '\t\n':
-                c = ' '
-
-            if c in ' ;':
-                if len(token) > 0:
-                    if token[0] == '"' and token[-1] == '"':
-                        # remove quotes.
-                        token = token[1:-1]
-                    self.tokens.append(token)
-                    token = ''
-                if c == ';':
-                    self.tokens.append(c)
-            else:
-                token += c
-            i += 1
+        tokenizer = Scp2Tokenizer(self.content)
+        tokenizer.run()
+        self.tokens = tokenizer.tokens
 
     def parse (self):
         if len(self.tokens) == 0:
