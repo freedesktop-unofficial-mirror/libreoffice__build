@@ -62,13 +62,15 @@ class Scp2Parser(object):
         token = ''
         while i < n:
             c = self.content[i]
-            if c in '\t\n;':
+            if c in '\t\n':
                 c = ' '
 
-            if c == ' ':
+            if c in ' ;':
                 if len(token) > 0:
                     self.tokens.append(token)
                     token = ''
+                if c == ';':
+                    self.tokens.append(c)
             else:
                 token += c
             i += 1
@@ -127,7 +129,11 @@ class Scp2Parser(object):
             elif left:
                 attr_name = self.token()
             else:
-                attr_value = self.token()
+                # Parse all the way up to ';'
+                attr_value = ''
+                while self.token() != ';':
+                    attr_value += self.token()
+                    self.next()
                 attrs[attr_name] = attr_value
                 left = True
 
