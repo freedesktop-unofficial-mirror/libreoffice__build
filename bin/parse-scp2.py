@@ -50,8 +50,9 @@ class Scp2Parser(object):
         'WindowsCustomAction'
     ]
 
-    def __init__ (self, content):
+    def __init__ (self, content, filename):
         self.content = content
+        self.filename = filename
         self.nodes = {}
 
     def tokenize (self):
@@ -83,12 +84,13 @@ class Scp2Parser(object):
             t = self.token()
             if t in Scp2Parser.NodeTypes:
                 name, attrs = self.__parseEntity()
-                attrs['__node_type__'] = t # special attribute name
+                attrs['__node_type__'] = t                 # type of node
+                attrs['__node_location__'] = self.filename # file where the node is defined
                 if self.nodes.has_key(name):
                     raise ParseError("node named %s already exists"%name, 1)
                 self.nodes[name] = attrs
             else:
-                raise ParseError("Unknown block type: %s"%t)
+                raise ParseError("Unknown node type: %s"%t)
 
             self.next()
 
@@ -190,7 +192,7 @@ class Scp2Processor(object):
         file = open(Scp2Processor.tmpout, 'r')
         content = file.read()
         file.close()
-        parser = Scp2Parser(content)
+        parser = Scp2Parser(content, self.to_relative(scp))
         parser.tokenize()
         try:
             parser.parse()
@@ -209,10 +211,15 @@ class Scp2Processor(object):
         for name in names:
             attrs = self.nodes[name]
             node_type = attrs['__node_type__']
+            print ('-'*70)
             print ("%s (%s)"%(name, node_type))
+            print ("[node location: %s]"%attrs['__node_location__'])
             attr_names = attrs.keys()
             attr_names.sort()
             for attr_name in attr_names:
+                if attr_name in ['__node_type__', '__node_location__']:
+                    # Skip special attribute.
+                    continue
                 print ("  %s = %s"%(attr_name, attrs[attr_name]))
 
     @staticmethod
