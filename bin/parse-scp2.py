@@ -24,6 +24,16 @@ class ParseError(ErrorBase):
     def __init__ (self, msg, sev = 0):
         ErrorBase.__init__(self, "ParseError", msg, sev)
 
+class DirError(ErrorBase):
+    def __init__ (self, msg):
+        ErrorBase.__init__(self, "DirError", msg, 0)
+
+class LinkedNode(object):
+    def __init__ (self, name):
+        self.name = name
+        self.parent = None
+        self.children = []
+
 # Parse each .scp file.
 class Scp2Parser(object):
 
@@ -53,7 +63,7 @@ class Scp2Parser(object):
     def __init__ (self, content, filename):
         self.content = content
         self.filename = filename
-        self.nodes = {}
+        self.nodedata = {}
 
     def tokenize (self):
         self.tokens = []
@@ -67,6 +77,9 @@ class Scp2Parser(object):
 
             if c in ' ;':
                 if len(token) > 0:
+                    if token[0] == '"' and token[-1] == '"':
+                        # remove quotes.
+                        token = token[1:-1]
                     self.tokens.append(token)
                     token = ''
                 if c == ';':
@@ -88,20 +101,64 @@ class Scp2Parser(object):
                 name, attrs, values = self.__parseEntity()
                 attrs['__node_type__'] = t                 # type of node
                 attrs['__node_location__'] = self.filename # file where the node is defined
-                attrs['__node_values__'] = values
-                if self.nodes.has_key(name):
+                attrs['__node_values__'] = values          # list of values that are not attributes (i.e. not associated with names)
+                if self.nodedata.has_key(name):
                     raise ParseError("node named %s already exists"%name, 1)
-                self.nodes[name] = attrs
+                self.nodedata[name] = attrs
             else:
                 raise ParseError("Unknown node type: %s"%t)
 
             self.next()
 
-    def append_nodes (self, nodes):
-        for key in self.nodes.keys():
-            if nodes.has_key(key):
+    def append_nodes (self, nodedata, nodetree):
+
+        for key in self.nodedata.keys():
+
+            if nodedata.has_key(key):
                 raise ParseError("node named %s already exists"%key, 1)
-            nodes[key] = self.nodes[key]
+
+            # Transfer all the node attributes to the caller instance.
+            nodedata[key] = self.nodedata[key]
+
+            # Now, add linkage data to the parent tree instance.
+
+            if not nodetree.has_key(key):
+                # Create a new linked node instance.
+                nodetree[key] = LinkedNode(key)
+
+            attrs = self.nodedata[key]
+
+            node_type = attrs['__node_type__']
+            if node_type == 'Module':
+                self.__link_module_node(key, attrs, nodetree)
+        
+
+    def __link_module_node (self, name, attrs, nodetree):
+
+        if attrs.has_key('ParentID'):
+            parentID = attrs['ParentID']
+
+            if not nodetree.has_key(parentID):
+                nodetree[parentID] = LinkedNode(parentID)
+
+            nodetree[parentID].children.append(nodetree[name])
+            if nodetree[name].parent != None:
+                raise ParseError("parent node instance already exists for '%s'"%parentID, 1)
+            nodetree[name].parent = nodetree[parentID]
+
+        if attrs.has_key('Files'):
+            # file list strings are formatted '(file1,file2,file3,....)'
+            files = attrs['Files']
+            if files[0] != '(' or files[-1] != ')':
+                raise ParseError("file list string is not formatted correctly: %s"%files)
+            files = files[1:-1]
+            list = files.split(',')
+            for file in list:
+
+                if not nodetree.has_key(file):
+                    nodetree[file] = LinkedNode(file)
+                nodetree[name].children.append(nodetree[file])
+
 
     def next (self):
         self.i += 1
@@ -112,6 +169,8 @@ class Scp2Parser(object):
     def __parseEntity (self):
         self.next()
         name = self.token()
+        if len(name) == 0:
+            raise ParseError("empty name", 1)
         left = True
         attr_name = ''
         attr_value = ''
@@ -130,7 +189,7 @@ class Scp2Parser(object):
             
             elif left:
                 if self.token() == ';':
-                    # Not a valid attribute.  Ignore this for now.
+                    # Not a valid attribute.  Store it as a 'value'.
                     values.append(attr_name)
                     attr_name = ''
                 else:
@@ -150,7 +209,6 @@ class Scp2Parser(object):
         return name, attrs, values
 
 
-
 # Collect all .scp files in scp2 directory, and run preprocessor.
 class Scp2Processor(object):
 
@@ -167,7 +225,8 @@ class Scp2Processor(object):
         self.cur_dir = cur_dir
         self.mod_output_dir = mod_output_dir
         self.scp_files = []
-        self.nodes = {}
+        self.nodedata = {}
+        self.nodetree = {}
 
         # Check file paths first.
         if not os.path.isfile("%s/scp2/inc/macros.inc"%self.cur_dir):
@@ -200,7 +259,7 @@ class Scp2Processor(object):
         if ret > 0:
             raise ParseError("failed to copy scp file to a temporary location.")
 
-        subprocess.call("gcc -E -I./scp2/inc -I%s -DUNX %s 2>/dev/null | grep -v -E \"^\#\" > %s"%
+        subprocess.call("gcc -E -I./scp2/inc -I./scp2/%s/inc -DUNX %s 2>/dev/null | grep -v -E \"^\#\" > %s"%
             (self.mod_output_dir, Scp2Processor.tmpin, Scp2Processor.tmpout), shell=True)
 
         file = open(Scp2Processor.tmpout, 'r')
@@ -210,7 +269,7 @@ class Scp2Processor(object):
         parser.tokenize()
         try:
             parser.parse()
-            parser.append_nodes(self.nodes)
+            parser.append_nodes(self.nodedata, self.nodetree)
         except ParseError as e:
             # Skip mal-formed files, instead of exit with error.
             error (e.value)
@@ -219,11 +278,11 @@ class Scp2Processor(object):
                 # This is a severe error.  Exit right away.
                 sys.exit(1)
 
-    def print_summary (self):
-        names = self.nodes.keys()
+    def print_summary_flat (self):
+        names = self.nodedata.keys()
         names.sort()
         for name in names:
-            attrs = self.nodes[name]
+            attrs = self.nodedata[name]
             node_type = attrs['__node_type__']
             print ('-'*70)
             print ("%s (%s)"%(name, node_type))
@@ -243,6 +302,98 @@ class Scp2Processor(object):
                     continue
                 print ("  %s = %s"%(attr_name, attrs[attr_name]))
 
+    def print_summary_tree (self):
+        root = 'gid_Module_Root'
+        node = self.nodetree[root]
+        self.__print_summary_tree_node(node, 0)
+
+    def __get_fullpath (self, fileID):
+        nodedata = self.nodedata[fileID]
+        filename = None
+        if nodedata.has_key('Name'):
+            filename = nodedata['Name']
+        elif nodedata.has_key('Name(en-US)'):
+            filename = nodedata['Name(en-US)']
+        else:
+            raise DirError("%s doesn't have a name attribute."%fileID)
+
+        if not nodedata.has_key('Dir'):
+            raise DirError("file %s doesn't have Dir attribute."%fileID)
+
+        parent_dir_name = nodedata['Dir']
+
+        while parent_dir_name != None:
+
+            if parent_dir_name == 'PREDEFINED_PROGDIR':
+                # special directory name
+                return parent_dir_name + '/' + filename
+
+            if not self.nodedata.has_key(parent_dir_name):
+                # directory is referenced but not defined.  Skip it for now.
+                raise DirError("directory '%s' is referenced but not defined."%parent_dir_name)
+    
+            nodedata = self.nodedata[parent_dir_name]
+            if nodedata.has_key('DosName'):
+                filename = nodedata['DosName'] + "/" + filename
+            elif nodedata.has_key('DosName(en-US)'):
+                filename = nodedata['DosName(en-US)'] + "/" + filename
+            elif nodedata.has_key('HostName'):
+                filename = nodedata['HostName'] + "/" + filename
+            else:
+                raise DirError("directory '%s' does not have either DosName or HostName attribute."%parent_dir_name)
+
+            if nodedata.has_key('ParentID'):
+                parent_dir_name = nodedata['ParentID']
+            else:
+                parent_dir_name = None
+
+        return filename
+
+    def __print_summary_tree_node (self, node, level):
+
+        indent = '    '*level
+
+        if node == None:
+            return
+
+        if not self.nodedata.has_key(node.name):
+            # This node is referenced but is not defined.  Skip it.
+            #error("Node '%s' is referenced but not defined."%node.name)
+            return
+
+        nodedata = self.nodedata[node.name]
+        if not self.nodedata.has_key(node.name):
+            raise ParseError("there is no associated node data for '%s'"%node.name)
+
+        node_type = nodedata['__node_type__']
+
+        name = ''
+        if node_type == 'File':
+            try:
+                name = self.__get_fullpath(node.name)
+            except DirError as e:
+                name = e.value
+        elif node_type == 'Directory':
+            name = ndoedata['DosName']
+
+        s = indent + "<%s id=\"%s\""%(node_type, node.name)
+        if len(name) > 0:
+            s += " name=\"%s\""%name
+
+        if len(node.children) > 0:
+            s += ">"
+            print (s)
+    
+            children = node.children
+            children.sort()
+            for child in children:
+                self.__print_summary_tree_node(child, level+1)
+    
+            print (indent + "</%s>"%node_type)
+        else:
+            s += "/>"
+            print (s)
+
     @staticmethod
     def visit (arg, dirname, names):
         instance = arg
@@ -251,19 +402,32 @@ class Scp2Processor(object):
             if os.path.splitext(filepath)[1] == '.scp':
                 instance.scp_files.append(filepath)
 
-
 if __name__ == '__main__':
 
     parser = optparse.OptionParser()
     parser.usage += " " + arg_desc + "\n" + desc
     parser.add_option("", "--module-output-dir", dest="mod_output_dir", default="unxlngi6.pro", metavar="DIR",
         help="Specify the name of module output directory.  The default value is 'unxlngi6.pro'.")
+    parser.add_option("-m", "--output-mode", dest="mode", default='tree', metavar="MODE",
+        help="Specify output mode.  Allowed values are 'tree' and 'flat.  The default mode is 'tree'.")
 
     options, args = parser.parse_args()
+
+    if not options.mode in ['tree', 'flat']:
+        error("unknown output mode '%s'"%options.mode)
+        sys.exit(1)
+
     cur_dir = os.getcwd()
     try:
         processor = Scp2Processor(cur_dir, options.mod_output_dir)
         processor.run()
-        processor.print_summary()
+        if options.mode == 'tree':
+            processor.print_summary_tree()
+        elif options.mode == 'flat':
+            processor.print_summary_flat()
+        else:
+            raise ParseError("unknown output mode '%s'"%options.mode)
+
     except ParseError as e:
-        print (e.value)
+        error (e.value)
+        sys.exit(1)
