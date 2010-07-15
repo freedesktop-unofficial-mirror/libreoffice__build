@@ -34,6 +34,8 @@ class LinkedNode(object):
         self.parent = None
         self.children = []
 
+# ----------------------------------------------------------------------------
+
 class Scp2Tokenizer(object):
 
     def __init__ (self, content):
@@ -72,6 +74,8 @@ class Scp2Tokenizer(object):
             else:
                 self.buf += c
             i += 1
+
+# ----------------------------------------------------------------------------
 
 # Parse each .scp file.
 class Scp2Parser(object):
@@ -265,6 +269,7 @@ class Scp2Parser(object):
 
         return name, attrs, values
 
+# ----------------------------------------------------------------------------
 
 # Collect all .scp files in scp2 directory, and run preprocessor.
 class Scp2Processor(object):
@@ -460,6 +465,103 @@ class Scp2Processor(object):
             if os.path.splitext(filepath)[1] == '.scp':
                 instance.scp_files.append(filepath)
 
+# ----------------------------------------------------------------------------
+
+class OOLstParser(object):
+
+    def __init__ (self):
+        self.vars = {}
+
+    def __repr__ (self):
+        s = ''
+        scope_names = self.vars.keys()
+        scope_names.sort()
+        for scope in scope_names:
+            s += "%s\n"%scope
+            attrs = self.vars[scope]
+            keys = attrs.keys()
+            keys.sort()
+            for key in keys:
+                s += "    %s"%key
+                if attrs[key] != None:
+                    s += " = %s"%attrs[key]
+                else:
+                    s += " ="
+                s += "\n"
+
+        return s
+
+    def parse_openoffice_lst (self, lines):
+    
+        class _Error(ParseError):
+            def __init__ (self, msg, sev=0):
+                ParseError.__init__(self, "(openoffice.lst) " + msg, sev)
+    
+        self.ns = [] # namespace stack
+        n = len(lines)
+        self.last = None
+        for i in xrange(0, n):
+            words = lines[i].split()
+            if len(words) == 0:
+                # empty line
+                continue
+    
+            if words[0] == '{':
+                # new scope begins
+                if len(words) != 1:
+                    raise _Error("{ is followed by a token.", 1)
+                if self.last == None:
+                    raise _Error("fail to find a namespace token in the previous line.", 1)
+                if len(self.last) != 1:
+                    raise _Error("line contains multiple tokens when only one token is expected.", 1)
+                t = self.last[0]
+                self.ns.append(t)
+    
+            elif words[0] == '}':
+                # current scope ends
+                self.__check_last_line()
+
+                if len(words) != 1:
+                    raise _Error("} is followed by a token.", 1)
+                self.ns.pop()
+    
+            else:
+                # check the last line
+                self.__check_last_line()
+    
+            self.last = words
+
+    def __check_last_line (self):
+        if self.last == None or len(self.last) == 0:
+            return
+
+        if self.last[0] in '{}':
+            return
+
+        key = self.last[0]
+        val = None
+        if len(self.last) > 1:
+            sep = ' '
+            val = sep.join(self.last[1:])
+        self.__insert_attr(self.ns, key, val)
+
+
+    def __insert_attr (self, ns, key, val):
+        ns_str = '' # aggregate namespaces, separated by '::'s.
+        for name in ns:
+            if len(ns_str) == 0:
+                ns_str = name
+            else:
+                ns_str += '::' + name
+
+        if not self.vars.has_key(ns_str):
+            # Create this namespace entry.
+            self.vars[ns_str] = {}
+        self.vars[ns_str][key] = val
+
+
+# ----------------------------------------------------------------------------
+
 if __name__ == '__main__':
 
     parser = optparse.OptionParser()
@@ -468,6 +570,8 @@ if __name__ == '__main__':
         help="Specify the name of module output directory.  The default value is 'unxlngi6.pro'.")
     parser.add_option("-m", "--output-mode", dest="mode", default='tree', metavar="MODE",
         help="Specify output mode.  Allowed values are 'tree' and 'flat.  The default mode is 'tree'.")
+    parser.add_option("", "--openoffice-lst", dest="openoffice_lst", default="instsetoo_native/util/openoffice.lst", metavar="FILE",
+        help="Specify the location of openoffice.lst file which contains variables used by the scp files.  The default value is 'instsetoo_native/util/openoffice.lst'.")
 
     options, args = parser.parse_args()
 
@@ -476,6 +580,23 @@ if __name__ == '__main__':
         sys.exit(1)
 
     cur_dir = os.getcwd()
+    oo_lst_path = cur_dir + '/' + options.openoffice_lst
+    if not os.path.isfile(oo_lst_path):
+        error("failed to find the openoffice.lst file at (%s)."%oo_lst_path)
+        sys.exit(1)
+
+    oolst_parser = OOLstParser()
+    try:
+        file = open(oo_lst_path, 'r')
+        oolst_parser.parse_openoffice_lst(file.readlines())
+        file.close()
+    except ParseError as e:
+        error(e.value)
+        if e.sev > 0:
+            sys.exit(1)
+
+    vars = oolst_parser.vars
+
     try:
         processor = Scp2Processor(cur_dir, options.mod_output_dir)
         processor.run()
