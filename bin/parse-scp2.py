@@ -94,9 +94,9 @@ class Scp2Parser(object):
         'RegistryItem',        # done
         'ScpAction',           # ignored
         'Shortcut',            # linked to File?  Treat this as a child of File for now.
-        'StarRegistry',        # 
+        'StarRegistry',        # ignored, probably for StarOffice only
         'Unixlink',            # done, linked from within Module
-        'WindowsCustomAction'  # 
+        'WindowsCustomAction'  # ignored
     ]
 
     def __init__ (self, content, filename):
