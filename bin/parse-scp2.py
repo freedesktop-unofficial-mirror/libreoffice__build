@@ -82,21 +82,21 @@ class Scp2Parser(object):
         FolderItem = 2
 
     NodeTypes = [
-        'DataCarrier',
-        'Directory', 
-        'File', 
-        'Folder',
-        'FolderItem', 
-        'Installation', 
-        'Module',
-        'Profile',
-        'ProfileItem',
-        'RegistryItem', 
-        'ScpAction',
-        'Shortcut',
-        'StarRegistry',
-        'Unixlink',
-        'WindowsCustomAction'
+        'DataCarrier',         # ignored
+        'Directory',           # ignored, referenced directly from File
+        'File',                # done, linked from within Module
+        'Folder',              # ignored
+        'FolderItem',          # ignored for now.  windows specific?
+        'Installation',        # 
+        'Module',              # done
+        'Profile',             # 
+        'ProfileItem',         # 
+        'RegistryItem',        # 
+        'ScpAction',           # 
+        'Shortcut',            # 
+        'StarRegistry',        # 
+        'Unixlink',            # done, linked from within Module
+        'WindowsCustomAction'  # 
     ]
 
     def __init__ (self, content, filename):
@@ -108,6 +108,12 @@ class Scp2Parser(object):
         tokenizer = Scp2Tokenizer(self.content)
         tokenizer.run()
         self.tokens = tokenizer.tokens
+
+    def next (self):
+        self.i += 1
+
+    def token (self):
+        return self.tokens[self.i]
 
     def parse (self):
         if len(self.tokens) == 0:
@@ -152,7 +158,19 @@ class Scp2Parser(object):
             node_type = attrs['__node_type__']
             if node_type == 'Module':
                 self.__link_module_node(key, attrs, nodetree)
-        
+
+    def __link_files (self, name, files, nodetree):
+
+        # file list strings are formatted like this '(file1,file2,file3,....)'
+        if files[0] != '(' or files[-1] != ')':
+            raise ParseError("file list string is not formatted correctly: %s"%files)
+        files = files[1:-1]
+        list = files.split(',')
+        for file in list:
+            if not nodetree.has_key(file):
+                nodetree[file] = LinkedNode(file)
+            nodetree[name].children.append(nodetree[file])
+
 
     def __link_module_node (self, name, attrs, nodetree):
 
@@ -168,24 +186,11 @@ class Scp2Parser(object):
             nodetree[name].parent = nodetree[parentID]
 
         if attrs.has_key('Files'):
-            # file list strings are formatted '(file1,file2,file3,....)'
-            files = attrs['Files']
-            if files[0] != '(' or files[-1] != ')':
-                raise ParseError("file list string is not formatted correctly: %s"%files)
-            files = files[1:-1]
-            list = files.split(',')
-            for file in list:
+            self.__link_files(name, attrs['Files'], nodetree)
 
-                if not nodetree.has_key(file):
-                    nodetree[file] = LinkedNode(file)
-                nodetree[name].children.append(nodetree[file])
+        if attrs.has_key('Unixlinks'):
+            self.__link_files(name, attrs['Unixlinks'], nodetree)
 
-
-    def next (self):
-        self.i += 1
-
-    def token (self):
-        return self.tokens[self.i]
 
     def __parseEntity (self):
         self.next()
@@ -389,17 +394,17 @@ class Scp2Processor(object):
         node_type = nodedata['__node_type__']
 
         name = ''
-        if node_type == 'File':
+        if node_type in ['File', 'Unixlink']:
             try:
                 name = self.__get_fullpath(node.name)
             except DirError as e:
                 name = e.value
-        elif node_type == 'Directory':
-            name = ndoedata['DosName']
 
         s = indent + "<%s id=\"%s\""%(node_type, node.name)
         if len(name) > 0:
             s += " name=\"%s\""%name
+        if node_type == 'Unixlink':
+            s += " target=\"%s\""%nodedata['Target']
 
         if len(node.children) > 0:
             s += ">"
