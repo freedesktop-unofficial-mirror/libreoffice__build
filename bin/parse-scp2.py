@@ -398,7 +398,8 @@ class Scp2Processor(object):
             try:
                 name = self.__get_fullpath(node.name)
             except DirError as e:
-                name = e.value
+                error(e.value)
+                return
 
         s = indent + "<%s id=\"%s\""%(node_type, node.name)
         if len(name) > 0:
