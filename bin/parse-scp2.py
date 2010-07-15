@@ -165,34 +165,29 @@ class Scp2Parser(object):
 
     def __get_attr_or_fail (self, name, key, attrs):
         if not attrs.has_key(key):
-            raise ParseError("%s doesn't have %s attribute, but expected."%(name, key))
+            raise ParseError("%s doesn't have %s attribute, but expected."%(name, key), 1)
         return attrs[key]
 
-    def __link_shortcut (self, name, attrs, nodetree):
-        fileID = self.__get_attr_or_fail(name, 'FileID', attrs)
-        if not nodetree.has_key(fileID):
-            nodetree[fileID] = LinkedNode(fileID)
+    def __link_simple (self, name, attrs, nodetree, pid_attr):
+        parentID = self.__get_attr_or_fail(name, pid_attr, attrs)
+        if not nodetree.has_key(parentID):
+            nodetree[parentID] = LinkedNode(parentID)
         if not nodetree.has_key(name):
             nodetree[name] = LinkedNode(name)
 
-        nodetree[fileID].children.append(nodetree[name])
+        nodetree[parentID].children.append(nodetree[name])
         if nodetree[name].parent != None:
             raise ParseError("parent node instance already exists for '%s'"%name, 1)
-        nodetree[name].parent = nodetree[fileID]
+        nodetree[name].parent = nodetree[parentID]
+
+
+    def __link_shortcut (self, name, attrs, nodetree):
+        self.__link_simple(name, attrs, nodetree, 'FileID')
 
 
     def __link_registry_item (self, name, attrs, nodetree):
         # RegistryItem entries have ModuleID to link back to a module.
-        moduleID = self.__get_attr_or_fail(name, 'ModuleID', attrs)
-        if not nodetree.has_key(moduleID):
-            nodetree[moduleID] = LinkedNode(moduleID)
-        if not nodetree.has_key(name):
-            nodetree[name] = LinkedNode(name)
-
-        nodetree[moduleID].children.append(nodetree[name])
-        if nodetree[name].parent != None:
-            raise ParseError("parent node instance already exists for '%s'"%name, 1)
-        nodetree[name].parent = nodetree[moduleID]
+        self.__link_simple(name, attrs, nodetree, 'ModuleID')
 
 
     def __link_files (self, name, files, nodetree):
