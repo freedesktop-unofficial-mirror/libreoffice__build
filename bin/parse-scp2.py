@@ -87,13 +87,13 @@ class Scp2Parser(object):
         'File',                # done, linked from within Module
         'Folder',              # ignored
         'FolderItem',          # ignored for now.  windows specific?
-        'Installation',        # 
+        'Installation',        # ignore.  I don't know what this is for.
         'Module',              # done
-        'Profile',             # 
-        'ProfileItem',         # 
-        'RegistryItem',        # 
-        'ScpAction',           # 
-        'Shortcut',            # 
+        'Profile',             # ignored
+        'ProfileItem',         # ignored
+        'RegistryItem',        # done
+        'ScpAction',           # ignored
+        'Shortcut',            # linked to File?  Treat this as a child of File for now.
         'StarRegistry',        # 
         'Unixlink',            # done, linked from within Module
         'WindowsCustomAction'  # 
@@ -158,6 +158,42 @@ class Scp2Parser(object):
             node_type = attrs['__node_type__']
             if node_type == 'Module':
                 self.__link_module_node(key, attrs, nodetree)
+            elif node_type == 'RegistryItem':
+                self.__link_registry_item(key, attrs, nodetree)
+            elif node_type == 'Shortcut':
+                self.__link_shortcut(key, attrs, nodetree)
+
+    def __get_attr_or_fail (self, name, key, attrs):
+        if not attrs.has_key(key):
+            raise ParseError("%s doesn't have %s attribute, but expected."%(name, key))
+        return attrs[key]
+
+    def __link_shortcut (self, name, attrs, nodetree):
+        fileID = self.__get_attr_or_fail(name, 'FileID', attrs)
+        if not nodetree.has_key(fileID):
+            nodetree[fileID] = LinkedNode(fileID)
+        if not nodetree.has_key(name):
+            nodetree[name] = LinkedNode(name)
+
+        nodetree[fileID].children.append(nodetree[name])
+        if nodetree[name].parent != None:
+            raise ParseError("parent node instance already exists for '%s'"%name, 1)
+        nodetree[name].parent = nodetree[fileID]
+
+
+    def __link_registry_item (self, name, attrs, nodetree):
+        # RegistryItem entries have ModuleID to link back to a module.
+        moduleID = self.__get_attr_or_fail(name, 'ModuleID', attrs)
+        if not nodetree.has_key(moduleID):
+            nodetree[moduleID] = LinkedNode(moduleID)
+        if not nodetree.has_key(name):
+            nodetree[name] = LinkedNode(name)
+
+        nodetree[moduleID].children.append(nodetree[name])
+        if nodetree[name].parent != None:
+            raise ParseError("parent node instance already exists for '%s'"%name, 1)
+        nodetree[name].parent = nodetree[moduleID]
+
 
     def __link_files (self, name, files, nodetree):
 
@@ -182,7 +218,7 @@ class Scp2Parser(object):
 
             nodetree[parentID].children.append(nodetree[name])
             if nodetree[name].parent != None:
-                raise ParseError("parent node instance already exists for '%s'"%parentID, 1)
+                raise ParseError("parent node instance already exists for '%s'"%name, 1)
             nodetree[name].parent = nodetree[parentID]
 
         if attrs.has_key('Files'):
@@ -394,7 +430,7 @@ class Scp2Processor(object):
         node_type = nodedata['__node_type__']
 
         name = ''
-        if node_type in ['File', 'Unixlink']:
+        if node_type in ['File', 'Unixlink', 'Shortcut']:
             try:
                 name = self.__get_fullpath(node.name)
             except DirError as e:
