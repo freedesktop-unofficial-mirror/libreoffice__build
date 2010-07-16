@@ -236,14 +236,21 @@ class Scp2Parser(object):
             if node_type == 'Module':
                 self.__link_module_node(key, attrs, nodetree)
             elif node_type == 'RegistryItem':
-                self.__link_registry_item(key, attrs, nodetree)
+                # RegistryItem entries have ModuleID to link back to a module.
+                self.__link_simple(key, attrs, nodetree, 'ModuleID')
             elif node_type == 'Shortcut':
-                self.__link_shortcut(key, attrs, nodetree)
+                self.__link_simple(key, attrs, nodetree, 'FileID')
+            elif node_type == 'Profile':
+                self.__link_simple(key, attrs, nodetree, 'ModuleID')
+            elif node_type == 'ProfileItem':
+                self.__link_simple(key, attrs, nodetree, 'ProfileID')
+                
 
     def __get_attr_or_fail (self, name, key, attrs):
         if not attrs.has_key(key):
             raise ParseError("%s doesn't have %s attribute, but expected."%(name, key), 1)
         return attrs[key]
+
 
     def __link_simple (self, name, attrs, nodetree, pid_attr):
         parentID = self.__get_attr_or_fail(name, pid_attr, attrs)
@@ -256,15 +263,6 @@ class Scp2Parser(object):
         if nodetree[name].parent != None:
             raise ParseError("parent node instance already exists for '%s'"%name, 1)
         nodetree[name].parent = nodetree[parentID]
-
-
-    def __link_shortcut (self, name, attrs, nodetree):
-        self.__link_simple(name, attrs, nodetree, 'FileID')
-
-
-    def __link_registry_item (self, name, attrs, nodetree):
-        # RegistryItem entries have ModuleID to link back to a module.
-        self.__link_simple(name, attrs, nodetree, 'ModuleID')
 
 
     def __link_files (self, name, files, nodetree):
@@ -347,6 +345,30 @@ class Scp2Parser(object):
 class XMLFunc:
 
     @staticmethod
+    def resolve_vars (s, vars):
+        """Replace all ${...}s with their respective values."""
+
+        ret = ''
+        
+        while True:
+            start = s.find('${')
+            if start == -1:
+                ret += s
+                break
+    
+            end = s.find('}', start+2)
+            if end == -1:
+                ret += s
+                break
+    
+            key = s[start+2:end]
+            if vars.has_key(key):
+                ret += s[:start] + vars[key]
+            s = s[end+1:]
+    
+        return ret
+
+    @staticmethod
     def to_xml_name (name):
         """CamelCase to camel-case"""
         s = ''
@@ -367,6 +389,15 @@ class XMLFunc:
         if attrs.has_key(key):
             s = " %s=\"%s\""%(XMLFunc.to_xml_name(key), attrs[key])
         return s
+
+    @staticmethod
+    def add_attr_vars (attrs, key, vars):
+        if not attrs.has_key(key):
+            return ''
+
+        s = " %s=\"%s\""%(XMLFunc.to_xml_name(key), XMLFunc.resolve_vars(attrs[key], vars))
+        return s
+
 
     @staticmethod
     def add_attr_array (attrs, key):
@@ -536,24 +567,6 @@ class Scp2Processor(object):
 
         return filename, localized
 
-    def __resolve_vars (self, s):
-        """Replace all ${...}s with their respective values."""
-
-        while True:
-            start = s.find('${')
-            if start == -1:
-                break
-    
-            end = s.find('}', start+2)
-            if end == -1:
-                break
-    
-            key = s[start+2:end]
-            if self.vars.has_key(key):
-                s = s[:start] + self.vars[key] + s[end+1:]
-    
-        return s
-
     def __print_summary_tree_node (self, node, level):
 
         indent = '    '*level
@@ -574,10 +587,10 @@ class Scp2Processor(object):
 
         name = ''
         localized = False
-        if node_type in ['File', 'Unixlink', 'Shortcut']:
+        if node_type in ['File', 'Unixlink', 'Shortcut', 'Profile']:
             try:
                 name, localized = self.__get_fullpath(node.name)
-                name = self.__resolve_vars(name)
+                name = XMLFunc.resolve_vars(name, self.vars)
             except DirError as e:
                 error(e.value)
                 return
@@ -594,10 +607,16 @@ class Scp2Processor(object):
             s += XMLFunc.add_attr(nodedata, 'UnixRights')
             s += XMLFunc.add_attr_array(nodedata, 'Styles')
 
+        elif node_type == 'Profile':
+            s += XMLFunc.add_attr_array(nodedata, 'Styles')
+
+        elif node_type == 'ProfileItem':
+            s += XMLFunc.add_attr(nodedata, 'Section')
+            s += XMLFunc.add_attr(nodedata, 'Key')
+            s += XMLFunc.add_attr_vars(nodedata, 'Value', self.vars)
+
         elif node_type == 'Unixlink':
-            target = nodedata['Target']
-            target = self.__resolve_vars(target)
-            s += " target=\"%s\""%target
+            s += XMLFunc.add_attr_vars(nodedata, 'Target', self.vars)
 
         if localized:
             s += " localized=\"true\""
