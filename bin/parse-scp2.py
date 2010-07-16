@@ -491,10 +491,12 @@ class Scp2Processor(object):
 
         nodedata = self.nodedata[fileID]
         filename = None
+        localized = False
         if nodedata.has_key('Name'):
             filename = nodedata['Name']
         elif nodedata.has_key('Name(en-US)'):
             filename = nodedata['Name(en-US)']
+            localized = True
         else:
             raise DirError("%s doesn't have a name attribute."%fileID)
 
@@ -507,7 +509,8 @@ class Scp2Processor(object):
 
             if parent_dir_name == 'PREDEFINED_PROGDIR':
                 # special directory name
-                return parent_dir_name + '/' + filename
+                filename = parent_dir_name + '/' + filename
+                break
 
             if not self.nodedata.has_key(parent_dir_name):
                 # directory is referenced but not defined.  Skip it for now.
@@ -528,7 +531,7 @@ class Scp2Processor(object):
             else:
                 parent_dir_name = None
 
-        return filename
+        return filename, localized
 
     def __resolve_vars (self, s):
         """Replace all ${...}s with their respective values."""
@@ -567,9 +570,10 @@ class Scp2Processor(object):
         node_type = nodedata['__node_type__']
 
         name = ''
+        localized = False
         if node_type in ['File', 'Unixlink', 'Shortcut']:
             try:
-                name = self.__get_fullpath(node.name)
+                name, localized = self.__get_fullpath(node.name)
                 name = self.__resolve_vars(name)
             except DirError as e:
                 error(e.value)
@@ -588,6 +592,9 @@ class Scp2Processor(object):
             target = nodedata['Target']
             target = self.__resolve_vars(target)
             s += " target=\"%s\""%target
+
+        if localized:
+            s += " localized=\"true\""
 
         if len(node.children) > 0:
             s += ">"
