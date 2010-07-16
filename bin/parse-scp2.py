@@ -378,6 +378,9 @@ class XMLFunc:
         if len(raw_str) == 0 or raw_str[0] != '(' or raw_str[-1] != ')':
             raise ParseError("%s attribute is not formatted properly: '%s'"%(key, raw_str), 1)
 
+        if raw_str == '()':
+            return ''
+
         val = raw_str[1:-1].lower().replace('_', '-')
         s = " %s=\"%s\""%(XMLFunc.to_xml_name(key), val)
         return s
@@ -584,11 +587,14 @@ class Scp2Processor(object):
         if len(name) > 0:
             s += " name=\"%s\""%name
 
-        if node_type == 'File':
+        if node_type == 'Module':
+            s += XMLFunc.add_attr_array(nodedata, 'Styles')
+
+        elif node_type == 'File':
             s += XMLFunc.add_attr(nodedata, 'UnixRights')
             s += XMLFunc.add_attr_array(nodedata, 'Styles')
 
-        if node_type == 'Unixlink':
+        elif node_type == 'Unixlink':
             target = nodedata['Target']
             target = self.__resolve_vars(target)
             s += " target=\"%s\""%target
