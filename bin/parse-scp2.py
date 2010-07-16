@@ -75,9 +75,6 @@ top_modules = [
     'gid_Module_Optional_OGLTrans'
 ]
 
-def error (msg):
-    sys.stderr.write(msg + "\n")
-
 class ErrorBase(Exception):
     
     def __init__ (self, name, msg, sev):
@@ -105,6 +102,16 @@ class LinkedNode(object):
         self.name = name
         self.parent = None
         self.children = []
+
+# ----------------------------------------------------------------------------
+
+def error (msg):
+    sys.stderr.write(msg + "\n")
+
+def get_attr_or_fail (name, key, attrs):
+    if not attrs.has_key(key):
+        raise ParseError("%s doesn't have %s attribute, but expected."%(name, key), 1)
+    return attrs[key]
 
 # ----------------------------------------------------------------------------
 
@@ -246,14 +253,8 @@ class Scp2Parser(object):
                 self.__link_simple(key, attrs, nodetree, 'ProfileID')
                 
 
-    def __get_attr_or_fail (self, name, key, attrs):
-        if not attrs.has_key(key):
-            raise ParseError("%s doesn't have %s attribute, but expected."%(name, key), 1)
-        return attrs[key]
-
-
     def __link_simple (self, name, attrs, nodetree, pid_attr):
-        parentID = self.__get_attr_or_fail(name, pid_attr, attrs)
+        parentID = get_attr_or_fail(name, pid_attr, attrs)
         if not nodetree.has_key(parentID):
             nodetree[parentID] = LinkedNode(parentID)
         if not nodetree.has_key(name):
@@ -391,6 +392,19 @@ class XMLFunc:
         return s
 
     @staticmethod
+    def add_attr_localized (attrs, key, locale):
+        if attrs.has_key(key):
+            # Try non-localized name first.
+            return " %s=\"%s\""%(XMLFunc.to_xml_name(key), attrs[key])
+        
+        key_localized = key + "(%s)"%locale
+        if attrs.has_key(key_localized):
+            # Try non-localized name first.
+            return " %s=\"%s\" locale=\"%s\""%(XMLFunc.to_xml_name(key), attrs[key_localized], locale)
+
+        return ''
+
+    @staticmethod
     def add_attr_vars (attrs, key, vars):
         if not attrs.has_key(key):
             return ''
@@ -437,6 +451,7 @@ class Scp2Processor(object):
         self.scp_files = []
         self.nodedata = {}
         self.nodetree = {}
+        self.locale = 'en-US'
 
         # Check file paths first.
         if not os.path.isfile("%s/scp2/inc/macros.inc"%self.cur_dir):
@@ -520,16 +535,17 @@ class Scp2Processor(object):
         node = self.nodetree[root]
         self.__print_summary_tree_node(node, 0)
 
-    def __get_fullpath (self, fileID):
+    def __get_fullpath (self, fileID, locale):
         """Given a file identifier, construct the absolute path for that file."""
 
         nodedata = self.nodedata[fileID]
         filename = None
         localized = False
+        key_localized = "Name(%s)"%locale
         if nodedata.has_key('Name'):
             filename = nodedata['Name']
-        elif nodedata.has_key('Name(en-US)'):
-            filename = nodedata['Name(en-US)']
+        elif nodedata.has_key(key_localized):
+            filename = nodedata[key_localized]
             localized = True
         else:
             raise DirError("%s doesn't have a name attribute."%fileID)
@@ -576,7 +592,6 @@ class Scp2Processor(object):
 
         if not self.nodedata.has_key(node.name):
             # This node is referenced but is not defined.  Skip it.
-            #error("Node '%s' is referenced but not defined."%node.name)
             return
 
         nodedata = self.nodedata[node.name]
@@ -589,7 +604,7 @@ class Scp2Processor(object):
         localized = False
         if node_type in ['File', 'Unixlink', 'Shortcut', 'Profile']:
             try:
-                name, localized = self.__get_fullpath(node.name)
+                name, localized = self.__get_fullpath(node.name, self.locale)
                 name = XMLFunc.resolve_vars(name, self.vars)
             except DirError as e:
                 error(e.value)
@@ -618,8 +633,14 @@ class Scp2Processor(object):
         elif node_type == 'Unixlink':
             s += XMLFunc.add_attr_vars(nodedata, 'Target', self.vars)
 
+        elif node_type == 'RegistryItem':
+            val_path = get_attr_or_fail(node.name, 'ParentID', nodedata)
+            val_path += '\\' + get_attr_or_fail(node.name, 'Subkey', nodedata)
+            s += " path=\"%s\""%val_path
+            s += XMLFunc.add_attr_localized(nodedata, 'Value', self.locale)
+
         if localized:
-            s += " localized=\"true\""
+            s += " locale=\"%s\""%self.locale
 
         if len(node.children) > 0:
             s += ">"
