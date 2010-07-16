@@ -7,6 +7,73 @@ arg_desc = ""
 desc = """
 Run this script at the root of OOo source tree."""
 
+top_modules = [
+    'gid_Module_Optional_Gnome',
+    'gid_Module_Optional_Kde',
+    'gid_Module_Root',
+    'gid_Module_Prg_Wrt_Bin',
+    'gid_Module_Prg_Calc_Bin',
+    'gid_Module_Prg_Draw_Bin',
+    'gid_Module_Prg_Impress_Bin',
+    'gid_Module_Prg_Base_Bin',
+    'gid_Module_Prg_Math_Bin',
+    'gid_Module_Optional_Binfilter',
+    'gid_Module_Optional_Grfflt',
+    'gid_Module_Oooimprovement',
+    'gid_Module_Optional_Testtool',
+    'gid_Module_Optional_Oo_English',
+    'gid_Module_Optional_Xsltfiltersamples',
+    'gid_Module_Optional_Javafilter',
+    'gid_Module_Optional_Activexcontrol',
+    'gid_Module_Optional_Onlineupdate',
+    'gid_Module_Optional_Pyuno',
+    'gid_Module_Optional_Pymailmerge',
+    'gid_Module_Optional_Headless',
+    'gid_Module_Root_Files_Images',
+    'gid_Module_Root_Fonts_OOo_Hidden',
+    'gid_Module_Oo_Linguistic',
+    'gid_Module_Root_Files_2',
+    'gid_Module_Root_Files_3',
+    'gid_Module_Root_Files_4',
+    'gid_Module_Root_Files_5',
+    'gid_Module_Root_Files_6',
+    'gid_Module_Root_Files_7',
+    'gid_Module_Root_Extension_Oooimprovement',
+    'gid_Module_Root_Extension_Dictionary_Af',
+    'gid_Module_Root_Extension_Dictionary_Ca',
+    'gid_Module_Root_Extension_Dictionary_Cs',
+    'gid_Module_Root_Extension_Dictionary_Da',
+    'gid_Module_Root_Extension_Dictionary_De_AT',
+    'gid_Module_Root_Extension_Dictionary_De_CH',
+    'gid_Module_Root_Extension_Dictionary_De_DE',
+    'gid_Module_Root_Extension_Dictionary_En',
+    'gid_Module_Root_Extension_Dictionary_Es',
+    'gid_Module_Root_Extension_Dictionary_Et',
+    'gid_Module_Root_Extension_Dictionary_Fr',
+    'gid_Module_Root_Extension_Dictionary_Gl',
+    'gid_Module_Root_Extension_Dictionary_He',
+    'gid_Module_Root_Extension_Dictionary_Hu',
+    'gid_Module_Root_Extension_Dictionary_It',
+    'gid_Module_Root_Extension_Dictionary_Ku_Tr',
+    'gid_Module_Root_Extension_Dictionary_Lt',
+    'gid_Module_Root_Extension_Dictionary_Ne',
+    'gid_Module_Root_Extension_Dictionary_Nl',
+    'gid_Module_Root_Extension_Dictionary_No',
+    'gid_Module_Root_Extension_Dictionary_Pl',
+    'gid_Module_Root_Extension_Dictionary_Pt',
+    'gid_Module_Root_Extension_Dictionary_Ro',
+    'gid_Module_Root_Extension_Dictionary_Ru',
+    'gid_Module_Root_Extension_Dictionary_Sk',
+    'gid_Module_Root_Extension_Dictionary_Sl',
+    'gid_Module_Root_Extension_Dictionary_Sr',
+    'gid_Module_Root_Extension_Dictionary_Sv',
+    'gid_Module_Root_Extension_Dictionary_Sw',
+    'gid_Module_Root_Extension_Dictionary_Th',
+    'gid_Module_Root_Extension_Dictionary_Vi',
+    'gid_Module_Root_Extension_Dictionary_Zu',
+    'gid_Module_Optional_OGLTrans'
+]
+
 def error (msg):
     sys.stderr.write(msg + "\n")
 
@@ -27,6 +94,10 @@ class ParseError(ErrorBase):
 class DirError(ErrorBase):
     def __init__ (self, msg):
         ErrorBase.__init__(self, "DirError", msg, 0)
+
+class ModuleError(ErrorBase):
+    def __init__ (self, msg):
+        ErrorBase.__init__(self, "ModuleError", msg, 0)
 
 class LinkedNode(object):
     def __init__ (self, name):
@@ -283,9 +354,10 @@ class Scp2Processor(object):
         'scp2/source/ooo/starregistry_ooo.scp': True
     }
 
-    def __init__ (self, cur_dir, mod_output_dir):
+    def __init__ (self, cur_dir, mod_output_dir, vars):
         self.cur_dir = cur_dir
         self.mod_output_dir = mod_output_dir
+        self.vars = vars
         self.scp_files = []
         self.nodedata = {}
         self.nodetree = {}
@@ -360,12 +432,15 @@ class Scp2Processor(object):
             attr_names.sort()
             for attr_name in attr_names:
                 if attr_name in ['__node_type__', '__node_location__', '__node_values__']:
-                    # Skip special attribute.
+                    # Skip special attributes.
                     continue
                 print ("  %s = %s"%(attr_name, attrs[attr_name]))
 
-    def print_summary_tree (self):
-        root = 'gid_Module_Root'
+    def print_summary_tree (self, root):
+
+        if not self.nodetree.has_key(root):
+            raise ModuleError("module %s not found."%root)
+
         node = self.nodetree[root]
         self.__print_summary_tree_node(node, 0)
 
@@ -411,6 +486,23 @@ class Scp2Processor(object):
 
         return filename
 
+    def __resolve_vars (self, s):
+
+        while True:
+            start = s.find('${')
+            if start == -1:
+                break
+    
+            end = s.find('}', start+2)
+            if end == -1:
+                break
+    
+            key = s[start+2:end]
+            if self.vars.has_key(key):
+                s = s[:start] + self.vars[key] + s[end+1:]
+    
+        return s
+
     def __print_summary_tree_node (self, node, level):
 
         indent = '    '*level
@@ -433,6 +525,7 @@ class Scp2Processor(object):
         if node_type in ['File', 'Unixlink', 'Shortcut']:
             try:
                 name = self.__get_fullpath(node.name)
+                name = self.__resolve_vars(name)
             except DirError as e:
                 error(e.value)
                 return
@@ -441,7 +534,9 @@ class Scp2Processor(object):
         if len(name) > 0:
             s += " name=\"%s\""%name
         if node_type == 'Unixlink':
-            s += " target=\"%s\""%nodedata['Target']
+            target = nodedata['Target']
+            target = self.__resolve_vars(target)
+            s += " target=\"%s\""%target
 
         if len(node.children) > 0:
             s += ">"
@@ -490,6 +585,13 @@ class OOLstParser(object):
                 s += "\n"
 
         return s
+
+    def get_vars (self, scopes):
+        vars = {}
+        for scope in scopes:
+            for key in self.vars[scope].keys():
+                vars[key] = self.vars[scope][key]
+        return vars
 
     def parse_openoffice_lst (self, lines):
     
@@ -595,13 +697,23 @@ if __name__ == '__main__':
         if e.sev > 0:
             sys.exit(1)
 
-    vars = oolst_parser.vars
+    # For now, just pull variables from these two namespaces.
+    scopes_to_use = ['Globals::Settings::variables', 'OpenOffice::Settings::variables']
+    vars = oolst_parser.get_vars(scopes_to_use)
+    if vars.has_key('PRODUCTNAME'):
+        # Special variable
+        vars['UNIXPRODUCTNAME'] = vars['PRODUCTNAME'].lower()
 
     try:
-        processor = Scp2Processor(cur_dir, options.mod_output_dir)
+        processor = Scp2Processor(cur_dir, options.mod_output_dir, vars)
         processor.run()
         if options.mode == 'tree':
-            processor.print_summary_tree()
+            for module in top_modules:
+                try:
+                    processor.print_summary_tree(module)
+                except ModuleError as e:
+                    error(e.value)
+
         elif options.mode == 'flat':
             processor.print_summary_flat()
         else:
