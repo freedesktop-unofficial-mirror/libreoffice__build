@@ -7,6 +7,7 @@ arg_desc = ""
 desc = """
 Run this script at the root of OOo source tree."""
 
+# taken from setup_native/source/packinfo/packinfo_office.txt
 top_modules = [
     'gid_Module_Optional_Gnome',
     'gid_Module_Optional_Kde',
@@ -108,6 +109,7 @@ class LinkedNode(object):
 # ----------------------------------------------------------------------------
 
 class Scp2Tokenizer(object):
+    """Tokenizer for scp files."""
 
     def __init__ (self, content):
         self.content = content
@@ -148,8 +150,8 @@ class Scp2Tokenizer(object):
 
 # ----------------------------------------------------------------------------
 
-# Parse each .scp file.
 class Scp2Parser(object):
+    """Parser for scp files."""
 
     class Type:
         File       = 0
@@ -162,7 +164,7 @@ class Scp2Parser(object):
         'File',                # done, linked from within Module
         'Folder',              # ignored
         'FolderItem',          # ignored for now.  windows specific?
-        'Installation',        # ignore.  I don't know what this is for.
+        'Installation',        # ignored.  I don't know what this is for.
         'Module',              # done
         'Profile',             # ignored
         'ProfileItem',         # ignored
@@ -342,8 +344,48 @@ class Scp2Parser(object):
 
 # ----------------------------------------------------------------------------
 
-# Collect all .scp files in scp2 directory, and run preprocessor.
+class XMLFunc:
+
+    @staticmethod
+    def to_xml_name (name):
+        """CamelCase to camel-case"""
+        s = ''
+        n = len(name)
+        for i in xrange(0, n):
+            c = name[i]
+            if 'A' <= c and c <= 'Z':
+                if i > 0:
+                    s += '-'
+                s += c.lower()
+            else:
+                s += c
+        return s
+
+    @staticmethod
+    def add_attr (attrs, key):
+        s = ''
+        if attrs.has_key(key):
+            s = " %s=\"%s\""%(XMLFunc.to_xml_name(key), attrs[key])
+        return s
+
+    @staticmethod
+    def add_attr_array (attrs, key):
+
+        if not attrs.has_key(key):
+            return ''
+
+        raw_str = attrs[key]
+        if len(raw_str) == 0 or raw_str[0] != '(' or raw_str[-1] != ')':
+            raise ParseError("%s attribute is not formatted properly: '%s'"%(key, raw_str), 1)
+
+        val = raw_str[1:-1].lower().replace('_', '-')
+        s = " %s=\"%s\""%(XMLFunc.to_xml_name(key), val)
+        return s
+
+
+
 class Scp2Processor(object):
+    """Collect all .scp files in scp2 directory, and run preprocessor."""
 
     tmpin  = "/tmp/parse-scp2.py.cpp"
     tmpout = "/tmp/parse-scp2.py.out"
@@ -445,6 +487,8 @@ class Scp2Processor(object):
         self.__print_summary_tree_node(node, 0)
 
     def __get_fullpath (self, fileID):
+        """Given a file identifier, construct the absolute path for that file."""
+
         nodedata = self.nodedata[fileID]
         filename = None
         if nodedata.has_key('Name'):
@@ -487,6 +531,7 @@ class Scp2Processor(object):
         return filename
 
     def __resolve_vars (self, s):
+        """Replace all ${...}s with their respective values."""
 
         while True:
             start = s.find('${')
@@ -530,9 +575,15 @@ class Scp2Processor(object):
                 error(e.value)
                 return
 
-        s = indent + "<%s id=\"%s\""%(node_type, node.name)
+        s = indent + "<%s id=\"%s\""%(XMLFunc.to_xml_name(node_type), node.name)
+
         if len(name) > 0:
             s += " name=\"%s\""%name
+
+        if node_type == 'File':
+            s += XMLFunc.add_attr(nodedata, 'UnixRights')
+            s += XMLFunc.add_attr_array(nodedata, 'Styles')
+
         if node_type == 'Unixlink':
             target = nodedata['Target']
             target = self.__resolve_vars(target)
@@ -547,7 +598,7 @@ class Scp2Processor(object):
             for child in children:
                 self.__print_summary_tree_node(child, level+1)
     
-            print (indent + "</%s>"%node_type)
+            print (indent + "</%s>"%XMLFunc.to_xml_name(node_type))
         else:
             s += "/>"
             print (s)
@@ -563,6 +614,7 @@ class Scp2Processor(object):
 # ----------------------------------------------------------------------------
 
 class OOLstParser(object):
+    """Parser for openoffice.lst file."""
 
     def __init__ (self):
         self.vars = {}
