@@ -1,7 +1,27 @@
-diff -upr desktop/source/app/app.cxx desktop/source/app/app.cxx
---- desktop/source/app/app.cxx	2010-05-11 19:13:49.000000000 +0530
-+++ desktop/source/app/app.cxx	2010-05-11 12:08:29.000000000 +0530
-@@ -2546,6 +2546,9 @@ void Desktop::OpenClients()
+Muthu's / Flr's batch conversion cmd line work
+
+From: Thorsten Behrens <thb@openoffice.org>
+
+
+---
+
+ desktop/source/app/app.cxx             |    9 +
+ desktop/source/app/cmdlineargs.cxx     |   67 +++++++++++
+ desktop/source/app/cmdlineargs.hxx     |    6 +
+ desktop/source/app/cmdlinehelp.cxx     |   12 ++
+ desktop/source/app/dispatchwatcher.cxx |  203 +++++++++++++++++++++++++++++---
+ desktop/source/app/dispatchwatcher.hxx |    6 +
+ desktop/source/app/officeipcthread.cxx |   59 +++++++++
+ desktop/source/app/officeipcthread.hxx |    3 
+ sfx2/source/bastyp/fltfnc.cxx          |   10 +-
+ 9 files changed, 346 insertions(+), 29 deletions(-)
+
+
+diff --git desktop/source/app/app.cxx desktop/source/app/app.cxx
+index 367436f..76b715d 100644
+--- desktop/source/app/app.cxx
++++ desktop/source/app/app.cxx
+@@ -2543,6 +2543,9 @@ void Desktop::OpenClients()
          pArgs->GetPrinterName( aRequest.aPrinterName );
          pArgs->GetForceOpenList( aRequest.aForceOpenList );
          pArgs->GetForceNewList( aRequest.aForceNewList );
@@ -11,17 +31,17 @@ diff -upr desktop/source/app/app.cxx desktop/source/app/app.cxx
  
          if ( aRequest.aOpenList.getLength() > 0 ||
               aRequest.aViewList.getLength() > 0 ||
-@@ -2553,7 +2556,8 @@ void Desktop::OpenClients()
+@@ -2550,7 +2553,8 @@ void Desktop::OpenClients()
               aRequest.aPrintList.getLength() > 0 ||
               aRequest.aForceOpenList.getLength() > 0 ||
               aRequest.aForceNewList.getLength() > 0 ||
 -             ( aRequest.aPrintToList.getLength() > 0 && aRequest.aPrinterName.getLength() > 0 ))
 +             ( aRequest.aPrintToList.getLength() > 0 && aRequest.aPrinterName.getLength() > 0 ) ||
-+             ( aRequest.aConversionList.getLength() > 0 && aRequest.aConversionParams.getLength() > 0 ))
++             aRequest.aConversionList.getLength() > 0 )
          {
              bLoaded = sal_True;
  
-@@ -2903,7 +2907,8 @@ void Desktop::OpenSplashScreen()
+@@ -2900,7 +2904,8 @@ void Desktop::OpenSplashScreen()
           !pCmdLine->IsNoLogo() &&
           !pCmdLine->IsTerminateAfterInit() &&
           !pCmdLine->GetPrintList( aTmpString ) &&
@@ -31,20 +51,23 @@ diff -upr desktop/source/app/app.cxx desktop/source/app/app.cxx
      {
          // Determine application name from command line parameters
          OUString aAppName;
-diff -upr desktop/source/app/cmdlineargs.cxx desktop/source/app/cmdlineargs.cxx
---- desktop/source/app/cmdlineargs.cxx	2010-05-11 19:14:16.000000000 +0530
-+++ desktop/source/app/cmdlineargs.cxx	2010-05-11 19:21:17.000000000 +0530
-@@ -151,6 +151,9 @@ void CommandLineArgs::ParseCommandLine_I
+diff --git desktop/source/app/cmdlineargs.cxx desktop/source/app/cmdlineargs.cxx
+index d3622f5..49734b2 100644
+--- desktop/source/app/cmdlineargs.cxx
++++ desktop/source/app/cmdlineargs.cxx
+@@ -151,6 +151,11 @@ void CommandLineArgs::ParseCommandLine_Impl( Supplier& supplier )
      sal_Bool	bForceOpenEvent	= sal_False;
      sal_Bool	bForceNewEvent	= sal_False;
      sal_Bool 	bDisplaySpec	= sal_False;
 +    sal_Bool    bConversionEvent= sal_False;
 +    sal_Bool    bConversionParamsEvent= sal_False;
++    sal_Bool    bBatchPrintEvent= sal_False;
++    sal_Bool    bBatchPrinterNameEvent= sal_False;
 +    sal_Bool    bConversionOutEvent   = sal_False;
  
      m_eArgumentCount = NONE;
  
-@@ -295,6 +298,17 @@ void CommandLineArgs::ParseCommandLine_I
+@@ -295,6 +300,27 @@ void CommandLineArgs::ParseCommandLine_Impl( Supplier& supplier )
                          bDisplaySpec	= sal_False;
                      }
                      #endif
@@ -54,15 +77,25 @@ diff -upr desktop/source/app/cmdlineargs.cxx desktop/source/app/cmdlineargs.cxx
 +                        bConversionEvent = sal_True;
 +                        bConversionParamsEvent = sal_True;
 +                    }
++                    else if ( aArgStr.EqualsIgnoreCaseAscii( "-print-to-file" ) )
++                    {
++                        bOpenEvent = sal_False;
++                        bBatchPrintEvent = sal_True;
++                    }
++                    else if ( aArgStr.EqualsIgnoreCaseAscii( "-printer-name" ) && 
++                              bBatchPrintEvent )
++                    {
++                        bBatchPrinterNameEvent = sal_True;
++                    }
 +                    else if ( aArgStr.EqualsIgnoreCaseAscii( "-outdir" ) && 
-+                              bConversionEvent )
++                              (bConversionEvent || bBatchPrintEvent) )
 +                    {
 +                        bConversionOutEvent = sal_True;
 +                    }
                  }
                  else
                  {
-@@ -304,6 +318,17 @@ void CommandLineArgs::ParseCommandLine_I
+@@ -304,6 +330,23 @@ void CommandLineArgs::ParseCommandLine_Impl( Supplier& supplier )
                          AddStringListParam_Impl( CMD_STRINGPARAM_PRINTERNAME, aArgStr );
                          bPrinterName = sal_False;
                      }
@@ -72,28 +105,30 @@ diff -upr desktop/source/app/cmdlineargs.cxx desktop/source/app/cmdlineargs.cxx
 +                        AddStringListParam_Impl( CMD_STRINGPARAM_CONVERSIONPARAMS, aArgStr );
 +                        bConversionParamsEvent = sal_False;
 +                    }
-+                    else if ( bConversionEvent && bConversionOutEvent )
++                    else if ( bBatchPrinterNameEvent && bBatchPrintEvent )
++                    {
++                        // first argument is the printer name
++                        AddStringListParam_Impl( CMD_STRINGPARAM_PRINTERNAME, aArgStr );
++                        bBatchPrinterNameEvent = sal_False;
++                    }
++                    else if ( (bConversionEvent || bBatchPrintEvent) && bConversionOutEvent )
 +                    {
 +                        AddStringListParam_Impl( CMD_STRINGPARAM_CONVERSIONOUT, aArgStr );
 +                        bConversionOutEvent = sal_False;
 +                    }
                      else
                      {
- 						if( bOpenEvent || bViewEvent || bForceNewEvent || bForceOpenEvent )
-@@ -335,6 +360,12 @@ void CommandLineArgs::ParseCommandLine_I
+                         if( bOpenEvent || bViewEvent || bForceNewEvent || bForceOpenEvent )
+@@ -335,6 +378,8 @@ void CommandLineArgs::ParseCommandLine_Impl( Supplier& supplier )
                              bDisplaySpec = sal_False; // only one display, not a lsit
                              bOpenEvent = sal_True;    // set back to standard
                          }
-+                        else if ( bConversionEvent )
++                        else if ( bConversionEvent || bBatchPrintEvent )
 +                            AddStringListParam_Impl( CMD_STRINGPARAM_CONVERSIONLIST, aArgStr );
-+                        else if ( bConversionParamsEvent )
-+                        {
-+                            AddStringListParam_Impl( CMD_STRINGPARAM_CONVERSIONPARAMS, aArgStr );
-+                        }
                      }
                  }
              }
-@@ -891,6 +922,28 @@ sal_Bool CommandLineArgs::GetLanguage( :
+@@ -904,6 +949,28 @@ sal_Bool CommandLineArgs::GetLanguage( ::rtl::OUString& rPara ) const
      return m_aStrSetParams[ CMD_STRINGPARAM_LANGUAGE ];
  }
  
@@ -122,10 +157,11 @@ diff -upr desktop/source/app/cmdlineargs.cxx desktop/source/app/cmdlineargs.cxx
  sal_Bool CommandLineArgs::IsEmpty() const
  {
      osl::MutexGuard  aMutexGuard( m_aMutex );
-diff -upr desktop/source/app/cmdlineargs.hxx desktop/source/app/cmdlineargs.hxx
---- desktop/source/app/cmdlineargs.hxx	2010-05-11 19:13:37.000000000 +0530
-+++ desktop/source/app/cmdlineargs.hxx	2010-05-11 12:20:13.000000000 +0530
-@@ -90,6 +90,9 @@ class CommandLineArgs
+diff --git desktop/source/app/cmdlineargs.hxx desktop/source/app/cmdlineargs.hxx
+index d1db805..0efd32b 100644
+--- desktop/source/app/cmdlineargs.hxx
++++ desktop/source/app/cmdlineargs.hxx
+@@ -91,6 +91,9 @@ class CommandLineArgs
              CMD_STRINGPARAM_VERSION,
              CMD_STRINGPARAM_PRINTTOLIST,
              CMD_STRINGPARAM_PRINTERNAME,
@@ -135,7 +171,7 @@ diff -upr desktop/source/app/cmdlineargs.hxx desktop/source/app/cmdlineargs.hxx
              CMD_STRINGPARAM_DISPLAY,
              CMD_STRINGPARAM_LANGUAGE,
              CMD_STRINGPARAM_COUNT			// must be last element!
-@@ -170,6 +173,9 @@ class CommandLineArgs
+@@ -172,6 +175,9 @@ class CommandLineArgs
          sal_Bool				GetPrintToList( ::rtl::OUString& rPara ) const;
          sal_Bool				GetPrinterName( ::rtl::OUString& rPara ) const;
          sal_Bool                GetLanguage( ::rtl::OUString& rPara ) const;
@@ -145,53 +181,11 @@ diff -upr desktop/source/app/cmdlineargs.hxx desktop/source/app/cmdlineargs.hxx
  
          // Special analyzed states (does not match directly to a command line parameter!)
          sal_Bool                IsPrinting() const;
-diff -upr desktop/source/app/dispatchwatcher.hxx desktop/source/app/dispatchwatcher.hxx
---- desktop/source/app/dispatchwatcher.hxx	2010-05-11 19:11:24.000000000 +0530
-+++ desktop/source/app/dispatchwatcher.hxx	2010-05-10 13:51:16.000000000 +0530
-@@ -75,7 +75,8 @@ class DispatchWatcher : public ::cppu::W
-             REQUEST_PRINT,
-             REQUEST_PRINTTO,
-             REQUEST_FORCEOPEN,
--            REQUEST_FORCENEW
-+            REQUEST_FORCENEW,
-+            REQUEST_CONVERSION
-         };
- 
-         struct DispatchRequest
-@@ -86,7 +87,7 @@ class DispatchWatcher : public ::cppu::W
-             RequestType		aRequestType;
-             rtl::OUString	aURL;
-             boost::optional< rtl::OUString > aCwdUrl;
--            rtl::OUString	aPrinterName;
-+            rtl::OUString   aPrinterName;  // also conversion params
-             rtl::OUString   aPreselectedFactory;
-         };
- 
---- sfx2/source/bastyp/fltfnc.cxx	2010-05-11 19:11:26.000000000 +0530
-+++ sfx2/source/bastyp/fltfnc.cxx	2010-05-14 12:15:37.000000000 +0530
-@@ -374,8 +374,8 @@ const SfxFilter* SfxFilterMatcher::GetAn
- sal_uInt32  SfxFilterMatcher::GuessFilterIgnoringContent(
-     SfxMedium& rMedium,
-     const SfxFilter**ppFilter,
--    SfxFilterFlags /*nMust*/,
--    SfxFilterFlags /*nDont*/ ) const
-+    SfxFilterFlags nMust,
-+    SfxFilterFlags nDont ) const
- {
-     Reference< XTypeDetection > xDetection( ::comphelper::getProcessServiceFactory()->createInstance(::rtl::OUString::createFromAscii("com.sun.star.document.TypeDetection")), UNO_QUERY );
-     ::rtl::OUString sTypeName;
-@@ -390,7 +390,7 @@ sal_uInt32  SfxFilterMatcher::GuessFilte
- 
-     *ppFilter = NULL;
-     if ( sTypeName.getLength() )
--        *ppFilter = GetFilter4EA( sTypeName );
-+        *ppFilter = GetFilter4EA( sTypeName, nMust, nDont );
- 
-     return *ppFilter ? ERRCODE_NONE : ERRCODE_ABORT;
- }
---- desktop/source/app/cmdlinehelp.cxx	2010-05-11 19:13:48.000000000 +0530
-+++ desktop/source/app/cmdlinehelp.cxx	2010-05-17 16:44:48.000000000 +0530
-@@ -116,7 +116,12 @@ namespace desktop
+diff --git desktop/source/app/cmdlinehelp.cxx desktop/source/app/cmdlinehelp.cxx
+index 3032315..e4518c1 100644
+--- desktop/source/app/cmdlinehelp.cxx
++++ desktop/source/app/cmdlinehelp.cxx
+@@ -116,7 +116,17 @@ namespace desktop
          "-unaccept=<accept-string>\n"\
          "      Close an acceptor that was created with -accept=<accept-string>\n"\
          "      Use -unnaccept=all to close all open acceptors\n"\
@@ -201,25 +195,19 @@ diff -upr desktop/source/app/dispatchwatcher.hxx desktop/source/app/dispatchwatc
 +        "      If -outdir is not specified then current working dir is used as output_dir.\n"\
 +        "      Eg. -convert-to pdf *.doc\n"\
 +        "          -convert-to pdf:writer_pdf_Export -outdir /home/user *.doc\n"\
++        "-print-to-file [-printer-name printer_name] [-outdir ouput_dir] files\n"\
++        "      Batch print files to file.\n"\
++        "      If -outdir is not specified then current working dir is used as output_dir.\n"\
++        "      Eg. -print-to-file *.doc\n"\
++        "          -print-to-file -printer-name nasty_lowres_printer -outdir /home/user *.doc\n"\
 +        "\nRemaining arguments will be treated as filenames or URLs of documents to open.\n";
  
      void ReplaceStringHookProc( UniString& rStr );
  
-diff -upr desktop/source/app/officeipcthread.hxx desktop/source/app/officeipcthread.hxx
---- desktop/source/app/officeipcthread.hxx    2010-05-11 19:11:24.000000000 +0530
-+++ desktop/source/app/officeipcthread.hxx    2010-05-11 12:11:09.000000000 +0530
-@@ -66,6 +66,9 @@ struct ProcessDocumentsRequest
-     ::rtl::OUString aForceNewList;     // Documents that should be forced to create a new document
-     ::rtl::OUString aPrinterName;      // The printer name that should be used for printing
-     ::rtl::OUString aPrintToList;      // Documents that should be printed on the given printer
-+    ::rtl::OUString aConversionList;
-+    ::rtl::OUString aConversionParams;
-+    ::rtl::OUString aConversionOut;
-     ::osl::Condition *pcProcessed;  // pointer condition to be set when the request has been processed
- };
-
---- desktop/source/app/dispatchwatcher.cxx	2010-05-11 19:11:24.000000000 +0530
-+++ desktop/source/app/dispatchwatcher.cxx	2010-05-25 16:40:20.000000000 +0530
+diff --git desktop/source/app/dispatchwatcher.cxx desktop/source/app/dispatchwatcher.cxx
+index e6383e3..83008fb 100644
+--- desktop/source/app/dispatchwatcher.cxx
++++ desktop/source/app/dispatchwatcher.cxx
 @@ -28,6 +28,12 @@
  // MARKER(update_precomp.py): autogen include statement, do not remove
  #include "precompiled_desktop.hxx"
@@ -293,37 +281,48 @@ diff -upr desktop/source/app/officeipcthread.hxx desktop/source/app/officeipcthr
  Mutex* DispatchWatcher::pWatcherMutex = NULL;
  
  Mutex& DispatchWatcher::GetMutex()
-@@ -151,7 +195,8 @@ sal_Bool DispatchWatcher::executeDispatc
+@@ -141,7 +185,6 @@ sal_Bool DispatchWatcher::executeDispatchRequests( const DispatchList& aDispatch
+ 
+     for ( p = aDispatchRequestsList.begin(); p != aDispatchRequestsList.end(); p++ )
+     {
+-        String					aPrinterName;
+         const DispatchRequest&	aDispatchRequest = *p;
+ 
+         // create parameter array
+@@ -151,7 +194,9 @@ sal_Bool DispatchWatcher::executeDispatchRequests( const DispatchList& aDispatch
  
          // we need more properties for a print/print to request
          if ( aDispatchRequest.aRequestType == REQUEST_PRINT ||
 -             aDispatchRequest.aRequestType == REQUEST_PRINTTO  )
 +             aDispatchRequest.aRequestType == REQUEST_PRINTTO ||
++             aDispatchRequest.aRequestType == REQUEST_BATCHPRINT ||
 +             aDispatchRequest.aRequestType == REQUEST_CONVERSION)
              nCount++;
  
          Sequence < PropertyValue > aArgs( nCount );
-@@ -161,7 +206,8 @@ sal_Bool DispatchWatcher::executeDispatc
+@@ -161,7 +206,9 @@ sal_Bool DispatchWatcher::executeDispatchRequests( const DispatchList& aDispatch
          aArgs[0].Value <<= ::rtl::OUString::createFromAscii("private:OpenEvent");
  
          if ( aDispatchRequest.aRequestType == REQUEST_PRINT ||
 -             aDispatchRequest.aRequestType == REQUEST_PRINTTO )
 +             aDispatchRequest.aRequestType == REQUEST_PRINTTO ||
++             aDispatchRequest.aRequestType == REQUEST_BATCHPRINT ||
 +             aDispatchRequest.aRequestType == REQUEST_CONVERSION)
          {
              aArgs[1].Name = ::rtl::OUString::createFromAscii("ReadOnly");
              aArgs[2].Name = ::rtl::OUString::createFromAscii("OpenNewView");
-@@ -196,7 +242,8 @@ sal_Bool DispatchWatcher::executeDispatc
+@@ -196,7 +243,9 @@ sal_Bool DispatchWatcher::executeDispatchRequests( const DispatchList& aDispatch
          ::rtl::OUString aTarget( RTL_CONSTASCII_USTRINGPARAM("_default") );
  
          if ( aDispatchRequest.aRequestType == REQUEST_PRINT ||
 -             aDispatchRequest.aRequestType == REQUEST_PRINTTO )
 +             aDispatchRequest.aRequestType == REQUEST_PRINTTO ||
++             aDispatchRequest.aRequestType == REQUEST_BATCHPRINT ||
 +             aDispatchRequest.aRequestType == REQUEST_CONVERSION)
          {
              // documents opened for printing are opened readonly because they must be opened as a new document and this
              // document could be open already
-@@ -214,7 +261,6 @@ sal_Bool DispatchWatcher::executeDispatc
+@@ -214,7 +263,6 @@ sal_Bool DispatchWatcher::executeDispatchRequests( const DispatchList& aDispatch
              // hidden documents should never be put into open tasks
              aTarget = ::rtl::OUString( RTL_CONSTASCII_USTRINGPARAM("_blank") );
          }
@@ -331,12 +330,13 @@ diff -upr desktop/source/app/officeipcthread.hxx desktop/source/app/officeipcthr
          // load the document ... if they are loadable!
          // Otherwise try to dispatch it ...
          Reference < XPrintable > xDoc;
-@@ -361,24 +407,89 @@ sal_Bool DispatchWatcher::executeDispatc
+@@ -361,24 +409,133 @@ sal_Bool DispatchWatcher::executeDispatchRequests( const DispatchList& aDispatch
                  OfficeIPCThread::RequestsCompleted( 1 );
              }
              else if ( aDispatchRequest.aRequestType == REQUEST_PRINT ||
 -                      aDispatchRequest.aRequestType == REQUEST_PRINTTO )
 +                      aDispatchRequest.aRequestType == REQUEST_PRINTTO ||
++                      aDispatchRequest.aRequestType == REQUEST_BATCHPRINT ||
 +                      aDispatchRequest.aRequestType == REQUEST_CONVERSION )
              {
                  if ( xDoc.is() )
@@ -393,8 +393,8 @@ diff -upr desktop/source/app/officeipcthread.hxx desktop/source/app/officeipcthr
 +                            rtl::OString aSource8 = ::rtl::OUStringToOString ( aTempName, RTL_TEXTENCODING_UTF8 );
 +                            FileBase::getSystemPathFromFileURL( aOutFile, aTempName );
 +                            rtl::OString aTargetURL8 = ::rtl::OUStringToOString(aTempName, RTL_TEXTENCODING_UTF8 );
-+                            printf("convert %s->%s using %s\n", aSource8.getStr(), aTargetURL8.getStr(), 
-+                                                                ::rtl::OUStringToOString( aFilter, RTL_TEXTENCODING_UTF8 ).getStr());
++                            printf("convert %s -> %s using %s\n", aSource8.getStr(), aTargetURL8.getStr(), 
++                                   ::rtl::OUStringToOString( aFilter, RTL_TEXTENCODING_UTF8 ).getStr());
 +                            if( FStatHelper::IsDocument(aOutFile) )
 +                                printf("Overwriting: %s\n",::rtl::OUStringToOString( aTempName, RTL_TEXTENCODING_UTF8 ).getStr() );
 +                            try 
@@ -406,6 +406,52 @@ diff -upr desktop/source/app/officeipcthread.hxx desktop/source/app/officeipcthr
 +                                fprintf( stderr, "Error: Please reverify input parameters...\n" );
 +                            }
 +                        }
++                    } else if ( aDispatchRequest.aRequestType == REQUEST_BATCHPRINT ) {
++                        rtl::OUString aParam = aDispatchRequest.aPrinterName;
++                        sal_Int32 nPathIndex =  aParam.lastIndexOfAsciiL( ";", 1 );
++
++                        rtl::OUString aFilterOut;
++                        rtl::OUString aPrinterName;
++                        if( nPathIndex != -1 )
++                            aFilterOut=aParam.copy( nPathIndex+1 );
++                        if( nPathIndex != 0 )
++                            aPrinterName=aParam.copy( 0, nPathIndex );
++
++                        INetURLObject aOutFilename( aObj );
++                        aOutFilename.SetExtension( ::rtl::OUString::createFromAscii("ps") );
++                        FileBase::getFileURLFromSystemPath( aFilterOut, aFilterOut );
++                        rtl::OUString aOutFile = aFilterOut+
++                            ::rtl::OUString::createFromAscii( "/" )+
++                            aOutFilename.getName();
++
++                        rtl::OUString aTempName;
++                        FileBase::getSystemPathFromFileURL( aName, aTempName );
++                        rtl::OString aSource8 = ::rtl::OUStringToOString ( aTempName, RTL_TEXTENCODING_UTF8 );
++                        FileBase::getSystemPathFromFileURL( aOutFile, aTempName );
++                        rtl::OString aTargetURL8 = ::rtl::OUStringToOString(aTempName, RTL_TEXTENCODING_UTF8 );
++                        printf("print %s -> %s using %s\n", aSource8.getStr(), aTargetURL8.getStr(), 
++                               aPrinterName.getLength() ? 
++                               ::rtl::OUStringToOString( aPrinterName, RTL_TEXTENCODING_UTF8 ).getStr() : "<default_printer>");
++
++                        // create the custom printer, if given
+                         Sequence < PropertyValue > aPrinterArgs( 1 );
+-                        aPrinterArgs[0].Name = ::rtl::OUString::createFromAscii("Name");
+-                        aPrinterArgs[0].Value <<= ::rtl::OUString( aDispatchRequest.aPrinterName );
+-                        xDoc->setPrinter( aPrinterArgs );
++                        if( aPrinterName.getLength() )
++                        {
++                            aPrinterArgs[0].Name = ::rtl::OUString::createFromAscii("Name");
++                            aPrinterArgs[0].Value <<= aPrinterName;
++                            xDoc->setPrinter( aPrinterArgs );
++                        }
++
++                        // print ( also without user interaction )
++                        aPrinterArgs.realloc(2);
++                        aPrinterArgs[0].Name = ::rtl::OUString::createFromAscii("FileName");
++                        aPrinterArgs[0].Value <<= aOutFile;
++                        aPrinterArgs[1].Name = ::rtl::OUString::createFromAscii("Wait");
++                        aPrinterArgs[1].Value <<= ( sal_Bool ) sal_True;
++                        xDoc->print( aPrinterArgs );
 +                    } else {
 +                        if ( aDispatchRequest.aRequestType == REQUEST_PRINTTO )
 +                        {
@@ -417,10 +463,7 @@ diff -upr desktop/source/app/officeipcthread.hxx desktop/source/app/officeipcthr
 +                        }
 +
 +                        // print ( also without user interaction )
-                         Sequence < PropertyValue > aPrinterArgs( 1 );
--                        aPrinterArgs[0].Name = ::rtl::OUString::createFromAscii("Name");
--                        aPrinterArgs[0].Value <<= ::rtl::OUString( aDispatchRequest.aPrinterName );
--                        xDoc->setPrinter( aPrinterArgs );
++                        Sequence < PropertyValue > aPrinterArgs( 1 );
 +                        aPrinterArgs[0].Name = ::rtl::OUString::createFromAscii("Wait");
 +                        aPrinterArgs[0].Value <<= ( sal_Bool ) sal_True;
 +                        xDoc->print( aPrinterArgs );
@@ -434,7 +477,7 @@ diff -upr desktop/source/app/officeipcthread.hxx desktop/source/app/officeipcthr
                  }
                  else
                  {
-@@ -442,9 +551,15 @@ sal_Bool DispatchWatcher::executeDispatc
+@@ -442,9 +599,15 @@ sal_Bool DispatchWatcher::executeDispatchRequests( const DispatchList& aDispatch
      // implementation via statusChanged!!
      if ( bEmpty && !bNoTerminate /*m_aRequestContainer.empty()*/ )
      {
@@ -450,7 +493,7 @@ diff -upr desktop/source/app/officeipcthread.hxx desktop/source/app/officeipcthr
  
          Reference< XElementAccess > xList( xTasksSupplier->getFrames(), UNO_QUERY );
  
-@@ -470,7 +585,7 @@ throw(::com::sun::star::uno::RuntimeExce
+@@ -470,7 +633,7 @@ throw(::com::sun::star::uno::RuntimeException)
  void SAL_CALL DispatchWatcher::dispatchFinished( const DispatchResultEvent& ) throw( RuntimeException )
  {
      osl::ClearableMutexGuard aGuard( GetMutex() );
@@ -459,8 +502,34 @@ diff -upr desktop/source/app/officeipcthread.hxx desktop/source/app/officeipcthr
      aGuard.clear();
      OfficeIPCThread::RequestsCompleted( 1 );
  /*
---- desktop/source/app/officeipcthread.cxx	2010-05-11 19:11:24.000000000 +0530
-+++ desktop/source/app/officeipcthread.cxx	2010-05-25 16:04:14.000000000 +0530
+diff --git desktop/source/app/dispatchwatcher.hxx desktop/source/app/dispatchwatcher.hxx
+index f7de7ae..62828a5 100644
+--- desktop/source/app/dispatchwatcher.hxx
++++ desktop/source/app/dispatchwatcher.hxx
+@@ -75,7 +75,9 @@ class DispatchWatcher : public ::cppu::WeakImplHelper1< ::com::sun::star::frame:
+             REQUEST_PRINT,
+             REQUEST_PRINTTO,
+             REQUEST_FORCEOPEN,
+-            REQUEST_FORCENEW
++            REQUEST_FORCENEW,
++            REQUEST_CONVERSION,
++            REQUEST_BATCHPRINT
+         };
+ 
+         struct DispatchRequest
+@@ -86,7 +88,7 @@ class DispatchWatcher : public ::cppu::WeakImplHelper1< ::com::sun::star::frame:
+             RequestType		aRequestType;
+             rtl::OUString	aURL;
+             boost::optional< rtl::OUString > aCwdUrl;
+-            rtl::OUString	aPrinterName;
++            rtl::OUString   aPrinterName;  // also conversion params
+             rtl::OUString   aPreselectedFactory;
+         };
+ 
+diff --git desktop/source/app/officeipcthread.cxx desktop/source/app/officeipcthread.cxx
+index 0bd9db4..569a0d7 100644
+--- desktop/source/app/officeipcthread.cxx
++++ desktop/source/app/officeipcthread.cxx
 @@ -51,6 +51,7 @@
  #include "osl/file.hxx"
  #include "rtl/process.h"
@@ -469,28 +538,41 @@ diff -upr desktop/source/app/officeipcthread.hxx desktop/source/app/officeipcthr
  
  using namespace vos;
  using namespace rtl;
-@@ -945,6 +946,49 @@ static void AddToDispatchList(
+@@ -945,6 +946,62 @@ static void AddToDispatchList(
      }
  }
  
 +static void AddConversionsToDispatchList(
 +    DispatchWatcher::DispatchList& rDispatchList,
 +    boost::optional< rtl::OUString > const & cwdUrl,
-+    const OUString& aRequestList,
-+    DispatchWatcher::RequestType nType,
-+    const OUString& aPara,
-+    const OUString& aFactory,
-+    const OUString& aParamOut )
++    const OUString& rRequestList,
++    const OUString& rParam,
++    const OUString& rPrinterName,
++    const OUString& rFactory,
++    const OUString& rParamOut )
 +{
-+    OUString aOutDir( aParamOut.trim() );
-+    OUString aParam( aPara );
++    DispatchWatcher::RequestType nType;
++    OUString aParam( rParam );
++
++    if( rParam.getLength() )
++    {
++        nType = DispatchWatcher::REQUEST_CONVERSION;
++        aParam = rParam;
++    }
++    else
++    {
++        nType = DispatchWatcher::REQUEST_BATCHPRINT;
++        aParam = rPrinterName;
++    }
++
++    OUString aOutDir( rParamOut.trim() );
 +    ::rtl::OUString aPWD;
 +    ::tools::getProcessWorkingDir( &aPWD );
 +
-+    if( !::osl::FileBase::getAbsoluteFileURL( aPWD, aParamOut, aOutDir ) )
++    if( !::osl::FileBase::getAbsoluteFileURL( aPWD, rParamOut, aOutDir ) )
 +        ::osl::FileBase::getSystemPathFromFileURL( aOutDir, aOutDir );
 + 
-+    if( aParamOut.trim().getLength() )
++    if( rParamOut.trim().getLength() )
 +    {
 +        aParam += ::rtl::OUString::createFromAscii(";");
 +        aParam += aOutDir;
@@ -501,15 +583,15 @@ diff -upr desktop/source/app/officeipcthread.hxx desktop/source/app/officeipcthr
 +        aParam += ::rtl::OUString::createFromAscii( ";" ) + aPWD;
 +    }
 +
-+    if ( aRequestList.getLength() > 0 )
++    if ( rRequestList.getLength() > 0 )
 +    {
 +        sal_Int32 nIndex = 0;
 +        do
 +        {
-+            OUString aToken = aRequestList.getToken( 0, APPEVENT_PARAM_DELIMITER, nIndex );
++            OUString aToken = rRequestList.getToken( 0, APPEVENT_PARAM_DELIMITER, nIndex );
 +            if ( aToken.getLength() > 0 )
 +                rDispatchList.push_back(
-+                    DispatchWatcher::DispatchRequest( nType, aToken, cwdUrl, aParam, aFactory ));
++                    DispatchWatcher::DispatchRequest( nType, aToken, cwdUrl, aParam, rFactory ));
 +        }
 +        while ( nIndex >= 0 );
 +    }
@@ -519,12 +601,54 @@ diff -upr desktop/source/app/officeipcthread.hxx desktop/source/app/officeipcthr
  sal_Bool OfficeIPCThread::ExecuteCmdLineRequests( ProcessDocumentsRequest& aRequest )
  {
      // protect the dispatch list
-@@ -961,7 +1005,7 @@ sal_Bool OfficeIPCThread::ExecuteCmdLine
+@@ -961,7 +1018,7 @@ sal_Bool OfficeIPCThread::ExecuteCmdLineRequests( ProcessDocumentsRequest& aRequ
      AddToDispatchList( aDispatchList, aRequest.aCwdUrl, aRequest.aPrintToList, DispatchWatcher::REQUEST_PRINTTO, aRequest.aPrinterName, aRequest.aModule );
      AddToDispatchList( aDispatchList, aRequest.aCwdUrl, aRequest.aForceOpenList, DispatchWatcher::REQUEST_FORCEOPEN, aEmpty, aRequest.aModule );
      AddToDispatchList( aDispatchList, aRequest.aCwdUrl, aRequest.aForceNewList, DispatchWatcher::REQUEST_FORCENEW, aEmpty, aRequest.aModule );
 -
-+    AddConversionsToDispatchList( aDispatchList, aRequest.aCwdUrl, aRequest.aConversionList, DispatchWatcher::REQUEST_CONVERSION, aRequest.aConversionParams, aRequest.aModule, aRequest.aConversionOut );
++    AddConversionsToDispatchList( aDispatchList, aRequest.aCwdUrl, aRequest.aConversionList, aRequest.aConversionParams, aRequest.aPrinterName, aRequest.aModule, aRequest.aConversionOut );
      sal_Bool bShutdown( sal_False );
  
      if ( pGlobalOfficeIPCThread )
+diff --git desktop/source/app/officeipcthread.hxx desktop/source/app/officeipcthread.hxx
+index 92a35a5..4f442a9 100644
+--- desktop/source/app/officeipcthread.hxx
++++ desktop/source/app/officeipcthread.hxx
+@@ -66,6 +66,9 @@ struct ProcessDocumentsRequest
+     ::rtl::OUString aForceNewList;	// Documents that should be forced to create a new document
+     ::rtl::OUString aPrinterName;	// The printer name that should be used for printing
+     ::rtl::OUString aPrintToList;	// Documents that should be printed on the given printer
++    ::rtl::OUString aConversionList;
++    ::rtl::OUString aConversionParams;
++    ::rtl::OUString aConversionOut;
+     ::osl::Condition *pcProcessed;  // pointer condition to be set when the request has been processed
+ };
+ 
+diff --git sfx2/source/bastyp/fltfnc.cxx sfx2/source/bastyp/fltfnc.cxx
+index c42e49d..6d8c9b8 100644
+--- sfx2/source/bastyp/fltfnc.cxx
++++ sfx2/source/bastyp/fltfnc.cxx
+@@ -374,8 +374,8 @@ const SfxFilter* SfxFilterMatcher::GetAnyFilter( SfxFilterFlags nMust, SfxFilter
+ sal_uInt32  SfxFilterMatcher::GuessFilterIgnoringContent(
+     SfxMedium& rMedium,
+     const SfxFilter**ppFilter,
+-    SfxFilterFlags /*nMust*/,
+-    SfxFilterFlags /*nDont*/ ) const
++    SfxFilterFlags nMust,
++    SfxFilterFlags nDont ) const
+ {
+     Reference< XTypeDetection > xDetection( ::comphelper::getProcessServiceFactory()->createInstance(::rtl::OUString::createFromAscii("com.sun.star.document.TypeDetection")), UNO_QUERY );
+     ::rtl::OUString sTypeName;
+@@ -390,7 +390,11 @@ sal_uInt32  SfxFilterMatcher::GuessFilterIgnoringContent(
+ 
+     *ppFilter = NULL;
+     if ( sTypeName.getLength() )
+-        *ppFilter = GetFilter4EA( sTypeName );
++    {
++        // make sure filter list is initialized
++        pImpl->InitForIterating();
++        *ppFilter = GetFilter4EA( sTypeName, nMust, nDont );
++    }
+ 
+     return *ppFilter ? ERRCODE_NONE : ERRCODE_ABORT;
+ }
