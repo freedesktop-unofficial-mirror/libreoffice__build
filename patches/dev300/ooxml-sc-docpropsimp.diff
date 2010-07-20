@@ -1,0 +1,96 @@
+--- oox/inc/oox/core/xmlfilterbase.hxx	2010-05-11 19:14:26.000000000 +0530
++++ oox/inc/oox/core/xmlfilterbase.hxx	2010-07-14 13:40:19.000000000 +0530
+@@ -224,6 +224,8 @@ public:
+         @return *this
+      */
+     XmlFilterBase& exportDocumentProperties( ::com::sun::star::uno::Reference< ::com::sun::star::document::XDocumentProperties > xProperties );
++    
++    void importDocumentProperties() throw();
+ 
+ protected:
+     virtual ::com::sun::star::uno::Reference< ::com::sun::star::io::XInputStream >
+--- oox/source/core/xmlfilterbase.cxx	2010-05-11 19:14:26.000000000 +0530
++++ oox/source/core/xmlfilterbase.cxx	2010-07-14 13:40:30.000000000 +0530
+@@ -88,6 +88,22 @@ using ::sax_fastparser::FastSerializerHe
+ using ::sax_fastparser::FSHelperPtr;
+ using namespace ::com::sun::star;
+ 
++
++#include <com/sun/star/document/XDocumentPropertiesSupplier.hpp>
++#include <com/sun/star/document/XOOXMLDocumentPropertiesImporter.hpp>
++#include <com/sun/star/beans/XPropertySet.hpp>
++#include <comphelper/processfactory.hxx>
++#include <comphelper/mediadescriptor.hxx>
++#include <oox/core/filterdetect.hxx>
++#include <comphelper/storagehelper.hxx>
++
++using ::com::sun::star::uno::XComponentContext;
++using ::com::sun::star::document::XOOXMLDocumentPropertiesImporter;
++using ::com::sun::star::document::XDocumentPropertiesSupplier;
++using ::com::sun::star::beans::XPropertySet;
++using ::com::sun::star::lang::XComponent;
++
++
+ namespace oox {
+ namespace core {
+ 
+@@ -114,6 +130,22 @@ XmlFilterBaseImpl::XmlFilterBaseImpl() :
+ }
+ 
+ // ============================================================================
++static Reference< XComponentContext > lcl_getComponentContext(Reference< XMultiServiceFactory > aFactory)
++{
++    Reference< XComponentContext > xContext;
++    try
++    {
++        Reference< XPropertySet > xFactProp( aFactory, UNO_QUERY );
++        if( xFactProp.is() )
++            xFactProp->getPropertyValue( OUString::createFromAscii("DefaultContext") ) >>= xContext;
++    }
++    catch( Exception& )
++    {}
++
++    return xContext;
++}
++
++// ============================================================================
+ 
+ namespace 
+ { 
+@@ -187,6 +219,25 @@ XmlFilterBase::~XmlFilterBase()
+ 
+ // ----------------------------------------------------------------------------
+ 
++void XmlFilterBase::importDocumentProperties() throw()
++{
++    Reference< XMultiServiceFactory > xFactory( getGlobalFactory(), UNO_QUERY );
++    MediaDescriptor aMediaDesc( getMediaDescriptor() );
++    Reference< XInputStream > xInputStream;
++    ::oox::core::FilterDetect aDetector( xFactory );
++    xInputStream = aDetector.extractUnencryptedPackage( aMediaDesc );
++    Reference< XComponent > xModel( getModel(), UNO_QUERY );
++    Reference< XComponentContext > xContext = lcl_getComponentContext(getGlobalFactory());
++    Reference< XStorage > xDocumentStorage (
++            ::comphelper::OStorageHelper::GetStorageOfFormatFromInputStream( OFOPXML_STORAGE_FORMAT_STRING, xInputStream ) );
++    Reference< XInterface > xTemp = xContext->getServiceManager()->createInstanceWithContext(
++            ::rtl::OUString(RTL_CONSTASCII_USTRINGPARAM("com.sun.star.document.OOXMLDocumentPropertiesImporter")),
++            xContext);
++    Reference< XOOXMLDocumentPropertiesImporter > xImporter( xTemp, UNO_QUERY );
++    Reference< XDocumentPropertiesSupplier > xPropSupplier( xModel, UNO_QUERY);
++    xImporter->importProperties( xDocumentStorage, xPropSupplier->getDocumentProperties() );
++}
++
+ OUString XmlFilterBase::getFragmentPathFromFirstType( const OUString& rType )
+ {
+     // importRelations() caches the relations map for subsequence calls
+--- oox/source/xls/excelfilter.cxx	2010-07-16 21:21:27.000000000 +0530
++++ oox/source/xls/excelfilter.cxx	2010-07-17 09:13:49.000000000 +0530
+@@ -131,6 +131,8 @@ bool ExcelFilter::importDocument() throw
+         WorkbookHelperRoot aHelper( *this );
+         bRet = aHelper.isValid() && importFragment( new OoxWorkbookFragment( aHelper, aWorkbookPath ) );
+     }
++    if( bRet )
++        importDocumentProperties();
+     return bRet;
+ }
+ 

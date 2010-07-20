@@ -1,0 +1,174 @@
+--- oox/util/makefile.mk	2010-06-03 03:22:23.000000000 +0530
++++ oox/util/makefile.mk	2010-07-16 13:39:27.000000000 +0530
+@@ -77,6 +77,7 @@ SHL1STDLIBS= \
+         $(SVLLIB)		\
+         $(UNOTOOLSLIB)		\
+         $(MSFILTERLIB)	\
++        $(XMLOFFLIB)    \
+         $(TOOLSLIB)
+ 
+ # link openssl, copied this bit from ucb/source/ucp/webdav/makefile.mk
+--- oox/inc/oox/xls/pagesettings.hxx	2010-06-03 03:22:23.000000000 +0530
++++ oox/inc/oox/xls/pagesettings.hxx	2010-07-15 17:18:24.000000000 +0530
+@@ -58,6 +58,8 @@ struct PageSettingsModel
+     double              mfHeaderMargin;         /// Margin between top edge of page and begin of header.
+     double              mfFooterMargin;         /// Margin between end of footer and bottom edge of page.
+     sal_Int32           mnPaperSize;            /// Paper size (enumeration).
++    sal_Int32           mnPaperWidth;           /// Paper width in twips
++    sal_Int32           mnPaperHeight;          /// Paper height in twips
+     sal_Int32           mnCopies;               /// Number of copies to print.
+     sal_Int32           mnScale;                /// Page scale (zoom in percent).
+     sal_Int32           mnFirstPage;            /// First page number.
+--- oox/source/xls/pagesettings.cxx	2010-06-03 03:22:23.000000000 +0530
++++ oox/source/xls/pagesettings.cxx	2010-07-16 19:52:02.000000000 +0530
+@@ -49,6 +49,8 @@
+ #include "oox/xls/excelhandlers.hxx"
+ #include "oox/xls/stylesbuffer.hxx"
+ #include "oox/xls/unitconverter.hxx"
++#include "tools/mapunit.hxx"
++#include "xmloff/xmluconv.hxx"
+ 
+ using ::rtl::OString;
+ using ::rtl::OStringBuffer;
+@@ -129,6 +131,8 @@ PageSettingsModel::PageSettingsModel() :
+     mfHeaderMargin( OOX_MARGIN_DEFAULT_HF ),
+     mfFooterMargin( OOX_MARGIN_DEFAULT_HF ),
+     mnPaperSize( 1 ),
++    mnPaperWidth( 0 ),
++    mnPaperHeight( 0 ),
+     mnCopies( 1 ),
+     mnScale( 100 ),
+     mnFirstPage( 1 ),
+@@ -187,8 +191,13 @@ void PageSettings::importPageMargins( co
+ 
+ void PageSettings::importPageSetup( const Relations& rRelations, const AttributeList& rAttribs )
+ {
++    OUString aStr;
+     maModel.maBinSettPath   = rRelations.getFragmentPathFromRelId( rAttribs.getString( R_TOKEN( id ), OUString() ) );
+     maModel.mnPaperSize     = rAttribs.getInteger( XML_paperSize, 1 );
++    aStr                    = rAttribs.getString ( XML_paperWidth, OUString() );
++    SvXMLUnitConverter::convertMeasure( maModel.mnPaperWidth, aStr, MAP_100TH_MM );
++    aStr                    = rAttribs.getString ( XML_paperHeight, OUString() );
++    SvXMLUnitConverter::convertMeasure( maModel.mnPaperHeight, aStr, MAP_100TH_MM );
+     maModel.mnCopies        = rAttribs.getInteger( XML_copies, 1 );
+     maModel.mnScale         = rAttribs.getInteger( XML_scale, 100 );
+     maModel.mnFirstPage     = rAttribs.getInteger( XML_firstPageNumber, 1 );
+@@ -208,8 +217,13 @@ void PageSettings::importPageSetup( cons
+ 
+ void PageSettings::importChartPageSetup( const Relations& rRelations, const AttributeList& rAttribs )
+ {
++    OUString aStr;
+     maModel.maBinSettPath   = rRelations.getFragmentPathFromRelId( rAttribs.getString( R_TOKEN( id ), OUString() ) );
+     maModel.mnPaperSize     = rAttribs.getInteger( XML_paperSize, 1 );
++    aStr                    = rAttribs.getString ( XML_paperWidth, OUString() );
++    SvXMLUnitConverter::convertMeasure( maModel.mnPaperWidth, aStr, MAP_100TH_MM );
++    aStr                    = rAttribs.getString ( XML_paperHeight, OUString() );
++    SvXMLUnitConverter::convertMeasure( maModel.mnPaperHeight, aStr, MAP_100TH_MM );
+     maModel.mnCopies        = rAttribs.getInteger( XML_copies, 1 );
+     maModel.mnFirstPage     = rAttribs.getInteger( XML_firstPageNumber, 1 );
+     maModel.mnHorPrintRes   = rAttribs.getInteger( XML_horizontalDpi, 600 );
+@@ -1141,13 +1155,29 @@ void PageSettingsConverter::writePageSet
+         bLandscape = bChartSheet;
+ 
+     // paper size
+-    if( rModel.mbValidSettings && (0 < rModel.mnPaperSize) && (rModel.mnPaperSize < static_cast< sal_Int32 >( STATIC_ARRAY_SIZE( spPaperSizeTable ) )) )
++    if( !rModel.mbValidSettings )
+     {
+-        const ApiPaperSize& rPaperSize = spPaperSizeTable[ rModel.mnPaperSize ];
+-        Size aSize( rPaperSize.mnWidth, rPaperSize.mnHeight );
+-        if( bLandscape )
+-            ::std::swap( aSize.Width, aSize.Height );
+-        rPropSet.setProperty( PROP_Size, aSize );
++        Size aSize;
++        bool bValid = false;
++
++        if( (0 < rModel.mnPaperSize) && (rModel.mnPaperSize < static_cast< sal_Int32 >( STATIC_ARRAY_SIZE( spPaperSizeTable ) )) )
++        {
++            const ApiPaperSize& rPaperSize = spPaperSizeTable[ rModel.mnPaperSize ];
++            aSize = Size( rPaperSize.mnWidth, rPaperSize.mnHeight );
++            bValid = true;
++        }
++        if( rModel.mnPaperWidth > 0 && rModel.mnPaperHeight > 0 )
++        {
++            aSize = Size( rModel.mnPaperWidth, rModel.mnPaperHeight );
++            bValid = true;
++        }
++
++        if( bValid )
++        {
++            if( bLandscape )
++                ::std::swap( aSize.Width, aSize.Height );
++            rPropSet.setProperty( PROP_Size, aSize );
++        }
+     }
+ 
+     // header/footer
+--- oox/inc/oox/xls/workbooksettings.hxx	2010-05-11 19:09:37.000000000 +0530
++++ oox/inc/oox/xls/workbooksettings.hxx	2010-07-14 16:07:06.000000000 +0530
+@@ -57,6 +57,7 @@ struct WorkbookSettingsModel
+     sal_Int32           mnUpdateLinksMode;      /// Specifies how external links are updated.
+     sal_Int32           mnDefaultThemeVer;      /// Default theme version.
+     bool                mbDateMode1904;         /// True = null date is 1904-01-01.
++    bool                mbDateCompatibility;    /// False = null date is 1899-12-30.
+     bool                mbSaveExtLinkValues;    /// True = save cached cell values for external links.
+ 
+     explicit            WorkbookSettingsModel();
+@@ -148,7 +149,7 @@ public:
+ 
+ private:
+     /** Updates date mode and unit converter nulldate. */
+-    void                setDateMode( bool bDateMode1904 );
++    void                setDateMode( bool bDateMode1904, bool bDateCompatibility=true );
+ 
+ private:
+     FileSharingModel    maFileSharing;
+--- oox/source/xls/workbooksettings.cxx	2010-05-11 19:14:03.000000000 +0530
++++ oox/source/xls/workbooksettings.cxx	2010-07-14 16:17:16.000000000 +0530
+@@ -35,6 +35,7 @@
+ #include "oox/helper/propertyset.hxx"
+ #include "oox/helper/recordinputstream.hxx"
+ #include "oox/core/filterbase.hxx"
++#include "oox/core/xmlfilterbase.hxx"
+ #include "oox/xls/biffinputstream.hxx"
+ #include "oox/xls/unitconverter.hxx"
+ 
+@@ -136,7 +141,7 @@ void WorkbookSettings::importWorkbookPr(
+     maBookSettings.mnUpdateLinksMode   = rAttribs.getToken( XML_updateLinks, XML_userSet );
+     maBookSettings.mnDefaultThemeVer   = rAttribs.getInteger( XML_defaultThemeVersion, -1 );
+     maBookSettings.mbSaveExtLinkValues = rAttribs.getBool( XML_saveExternalLinkValues, true );
+-    setDateMode( rAttribs.getBool( XML_date1904, false ) );
++    setDateMode( rAttribs.getBool( XML_date1904, false ), rAttribs.getBool( XML_dateCompatibility, true ) );
+ }
+ 
+ void WorkbookSettings::importCalcPr( const AttributeList& rAttribs )
+@@ -341,13 +346,27 @@ sal_Int16 WorkbookSettings::getApiShowOb
+ 
+ Date WorkbookSettings::getNullDate() const
+ {
+-    static const Date saDate1900( 30, 12, 1899 ), saDate1904( 1, 1, 1904 );
++    static const Date saDate1900                 ( 30, 12, 1899 );
++    static const Date saDate1904                 ( 1, 1, 1904 );
++    static const Date saDateBackCompatibility1900( 31, 12, 1899 );
++
++    if( getOoxFilter().getVersion() == oox::core::ISOIEC_29500_2008 )
++    {
++        if( !maBookSettings.mbDateCompatibility )
++            return saDate1900;
++
++        return maBookSettings.mbDateMode1904 ? saDate1904 : 
++                                               saDateBackCompatibility1900;
++    }
++    
+     return maBookSettings.mbDateMode1904 ? saDate1904 : saDate1900;
+ }
+ 
+-void WorkbookSettings::setDateMode( bool bDateMode1904 )
++void WorkbookSettings::setDateMode( bool bDateMode1904, bool bDateCompatibility )
+ {
+-    maBookSettings.mbDateMode1904 = bDateMode1904;
++    maBookSettings.mbDateMode1904      = bDateMode1904;
++    maBookSettings.mbDateCompatibility = bDateCompatibility;
++
+     getUnitConverter().finalizeNullDate( getNullDate() );
+ }
+ 
