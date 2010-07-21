@@ -13,7 +13,7 @@ index 66a9e06..2abf6a4 100644
  Export of cell tables including row and column description.
  - Managing all used and formatted cells in a sheet.
 @@ -1005,14 +1008,12 @@ private:
-     XclExpRow&          GetOrCreateRow( sal_uInt32 nXclRow, bool bRowAlwaysEmpty );
+     XclExpRow&          GetOrCreateRow( sal_uInt16 nXclRow, bool bRowAlwaysEmpty );
  
  private:
 -    typedef XclExpRecordList< XclExpRow >   XclExpRowList;
@@ -27,7 +27,7 @@ index 66a9e06..2abf6a4 100644
      XclExpRowOutlineBuffer maOutlineBfr;    /// Buffer for row outline groups.
      XclExpDimensions    maDimensions;       /// DIMENSIONS record for used area.
 -    XclExpRow*          mpLastUsedRow;      /// Last used row for faster access.
--    sal_uInt32          mnLastUsedXclRow;   /// Last used row for faster access.
+-    sal_uInt16          mnLastUsedXclRow;   /// Last used row for faster access.
  };
  
  // ============================================================================
@@ -35,14 +35,6 @@ diff --git sc/source/filter/excel/xetable.cxx sc/source/filter/excel/xetable.cxx
 index 36de8e5..6abe5b5 100644
 --- sc/source/filter/excel/xetable.cxx
 +++ sc/source/filter/excel/xetable.cxx
-@@ -47,6 +47,7 @@
- #include "xeescher.hxx"
- 
- #include <oox/core/tokens.hxx>
-+#include "svx/fontitem.hxx"
- 
- using ::rtl::OString;
- using ::rtl::OUString;
 @@ -2091,9 +2092,7 @@ void XclExpRow::SaveXml( XclExpXmlStream& rStrm )
  XclExpRowBuffer::XclExpRowBuffer( const XclExpRoot& rRoot ) :
      XclExpRoot( rRoot ),
@@ -87,7 +79,7 @@ index 36de8e5..6abe5b5 100644
 -        #i59220# Tolerance of +-128 rows for inserted/removed rows. */
 -    if( (nDefaultXclRow < 31872) || (nDefaultXclRow > 32128) )
 -    {
--        sal_uInt32 nLastXclRow = static_cast< sal_uInt32 >( GetMaxPos().Row() );
+-        sal_uInt16 nLastXclRow = static_cast< sal_uInt16 >( GetMaxPos().Row() );
 -        if( nDefaultXclRow <= nLastXclRow )
 -        {
 -            // create a dummy ROW record and fill aMaxDefData
@@ -158,11 +150,54 @@ index 36de8e5..6abe5b5 100644
 -        if( xRow->IsEnabled() )
 +        if( rRow->IsEnabled() )
          {
--            sal_uInt32 nXclRow = xRow->GetXclRow();
-+            sal_uInt32 nXclRow = rRow->GetXclRow();
+-            sal_uInt16 nXclRow = xRow->GetXclRow();
++            sal_uInt16 nXclRow = rRow->GetXclRow();
              nFirstUsedXclRow = ::std::min< sal_uInt32 >( nFirstUsedXclRow, nXclRow );
              nFirstFreeXclRow = ::std::max< sal_uInt32 >( nFirstFreeXclRow, nXclRow + 1 );
          }
+@@ -2200,27 +2200,29 @@ void XclExpRowBuffer::Save( XclExpStream& rStrm )
+     maDimensions.Save( rStrm );
+
+     // save in blocks of 32 rows, each block contains first all ROWs, then all cells
+-    size_t nSize = maRowList.GetSize();
+-    size_t nBlockStart = 0;
+-    sal_uInt16 nStartXclRow = (nSize == 0) ? 0 : maRowList.GetRecord( 0 )->GetXclRow();
++    size_t nSize = maRowMap.size();
++    RowMap::iterator itr, itrBeg = maRowMap.begin(), itrEnd = maRowMap.end();
++    RowMap::iterator itrBlkStart = maRowMap.begin(), itrBlkEnd = maRowMap.begin();
++    sal_uInt16 nStartXclRow = (nSize == 0) ? 0 : itrBeg->second->GetXclRow();
++
+
+-    while( nBlockStart < nSize )
++    for (itr = itrBeg; itr != itrEnd; ++itr)
+     {
+         // find end of row block
+-        size_t nBlockEnd = nBlockStart + 1;
+-        while( (nBlockEnd < nSize) && (maRowList.GetRecord( nBlockEnd )->GetXclRow() - nStartXclRow < EXC_ROW_ROWBLOCKSIZE) )
+-            ++nBlockEnd;
++        ++itrBlkEnd;
++        while( (itrBlkEnd != itrEnd) && (itrBlkEnd->second->GetXclRow() - nStartXclRow < EXC_ROW_ROWBLOCKSIZE) )
++            ++itrBlkEnd;
+
+         // write the ROW records
+-        size_t nPos;
+-        for( nPos = nBlockStart; nPos < nBlockEnd; ++nPos )
+-            maRowList.GetRecord( nPos )->Save( rStrm );
++        RowMap::iterator itRow;
++        for( itRow = itrBlkStart; itRow != itrBlkEnd; ++itRow )
++            itRow->second->Save( rStrm );
+
+         // write the cell records
+-        for( nPos = nBlockStart; nPos < nBlockEnd; ++nPos )
+-            maRowList.GetRecord( nPos )->WriteCellList( rStrm );
++        for( itRow = itrBlkStart; itRow != itrBlkEnd; ++itRow )
++             itRow->second->WriteCellList( rStrm );
+
+-        nBlockStart = nBlockEnd;
++        itrBlkStart = itrBlkEnd;
+         nStartXclRow += EXC_ROW_ROWBLOCKSIZE;
+     }
+ }
 @@ -2250,23 +2219,22 @@ void XclExpRowBuffer::Save( XclExpStream& /*rStrm*/ )
  void XclExpRowBuffer::SaveXml( XclExpXmlStream& rStrm )
  {
@@ -201,7 +236,7 @@ index 36de8e5..6abe5b5 100644
  XclExpDimensions* XclExpRowBuffer::GetDimensions() 
 @@ -2276,18 +2244,14 @@ XclExpDimensions* XclExpRowBuffer::GetDimensions()
  
- XclExpRow& XclExpRowBuffer::GetOrCreateRow( sal_uInt32 nXclRow, bool bRowAlwaysEmpty )
+ XclExpRow& XclExpRowBuffer::GetOrCreateRow( sal_uInt16 nXclRow, bool bRowAlwaysEmpty )
  {
 -    if( !mpLastUsedRow || (mnLastUsedXclRow != nXclRow) )
 +    RowMap::iterator itr = maRowMap.find(nXclRow);
@@ -211,7 +246,7 @@ index 36de8e5..6abe5b5 100644
 -        // do not use sal_uInt16 for nFirstFreeXclRow, would cause loop in full sheets
 -        for( size_t nFirstFreeXclRow = maRowList.GetSize(); nFirstFreeXclRow <= nXclRow; ++nFirstFreeXclRow )
 -            maRowList.AppendNewRecord( new XclExpRow(
--                GetRoot(), static_cast< sal_uInt32 >( nFirstFreeXclRow ), maOutlineBfr, bRowAlwaysEmpty ) );
+-                GetRoot(), static_cast< sal_uInt16 >( nFirstFreeXclRow ), maOutlineBfr, bRowAlwaysEmpty ) );
 -
 -        mpLastUsedRow = maRowList.GetRecord( nXclRow ).get();
 -        mnLastUsedXclRow = nXclRow;
