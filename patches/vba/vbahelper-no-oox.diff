@@ -1,0 +1,426 @@
+diff --git vbahelper/inc/vbahelper/vbahelper.hxx vbahelper/inc/vbahelper/vbahelper.hxx
+index 4cc1082..ab07aed 100644
+--- vbahelper/inc/vbahelper/vbahelper.hxx
++++ vbahelper/inc/vbahelper/vbahelper.hxx
+@@ -36,6 +36,7 @@
+ #include <com/sun/star/awt/XControl.hpp>
+ #include <com/sun/star/awt/XDevice.hpp>
+ #include <com/sun/star/frame/XDispatchResultListener.hpp>
++#include <com/sun/star/awt/XUnitConversion.hpp>
+ #include <com/sun/star/frame/DispatchResultEvent.hpp>
+ #include <com/sun/star/frame/DispatchResultState.hpp>
+ #include <com/sun/star/lang/EventObject.hpp>
+@@ -48,7 +49,6 @@
+ #include <sfx2/docfilt.hxx>
+ #include <sfx2/docfile.hxx>
+ #include <vcl/pointr.hxx>
+-#include <oox/helper/graphichelper.hxx>
+ #include <memory>
+ #include "vbaaccesshelper.hxx"
+ 
+@@ -189,9 +189,11 @@ public:
+ #define VBA_TOP "PositionY"
+ class VBAHELPER_DLLPUBLIC UserFormGeometryHelper : public AbstractGeometryAttributes
+ {
+-
++    css::uno::Reference< css::awt::XUnitConversion > mxControlUnits;
+     css::uno::Reference< css::beans::XPropertySet > mxModel;
+-    std::auto_ptr< oox::GraphicHelper > mpGraphicHelper;
++    sal_Int32 ConvertLogicToPixel( sal_Int32 nValue, sal_Bool bIsPoint, sal_Bool bIsX, sal_Int16 nSourceUnit );
++    sal_Int32 ConvertPixelToLogic( sal_Int32 nValue, sal_Bool bIsPoint, sal_Bool bIsX, sal_Int16 nTargetUnit );
++
+ public:
+     UserFormGeometryHelper( const css::uno::Reference< css::uno::XComponentContext >& xContext, const css::uno::Reference< css::awt::XControl >& xControl );
+     virtual double getLeft();
+diff --git vbahelper/prj/build.lst vbahelper/prj/build.lst
+index ded9ee2..20001db 100644
+--- vbahelper/prj/build.lst
++++ vbahelper/prj/build.lst
+@@ -1,4 +1,4 @@
+-vba     vbahelper       :       oovbaapi oox basic sfx2 svx filter cppuhelper vcl comphelper svtools tools sal NULL
++vba     vbahelper       :       oovbaapi basic sfx2 svx filter cppuhelper vcl comphelper svtools tools sal NULL
+ vba	vbahelper									usr1	-	all	  vba_mkout NULL
+ #vba	vbahelper\inc								nmake	-	all	vba_inc NULL
+ vba	vbahelper\source\vbahelper                        nmake	-	all	vba_vbahelper NULL
+diff --git vbahelper/source/vbahelper/vbahelper.cxx vbahelper/source/vbahelper/vbahelper.cxx
+index e9c6f23..ac5c3b4 100644
+--- vbahelper/source/vbahelper/vbahelper.cxx
++++ vbahelper/source/vbahelper/vbahelper.cxx
+@@ -38,6 +38,8 @@
+ #include <com/sun/star/lang/XMultiComponentFactory.hpp>
+ #include <com/sun/star/beans/XPropertySet.hpp>
+ #include <com/sun/star/beans/XIntrospection.hpp>
++#include <com/sun/star/util/MeasureUnit.hpp>
++
+ #include <ooo/vba/msforms/XShape.hpp>
+ 
+ #include <comphelper/processfactory.hxx>
+@@ -988,96 +990,282 @@ void setOrAppendPropertyValue( uno::Sequence< beans::PropertyValue >& aProp, con
+ 
+ #define VBA_LEFT "PositionX"
+ #define VBA_TOP "PositionY"
+-UserFormGeometryHelper::UserFormGeometryHelper( const uno::Reference< uno::XComponentContext >& xContext, const uno::Reference< awt::XControl >& xControl )
++#define VBA_HEIGHT "Height"
++#define VBA_WIDTH "Width"
++UserFormGeometryHelper::UserFormGeometryHelper( const uno::Reference< uno::XComponentContext >& /*xContext*/, const uno::Reference< awt::XControl >& xControl )
+ {
++    if ( !xControl.is() )
++        throw uno::RuntimeException();
++
++    mxControlUnits.set( xControl->getPeer(), uno::UNO_QUERY_THROW );
+     mxModel.set( xControl->getModel(), uno::UNO_QUERY_THROW );
+-    uno::Reference< lang::XMultiServiceFactory > xFac( ( xContext.is() ? xContext->getServiceManager() : NULL ), uno::UNO_QUERY_THROW );
+-    // TODO We need access to a document GraphicHelper (  shared with oox ? )
+-    // maybe wrap this in an uno service? It's purty naff creating these
+-    // per control object
+-    mpGraphicHelper.reset( new oox::GraphicHelper( xFac, NULL ) );
+ }
+-    double UserFormGeometryHelper::getLeft()
+-    {
+-    sal_Int32 nLeft = 0;
+-    mxModel->getPropertyValue( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( VBA_LEFT ) ) ) >>= nLeft;	
+-        //control units are in appfont
+-        awt::Point aPoint( nLeft, nLeft );
+-        //covert appfont to hmm
+-        aPoint = mpGraphicHelper->convertAppFontToHmm( aPoint );
+-        //convert hmm to Points
+-        return Millimeter::getInPoints( aPoint.X );
+-    }
+-    void UserFormGeometryHelper::setLeft( double nLeft )
+-    {
+-        //covert Points to hmm
+-        awt::Point aPoint( Millimeter::getInHundredthsOfOneMillimeter( nLeft ), 
+-          Millimeter::getInHundredthsOfOneMillimeter( nLeft ) );
+-        //convert hmm to appfont
+-        aPoint = mpGraphicHelper->convertHmmToAppFont( aPoint );
+-        mxModel->setPropertyValue( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( VBA_LEFT ) ), uno::makeAny( aPoint.X ) );
+-    }
+-    double UserFormGeometryHelper::getTop()
+-    {
+-    sal_Int32 nTop = 0;
+-    mxModel->getPropertyValue( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( VBA_TOP ) ) ) >>= nTop;	
+-        //control units are in appfont
+-        awt::Point aPoint( nTop, nTop );
+-        //covert appfont to hmm
+-        aPoint = mpGraphicHelper->convertAppFontToHmm( aPoint );
+-        //convert hmm to Points
+-	return Millimeter::getInPoints( aPoint.X );
+-    }
+-    void UserFormGeometryHelper::setTop( double nTop )
+-    {
+-        //covert Points to hmm
+-        awt::Point aPoint( Millimeter::getInHundredthsOfOneMillimeter( nTop ), 
+-          Millimeter::getInHundredthsOfOneMillimeter( nTop ) );
+-        //convert hmm to appfont
+-        aPoint = mpGraphicHelper->convertHmmToAppFont( aPoint );
+-        mxModel->setPropertyValue( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( VBA_TOP ) ), uno::makeAny( aPoint.X ) );
+-    }
+-    double UserFormGeometryHelper::getHeight()
+-    {
+-    sal_Int32 nHeight = 0;
+-    mxModel->getPropertyValue( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( NAME_HEIGHT ) ) ) >>= nHeight;	
+-        //control units are in appfont
+-        awt::Point aPoint( nHeight, nHeight );
+-        //covert appfont to hmm
+-        aPoint = mpGraphicHelper->convertAppFontToHmm( aPoint );
+-        //convert hmm to Points
+-	return Millimeter::getInPoints( aPoint.X );
+-    }
+-
+-    void UserFormGeometryHelper::setHeight( double nHeight )
+-    {
+-        //covert Points to hmm
+-        awt::Point aPoint( Millimeter::getInHundredthsOfOneMillimeter( nHeight ), 
+-          Millimeter::getInHundredthsOfOneMillimeter( nHeight ) );
+-        //convert hmm to appfont
+-        aPoint = mpGraphicHelper->convertHmmToAppFont( aPoint );
+-        mxModel->setPropertyValue( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( NAME_HEIGHT ) ), uno::makeAny( aPoint.X ) );
+-    }
+-    double UserFormGeometryHelper::getWidth()
+-    {
+-    sal_Int32 nWidth = 0;
+-    mxModel->getPropertyValue( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( 	NAME_WIDTH ) ) ) >>= nWidth;	
+-        //control units are in appfont
+-        awt::Point aPoint( nWidth, nWidth );
+-        //covert appfont to hmm
+-        aPoint = mpGraphicHelper->convertAppFontToHmm( aPoint );
+-        //convert hmm to Points
+-	return Millimeter::getInPoints( aPoint.X );
+-    }
+-    void UserFormGeometryHelper::setWidth( double nWidth)
+-    {
+-        //covert Points to hmm
+-        awt::Point aPoint( Millimeter::getInHundredthsOfOneMillimeter( nWidth ), 
+-          Millimeter::getInHundredthsOfOneMillimeter( nWidth ) );
+-        //convert hmm to appfont
+-        aPoint = mpGraphicHelper->convertHmmToAppFont( aPoint );
+-	mxModel->setPropertyValue( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( 	NAME_WIDTH ) ), uno::makeAny(  aPoint.X ) );
++
++//---------------------------------------------
++sal_Int32 UserFormGeometryHelper::ConvertPixelToLogic( sal_Int32 nValue, sal_Bool bIsPoint, sal_Bool bIsX, sal_Int16 nTargetUnit )
++{
++    sal_Int32 nResult = 0;
++    if ( bIsPoint )
++    {
++        // conversion for a point
++        awt::Point aPixelPoint( 0, 0 );
++        ( bIsX ? aPixelPoint.X : aPixelPoint.Y ) = nValue;
++        awt::Point aTargetPoint( 0, 0 );
++        aTargetPoint = mxControlUnits->convertPointToLogic( aPixelPoint, nTargetUnit );
++
++        nResult = bIsX ? aTargetPoint.X : aTargetPoint.Y;
++    }
++    else
++    {
++        // conversion for a size
++        awt::Size aPixelSize( 0, 0 );
++        ( bIsX ? aPixelSize.Width : aPixelSize.Height ) = nValue;
++        awt::Size aTargetSize( 0, 0 );
++        aTargetSize = mxControlUnits->convertSizeToLogic( aPixelSize, nTargetUnit );
++
++        nResult = bIsX ? aTargetSize.Width : aTargetSize.Height;
++    }
++
++    return nResult;
++}
++
++//---------------------------------------------
++sal_Int32 UserFormGeometryHelper::ConvertLogicToPixel( sal_Int32 nValue, sal_Bool bIsPoint, sal_Bool bIsX, sal_Int16 nSourceUnit )
++{
++    sal_Int32 nResult = 0;
++    if ( bIsPoint )
++    {
++        // conversion for a point
++        awt::Point aSourcePoint( 0, 0 );
++        ( bIsX ? aSourcePoint.X : aSourcePoint.Y ) = nValue;
++
++        awt::Point aPixelPoint( 0, 0 );
++        aPixelPoint = mxControlUnits->convertPointToPixel( aSourcePoint, nSourceUnit );
++
++        nResult = bIsX ? aPixelPoint.X : aPixelPoint.Y;
++    }
++    else
++    {
++        // conversion for a size
++        awt::Size aSourceSize( 0, 0 );
++        ( bIsX ? aSourceSize.Width : aSourceSize.Height ) = nValue;
++
++        awt::Size aPixelSize( 0, 0 );
++        aPixelSize = mxControlUnits->convertSizeToPixel( aSourceSize, nSourceUnit );
++
++        nResult = bIsX ? aPixelSize.Width : aPixelSize.Height;
++    }
++
++    return nResult;
++}
++//---------------------------------------------
++double UserFormGeometryHelper::getLeft()
++{
++    double nResult = 0;
++
++    try
++    {
++        sal_Int32 nLeft = 0;
++        mxModel->getPropertyValue( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( VBA_LEFT ) ) ) >>= nLeft;
++        nResult = ConvertLogicToPixel( nLeft,
++                                       sal_True, // Point
++                                       sal_True, // X
++                                       util::MeasureUnit::APPFONT );
++    }
++    catch ( uno::RuntimeException& )
++    {
++        throw;
++    }
++    catch ( uno::Exception& e )
++    {
++        throw lang::WrappedTargetException( ::rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( "Can not get position X!" ) ),
++                uno::Reference< uno::XInterface >(),
++                uno::makeAny( e ) ); 
++    }
++
++    return nResult;
++}
++
++//---------------------------------------------
++void UserFormGeometryHelper::setLeft( double nLeft )
++{
++    try
++    {
++        mxModel->setPropertyValue(
++                rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( VBA_LEFT ) ),
++                uno::makeAny( ConvertPixelToLogic( nLeft,
++                                                   sal_True, // Point
++                                                   sal_True, // X
++                                                   util::MeasureUnit::APPFONT ) ) );
++    }
++    catch ( uno::RuntimeException& )
++    {
++        throw;
++    }
++    catch ( uno::Exception& e )
++    {
++        throw lang::WrappedTargetException( ::rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( "Can not set position X!" ) ),
++                uno::Reference< uno::XInterface >(),
++                uno::makeAny( e ) ); 
++    }
++}
++
++//---------------------------------------------
++double UserFormGeometryHelper::getTop()
++{
++    double nResult = 0;
++
++    try
++    {
++        sal_Int32 nTop = 0;
++        mxModel->getPropertyValue( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( VBA_TOP ) ) ) >>= nTop;
++        nResult = ConvertLogicToPixel( nTop,
++                                       sal_True, // Point
++                                       sal_False, // Y
++                                       util::MeasureUnit::APPFONT );
++    }
++    catch ( uno::RuntimeException& )
++    {
++        throw;
++    }
++    catch ( uno::Exception& e )
++    {
++        throw lang::WrappedTargetException( ::rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( "Can not get position Y!" ) ),
++                uno::Reference< uno::XInterface >(),
++                uno::makeAny( e ) ); 
++    }
++
++    return nResult;
++}
++
++//---------------------------------------------
++void UserFormGeometryHelper::setTop( double nTop )
++{
++    try
++    {
++        mxModel->setPropertyValue(
++                rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( VBA_TOP ) ),
++                uno::makeAny( ConvertPixelToLogic( nTop,
++                                                   sal_True, // Point
++                                                   sal_False, // Y
++                                                   util::MeasureUnit::APPFONT ) ) );
++    }
++    catch ( uno::RuntimeException& )
++    {
++        throw;
++    }
++    catch ( uno::Exception& e )
++    {
++        throw lang::WrappedTargetException( ::rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( "Can not set position X!" ) ),
++                uno::Reference< uno::XInterface >(),
++                uno::makeAny( e ) ); 
++    }
++}
++
++//---------------------------------------------
++double UserFormGeometryHelper::getWidth()
++{
++    double nResult = 0;
++
++    try
++    {
++        sal_Int32 nWidth = 0;
++        mxModel->getPropertyValue( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( VBA_WIDTH ) ) ) >>= nWidth;
++        nResult = ConvertLogicToPixel( nWidth,
++                                       sal_False, // Size
++                                       sal_True, // X
++                                       util::MeasureUnit::APPFONT );
++    }
++    catch ( uno::RuntimeException& )
++    {
++        throw;
++    }
++    catch ( uno::Exception& e )
++    {
++        throw lang::WrappedTargetException( ::rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( "Can not get width!" ) ),
++                uno::Reference< uno::XInterface >(),
++                uno::makeAny( e ) ); 
++    }
++
++    return nResult;
++}
++
++//---------------------------------------------
++void UserFormGeometryHelper::setWidth( double nWidth)
++{
++    try
++    {
++        mxModel->setPropertyValue(
++                rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( VBA_WIDTH ) ),
++                uno::makeAny( ConvertPixelToLogic( nWidth,
++                                                   sal_False, // Size
++                                                   sal_True, // X
++                                                   util::MeasureUnit::APPFONT ) ) );
+     }
++    catch ( uno::RuntimeException& )
++    {
++        throw;
++    }
++    catch ( uno::Exception& e )
++    {
++        throw lang::WrappedTargetException( ::rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( "Can not set width!" ) ),
++                uno::Reference< uno::XInterface >(),
++                uno::makeAny( e ) ); 
++    }
++}
++
++//---------------------------------------------
++double UserFormGeometryHelper::getHeight()
++{
++    double nResult = 0;
++
++    try
++    {
++        sal_Int32 nHeight = 0;
++        mxModel->getPropertyValue( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( VBA_HEIGHT ) ) ) >>= nHeight;
++        nResult = ConvertLogicToPixel( nHeight,
++                                       sal_False, // Size
++                                       sal_False, // Y
++                                       util::MeasureUnit::APPFONT );
++    }
++    catch ( uno::RuntimeException& )
++    {
++        throw;
++    }
++    catch ( uno::Exception& e )
++    {
++        throw lang::WrappedTargetException( ::rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( "Can not get height!" ) ),
++                uno::Reference< uno::XInterface >(),
++                uno::makeAny( e ) ); 
++    }
++
++    return nResult;
++}
++
++//---------------------------------------------
++
++void UserFormGeometryHelper::setHeight( double nHeight )
++{
++    try
++    {
++        mxModel->setPropertyValue(
++                rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( VBA_HEIGHT ) ),
++                uno::makeAny( ConvertPixelToLogic( nHeight,
++                                                   sal_False, // Size
++                                                   sal_False, // Y
++                                                   util::MeasureUnit::APPFONT ) ) );
++    }
++    catch ( uno::RuntimeException& )
++    {
++        throw;
++    }
++    catch ( uno::Exception& e )
++    {
++        throw lang::WrappedTargetException( ::rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( "Can not set height!" ) ),
++                uno::Reference< uno::XInterface >(),
++                uno::makeAny( e ) ); 
++    }
++}
+ 
+     double ConcreteXShapeGeometryAttributes::getLeft()
+     {
