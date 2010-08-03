@@ -1,0 +1,244 @@
+diff --git sc/inc/pivot.hxx sc/inc/pivot.hxx
+index 09a88b4..72f8e4e 100644
+--- sc/inc/pivot.hxx
++++ sc/inc/pivot.hxx
+@@ -133,6 +133,16 @@ typedef PivotField          PivotPageFieldArr[PIVOT_MAXPAGEFIELD];
+ 
+ //------------------------------------------------------------------------
+ 
++struct ScDPName
++{
++    ::rtl::OUString     maName;         /// Original name of the dimension.
++    ::rtl::OUString     maLayoutName;   /// Layout name (display name)
++
++    explicit ScDPName(const ::rtl::OUString& rName, const ::rtl::OUString& rLayoutName);
++};
++
++// ============================================================================
++
+ struct ScDPLabelData
+ {
+     ::rtl::OUString     maName;         /// Original name of the dimension.
+@@ -190,7 +200,7 @@ struct ScDPFuncData
+ // ============================================================================
+ 
+ typedef std::vector< ScDPLabelData > ScDPLabelDataVec;
+-typedef std::vector< String > ScDPNameVec;
++typedef std::vector<ScDPName> ScDPNameVec;
+ 
+ // ============================================================================
+ 
+diff --git sc/source/core/data/pivot2.cxx sc/source/core/data/pivot2.cxx
+index eea170b..e2bfbe8 100644
+--- sc/source/core/data/pivot2.cxx
++++ sc/source/core/data/pivot2.cxx
+@@ -63,6 +63,11 @@ using ::rtl::OUString;
+ // STATIC DATA -----------------------------------------------------------
+ // ============================================================================
+ 
++ScDPName::ScDPName(const OUString& rName, const OUString& rLayoutName) :
++    maName(rName), maLayoutName(rLayoutName) {}
++
++// ============================================================================
++
+ ScDPLabelData::Member::Member() :
+     mbVisible(true),
+     mbShowDetails(true)
+diff --git sc/source/ui/dbgui/pvfundlg.cxx sc/source/ui/dbgui/pvfundlg.cxx
+index bcaa5de..f697842 100644
+--- sc/source/ui/dbgui/pvfundlg.cxx
++++ sc/source/ui/dbgui/pvfundlg.cxx
+@@ -545,7 +545,7 @@ void ScDPSubtotalOptDlg::FillLabelData( ScDPLabelData& rLabelData ) const
+     else
+         rLabelData.maSortInfo.Mode = DataPilotFieldSortMode::DATA;
+ 
+-    rLabelData.maSortInfo.Field = maLbSortBy.GetSelectEntry();
++    rLabelData.maSortInfo.Field = GetFieldName(maLbSortBy.GetSelectEntry());
+     rLabelData.maSortInfo.IsAscending = maRbSortAsc.IsChecked();
+ 
+     // *** LAYOUT MODE ***
+@@ -558,7 +558,7 @@ void ScDPSubtotalOptDlg::FillLabelData( ScDPLabelData& rLabelData ) const
+     rLabelData.maShowInfo.IsEnabled = maCbShow.IsChecked();
+     rLabelData.maShowInfo.ShowItemsMode = maLbShowFromWrp.GetControlValue();
+     rLabelData.maShowInfo.ItemCount = sal::static_int_cast<sal_Int32>( maNfShow.GetValue() );
+-    rLabelData.maShowInfo.DataField = maLbShowUsing.GetSelectEntry();
++    rLabelData.maShowInfo.DataField = GetFieldName(maLbShowUsing.GetSelectEntry());
+ 
+     // *** HIDDEN ITEMS ***
+ 
+@@ -583,9 +583,13 @@ void ScDPSubtotalOptDlg::Init( const ScDPNameVec& rDataFields, bool bEnableLayou
+ 
+     for( ScDPNameVec::const_iterator aIt = rDataFields.begin(), aEnd = rDataFields.end(); aIt != aEnd; ++aIt )
+     {
+-        maLbSortBy.InsertEntry( *aIt );
+-        maLbShowUsing.InsertEntry( *aIt );  // for AutoShow
++        // Cache names for later lookup.
++        maDataFieldNameMap.insert(NameMapType::value_type(aIt->maLayoutName, aIt->maName));
++
++        maLbSortBy.InsertEntry( aIt->maLayoutName );
++        maLbShowUsing.InsertEntry( aIt->maLayoutName );  // for AutoShow
+     }
++
+     if( maLbSortBy.GetEntryCount() > SC_SORTDATA_POS )
+         maLbSortBy.SetSeparatorPos( SC_SORTDATA_POS - 1 );
+ 
+@@ -681,6 +685,12 @@ void ScDPSubtotalOptDlg::InitHideListBox()
+     maLbHide.Enable( bEnable );
+ }
+ 
++const OUString& ScDPSubtotalOptDlg::GetFieldName(const OUString& rLayoutName) const
++{
++    NameMapType::const_iterator itr = maDataFieldNameMap.find(rLayoutName);
++    return itr == maDataFieldNameMap.end() ? rLayoutName : itr->second;
++}
++
+ IMPL_LINK( ScDPSubtotalOptDlg, RadioClickHdl, RadioButton*, pBtn )
+ {
+     maLbSortBy.Enable( pBtn != &maRbSortMan );
+diff --git sc/source/ui/dbgui/pvlaydlg.cxx sc/source/ui/dbgui/pvlaydlg.cxx
+index 1b2c41e..81eac1b 100644
+--- sc/source/ui/dbgui/pvlaydlg.cxx
++++ sc/source/ui/dbgui/pvlaydlg.cxx
+@@ -469,10 +469,14 @@ void ScDPLayoutDlg::InitWnd( PivotField* pArr, long nCount, ScDPFieldType eType
+                         DBG_ASSERT( pData, "ScDPLabelData not found" );
+                         if (pData)
+                         {
+-                            String aStr( GetFuncString( (*pInitArr)[j]->mnFuncMask,
+-                                                         pData->mbIsValue ) );
++                            OUString aStr = pData->maLayoutName;
++                            if (!aStr.getLength())
++                            {
++                                USHORT nInitMask = (*pInitArr)[j]->mnFuncMask;
++                                aStr = GetFuncString(nInitMask, pData->mbIsValue);
++                                aStr += pData->maName;
++                            }
+ 
+-                            aStr += GetLabelString( nCol );
+                             pInitWnd->AddField( aStr, j );
+ 
+                             pData->mnFuncMask = nMask;
+@@ -615,10 +619,14 @@ void ScDPLayoutDlg::AddField( size_t nFromIndex, ScDPFieldType eToType, const Po
+         }
+         else
+         {
++            ScDPLabelData* p = GetLabelData(fData.mnCol);
++            OUString aStr = p->maLayoutName;
+             USHORT nMask = fData.mnFuncMask;
+-            OUString aStr = GetFuncString( nMask, rData.mbIsValue );
+-            
+-            aStr += rData.getDisplayName();
++            if (!aStr.getLength())
++            {
++                aStr = GetFuncString(nMask);
++                aStr += p->maName;
++            }
+ 
+             if ( toWnd->AddField( aStr,
+                                   DlgPos2WndPos( rAtPos, *toWnd ),
+@@ -765,10 +773,14 @@ void ScDPLayoutDlg::MoveField( ScDPFieldType eFromType, size_t nFromIndex, ScDPF
+                     }
+                     else
+                     {
+-                        String aStr;
++                        ScDPLabelData* p = GetLabelData(fData.mnCol);
++                        OUString aStr = p->maLayoutName;
+                         USHORT nMask = fData.mnFuncMask;
+-                        aStr  = GetFuncString( nMask );
+-                        aStr += GetLabelString( fData.mnCol );
++                        if (!aStr.getLength())
++                        {
++                            aStr = GetFuncString(nMask);
++                            aStr += p->maName;
++                        }
+ 
+                         if ( toWnd->AddField( aStr,
+                                               DlgPos2WndPos( rAtPos, *toWnd ),
+@@ -846,10 +858,14 @@ void ScDPLayoutDlg::MoveField( ScDPFieldType eFromType, size_t nFromIndex, ScDPF
+                 }
+                 else
+                 {
+-                    String aStr;
++                    ScDPLabelData* p = GetLabelData(fData.mnCol);
++                    OUString aStr = p->maLayoutName;
+                     USHORT nMask = fData.mnFuncMask;
+-                    aStr  = GetFuncString( nMask );
+-                    aStr += GetLabelString( fData.mnCol );
++                    if (!aStr.getLength())
++                    {
++                        aStr = GetFuncString(nMask);
++                        aStr += p->maName;
++                    }
+ 
+                     if ( theWnd->AddField( aStr,
+                                            DlgPos2WndPos( rAtPos, *theWnd ),
+@@ -1017,13 +1033,26 @@ void ScDPLayoutDlg::NotifyDoubleClick( ScDPFieldType eType, size_t nFieldIndex )
+                 case TYPE_ROW:
+                 {
+                     // list of names of all data fields
+-                    std::vector< String > aDataFieldNames;
++                    vector<ScDPName> aDataFieldNames;
+                     for( ScDPFuncDataVec::const_iterator aIt = aDataArr.begin(), aEnd = aDataArr.end();
+                             (aIt != aEnd) && aIt->get(); ++aIt )
+                     {
+-                        String aName( GetLabelString( (*aIt)->mnCol ) );
+-                        if( aName.Len() )
+-                            aDataFieldNames.push_back( aName );
++                        ScDPLabelData* pDFData = GetLabelData((*aIt)->mnCol);
++                        if (!pDFData)
++                            continue;
++
++                        if (!pDFData->maName.getLength())
++                            continue;
++
++                        OUString aLayoutName = pDFData->maLayoutName;
++                        if (!aLayoutName.getLength())
++                        {
++                            // No layout name exists.  Use the stock name.
++                            USHORT nMask = (*aIt)->mnFuncMask;
++                            OUString aFuncStr = GetFuncString(nMask);
++                            aLayoutName = aFuncStr + pDFData->maName;
++                        }
++                        aDataFieldNames.push_back(ScDPName(pDFData->maName, aLayoutName));
+                     }
+ 
+                     bool bLayout = (eType == TYPE_ROW) &&
+@@ -1053,8 +1082,14 @@ void ScDPLayoutDlg::NotifyDoubleClick( ScDPFieldType eType, size_t nFieldIndex )
+                         (*pArr)[nFieldIndex]->mnFuncMask = pData->mnFuncMask = pDlg->GetFuncMask();
+                         (*pArr)[nFieldIndex]->maFieldRef = pDlg->GetFieldRef();
+ 
+-                        String aStr( GetFuncString ( aDataArr[nFieldIndex]->mnFuncMask ) );
+-                        aStr += GetLabelString( aDataArr[nFieldIndex]->mnCol );
++                        ScDPLabelData* p = GetLabelData(aDataArr[nFieldIndex]->mnCol);
++                        OUString aStr = p->maLayoutName;
++                        if (!aStr.getLength())
++                        {
++                            // Layout name is not available.  Use default name.
++                            aStr = GetFuncString (aDataArr[nFieldIndex]->mnFuncMask);
++                            aStr += p->maName;
++                        }
+                         aWndData.SetFieldText( aStr, nFieldIndex );
+                     }
+                     delete pDlg;
+diff --git sc/source/ui/inc/pvfundlg.hxx sc/source/ui/inc/pvfundlg.hxx
+index 4f219d8..9b9ef3e 100644
+--- sc/source/ui/inc/pvfundlg.hxx
++++ sc/source/ui/inc/pvfundlg.hxx
+@@ -170,6 +170,8 @@ private:
+     void                Init( const ScDPNameVec& rDataFields, bool bEnableLayout );
+     void                InitHideListBox();
+ 
++    const ::rtl::OUString& GetFieldName(const ::rtl::OUString& rLayoutName) const;
++
+     DECL_LINK( RadioClickHdl, RadioButton* );
+     DECL_LINK( CheckHdl, CheckBox* );
+     DECL_LINK( SelectHdl, ListBox* );
+@@ -205,6 +207,9 @@ private:
+ 
+     ScDPObject&         mrDPObj;            /// The DataPilot object (for member names).
+     ScDPLabelData       maLabelData;        /// Cache for members data.
++
++    typedef ::std::hash_map< ::rtl::OUString, ::rtl::OUString, ::rtl::OUStringHash > NameMapType;
++    NameMapType maDataFieldNameMap; /// Cache for displayed name to field name mapping.
+ };
+ 
+ // ============================================================================
