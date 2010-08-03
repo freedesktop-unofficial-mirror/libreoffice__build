@@ -14747,7 +14747,7 @@ index 5055149..f3556a6 100644
  void XclExpNote::WriteBody( XclExpStream& rStrm )
  {
      // BIFF5/BIFF7 is written separately
-@@ -1097,6 +1099,70 @@ void XclExpNote::WriteXml( sal_Int32 nAuthorId, XclExpXmlStream& rStrm )
+@@ -1097,6 +1099,72 @@ void XclExpNote::WriteXml( sal_Int32 nAuthorId, XclExpXmlStream& rStrm )
  
  // ============================================================================
  
@@ -14799,7 +14799,9 @@ index 5055149..f3556a6 100644
 +    {
 +        ScMacroInfo* pInfo = ScDrawLayer::GetMacroInfo( pSdrObj );
 +        if ( pInfo && pInfo->GetMacro().getLength() )
-+            SetMacroLink( XclControlHelper::GetXclMacroName( pInfo->GetMacro(), rRoot.GetDocShell() ) ); 
++// FIXME ooo330-m2: XclControlHelper::GetXclMacroName was removed in upstream sources; they started to call XclTools::GetXclMacroName instead; is this enough? it has only one parameter
++//            SetMacroLink( XclControlHelper::GetXclMacroName( pInfo->GetMacro(), rRoot.GetDocShell() ) ); 
++            SetMacroLink( XclTools::GetXclMacroName( pInfo->GetMacro() ) );
 +    }
 +}
 +
@@ -15204,6 +15206,96 @@ index b1ce3a0..fdd537a 100644
  }
  
  // FONT record - font information =============================================
+diff --git sc/source/filter/excel/xlescher.cxx sc/source/filter/excel/xlescher.cxx
+index 0b808d3..fab4df4 100644
+--- sc/source/filter/excel/xlescher.cxx
++++ sc/source/filter/excel/xlescher.cxx
+# FIXME ooo330-m2: XclControlHelper::GetXclMacroName has been removed upstream; not sure how to port it
+#        => keep only the change for XclControlHelper::ExtractFromMacroDescriptor
+#@@ -35,6 +35,13 @@
+# #include "document.hxx"
+# #include "xistream.hxx"
+# #include "xlescher.hxx"
+#+#include "globstr.hrc"
+#+
+#+#include <sfx2/objsh.hxx>
+#+#include <basic/sbstar.hxx>
+#+#include <basic/sbmod.hxx>
+#+#include <basic/sbmeth.hxx>
+#+#include <basic/basmgr.hxx>
+# #include <filter/msfilter/msvbahelper.hxx>
+# 
+# using ::rtl::OUString;
+#@@ -325,6 +332,7 @@ Reference< XControlModel > XclControlHelper::GetControlModel( Reference< XShape
+#     return xCtrlModel;
+# }
+# 
+#+#define EXC_MACRONAME_URI "vnd.sun.star.script:"
+# #define EXC_MACRONAME_PRE "vnd.sun.star.script:Standard."
+# #define EXC_MACRONAME_SUF "?language=Basic&location=document"
+# 
+#@@ -341,7 +349,7 @@ OUString XclControlHelper::GetScMacroName( const String& rXclMacroName, SfxObjec
+#     return OUString();
+# }
+# 
+#-String XclControlHelper::GetXclMacroName( const OUString& rScMacroName )
+#+String XclControlHelper::GetXclMacroName( const OUString& rScMacroName, SfxObjectShell* pDocShell )
+# {
+#     const OUString saMacroNamePre = CREATE_OUSTRING( EXC_MACRONAME_PRE );
+#     const OUString saMacroNameSuf = CREATE_OUSTRING( EXC_MACRONAME_SUF );
+#@@ -350,6 +358,26 @@ String XclControlHelper::GetXclMacroName( const OUString& rScMacroName )
+#     if( (snXclMacroNameLen > 0) && rScMacroName.matchIgnoreAsciiCase( saMacroNamePre, 0 ) &&
+#             rScMacroName.matchIgnoreAsciiCase( saMacroNameSuf, snScMacroNameLen - saMacroNameSuf.getLength() ) )
+#         return rScMacroName.copy( saMacroNamePre.getLength(), snXclMacroNameLen );
+#+
+#+    // This Macro prefix name may not be "vnd.sun.star.script:Standard.", it may be any string that beginning with "vnd.sun.star.script:",
+#+    // because Excel can change the VBA project name, such as the default name is "VBAProject", we can change it to "HelloVBA". We must
+#+    // use library's name of current document to match with the macro name.
+#+    if ( pDocShell )
+#+    {
+#+        BasicManager* pBasicManager = pDocShell->GetBasicManager();
+#+        if ( pBasicManager )
+#+        {
+#+            const OUString sProjectName = pBasicManager->GetName();
+#+            const OUString saMacroNamePre1 = CREATE_OUSTRING(EXC_MACRONAME_URI) + sProjectName + CREATE_OUSTRING(".");
+#+            sal_Int32 snXclMacroNameLen1 = snScMacroNameLen - saMacroNamePre1.getLength() - saMacroNameSuf.getLength();
+#+            if ( (snXclMacroNameLen1 > 0) && rScMacroName.matchIgnoreAsciiCase( saMacroNamePre1, 0 ) &&
+#+                rScMacroName.matchIgnoreAsciiCase( saMacroNameSuf, snScMacroNameLen - saMacroNameSuf.getLength() ) )
+#+            {
+#+                return rScMacroName.copy( saMacroNamePre1.getLength(), snXclMacroNameLen1 );
+#+            }
+#+        }
+#+    }
+#+
+#     return String::EmptyString();
+# }
+# 
+#@@ -385,13 +413,13 @@ bool XclControlHelper::FillMacroDescriptor( ScriptEventDescriptor& rDescriptor,
+# }
+# 
+# String XclControlHelper::ExtractFromMacroDescriptor(
+#-        const ScriptEventDescriptor& rDescriptor, XclTbxEventType eEventType )
+#+        const ScriptEventDescriptor& rDescriptor, XclTbxEventType eEventType, SfxObjectShell* pShell )
+# {
+#     if( (rDescriptor.ScriptCode.getLength() > 0) &&
+#             rDescriptor.ScriptType.equalsIgnoreAsciiCaseAscii( EXC_MACROSCRIPT ) &&
+#             rDescriptor.ListenerType.equalsAscii( spTbxListenerData[ eEventType ].mpcListenerType ) &&
+#             rDescriptor.EventMethod.equalsAscii( spTbxListenerData[ eEventType ].mpcEventMethod ) )
+#-        return GetXclMacroName( rDescriptor.ScriptCode );
+#+        return GetXclMacroName( rDescriptor.ScriptCode, pShell );
+#     return String::EmptyString();
+# }
+# 
+# FIXME ooo330-m2: this hunk is copy of the above hunk; it does the change only for XclControlHelper::ExtractFromMacroDescriptor
+@@ -385,7 +413,7 @@ bool XclControlHelper::FillMacroDescriptor( ScriptEventDescriptor& rDescriptor,
+ }
+ 
+ String XclControlHelper::ExtractFromMacroDescriptor(
+-        const ScriptEventDescriptor& rDescriptor, XclTbxEventType eEventType )
++        const ScriptEventDescriptor& rDescriptor, XclTbxEventType eEventType, SfxObjectShell* pShell )
+ {
+     if( (rDescriptor.ScriptCode.getLength() > 0) &&
+             rDescriptor.ScriptType.equalsIgnoreAsciiCaseAscii( "Script" ) &&
 diff --git sc/source/filter/excel/xltoolbar.cxx sc/source/filter/excel/xltoolbar.cxx
 new file mode 100644
 index 0000000..019a146
@@ -16012,6 +16104,33 @@ index 1d3047e..ba3448f 100644
  };
  
  // FONT record - font information =============================================
+diff --git sc/source/filter/inc/xlescher.hxx sc/source/filter/inc/xlescher.hxx
+index 6af4205..847a5fa 100644
+--- sc/source/filter/inc/xlescher.hxx
++++ sc/source/filter/inc/xlescher.hxx
+# FIXME ooo330-m2: the related code in sc/source/filter/excel/xlescher.cxx has been heavily changed by upstream
+#                  => the related hunks for xlescher.cxx were removed from this diff at all
+#                  the original version can be found in cws-vbasupportdev300_m83.diff
+#@@ -433,8 +433,9 @@ public:
+# 
+#     /** Returns the Calc macro name from an Excel macro name. */
+#     static ::rtl::OUString GetScMacroName( const String& rXclMacroName, SfxObjectShell* pShell = NULL );
+#+
+#     /** Returns the Excel macro name from a Calc macro name. */
+#-    static String       GetXclMacroName( const ::rtl::OUString& rScMacroName );
+#+    static String       GetXclMacroName( const ::rtl::OUString& rScMacroName, SfxObjectShell* pShell = NULL );
+# 
+#     /** Fills the macro descriptor according to the passed macro name. */
+#     static bool         FillMacroDescriptor(
+@@ -444,7 +445,7 @@ public:
+     /** Tries to extract an Excel macro name from the passed macro descriptor. */
+     static String       ExtractFromMacroDescriptor(
+                             const ::com::sun::star::script::ScriptEventDescriptor& rDescriptor,
+-                            XclTbxEventType eEventType );
++                            XclTbxEventType eEventType, SfxObjectShell* pShell = NULL );
+ };
+ 
+ // ============================================================================
 diff --git sc/source/filter/xcl97/xcl97esc.cxx sc/source/filter/xcl97/xcl97esc.cxx
 index b7e5de8..58ef6ad 100644
 --- sc/source/filter/xcl97/xcl97esc.cxx
