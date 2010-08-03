@@ -3177,17 +3177,6 @@ index c9baf95..55f88fd 100644
  //#i64882#
  { "WaitUntil",          SbxNULL,      1 | _FUNCTION, RTLNAME(WaitUntil),0      },
    { "Date", SbxDOUBLE, 0,NULL,0 },
-@@ -628,6 +742,10 @@ SbiStdObject::SbiStdObject( const String& r, StarBASIC* pb ) : SbxObject( r )
-         p += ( p->nArgs & _ARGSMASK ) + 1;
-     }
- 
-+	// #i92642: Remove default properties
-+	Remove( XubString( RTL_CONSTASCII_USTRINGPARAM("Name") ), SbxCLASS_DONTCARE );
-+	Remove( XubString( RTL_CONSTASCII_USTRINGPARAM("Parent") ), SbxCLASS_DONTCARE );
-+
-     SetParent( pb );
- 
-     pStdFactory = new SbStdFactory;
 @@ -675,13 +793,15 @@ SbxVariable* SbiStdObject::Find( const String& rName, SbxClassType t )
               && ( p->nHash == nHash_ )
               && ( rName.EqualsIgnoreCaseAscii( p->pName ) ) )
@@ -7356,8 +7345,8 @@ index d1d40dc..ddd3528 100644
                      pFoundShell = pShell; 
                      break;
 @@ -204,9 +222,19 @@ VBAMacroResolvedInfo resolveVBAMacro( SfxObjectShell* pShell, const rtl::OUStrin
-         String sDocUrlOrPath = MacroName.copy( 0, nDocSepIndex );
-         sMacroUrl = MacroName.copy( nDocSepIndex + 1 );
+         String sDocUrlOrPath = sMacroUrl.copy( 0, nDocSepIndex );
+         sMacroUrl = sMacroUrl.copy( nDocSepIndex + 1 );
          OSL_TRACE("doc search, current shell is 0x%x", pShell );
 -        SfxObjectShell* pFoundShell = findShellForUrl( sDocUrlOrPath );
 +        SfxObjectShell* pFoundShell = NULL;
@@ -10056,8 +10045,8 @@ index cae978d..1ab317d 100644
 --- oovbaapi/ooo/vba/excel/XApplication.idl
 +++ oovbaapi/ooo/vba/excel/XApplication.idl
 @@ -39,6 +39,14 @@
+ #include <ooo/vba/XHelperInterface.idl>
  #include <ooo/vba/XAssistant.idl>
- #endif
  
 +#ifndef __ooo_vba_excel_XFileDialog_idl__
 +#include <ooo/vba/XFileDialog.idl>
@@ -10077,7 +10066,7 @@ index cae978d..1ab317d 100644
 +interface XFileDialog;
 +interface XFileSearch;
  
- interface XApplication : com::sun::star::uno::XInterface
+ interface XApplication
  {
 @@ -60,19 +70,27 @@ interface XApplication : com::sun::star::uno::XInterface
      [attribute, readonly] XWindow ActiveWindow;
@@ -13579,8 +13568,8 @@ index fa4f08d..dcfe46c 100644
 --- sc/inc/viewuno.hxx
 +++ sc/inc/viewuno.hxx
 @@ -196,6 +196,7 @@ private:
-     XMouseClickHandlerArr_Impl              aMouseClickHandlers;
      XActivationEventListenerArr_Impl        aActivationListeners;
+     SCTAB                                   nPreviousTab;
      sal_Bool								bDrawSelModeSet;
 +    sal_Bool                                bFilteredRangeSelection;
  
@@ -19506,7 +19495,7 @@ index 228ca64..3a4907b 100644
  uno::Any SAL_CALL
 @@ -631,6 +785,105 @@ ScVbaApplication::getDisplayAlerts() throw (uno::RuntimeException)
  {
-     return sal_True;
+     return m_xDisplayAlerts;
  }
 +
 +//VBA by minz@cn.ibm.com. Add Application.EnableEvents.
@@ -25578,7 +25567,7 @@ index fd136e6..d9cc4ea 100644
          {
              uno::Reference< sheet::XNamedRange > xNamed( xNameAccess->getByName( sAddress ), uno::UNO_QUERY_THROW );
 @@ -1163,6 +1164,28 @@ ScVbaRange::getRangeObjectForName( const uno::Reference< uno::XComponentContext
-     return getRangeForName( xContext, sRangeName, pDocSh, refAddr, eConv );
+     return getRangeForName( xParent, xContext, sRangeName, pDocSh, refAddr, eConv );
  }
  
 +table::CellAddress ScVbaRange::getLeftUpperCellAddress()
@@ -25938,24 +25927,25 @@ index fd136e6..d9cc4ea 100644
  }
  
  uno::Reference< excel::XRange > SAL_CALL 
-@@ -2634,11 +2700,12 @@ ScVbaRange::AddComment( const uno::Any& Text ) throw (uno::RuntimeException)
- {
- 
-     uno::Reference< excel::XComment > xComment( new ScVbaComment( this, mxContext, mxRange ) );
--    // if you don't pass a valid text or if there is already a comment
--    // associated with the range then return NULL
--    if ( !xComment->Text( Text, uno::Any(), uno::Any() ).getLength() 
--    ||   xComment->Text( uno::Any(), uno::Any(), uno::Any() ).getLength() )
--        return NULL;
-+        // if there is existing text then error
-+	if ( Text.hasValue() && xComment->Text( uno::Any(), uno::Any(), uno::Any() ).getLength() )
-+            throw uno::RuntimeException(); 
-+        // failed to write text? ( can this happen ?? )
-+	if ( !xComment->Text( Text, uno::Any(), uno::Any() ).getLength()  )
-+		return NULL;	
-     return xComment;
- }
- 
+# FIXME ooo330-m2: upstream created more complex implementation; it seems to have similar meaning; at least the check for existing text, ...
+#@@ -2634,11 +2700,12 @@ ScVbaRange::AddComment( const uno::Any& Text ) throw (uno::RuntimeException)
+# {
+# 
+#     uno::Reference< excel::XComment > xComment( new ScVbaComment( this, mxContext, mxRange ) );
+#-    // if you don't pass a valid text or if there is already a comment
+#-    // associated with the range then return NULL
+#-    if ( !xComment->Text( Text, uno::Any(), uno::Any() ).getLength() 
+#-    ||   xComment->Text( uno::Any(), uno::Any(), uno::Any() ).getLength() )
+#-        return NULL;
+#+        // if there is existing text then error
+#+	if ( Text.hasValue() && xComment->Text( uno::Any(), uno::Any(), uno::Any() ).getLength() )
+#+            throw uno::RuntimeException(); 
+#+        // failed to write text? ( can this happen ?? )
+#+	if ( !xComment->Text( Text, uno::Any(), uno::Any() ).getLength()  )
+#+		return NULL;	
+#     return xComment;
+# }
+# 
 @@ -2796,7 +2863,16 @@ ScVbaRange::Replace( const ::rtl::OUString& What, const ::rtl::OUString& Replace
          // OOo.org afaik
  
@@ -26514,7 +26504,7 @@ index fd136e6..d9cc4ea 100644
 +    }
  }
  
- css::uno::Reference< excel::XValidation > SAL_CALL 
+ uno::Any SAL_CALL
 @@ -4599,7 +4761,7 @@ uno::Any ScVbaRange::getShowDetail() throw ( css::uno::RuntimeException)
          (thisAddress.StartColumn == thisAddress.EndColumn && thisAddress.EndColumn == aOutlineAddress.EndColumn ))
      {
@@ -26689,7 +26679,7 @@ index fd136e6..d9cc4ea 100644
  {
 @@ -4703,7 +4995,7 @@ ScVbaRange::PrintOut( const uno::Any& From, const uno::Any& To, const uno::Any&
          {
-             ScVbaRange* pRange = dynamic_cast< ScVbaRange* >( xRange.get() ); 
+             ScVbaRange* pRange = getImplementation( xRange );
              // initialise the doc shell and the printareas
 -            pShell = getDocShellFromRange( pRange->mxRange );
 +			pShell = excel::GetDocShellFromRange( pRange->mxRange );
@@ -27010,18 +27000,16 @@ index b405589..2916b1d 100644
      double getCalcColWidth( const css::table::CellRangeAddress& ) throw (css::uno::RuntimeException);
      double getCalcRowHeight( const css::table::CellRangeAddress& ) throw (css::uno::RuntimeException);
      void visitArray( ArrayVisitor& vistor );
-@@ -133,7 +137,8 @@ public:
-     virtual ~ScVbaRange();
-      virtual css::uno::Reference< ov::XHelperInterface > thisHelperIface() { return this; }
-     bool isSingleCellRange(); 
--        static css::uno::Reference< ov::excel::XRange > getRangeObjectForName( const css::uno::Reference< css::uno::XComponentContext >& xContext, const rtl::OUString& sRangeName, ScDocShell* pDocSh, formula::FormulaGrammar::AddressConvention eConv = formula::FormulaGrammar::CONV_XL_A1  ) throw ( css::uno::RuntimeException );
-+	static css::uno::Reference< ov::excel::XRange > getRangeObjectForName( const css::uno::Reference< css::uno::XComponentContext >& xContext, const rtl::OUString& sRangeName, ScDocShell* pDocSh, formula::FormulaGrammar::AddressConvention eConv = formula::FormulaGrammar::CONV_XL_A1  ) throw ( css::uno::RuntimeException );
+@@ -133,6 +137,7 @@ public:
+         const css::uno::Reference< css::uno::XComponentContext >& xContext,
+         const rtl::OUString& sRangeName, ScDocShell* pDocSh,
+         formula::FormulaGrammar::AddressConvention eConv = formula::FormulaGrammar::CONV_XL_A1  ) throw ( css::uno::RuntimeException );
 +	css::table::CellAddress getLeftUpperCellAddress();
  
      // Attributes
      virtual css::uno::Any SAL_CALL getValue() throw (css::uno::RuntimeException);
 @@ -175,6 +180,7 @@ public:
-     virtual css::uno::Reference< ov::excel::XValidation > SAL_CALL getValidation() throw (css::uno::RuntimeException);
+     virtual css::uno::Any SAL_CALL getPrefixCharacter() throw (css::uno::RuntimeException);
      virtual css::uno::Any SAL_CALL getShowDetail() throw (css::uno::RuntimeException);
      virtual void SAL_CALL setShowDetail(const css::uno::Any& aShowDetail) throw (css::uno::RuntimeException);	
 +	virtual ::com::sun::star::uno::Reference< ::ooo::vba::excel::XQueryTable > SAL_CALL getQueryTable() throw (::com::sun::star::uno::RuntimeException); //09-09-16 add by limingl
@@ -27038,7 +27026,7 @@ index b405589..2916b1d 100644
 +                const css::uno::Any& ConsecutiveDelimiter, const css::uno::Any& Tab, const css::uno::Any& Semicolon, const css::uno::Any& Comma, 
                  const css::uno::Any& Space, const css::uno::Any& Other, const css::uno::Any& OtherChar, const css::uno::Any& FieldInfo,
                  const css::uno::Any& DecimalSeparator, const css::uno::Any& ThousandsSeparator, const css::uno::Any& TrailingMinusNumbers ) throw (css::uno::RuntimeException);
- 
+     virtual css::uno::Any SAL_CALL Hyperlinks( const css::uno::Any& aIndex ) throw (css::uno::RuntimeException);
 @@ -248,6 +254,11 @@ public:
      virtual void SAL_CALL RemoveSubtotal(  ) throw (css::script::BasicErrorException, css::uno::RuntimeException);
      virtual css::uno::Reference< ov::excel::XRange > SAL_CALL MergeArea() throw (css::script::BasicErrorException, css::uno::RuntimeException);
@@ -27098,19 +27086,20 @@ index f76794e..e585343 100644
      if ( sFormula1.getLength() )
          xCond->setFormula1( sFormula1 );
      if ( sFormula2.getLength() )
-diff --git sc/source/ui/vba/vbawindow.cxx sc/source/ui/vba/vbawindow.cxx
-index 1450d25..3a180a4 100644
---- sc/source/ui/vba/vbawindow.cxx
-+++ sc/source/ui/vba/vbawindow.cxx
-@@ -56,7 +56,7 @@ using namespace ::ooo::vba;
- using namespace ::ooo::vba::excel::XlWindowState;
- 
- // nameExists defined in vbaworksheet.cxx
--bool nameExists( uno::Reference <sheet::XSpreadsheetDocument>& xSpreadDoc, ::rtl::OUString & name, SCTAB& nTab ) throw ( lang::IllegalArgumentException );
-+bool nameExists( const uno::Reference <sheet::XSpreadsheetDocument>& xSpreadDoc, const ::rtl::OUString & name, SCTAB& nTab ) throw ( lang::IllegalArgumentException );
- 
- typedef  std::hash_map< rtl::OUString,
- SCTAB, ::rtl::OUStringHash,
+# FIXME ooo320-m2: this line was removed in upstream sources; they call it via ScVbaWorksheets::nameExists
+#diff --git sc/source/ui/vba/vbawindow.cxx sc/source/ui/vba/vbawindow.cxx
+#index 1450d25..3a180a4 100644
+#--- sc/source/ui/vba/vbawindow.cxx
+#+++ sc/source/ui/vba/vbawindow.cxx
+#@@ -56,7 +56,7 @@ using namespace ::ooo::vba;
+# using namespace ::ooo::vba::excel::XlWindowState;
+# 
+# // nameExists defined in vbaworksheet.cxx
+#-bool nameExists( uno::Reference <sheet::XSpreadsheetDocument>& xSpreadDoc, ::rtl::OUString & name, SCTAB& nTab ) throw ( lang::IllegalArgumentException );
+#+bool nameExists( const uno::Reference <sheet::XSpreadsheetDocument>& xSpreadDoc, const ::rtl::OUString & name, SCTAB& nTab ) throw ( lang::IllegalArgumentException );
+# 
+# typedef  std::hash_map< rtl::OUString,
+# SCTAB, ::rtl::OUStringHash,
 diff --git sc/source/ui/vba/vbaworkbook.cxx sc/source/ui/vba/vbaworkbook.cxx
 index e75ed8c..8ef3362 100644
 --- sc/source/ui/vba/vbaworkbook.cxx
@@ -27252,7 +27241,7 @@ index f89d682..acbef63 100644
 +
      // code name
      virtual ::rtl::OUString SAL_CALL getCodeName() throw ( css::uno::RuntimeException);
-     virtual void SAL_CALL setCodeName( const ::rtl::OUString& sGlobCodeName ) throw (css::uno::RuntimeException);
+ 
 @@ -76,6 +81,8 @@ public:
      // XHelperInterface
      virtual rtl::OUString& getServiceImplName();
@@ -27446,7 +27435,7 @@ index 2af3a04..8bc6dcf 100644
 +#include <ooo/vba/excel/XlSheetVisibility.hpp>
  
  #include <comphelper/processfactory.hxx>
- 
+ #include <vbahelper/vbashapes.hxx>
 @@ -74,7 +75,7 @@
  
  #include "cellsuno.hxx"
@@ -27457,22 +27446,23 @@ index 2af3a04..8bc6dcf 100644
  #include "vbaoutline.hxx"
  #include "vbarange.hxx"
 @@ -87,6 +88,7 @@
- #include <vbahelper/vbashapes.hxx>
- #include "vbapagesetup.hxx"
- #include "vbapagebreaks.hxx"
+ #include "vbaworksheets.hxx"
+ #include "vbahyperlinks.hxx"
+ #include "vbasheetobjects.hxx"
 +#include "viewuno.hxx" //liuchen 2009-9-2
  
  #define STANDARDWIDTH 2267
  #define STANDARDHEIGHT 427
-@@ -94,7 +96,7 @@
- using namespace com::sun::star;
- using namespace ooo::vba;
- bool
--nameExists( uno::Reference <sheet::XSpreadsheetDocument>& xSpreadDoc, ::rtl::OUString & name, SCTAB& nTab ) throw ( lang::IllegalArgumentException )
-+nameExists( const uno::Reference <sheet::XSpreadsheetDocument>& xSpreadDoc, const ::rtl::OUString & name, SCTAB& nTab ) throw ( lang::IllegalArgumentException )
- {
-     if (!xSpreadDoc.is())
-         throw lang::IllegalArgumentException( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( "nameExists() xSpreadDoc is null" ) ), uno::Reference< uno::XInterface  >(), 1 );
+# FIXME ooo320-m2: upstream removed this code at all; see also the change in sc/source/ui/vba/vbawindow.cxx
+#@@ -94,7 +96,7 @@
+# using namespace com::sun::star;
+# using namespace ooo::vba;
+# bool
+#-nameExists( uno::Reference <sheet::XSpreadsheetDocument>& xSpreadDoc, ::rtl::OUString & name, SCTAB& nTab ) throw ( lang::IllegalArgumentException )
+#+nameExists( const uno::Reference <sheet::XSpreadsheetDocument>& xSpreadDoc, const ::rtl::OUString & name, SCTAB& nTab ) throw ( lang::IllegalArgumentException )
+# {
+#     if (!xSpreadDoc.is())
+#         throw lang::IllegalArgumentException( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( "nameExists() xSpreadDoc is null" ) ), uno::Reference< uno::XInterface  >(), 1 );
 @@ -230,7 +232,7 @@ ScVbaWorksheet::setName(const ::rtl::OUString &rName ) throw (uno::RuntimeExcept
      xNamed->setName( rName );
  }
@@ -27571,7 +27561,7 @@ index 2af3a04..8bc6dcf 100644
  }
  
  void 
-@@ -486,20 +540,43 @@ ScVbaWorksheet::Copy( const uno::Any& Before, const uno::Any& After ) throw (uno
+@@ -486,18 +540,42 @@ ScVbaWorksheet::Copy( const uno::Any& Before, const uno::Any& After ) throw (uno
          return;
      }
  
@@ -27582,13 +27572,11 @@ index 2af3a04..8bc6dcf 100644
 +
      SCTAB nDest = 0;
 +    SCTAB nSrc = 0;
-     aSheetName = xSheet->getName();
--    bool bSheetExists = nameExists (xSpreadDoc, aSheetName, nDest );
- 
--    if ( bSheetExists )
+     rtl::OUString aSheetName = xSheet->getName();
+-    if ( ScVbaWorksheets::nameExists (xSpreadDoc, aSheetName, nDest ) )
 +    bool bSameDoc = ( pDestSheet->getModel() == getModel() );
-+    bool bDestSheetExists = nameExists (xDestDoc, aSheetName, nDest );
-+    bool bSheetExists = nameExists (xSrcDoc, aCurrSheetName, nSrc );
++    bool bDestSheetExists = ScVbaWorksheets::nameExists (xDestDoc, aSheetName, nDest );
++    bool bSheetExists = ScVbaWorksheets::nameExists (xSrcDoc, aCurrSheetName, nSrc );
 +
 +    // set sheet name to be newSheet name
 +    aSheetName = aCurrSheetName;
@@ -27658,24 +27646,26 @@ index 2af3a04..8bc6dcf 100644
          mxCharts = new ScVbaChartObjects(  this, mxContext, xTableCharts, xDrawPageSupplier );
      }
      if ( Index.hasValue() )
-@@ -882,7 +971,7 @@ ScVbaWorksheet::getServiceNames()
- rtl::OUString SAL_CALL
- ScVbaWorksheet::getCodeName() throw (css::uno::RuntimeException)
- {
--#ifdef VBA_OOBUILD_HACK 
-+#if 0
-     uno::Reference <sheet::XSpreadsheetDocument> xSpreadDoc( getModel(), uno::UNO_QUERY_THROW );
-     SCTAB nTab = 0;
-     rtl::OUString aSheetName = getName();
-@@ -903,7 +992,7 @@ ScVbaWorksheet::getCodeName() throw (css::uno::RuntimeException)
-     throw uno::RuntimeException( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM("Not implemented") ), uno::Reference< uno::XInterface >() );
- #endif
- }
--#ifdef VBA_OOBUILD_HACK 
-+#if 0
- void SAL_CALL
- ScVbaWorksheet::setCodeName( const rtl::OUString& sCodeName ) throw (css::uno::RuntimeException)
- {
+# FIXME ooo320-m2: upstream removed the VBA_OOBUILD_HACK code at all
+#@@ -882,7 +971,7 @@ ScVbaWorksheet::getServiceNames()
+# rtl::OUString SAL_CALL
+# ScVbaWorksheet::getCodeName() throw (css::uno::RuntimeException)
+# {
+#-#ifdef VBA_OOBUILD_HACK 
+#+#if 0
+#     uno::Reference <sheet::XSpreadsheetDocument> xSpreadDoc( getModel(), uno::UNO_QUERY_THROW );
+#     SCTAB nTab = 0;
+#     rtl::OUString aSheetName = getName();
+# FIXME ooo320-m2: upstream removed the VBA_OOBUILD_HACK code at all
+#@@ -903,7 +992,7 @@ ScVbaWorksheet::getCodeName() throw (css::uno::RuntimeException)
+#     throw uno::RuntimeException( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM("Not implemented") ), uno::Reference< uno::XInterface >() );
+# #endif
+# }
+#-#ifdef VBA_OOBUILD_HACK 
+#+#if 0
+# void SAL_CALL
+# ScVbaWorksheet::setCodeName( const rtl::OUString& sCodeName ) throw (css::uno::RuntimeException)
+# {
 @@ -933,7 +1022,7 @@ ScVbaWorksheet::setCodeName( const rtl::OUString& ) throw (css::uno::RuntimeExce
  sal_Int16
  ScVbaWorksheet::getSheetID() throw (uno::RuntimeException)
@@ -27741,9 +27731,9 @@ index 9d4a003..05b9fc2 100644
 --- sc/source/ui/vba/vbaworksheet.hxx
 +++ sc/source/ui/vba/vbaworksheet.hxx
 @@ -43,6 +43,7 @@
+ #include <ooo/vba/excel/XPageSetup.hpp>
  #include <ooo/vba/excel/XHPageBreaks.hpp>
  #include <ooo/vba/excel/XVPageBreaks.hpp>
- #include <ooo/vba/excel/XChartObjects.hpp>
 +#include <com/sun/star/container/XNamed.hpp>
  
  #include <vbahelper/vbahelperinterface.hxx>
@@ -27863,85 +27853,86 @@ index dc1402b..e08ad8e 100644
  }
  
  // XWorksheets
-diff --git sc/source/ui/vba/vbawsfunction.cxx sc/source/ui/vba/vbawsfunction.cxx
-index a22bc3f..6242560 100644
---- sc/source/ui/vba/vbawsfunction.cxx
-+++ sc/source/ui/vba/vbawsfunction.cxx
-@@ -71,13 +71,58 @@ ScVbaWSFunction::invoke(const rtl::OUString& FunctionName, const uno::Sequence<
- 
-     for (int i=0; i < Params.getLength();i++) 
-     {
-+        aArrayTemp[i]= aArray[i];
-         uno::Reference<excel::XRange> myRange( aArray[ i ], uno::UNO_QUERY );
-         if ( myRange.is() ) 
-         {
-             aArrayTemp[i] = myRange->getCellRange();
-             continue;
-         }
--        aArrayTemp[i]= aArray[i];
-+                else if (  aArray[ i ].getValueType().getTypeClass() == uno::TypeClass_BOOLEAN )
-+		{
-+			sal_Bool bValue( sal_False );
-+			aArray[ i ] >>= bValue;
-+			if ( bValue )
-+				aArrayTemp[ i ] <<= double( 1.0 ); 
-+			else
-+				aArrayTemp[ i ] <<= double( 0.0 ); 
-+                        
-+		}
-+        else if ( aArray[ i ].getValueType().getTypeClass() == uno::TypeClass_SEQUENCE )
-+        {
-+            // the sheet.FunctionAccess service doesn't deal with Sequences, only Sequences of Sequence
-+            uno::Type aType = aArray[ i ].getValueType();
-+            if ( aType.equals( getCppuType( (uno::Sequence<sal_Int16>*)0 ) ) )
-+            {
-+                uno::Sequence< uno::Sequence< sal_Int16 > >  aTmp(1);
-+                aArray[ i ] >>= aTmp[ 0 ];
-+                aArrayTemp[i] <<= aTmp;
-+            }
-+            else if ( aType.equals( getCppuType( (uno::Sequence<sal_Int32>*)0 ) ) )
-+            {
-+                uno::Sequence< uno::Sequence< sal_Int32 > > aTmp(1);
-+                aArray[ i ] >>= aTmp[ 0 ];
-+                aArrayTemp[i] <<= aTmp;
-+            }
-+            else if ( aType.equals( getCppuType( (uno::Sequence<double>*)0 ) ) )
-+            {
-+                uno::Sequence< uno::Sequence< double > > aTmp(1);
-+                aArray[ i ] >>= aTmp[ 0 ];
-+                aArrayTemp[i] <<= aTmp;
-+            }
-+            else if ( aType.equals( getCppuType( (uno::Sequence<rtl::OUString>*)0 ) ) )
-+            {
-+                uno::Sequence< uno::Sequence< rtl::OUString > > aTmp(1);
-+                aArray[ i ] >>= aTmp[ 0 ];
-+                aArrayTemp[i] <<= aTmp;
-+            }
-+            else if ( aType.equals( getCppuType( (uno::Sequence<uno::Any>*)0 ) ) )
-+            {
-+                uno::Sequence< uno::Sequence<uno::Any > > aTmp(1);
-+                aArray[ i ] >>= aTmp[ 0 ];
-+                aArrayTemp[i] <<= aTmp;
-+            }
-+        }
-     }
- 
-     for ( int count=0; count < aParamTemp.getLength(); ++count )
-@@ -85,12 +130,13 @@ ScVbaWSFunction::invoke(const rtl::OUString& FunctionName, const uno::Sequence<
-             count, rtl::OUStringToOString( comphelper::anyToString( aParamTemp[count] ), RTL_TEXTENCODING_UTF8 ).getStr()  );
-     
-     uno::Any aRet = xFunctionAccess->callFunction(FunctionName,aParamTemp);
-+
-     // MATCH function should alwayse return a double value, but currently if the first argument is XCellRange, MATCH function returns an array instead of a double value. Don't know why?
-     // To fix this issue in safe, current solution is to convert this array to a double value just for MATCH function.
-     String aUpper( FunctionName );
-     ScCompiler aCompiler( NULL, ScAddress() ); 
-     OpCode eOp = aCompiler.GetEnglishOpCode( aUpper.ToUpperAscii() );
--    if( eOp == ocMatch )
-+	if( eOp == ocMatch || eOp == ocIsError )
-     {
-         double fVal = 0.0;
-         if( aRet >>= fVal )
+# FIXME ooo320-m2: upstream rewrote this code completely; no idea how to apply this
+#diff --git sc/source/ui/vba/vbawsfunction.cxx sc/source/ui/vba/vbawsfunction.cxx
+#index a22bc3f..6242560 100644
+#--- sc/source/ui/vba/vbawsfunction.cxx
+#+++ sc/source/ui/vba/vbawsfunction.cxx
+#@@ -71,13 +71,58 @@ ScVbaWSFunction::invoke(const rtl::OUString& FunctionName, const uno::Sequence<
+# 
+#     for (int i=0; i < Params.getLength();i++) 
+#     {
+#+        aArrayTemp[i]= aArray[i];
+#         uno::Reference<excel::XRange> myRange( aArray[ i ], uno::UNO_QUERY );
+#         if ( myRange.is() ) 
+#         {
+#             aArrayTemp[i] = myRange->getCellRange();
+#             continue;
+#         }
+#-        aArrayTemp[i]= aArray[i];
+#+                else if (  aArray[ i ].getValueType().getTypeClass() == uno::TypeClass_BOOLEAN )
+#+		{
+#+			sal_Bool bValue( sal_False );
+#+			aArray[ i ] >>= bValue;
+#+			if ( bValue )
+#+				aArrayTemp[ i ] <<= double( 1.0 ); 
+#+			else
+#+				aArrayTemp[ i ] <<= double( 0.0 ); 
+#+                        
+#+		}
+#+        else if ( aArray[ i ].getValueType().getTypeClass() == uno::TypeClass_SEQUENCE )
+#+        {
+#+            // the sheet.FunctionAccess service doesn't deal with Sequences, only Sequences of Sequence
+#+            uno::Type aType = aArray[ i ].getValueType();
+#+            if ( aType.equals( getCppuType( (uno::Sequence<sal_Int16>*)0 ) ) )
+#+            {
+#+                uno::Sequence< uno::Sequence< sal_Int16 > >  aTmp(1);
+#+                aArray[ i ] >>= aTmp[ 0 ];
+#+                aArrayTemp[i] <<= aTmp;
+#+            }
+#+            else if ( aType.equals( getCppuType( (uno::Sequence<sal_Int32>*)0 ) ) )
+#+            {
+#+                uno::Sequence< uno::Sequence< sal_Int32 > > aTmp(1);
+#+                aArray[ i ] >>= aTmp[ 0 ];
+#+                aArrayTemp[i] <<= aTmp;
+#+            }
+#+            else if ( aType.equals( getCppuType( (uno::Sequence<double>*)0 ) ) )
+#+            {
+#+                uno::Sequence< uno::Sequence< double > > aTmp(1);
+#+                aArray[ i ] >>= aTmp[ 0 ];
+#+                aArrayTemp[i] <<= aTmp;
+#+            }
+#+            else if ( aType.equals( getCppuType( (uno::Sequence<rtl::OUString>*)0 ) ) )
+#+            {
+#+                uno::Sequence< uno::Sequence< rtl::OUString > > aTmp(1);
+#+                aArray[ i ] >>= aTmp[ 0 ];
+#+                aArrayTemp[i] <<= aTmp;
+#+            }
+#+            else if ( aType.equals( getCppuType( (uno::Sequence<uno::Any>*)0 ) ) )
+#+            {
+#+                uno::Sequence< uno::Sequence<uno::Any > > aTmp(1);
+#+                aArray[ i ] >>= aTmp[ 0 ];
+#+                aArrayTemp[i] <<= aTmp;
+#+            }
+#+        }
+#     }
+# 
+#     for ( int count=0; count < aParamTemp.getLength(); ++count )
+#@@ -85,12 +130,13 @@ ScVbaWSFunction::invoke(const rtl::OUString& FunctionName, const uno::Sequence<
+#             count, rtl::OUStringToOString( comphelper::anyToString( aParamTemp[count] ), RTL_TEXTENCODING_UTF8 ).getStr()  );
+#     
+#     uno::Any aRet = xFunctionAccess->callFunction(FunctionName,aParamTemp);
+#+
+#     // MATCH function should alwayse return a double value, but currently if the first argument is XCellRange, MATCH function returns an array instead of a double value. Don't know why?
+#     // To fix this issue in safe, current solution is to convert this array to a double value just for MATCH function.
+#     String aUpper( FunctionName );
+#     ScCompiler aCompiler( NULL, ScAddress() ); 
+#     OpCode eOp = aCompiler.GetEnglishOpCode( aUpper.ToUpperAscii() );
+#-    if( eOp == ocMatch )
+#+	if( eOp == ocMatch || eOp == ocIsError )
+#     {
+#         double fVal = 0.0;
+#         if( aRet >>= fVal )
 diff --git sc/source/ui/view/cellsh2.cxx sc/source/ui/view/cellsh2.cxx
 index 3908596..f4ba3d5 100644
 --- sc/source/ui/view/cellsh2.cxx
@@ -28419,13 +28410,11 @@ index d9e23b5..676d345 100644
          $(SLO)$/dapitype.obj	\
          $(SLO)$/dapidata.obj	\
          $(SLO)$/crdlg.obj			\
-@@ -315,8 +316,9 @@ SHL9STDLIBS= \
-         $(ISCLIB) \
+@@ -315,7 +316,8 @@ SHL9STDLIBS= \
          $(VCLLIB) \
          $(TKLIB) \
--        $(SVXMSFILTERLIB)		\
+         $(MSFILTERLIB)		\
 -        $(FORLIB)
-+	    $(MSFILTERLIB)		\
 +        $(FORLIB) \
 +        $(UNOTOOLSLIB)       
  
@@ -30668,9 +30657,9 @@ index 65e4374..4bbd815 100644
      $(SLO)$/unitconv.obj           \
 +    $(SLO)$/bindablecontrolhelper.obj   \
 +    $(SLO)$/filterutils.obj   \
-     $(SLO)$/wallitem.obj
+     $(SLO)$/wallitem.obj           \
+     $(SLO)$/xwindowitem.obj
  
- # --- Targets -------------------------------------------------------
 diff --git svx/source/form/fmscriptingenv.cxx svx/source/form/fmscriptingenv.cxx
 index 74d9585..c14d2f1 100644
 --- svx/source/form/fmscriptingenv.cxx
@@ -30782,7 +30771,7 @@ index 0f1a15b..733baef 100755
 +    SW_DLLPRIVATE void SetIsTemplate( bool bValue ) { bIsATemplate = bValue; }
  
      virtual const ::sfx2::IXmlIdRegistry* GetXmlIdRegistry() const;
- };
+ 
 diff --git sw/inc/unocoll.hxx sw/inc/unocoll.hxx
 index bf6ba28..805b68c 100644
 --- sw/inc/unocoll.hxx
@@ -44872,7 +44861,7 @@ index 999e761..d595981 100644
 --- toolkit/inc/toolkit/awt/vclxwindows.hxx
 +++ toolkit/inc/toolkit/awt/vclxwindows.hxx
 @@ -96,6 +96,7 @@
- #include <vcl/imgcons.hxx>
+ #include <vcl/pointr.hxx>
  #include <vcl/image.hxx>
  
 +#include <com/sun/star/document/XVbaMethodParameter.hpp>  //liuchen 2009-6-22, add the support of input/output parameters to VBA Dialog_QueryClose event
@@ -44952,9 +44941,9 @@ index a7875c6..d6d63f0 100644
      
      ::com::sun::star::uno::Reference< ::com::sun::star::graphic::XGraphicObject > mxGrfObj;
 -    ::com::sun::star::uno::Reference< ::com::sun::star::graphic::XGraphic > getGraphicFromURL_nothrow( const ::rtl::OUString& _rURL );
+ 
  protected:
-     ImageProducerControlModel() : mbAdjustingImagePosition( false ), mbAdjustingGraphic( false ) { }
-     ImageProducerControlModel( const ImageProducerControlModel& _rSource ) : com::sun::star::awt::XImageProducer(), UnoControlModel( _rSource ), mbAdjustingImagePosition( false ), mbAdjustingGraphic( false ) { }
+     GraphicControlModel() : mbAdjustingImagePosition( false ), mbAdjustingGraphic( false ) { }
 @@ -673,6 +672,44 @@ public:
  
  };
@@ -45072,7 +45061,7 @@ index 52af567..7a5b26b 100644
                       BASEPROPERTY_REFERENCE_DEVICE,
 +                     BASEPROPERTY_GROUPNAME,
                       0);
-     VCLXImageConsumer::ImplGetPropertyIds( rIds );
+     VCLXGraphicControl::ImplGetPropertyIds( rIds );
  }
 @@ -2334,6 +2335,7 @@ VCLXDialog::~VCLXDialog()
  ::com::sun::star::uno::Any VCLXDialog::queryInterface( const ::com::sun::star::uno::Type & rType ) throw(::com::sun::star::uno::RuntimeException)
@@ -45518,8 +45507,8 @@ index 5f84d9f..df3214d 100644
 +		else
 +			ret = url;
  
-         ::rtl::OUString testAbsoluteURL;
-         if ( ::osl::FileBase::E_None == ::osl::FileBase::getAbsoluteFileURL( baseLocation, url, testAbsoluteURL ) )
+         const INetURLObject protocolCheck( url );
+         const INetProtocol protocol = protocolCheck.GetProtocol();
 diff --git toolkit/source/controls/unocontrolmodel.cxx toolkit/source/controls/unocontrolmodel.cxx
 index 7e6346b..9335711 100644
 --- toolkit/source/controls/unocontrolmodel.cxx
@@ -45540,7 +45529,7 @@ index 3b17488..30246ae 100644
  
      return UnoControlModel::ImplGetDefaultValue( nPropId );
  }
--    uno::Reference< graphic::XGraphic > ImageProducerControlModel::getGraphicFromURL_nothrow( const ::rtl::OUString& _rURL )
+-    uno::Reference< graphic::XGraphic > GraphicControlModel::getGraphicFromURL_nothrow( const ::rtl::OUString& _rURL )
 +    uno::Reference< graphic::XGraphic > getGraphicFromURL_nothrow( uno::Reference< graphic::XGraphicObject >& rxGrfObj, const ::rtl::OUString& _rURL )
      {
          uno::Reference< graphic::XGraphic > xGraphic;
@@ -45660,9 +45649,9 @@ index dfae24a..0c0edea 100644
              DECL_PROP_2     ( "EnableVisible",          ENABLEVISIBLE,          sal_Bool,           BOUND, MAYBEDEFAULT ),
              DECL_PROP_3     ( "ReferenceDevice",        REFERENCE_DEVICE,       Reference< XDevice >,BOUND, MAYBEDEFAULT, TRANSIENT ),
 +            DECL_PROP_2     ( "VBAForm",                VBAFORM,                sal_Bool,           BOUND, MAYBEDEFAULT ),
-             DECL_PROP_3     ( "EvenRowBackgroundColor",  GRID_EVEN_ROW_BACKGROUND,     sal_Int32,      BOUND, MAYBEDEFAULT, MAYBEVOID ),
-             DECL_PROP_3     ( "HeaderBackgroundColor",   GRID_HEADER_BACKGROUND,       sal_Int32,      BOUND, MAYBEDEFAULT, MAYBEVOID ),
-             DECL_PROP_3     ( "LineColor",               GRID_LINE_COLOR,              sal_Int32,      BOUND, MAYBEDEFAULT, MAYBEVOID ),
+             DECL_PROP_3     ( "EvenRowBackgroundColor", GRID_EVEN_ROW_BACKGROUND, sal_Int32,      BOUND, MAYBEDEFAULT, MAYBEVOID ),
+             DECL_PROP_3     ( "HeaderBackgroundColor",  GRID_HEADER_BACKGROUND,  sal_Int32,      BOUND, MAYBEDEFAULT, MAYBEVOID ),
+             DECL_PROP_3     ( "GridLineColor",          GRID_LINE_COLOR,         sal_Int32,      BOUND, MAYBEDEFAULT, MAYBEVOID ),
 diff --git toolkit/source/helper/registerservices.cxx toolkit/source/helper/registerservices.cxx
 index 424f9b2..bcaa925 100644
 --- toolkit/source/helper/registerservices.cxx
@@ -45965,14 +45954,14 @@ index edcefa8..069c773 100644
 --- vbahelper/inc/vbahelper/vbaapplicationbase.hxx
 +++ vbahelper/inc/vbahelper/vbaapplicationbase.hxx
 @@ -51,7 +51,7 @@ public:
-     virtual void SAL_CALL setDisplayStatusBar(sal_Bool bDisplayStatusBar) throw (css::uno::RuntimeException);
+     virtual void SAL_CALL setInteractive( ::sal_Bool bInteractive ) throw (::com::sun::star::uno::RuntimeException);
      virtual css::uno::Any SAL_CALL CommandBars( const css::uno::Any& aIndex ) throw (css::uno::RuntimeException);  
      virtual ::rtl::OUString SAL_CALL getVersion() throw (css::uno::RuntimeException);
 -    virtual void SAL_CALL Run( const ::rtl::OUString& MacroName, const css::uno::Any& varg1, const css::uno::Any& varg2, const css::uno::Any& varg3, const css::uno::Any& varg4, const css::uno::Any& varg5, const css::uno::Any& varg6, const css::uno::Any& varg7, const css::uno::Any& varg8, const css::uno::Any& varg9, const css::uno::Any& varg10, const css::uno::Any& varg11, const css::uno::Any& varg12, const css::uno::Any& varg13, const css::uno::Any& varg14, const css::uno::Any& varg15, const css::uno::Any& varg16, const css::uno::Any& varg17, const css::uno::Any& varg18, const css::uno::Any& varg19, const css::uno::Any& varg20, const css::uno::Any& varg21, const css::uno::Any& varg22, const css::uno::Any& varg23, const css::uno::Any& varg24, const css::uno::Any& varg25, const css::uno::Any& varg26, const css::uno::Any& varg27, const css::uno::Any& varg28, const css::uno::Any& varg29, const css::uno::Any& varg30 ) throw (css::uno::RuntimeException);
 +    virtual css::uno::Any SAL_CALL Run( const ::rtl::OUString& MacroName, const css::uno::Any& varg1, const css::uno::Any& varg2, const css::uno::Any& varg3, const css::uno::Any& varg4, const css::uno::Any& varg5, const css::uno::Any& varg6, const css::uno::Any& varg7, const css::uno::Any& varg8, const css::uno::Any& varg9, const css::uno::Any& varg10, const css::uno::Any& varg11, const css::uno::Any& varg12, const css::uno::Any& varg13, const css::uno::Any& varg14, const css::uno::Any& varg15, const css::uno::Any& varg16, const css::uno::Any& varg17, const css::uno::Any& varg18, const css::uno::Any& varg19, const css::uno::Any& varg20, const css::uno::Any& varg21, const css::uno::Any& varg22, const css::uno::Any& varg23, const css::uno::Any& varg24, const css::uno::Any& varg25, const css::uno::Any& varg26, const css::uno::Any& varg27, const css::uno::Any& varg28, const css::uno::Any& varg29, const css::uno::Any& varg30 ) throw (css::uno::RuntimeException);
+     virtual void SAL_CALL OnTime( const ::com::sun::star::uno::Any& aEarliestTime, const ::rtl::OUString& aFunction, const ::com::sun::star::uno::Any& aLatestTime, const ::com::sun::star::uno::Any& aSchedule ) throw (::com::sun::star::uno::RuntimeException);
      virtual float SAL_CALL CentimetersToPoints( float _Centimeters ) throw (css::uno::RuntimeException);
-     virtual void SAL_CALL Quit(  ) throw (::com::sun::star::uno::RuntimeException);
-     // XHelperInterface
+     virtual void SAL_CALL Undo(  ) throw (::com::sun::star::uno::RuntimeException);
 diff --git vbahelper/inc/vbahelper/vbacollectionimpl.hxx vbahelper/inc/vbahelper/vbacollectionimpl.hxx
 index 40b9202..e08fd51 100644
 --- vbahelper/inc/vbahelper/vbacollectionimpl.hxx
@@ -46018,8 +46007,8 @@ index 40b9202..e08fd51 100644
      }		
  
 @@ -182,7 +196,7 @@ protected:
-         return createCollectionObject( m_xIndexAccess->getByIndex( nIndex - 1 ) );		
      }
+ 
  public:
 -    ScVbaCollectionBase( const css::uno::Reference< ov::XHelperInterface >& xParent,   const css::uno::Reference< css::uno::XComponentContext >& xContext, const css::uno::Reference< css::container::XIndexAccess >& xIndexAccess ) : BaseColBase( xParent, xContext ), m_xIndexAccess( xIndexAccess ){ m_xNameAccess.set(m_xIndexAccess, css::uno::UNO_QUERY); }
 +	ScVbaCollectionBase( const css::uno::Reference< ov::XHelperInterface >& xParent,   const css::uno::Reference< css::uno::XComponentContext >& xContext, const css::uno::Reference< css::container::XIndexAccess >& xIndexAccess, sal_Bool bIgnoreCase = sal_False ) : BaseColBase( xParent, xContext ), m_xIndexAccess( xIndexAccess ), mbIgnoreCase( bIgnoreCase ) { m_xNameAccess.set(m_xIndexAccess, css::uno::UNO_QUERY); }
@@ -46153,9 +46142,9 @@ index dad98b9..35ecda7 100644
 +#include <com/sun/star/frame/DispatchResultEvent.hpp>
 +#include <com/sun/star/frame/DispatchResultState.hpp>
 +#include <com/sun/star/lang/EventObject.hpp>
+ #include <com/sun/star/awt/XUnitConversion.hpp>
  #include <basic/basmgr.hxx>
  #include <basic/sberrors.hxx>
- #include <cppuhelper/implbase1.hxx>
 @@ -62,6 +66,7 @@ namespace ooo
                  throw css::lang::IllegalArgumentException();
              return aSomething;
@@ -46167,9 +46156,9 @@ index dad98b9..35ecda7 100644
 @@ -75,7 +80,7 @@ namespace ooo
          VBAHELPER_DLLPUBLIC css::uno::Reference< css::script::XTypeConverter > getTypeConverter( const css::uno::Reference< css::uno::XComponentContext >& xContext ) throw (css::uno::RuntimeException);
  
-         VBAHELPER_DLLPUBLIC void dispatchRequests (css::uno::Reference< css::frame::XModel>& xModel,rtl::OUString & aUrl) ;
--        VBAHELPER_DLLPUBLIC void dispatchRequests (css::uno::Reference< css::frame::XModel>& xModel,rtl::OUString & aUrl, css::uno::Sequence< css::beans::PropertyValue >& sProps ) ;
-+		VBAHELPER_DLLPUBLIC void dispatchRequests (css::uno::Reference< css::frame::XModel>& xModel,rtl::OUString & aUrl, css::uno::Sequence< css::beans::PropertyValue >& sProps, const css::uno::Reference< css::frame::XDispatchResultListener >& rListener = css::uno::Reference< css::frame::XDispatchResultListener >(), const sal_Bool bSilent = sal_True );
+         VBAHELPER_DLLPUBLIC void dispatchRequests( const css::uno::Reference< css::frame::XModel>& xModel, const rtl::OUString& aUrl );
+-        VBAHELPER_DLLPUBLIC void dispatchRequests( const css::uno::Reference< css::frame::XModel>& xModel, const rtl::OUString& aUrl, const css::uno::Sequence< css::beans::PropertyValue >& sProps );
++	 VBAHELPER_DLLPUBLIC void dispatchRequests (const css::uno::Reference< css::frame::XModel>& xModel, const rtl::OUString & aUrl, const css::uno::Sequence< css::beans::PropertyValue >& sProps, const css::uno::Reference< css::frame::XDispatchResultListener >& rListener = css::uno::Reference< css::frame::XDispatchResultListener >(), const sal_Bool bSilent = sal_True );
          VBAHELPER_DLLPUBLIC void dispatchExecute(SfxViewShell* pView, USHORT nSlot, SfxCallMode nCall = SFX_CALLMODE_SYNCHRON );
          VBAHELPER_DLLPUBLIC sal_Int32 OORGBToXLRGB( sal_Int32 );
          VBAHELPER_DLLPUBLIC sal_Int32 XLRGBToOORGB( sal_Int32 );
@@ -46433,11 +46422,11 @@ index 077e762..994da25 100644
  }
  
  ScVbaControl::~ScVbaControl()
-@@ -368,6 +381,87 @@ ScVbaControl::setControlTipText( const rtl::OUString& rsToolTip ) throw (css::un
-     m_xProps->setPropertyValue
-             (rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( "HelpText" ) ), uno::makeAny( rsToolTip ) );
+@@ -368,7 +381,86 @@ ScVbaControl::setControlTipText( const rtl::OUString& rsToolTip ) throw (css::un
+     m_aControlTag = aTag;
  }
-+
+ 
+-
 +::sal_Int32 SAL_CALL ScVbaControl::getForeColor() throw (::com::sun::star::uno::RuntimeException)
 +{
 +	sal_Int32 nForeColor = -1;
@@ -46562,12 +46551,16 @@ index c9c3964..e2b537c 100644
  #include <ooo/vba/msforms/XControl.hpp>
  
  #include <vbahelper/vbahelper.hxx>
-@@ -47,13 +48,19 @@ class ScVbaControl : public ControlImpl_BASE
+@@ -47,17 +48,23 @@ class ScVbaControl : public ControlImpl_BASE
  {
  private:
      com::sun::star::uno::Reference< com::sun::star::lang::XEventListener > m_xEventListener;
 +    com::sun::star::uno::Reference< com::sun::star::awt::XControl > m_xEmptyFormControl;
  protected:
+     // awt control has nothing similar to Tag property of Mso controls,
+     // whether it is necessary is another question
+     ::rtl::OUString m_aControlTag;
+ 
 +    bool bIsDialog;
 +    rtl::OUString m_sLibraryAndCodeName;
      std::auto_ptr< ov::AbstractGeometryAttributes > mpGeometryHelper;
@@ -46594,7 +46587,7 @@ index c9c3964..e2b537c 100644
      virtual sal_Bool SAL_CALL getEnabled() throw (css::uno::RuntimeException);
      virtual void SAL_CALL setEnabled( sal_Bool _enabled ) throw (css::uno::RuntimeException);
 @@ -87,6 +98,8 @@ public:
-     virtual void SAL_CALL setControlTipText( const rtl::OUString& ) throw (css::uno::RuntimeException);
+     virtual void SAL_CALL setTag( const ::rtl::OUString& aTag ) throw (css::uno::RuntimeException);
      //remove resouce because ooo.vba.excel.XControl is a wrapper of com.sun.star.drawing.XControlShape
      virtual void removeResouce() throw( css::uno::RuntimeException );
 +	virtual ::sal_Int32 SAL_CALL getForeColor() throw (::com::sun::star::uno::RuntimeException);
@@ -47054,9 +47047,9 @@ index b11b4ff..f21da73 100644
      $(SLO)$/vbatextframe.obj \
      $(SLO)$/vbapagesetupbase.obj \
 +    $(SLO)$/vbaeventshelperbase.obj \
- 
  # --- Targets -------------------------------------------------------
  
+ .INCLUDE :  target.mk
 diff --git vbahelper/source/vbahelper/vbaapplicationbase.cxx vbahelper/source/vbahelper/vbaapplicationbase.cxx
 index d9db387..d84f400 100644
 --- vbahelper/source/vbahelper/vbaapplicationbase.cxx
@@ -47070,16 +47063,36 @@ index d9db387..d84f400 100644
      if (bUpdate)
          xModel->unlockControllers();
      else
-@@ -131,9 +133,10 @@ VbaApplicationBase::getVersion() throw (uno::RuntimeException)
+# FIXME ooo320-m2: this is the origional hunk; I split it into two to follow the upstream changes
+#@@ -131,9 +133,10 @@ VbaApplicationBase::getVersion() throw (uno::RuntimeException)
+#     return rtl::OUString(RTL_CONSTASCII_USTRINGPARAM(OFFICEVERSION));
+# }
+# 
+#-void SAL_CALL VbaApplicationBase::Run( const ::rtl::OUString& MacroName, const uno::Any& varg1, const uno::Any& varg2, const uno::Any& varg3, const uno::Any& varg4, const uno::Any& varg5, const uno::Any& varg6, const uno::Any& varg7, const uno::Any& varg8, const uno::Any& varg9, const uno::Any& varg10, const uno::Any& varg11, const uno::Any& varg12, const uno::Any& varg13, const uno::Any& varg14, const uno::Any& varg15, const uno::Any& varg16, const uno::Any& varg17, const uno::Any& varg18, const uno::Any& varg19, const uno::Any& varg20, const uno::Any& varg21, const uno::Any& varg22, const uno::Any& varg23, const uno::Any& varg24, const uno::Any& varg25, const uno::Any& varg26, const uno::Any& varg27, const uno::Any& varg28, const uno::Any& varg29, const uno::Any& varg30 ) throw (uno::RuntimeException)
+#+uno::Any SAL_CALL VbaApplicationBase::Run( const ::rtl::OUString& MacroName, const uno::Any& varg1, const uno::Any& varg2, const uno::Any& varg3, const uno::Any& varg4, const uno::Any& varg5, const uno::Any& varg6, const uno::Any& varg7, const uno::Any& varg8, const uno::Any& varg9, const uno::Any& varg10, const uno::Any& varg11, const uno::Any& varg12, const uno::Any& varg13, const uno::Any& varg14, const uno::Any& varg15, const uno::Any& varg16, const uno::Any& varg17, const uno::Any& varg18, const uno::Any& varg19, const uno::Any& varg20, const uno::Any& varg21, const uno::Any& varg22, const uno::Any& varg23, const uno::Any& varg24, const uno::Any& varg25, const uno::Any& varg26, const uno::Any& varg27, const uno::Any& varg28, const uno::Any& varg29, const uno::Any& varg30 ) throw (uno::RuntimeException)
+# {
+#-    VBAMacroResolvedInfo aMacroInfo = resolveVBAMacro( getSfxObjShell( getCurrentDocument() ), MacroName );
+#+    // search the global tempalte
+#+    VBAMacroResolvedInfo aMacroInfo = resolveVBAMacro( getSfxObjShell( getCurrentDocument() ), MacroName, sal_True );
+#     if( aMacroInfo.IsResolved() )
+#     {
+#         // handle the arguments
+@@ -131,7 +133,7 @@ VbaApplicationBase::getVersion() throw (uno::RuntimeException)
      return rtl::OUString(RTL_CONSTASCII_USTRINGPARAM(OFFICEVERSION));
  }
  
 -void SAL_CALL VbaApplicationBase::Run( const ::rtl::OUString& MacroName, const uno::Any& varg1, const uno::Any& varg2, const uno::Any& varg3, const uno::Any& varg4, const uno::Any& varg5, const uno::Any& varg6, const uno::Any& varg7, const uno::Any& varg8, const uno::Any& varg9, const uno::Any& varg10, const uno::Any& varg11, const uno::Any& varg12, const uno::Any& varg13, const uno::Any& varg14, const uno::Any& varg15, const uno::Any& varg16, const uno::Any& varg17, const uno::Any& varg18, const uno::Any& varg19, const uno::Any& varg20, const uno::Any& varg21, const uno::Any& varg22, const uno::Any& varg23, const uno::Any& varg24, const uno::Any& varg25, const uno::Any& varg26, const uno::Any& varg27, const uno::Any& varg28, const uno::Any& varg29, const uno::Any& varg30 ) throw (uno::RuntimeException)
 +uno::Any SAL_CALL VbaApplicationBase::Run( const ::rtl::OUString& MacroName, const uno::Any& varg1, const uno::Any& varg2, const uno::Any& varg3, const uno::Any& varg4, const uno::Any& varg5, const uno::Any& varg6, const uno::Any& varg7, const uno::Any& varg8, const uno::Any& varg9, const uno::Any& varg10, const uno::Any& varg11, const uno::Any& varg12, const uno::Any& varg13, const uno::Any& varg14, const uno::Any& varg15, const uno::Any& varg16, const uno::Any& varg17, const uno::Any& varg18, const uno::Any& varg19, const uno::Any& varg20, const uno::Any& varg21, const uno::Any& varg22, const uno::Any& varg23, const uno::Any& varg24, const uno::Any& varg25, const uno::Any& varg26, const uno::Any& varg27, const uno::Any& varg28, const uno::Any& varg29, const uno::Any& varg30 ) throw (uno::RuntimeException)
  {
--    VBAMacroResolvedInfo aMacroInfo = resolveVBAMacro( getSfxObjShell( getCurrentDocument() ), MacroName );
+     ::rtl::OUString sSeparator = ::rtl::OUString::createFromAscii("/");
+     ::rtl::OUString sMacroSeparator = ::rtl::OUString::createFromAscii("!");
+@@ -151,7 +153,8 @@ VbaApplicationBase::getVersion() throw (uno::RuntimeException)
+     }
+ 
+     
+-    VBAMacroResolvedInfo aMacroInfo = resolveVBAMacro( getSfxObjShell( aMacroDocumentModel ), sMacro_only_Name );
 +    // search the global tempalte
-+    VBAMacroResolvedInfo aMacroInfo = resolveVBAMacro( getSfxObjShell( getCurrentDocument() ), MacroName, sal_True );
++    VBAMacroResolvedInfo aMacroInfo = resolveVBAMacro( getSfxObjShell( aMacroDocumentModel ), sMacro_only_Name, sal_True );
      if( aMacroInfo.IsResolved() )
      {
          // handle the arguments
@@ -47149,9 +47162,9 @@ index 848795a..2866053 100644
  #include <com/sun/star/frame/XStorable.hpp>
  #include <com/sun/star/frame/XFrame.hpp>
 +#include <com/sun/star/frame/XTitle.hpp>
+ #include <com/sun/star/document/XEmbeddedScripts.hpp> //Michael E. Bohn
  #include <com/sun/star/beans/XPropertySet.hpp>
- 
- #include <tools/urlobj.hxx>
+ #include <ooo/vba/XVBADocService.hpp>
 @@ -66,13 +67,8 @@ VbaDocumentBase::getName() throw (uno::RuntimeException)
      }
      else
@@ -47208,23 +47221,6 @@ index 848795a..2866053 100644
      }
  }
  
-@@ -179,14 +192,14 @@ void
- VbaDocumentBase::setSaved( sal_Bool bSave ) throw (uno::RuntimeException)
- {
-     uno::Reference< util::XModifiable > xModifiable( getModel(), uno::UNO_QUERY_THROW );
--    xModifiable->setModified( bSave );
-+	xModifiable->setModified( !bSave );
- }
- 
- sal_Bool
- VbaDocumentBase::getSaved() throw (uno::RuntimeException)
- {
-     uno::Reference< util::XModifiable > xModifiable( getModel(), uno::UNO_QUERY_THROW );
--    return xModifiable->isModified();
-+	return !xModifiable->isModified();
- }
- 
- void
 diff --git vbahelper/source/vbahelper/vbadocumentsbase.cxx vbahelper/source/vbahelper/vbadocumentsbase.cxx
 index 61cdb52..d3eb535 100644
 --- vbahelper/source/vbahelper/vbadocumentsbase.cxx
@@ -47424,9 +47420,9 @@ index ed56394..89892d7 100644
 --- vbahelper/source/vbahelper/vbahelper.cxx
 +++ vbahelper/source/vbahelper/vbahelper.cxx
 @@ -31,6 +31,7 @@
- #include <com/sun/star/frame/XFrame.hpp>
  #include <com/sun/star/frame/XDesktop.hpp>
  #include <com/sun/star/frame/XController.hpp>
+ #include <com/sun/star/frame/XModel2.hpp>
 +#include <com/sun/star/frame/XNotifyingDispatch.hpp>
  #include <com/sun/star/script/XDefaultProperty.hpp>
  #include <com/sun/star/uno/XComponentContext.hpp>
@@ -47435,11 +47431,11 @@ index ed56394..89892d7 100644
  }
      
  void
--dispatchRequests (uno::Reference< frame::XModel>& xModel,rtl::OUString & aUrl, uno::Sequence< beans::PropertyValue >& sProps )
-+dispatchRequests (uno::Reference< frame::XModel>& xModel,rtl::OUString & aUrl, uno::Sequence< beans::PropertyValue >& sProps, const uno::Reference< frame::XDispatchResultListener >& rListener, const sal_Bool bSilent )
+-dispatchRequests( const uno::Reference< frame::XModel>& xModel, const rtl::OUString& aUrl, const uno::Sequence< beans::PropertyValue >& sProps )
++dispatchRequests (const uno::Reference< frame::XModel>& xModel, const rtl::OUString & aUrl, const uno::Sequence< beans::PropertyValue >& sProps, const uno::Reference< frame::XDispatchResultListener >& rListener, const sal_Bool bSilent )
  {
- 
-     util::URL  url ;
+     util::URL url;
+     url.Complete = aUrl;
 @@ -350,6 +351,7 @@ dispatchRequests (uno::Reference< frame::XModel>& xModel,rtl::OUString & aUrl, u
      }
  
@@ -47488,8 +47484,8 @@ index ed56394..89892d7 100644
 +  aProp[ nLength ].Value = aValue;
 +}
 +
- #define VBA_LEFT "PositionX"
- #define VBA_TOP "PositionY"
+ // ====UserFormGeomentryHelper====
+ //---------------------------------------------
  UserFormGeometryHelper::UserFormGeometryHelper( const uno::Reference< uno::XComponentContext >& /*xContext*/, const uno::Reference< awt::XControl >& xControl )
 @@ -1173,7 +1196,49 @@ UserFormGeometryHelper::UserFormGeometryHelper( const uno::Reference< uno::XComp
          double points = double( static_cast<double>(_hmm) / factor);

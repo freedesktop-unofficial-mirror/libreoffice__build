@@ -272,9 +272,9 @@ index 07385f8..743c53e 100644
 --- oox/inc/oox/helper/graphichelper.hxx
 +++ oox/inc/oox/helper/graphichelper.hxx
 @@ -34,6 +34,7 @@
- #include <com/sun/star/awt/DeviceInfo.hpp>
  #include <com/sun/star/uno/Reference.hxx>
  #include "oox/helper/binarystreambase.hxx"
+ #include "oox/helper/storagebase.hxx"
 +#include "oox/dllapi.h"
  
  namespace com { namespace sun { namespace star {
@@ -321,203 +321,11 @@ index e4cb5a1..d8d51ca 100644
  // ============================================================================
  
  } // namespace oox
-diff --git oox/inc/oox/ole/axbinaryreader.hxx oox/inc/oox/ole/axbinaryreader.hxx
-index 3688ddc..286ddc5 100755
---- oox/inc/oox/ole/axbinaryreader.hxx
-+++ oox/inc/oox/ole/axbinaryreader.hxx
-@@ -87,6 +87,9 @@ private:
- /** A pair of integer values as a property. */
- typedef ::std::pair< sal_Int32, sal_Int32 > AxPairData;
- 
-+/** An array of string values as a property. */
-+typedef ::std::vector< ::rtl::OUString > AxStringArray;
-+
- // ============================================================================
- 
- const sal_uInt32 AX_FONTDATA_BOLD           = 0x00000001;
-@@ -149,6 +152,9 @@ public:
-     /** Reads the next string property from the stream, if the respective flag
-         in the property mask is set. */
-     void                readStringProperty( ::rtl::OUString& orValue );
-+    /** Reads a string array property from the stream, if the respective flag
-+        in the property mask is set. */
-+    void                readStringArrayProperty( AxStringArray& orArray );
-     /** Reads the next GUID property from the stream, if the respective flag
-         in the property mask is set. The GUID will be enclosed in braces. */
-     void                readGuidProperty( ::rtl::OUString& orGuid );
-@@ -172,6 +178,9 @@ public:
-     /** Skips the next string property in the stream, if the respective flag in
-         the property mask is set. */
-     inline void         skipStringProperty() { readStringProperty( maDummyString ); }
-+    /** Skips the next string array property in the stream, if the respective
-+        flag in the property mask is set. */
-+    inline void         skipStringArrayProperty() { readStringArrayProperty( maDummyStringArray ); }
-     /** Skips the next GUID property in the stream, if the respective flag in
-         the property mask is set. */
-     inline void         skipGuidProperty() { readGuidProperty( maDummyString ); }
-@@ -221,6 +230,16 @@ private:
-         virtual bool        readProperty( AxAlignedInputStream& rInStrm );
-     };
- 
-+    /** Complex property for an array of strings. */
-+    struct StringArrayProperty : public ComplexProperty
-+    {
-+        AxStringArray&      mrArray;
-+        sal_uInt32          mnSize;
-+        inline explicit     StringArrayProperty( AxStringArray& rArray, sal_uInt32 nSize ) :
-+                                mrArray( rArray ), mnSize( nSize ) {}
-+        virtual bool        readProperty( AxAlignedInputStream& rInStrm );
-+    };
-+
-     /** Complex property for a GUID value. */
-     struct GuidProperty : public ComplexProperty
-     {
-@@ -261,6 +280,7 @@ private:
-     AxFontData          maDummyFontData;    /// Dummy font for unsupported properties.
-     StreamDataSequence  maDummyPicData;     /// Dummy picture for unsupported properties.
-     ::rtl::OUString     maDummyString;      /// Dummy string for unsupported properties.
-+    AxStringArray       maDummyStringArray; /// Dummy string array for unsupported properties.
-     sal_Int64           mnPropFlags;        /// Flags specifying existing properties.
-     sal_Int64           mnNextProp;         /// Next property to read.
-     sal_Int64           mnPropsEnd;         /// End position of simple/large properties.
-diff --git oox/inc/oox/ole/axcontrol.hxx oox/inc/oox/ole/axcontrol.hxx
-index ea1411c..3b70361 100644
---- oox/inc/oox/ole/axcontrol.hxx
-+++ oox/inc/oox/ole/axcontrol.hxx
-@@ -111,8 +111,12 @@ enum ApiControlType
-     API_CONTROL_COMBOBOX,
-     API_CONTROL_SPINBUTTON,
-     API_CONTROL_SCROLLBAR,
-+    API_CONTROL_TABSTRIP,
-     API_CONTROL_PROGRESSBAR,
-     API_CONTROL_GROUPBOX,
-+    API_CONTROL_FRAME,
-+    API_CONTROL_PAGE,
-+    API_CONTROL_MULTIPAGE,
-     API_CONTROL_DIALOG
- };
- 
-@@ -639,19 +643,50 @@ private:
- 
- // ============================================================================
- 
-+/** Model for a Forms 2.0 tabstrip control. */
-+class AxTabStripModel : public AxFontDataModel
-+{
-+public:
-+    explicit            AxTabStripModel();
-+
-+    virtual bool        importBinaryModel( BinaryInputStream& rInStrm );
-+
-+    virtual ApiControlType getControlType() const;
-+    virtual void        convertProperties( PropertyMap& rPropMap, const ControlConverter& rConv ) const;
-+
-+    /** Returns the caption with the specified zero-based index. */
-+    ::rtl::OUString     getCaption( sal_Int32 nIndex ) const;
-+
-+private:
-+    AxStringArray       maCaptions;         /// Captions of all tabs.
-+    sal_uInt32          mnBackColor;        /// Fill color.
-+    sal_uInt32          mnTextColor;        /// Text color.
-+    sal_uInt32          mnFlags;            /// Various flags.
-+    sal_Int32           mnSelectedTab;      /// The index of the selected tab.
-+    sal_uInt32          mnTabStyle;         /// Visual style of the tabs.
-+    sal_Int32           mnTabFlagCount;     /// Number of entries in tab flag array.
-+};
-+
-+typedef ::boost::shared_ptr< AxTabStripModel > AxTabStripModelRef;
-+
-+// ============================================================================
-+
- typedef ::std::vector< ::rtl::OUString > AxClassTable;
- 
- /** Base class for ActiveX container controls. */
- class AxContainerModelBase : public AxFontDataModel
- {
- public:
--    explicit            AxContainerModelBase();
-+    explicit            AxContainerModelBase( bool bFontSupport = false );
- 
-     /** Allows to set single properties specified by XML token identifier. */
-     virtual void        importProperty( sal_Int32 nPropId, const ::rtl::OUString& rValue );
-     /** Reads the leading structure in the 'f' stream containing the model for
-         this control. */
-     virtual bool        importBinaryModel( BinaryInputStream& rInStrm );
-+    /** Converts font settings if supported. */
-+    virtual void        convertProperties( PropertyMap& rPropMap, const ControlConverter& rConv ) const;
-+
-     /** Reads the class table structure for embedded controls following the own
-         model from the 'f' stream. */
-     bool                importClassTable( BinaryInputStream& rInStrm, AxClassTable& orClassTable );
-@@ -672,13 +707,14 @@ protected:
-     sal_Int32           mnPicAlign;         /// Anchor position of the picture.
-     sal_Int32           mnPicSizeMode;      /// Clip, stretch, zoom.
-     bool                mbPicTiling;        /// True = picture is repeated.
-+    bool                mbFontSupport;      /// True = control supports the font property.
- };
- 
- typedef ::boost::shared_ptr< AxContainerModelBase > AxContainerModelRef;
- 
- // ============================================================================
- 
--/** Model for a Forms 2.0 frame (group box). */
-+/** Model for a Forms 2.0 frame control. */
- class AxFrameModel : public AxContainerModelBase
- {
- public:
-@@ -690,6 +726,38 @@ public:
- 
- // ============================================================================
- 
-+/** Model for a Forms 2.0 formpage control (a single page in a multipage control). */
-+class AxFormPageModel : public AxContainerModelBase
-+{
-+public:
-+    explicit            AxFormPageModel();
-+
-+    virtual ApiControlType getControlType() const;
-+    virtual void        convertProperties( PropertyMap& rPropMap, const ControlConverter& rConv ) const;
-+};
-+
-+// ============================================================================
-+
-+/** Model for a Forms 2.0 multipage control. Contains the tabstrip control
-+    (class AxTabStripModel) and the single pages (class AxFormPageModel). */
-+class AxMultiPageModel : public AxContainerModelBase
-+{
-+public:
-+    explicit            AxMultiPageModel();
-+
-+    virtual ApiControlType getControlType() const;
-+    virtual void        convertProperties( PropertyMap& rPropMap, const ControlConverter& rConv ) const;
-+
-+    /** Sets the tabstrip control model related to this multipage control.
-+        Contains all formatting attributes of the page tabs. */
-+    void                setTabStripModel( const AxTabStripModelRef& rxTabStrip );
-+
-+private:
-+    AxTabStripModelRef  mxTabStrip;
-+};
-+
-+// ============================================================================
-+
- /** Model for a Forms 2.0 user form. */
- class AxUserFormModel : public AxContainerModelBase
- {
 diff --git oox/inc/oox/ole/vbacontrol.hxx oox/inc/oox/ole/vbacontrol.hxx
 index 085a2f5..ddfabbf 100755
 --- oox/inc/oox/ole/vbacontrol.hxx
 +++ oox/inc/oox/ole/vbacontrol.hxx
-@@ -40,8 +40,6 @@ namespace oox { class StorageBase; }
- namespace oox {
- namespace ole {
- 
--class VbaFormControl;
--
- // ============================================================================
- 
- /** Common properties for all controls that are part of a VBA user form or of
-@@ -56,13 +54,13 @@ public:
+@@ -56,17 +54,13 @@ public:
      void                importProperty( sal_Int32 nPropId, const ::rtl::OUString& rValue );
      /** Imports the site model data from the passed input stream. */
      bool                importBinaryModel( BinaryInputStream& rInStrm );
@@ -528,10 +336,10 @@ index 085a2f5..ddfabbf 100755
      inline const ::rtl::OUString& getName() const { return maName; }
 -    /** Returns the position of the control in its parent. */
 -    inline const AxPairData& getPosition() const { return maPos; }
-+    /** Returns the unique identifier of this control. */
-+    inline sal_Int32    getId() const { return mnId; }
-+    /** Returns true, if the control is visible. */
-+    bool                isVisible() const;
+     /** Returns the unique identifier of this control. */
+     inline sal_Int32    getId() const { return mnId; }
+     /** Returns true, if the control is visible. */
+     bool                isVisible() const;
      /** Returns true, if this control is a container control. */
      bool                isContainer() const;
      /** Returns the length of the stream data for stream based controls. */
@@ -552,21 +360,6 @@ index 085a2f5..ddfabbf 100755
      AxPairData          maPos;              /// Position in parent container.
      sal_Int32           mnId;               /// Control identifier.
      sal_Int32           mnHelpContextId;    /// Help context identifier.
-@@ -123,11 +123,14 @@ public:
- 
-     /** Returns the programmatical name of the control. */
-     ::rtl::OUString     getControlName() const;
-+    /** Returns the unique identifier of this control. */
-+    sal_Int32           getControlId() const;
- 
-     /** Creates the UNO control model, inserts it into the passed container,
-         and converts all control properties. */
-     void                createAndConvert(
-                             sal_Int32 nCtrlIndex,
-+                            const ::com::sun::star::uno::Reference< ::com::sun::star::frame::XModel >& rxDocModel,
-                             const ::com::sun::star::uno::Reference< ::com::sun::star::container::XNameContainer >& rxParentNC,
-                             const ControlConverter& rConv ) const;
- 
 @@ -140,6 +143,7 @@ protected:
  
      /** Converts all control properties, and inserts and converts embedded controls. */
@@ -690,34 +483,6 @@ index 50a2a54..7be7c3c 100644
          else SINGLEFACTORY( ::oox::shape::ShapeContextHandler)
          else SINGLEFACTORY( ::oox::shape::FastTokenHandlerService)
          else SINGLEFACTORY2( ::oox::docprop::OOXMLDocPropImportImpl )
-diff --git oox/source/dump/oledumper.ini oox/source/dump/oledumper.ini
-index 7efe424..938efd0 100644
---- oox/source/dump/oledumper.ini
-+++ oox/source/dump/oledumper.ini
-@@ -725,11 +725,6 @@ combilist=VBA-FORMSITE-CLASSIDCACHE
-   0x8000=!predefined-class-id!class-table-index
- end
- 
--constlist=VBA-FORMSITE-CLASSIDCACHEINDEX
--  include=VBA-FORMSITE-CLASSNAMES
--  0x7FFF=invalid
--end
--
- constlist=VBA-FORMSITE-CLASSNAMES
-   7=Forms.Form.1
-   12=Forms.Image.1
-@@ -749,6 +744,11 @@ constlist=VBA-FORMSITE-CLASSNAMES
-   57=Forms.MultiPage.1
- end
- 
-+constlist=VBA-FORMSITE-CLASSIDCACHEINDEX
-+  include=VBA-FORMSITE-CLASSNAMES
-+  0x7FFF=invalid
-+end
-+
- # form design extender  ------------------------------------------------------
- 
- flagslist=VBA-FORMDESIGNEXT-PROPERTIES
 diff --git oox/source/helper/propertyset.cxx oox/source/helper/propertyset.cxx
 index b43ea12..1f1403e 100644
 --- oox/source/helper/propertyset.cxx
@@ -877,146 +642,10 @@ index b43ea12..1f1403e 100644
  
  // ============================================================================
  
-diff --git oox/source/ole/axbinaryreader.cxx oox/source/ole/axbinaryreader.cxx
-index 3809201..648b827 100755
---- oox/source/ole/axbinaryreader.cxx
-+++ oox/source/ole/axbinaryreader.cxx
-@@ -156,6 +156,30 @@ bool AxFontData::importGuidAndFont( BinaryInputStream& rInStrm )
- 
- // ============================================================================
- 
-+namespace {
-+
-+bool lclReadString( AxAlignedInputStream& rInStrm, OUString& rValue, sal_uInt32 nSize, bool bArrayString )
-+{
-+    bool bCompressed = getFlag( nSize, AX_STRING_COMPRESSED );
-+    sal_uInt32 nBufSize = nSize & AX_STRING_SIZEMASK;
-+    // Unicode: simple strings store byte count, array strings store char count
-+    sal_Int32 nChars = static_cast< sal_Int32 >( nBufSize / ((bCompressed || bArrayString) ? 1 : 2) );
-+    bool bValidChars = nChars <= 65536;
-+    OSL_ENSURE( bValidChars, "lclReadString - string too long" );
-+    sal_Int64 nEndPos = rInStrm.tell() + nChars * (bCompressed ? 1 : 2);
-+    nChars = ::std::min< sal_Int32 >( nChars, 65536 );
-+    rValue = bCompressed ?
-+        // ISO-8859-1 maps all byte values xx to the same Unicode code point U+00xx
-+        rInStrm.readCharArrayUC( nChars, RTL_TEXTENCODING_ISO_8859_1 ) :
-+        rInStrm.readUnicodeArray( nChars );
-+    rInStrm.seek( nEndPos );
-+    return bValidChars;
-+}
-+
-+} // namespace
-+
-+// ----------------------------------------------------------------------------
-+
- AxBinaryPropertyReader::ComplexProperty::~ComplexProperty()
- {
- }
-@@ -168,19 +192,22 @@ bool AxBinaryPropertyReader::PairProperty::readProperty( AxAlignedInputStream& r
- 
- bool AxBinaryPropertyReader::StringProperty::readProperty( AxAlignedInputStream& rInStrm )
- {
--    bool bCompressed = getFlag( mnSize, AX_STRING_COMPRESSED );
--    sal_uInt32 nBufSize = mnSize & AX_STRING_SIZEMASK;
--    sal_Int64 nEndPos = rInStrm.tell() + nBufSize;
--    sal_Int32 nChars = static_cast< sal_Int32 >( nBufSize / (bCompressed ? 1 : 2) );
--    bool bValidChars = nChars <= 65536;
--    OSL_ENSURE( bValidChars, "StringProperty::readProperty - string too long" );
--    nChars = ::std::min< sal_Int32 >( nChars, 65536 );
--    mrValue = bCompressed ?
--        // ISO-8859-1 maps all byte values xx to the same Unicode code point U+00xx
--        rInStrm.readCharArrayUC( nChars, RTL_TEXTENCODING_ISO_8859_1 ) :
--        rInStrm.readUnicodeArray( nChars );
--    rInStrm.seek( nEndPos );
--    return bValidChars;
-+    return lclReadString( rInStrm, mrValue, mnSize, false );
-+}
-+
-+bool AxBinaryPropertyReader::StringArrayProperty::readProperty( AxAlignedInputStream& rInStrm )
-+{
-+    sal_Int64 nEndPos = rInStrm.tell() + mnSize;
-+    while( rInStrm.tell() < nEndPos )
-+    {
-+        OUString aString;
-+        if( !lclReadString( rInStrm, aString, rInStrm.readuInt32(), true ) )
-+            return false;
-+        mrArray.push_back( aString );
-+        // every array string is aligned on 4 byte boundries
-+        rInStrm.align( 4 );
-+    }
-+    return true;
- }
- 
- bool AxBinaryPropertyReader::GuidProperty::readProperty( AxAlignedInputStream& rInStrm )
-@@ -238,6 +265,15 @@ void AxBinaryPropertyReader::readStringProperty( OUString& orValue )
-     }
- }
- 
-+void AxBinaryPropertyReader::readStringArrayProperty( AxStringArray& orArray )
-+{
-+    if( startNextProperty() )
-+    {
-+        sal_uInt32 nSize = maInStrm.readAligned< sal_uInt32 >();
-+        maLargeProps.push_back( ComplexPropVector::value_type( new StringArrayProperty( orArray, nSize ) ) );
-+    }
-+}
-+
- void AxBinaryPropertyReader::readGuidProperty( ::rtl::OUString& orGuid )
- {
-     if( startNextProperty() )
 diff --git oox/source/ole/axcontrol.cxx oox/source/ole/axcontrol.cxx
 index 7f75218..b5d86e3 100644
 --- oox/source/ole/axcontrol.cxx
 +++ oox/source/ole/axcontrol.cxx
-@@ -128,6 +128,7 @@ const sal_uInt32 AX_IMAGE_DEFFLAGS          = 0x0000001B;
- const sal_uInt32 AX_MORPHDATA_DEFFLAGS      = 0x2C80081B;
- const sal_uInt32 AX_SPINBUTTON_DEFFLAGS     = 0x0000001B;
- const sal_uInt32 AX_SCROLLBAR_DEFFLAGS      = 0x0000001B;
-+const sal_uInt32 AX_TABSTRIP_DEFFLAGS       = 0x0000001B;
- 
- const sal_uInt16 AX_POS_TOPLEFT             = 0;
- const sal_uInt16 AX_POS_TOP                 = 1;
-@@ -186,6 +187,10 @@ const sal_Int32 AX_ORIENTATION_HORIZONTAL   = 1;
- const sal_Int32 AX_PROPTHUMB_ON             = -1;
- const sal_Int32 AX_PROPTHUMB_OFF            = 0;
- 
-+const sal_uInt32 AX_TABSTRIP_TABS           = 0;
-+const sal_uInt32 AX_TABSTRIP_BUTTONS        = 1;
-+const sal_uInt32 AX_TABSTRIP_NONE           = 2;
-+
- const sal_uInt32 AX_CONTAINER_ENABLED       = 0x00000004;
- const sal_uInt32 AX_CONTAINER_HASDESIGNEXT  = 0x00004000;
- const sal_uInt32 AX_CONTAINER_NOCLASSTABLE  = 0x00008000;
-@@ -231,14 +236,6 @@ ControlConverter::~ControlConverter()
- 
- // Generic conversion ---------------------------------------------------------
- 
--void ControlConverter::convertSize( PropertyMap& rPropMap, const AxPairData& rSize ) const
--{
--    // size is given in 1/100 mm, UNO needs AppFont units
--    Size aAppFontSize = mrGraphicHelper.convertHmmToAppFont( Size( rSize.first, rSize.second ) );
--    rPropMap.setProperty( PROP_Width, aAppFontSize.Width );
--    rPropMap.setProperty( PROP_Height, aAppFontSize.Height );
--}
--
- void ControlConverter::convertPosition( PropertyMap& rPropMap, const AxPairData& rPos ) const
- {
-     // position is given in 1/100 mm, UNO needs AppFont units
-@@ -247,6 +244,14 @@ void ControlConverter::convertPosition( PropertyMap& rPropMap, const AxPairData&
-     rPropMap.setProperty( PROP_PositionY, aAppFontPos.Y );
- }
- 
-+void ControlConverter::convertSize( PropertyMap& rPropMap, const AxPairData& rSize ) const
-+{
-+    // size is given in 1/100 mm, UNO needs AppFont units
-+    Size aAppFontSize = mrGraphicHelper.convertHmmToAppFont( Size( rSize.first, rSize.second ) );
-+    rPropMap.setProperty( PROP_Width, aAppFontSize.Width );
-+    rPropMap.setProperty( PROP_Height, aAppFontSize.Height );
-+}
-+
- void ControlConverter::convertColor( PropertyMap& rPropMap, sal_Int32 nPropId, sal_uInt32 nOleColor ) const
- {
-     rPropMap.setProperty( nPropId, OleHelper::decodeOleColor( mrGraphicHelper, nOleColor, mbDefaultColorBgr ) );
 @@ -426,14 +431,16 @@ OUString ControlModelBase::getServiceName() const
          case API_CONTROL_FIXEDTEXT:     return CREATE_OUSTRING( "com.sun.star.awt.UnoControlFixedTextModel" );
          case API_CONTROL_IMAGE:         return CREATE_OUSTRING( "com.sun.star.awt.UnoControlImageControlModel" );
@@ -1040,111 +669,22 @@ index 7f75218..b5d86e3 100644
          case API_CONTROL_DIALOG:        return CREATE_OUSTRING( "com.sun.star.awt.UnoControlDialogModel" );
          default:    OSL_ENSURE( false, "ControlModelBase::getServiceName - no AWT model service supported" );
      }
-@@ -1362,7 +1369,70 @@ void AxScrollBarModel::convertProperties( PropertyMap& rPropMap, const ControlCo
- 
- // ============================================================================
- 
--AxContainerModelBase::AxContainerModelBase() :
-+AxTabStripModel::AxTabStripModel() :
-+    AxFontDataModel( false ),   // no support for Align property
-+    mnBackColor( AX_SYSCOLOR_BUTTONFACE ),
-+    mnTextColor( AX_SYSCOLOR_BUTTONTEXT ),
-+    mnFlags( AX_TABSTRIP_DEFFLAGS ),
-+    mnSelectedTab( -1 ),
-+    mnTabStyle( AX_TABSTRIP_TABS ),
-+    mnTabFlagCount( 0 )
-+{
-+}
-+
-+bool AxTabStripModel::importBinaryModel( BinaryInputStream& rInStrm )
-+{
-+    AxBinaryPropertyReader aReader( rInStrm );
-+    aReader.readIntProperty< sal_Int32 >( mnSelectedTab );
-+    aReader.readIntProperty< sal_uInt32 >( mnBackColor );
-+    aReader.readIntProperty< sal_uInt32 >( mnTextColor );
-+    aReader.skipUndefinedProperty();
-+    aReader.readPairProperty( maSize );
-+    aReader.readStringArrayProperty( maCaptions );
-+    aReader.skipIntProperty< sal_uInt8 >(); // mouse pointer
-+    aReader.skipUndefinedProperty();
-+    aReader.skipIntProperty< sal_uInt32 >(); // tab orientation
-+    aReader.readIntProperty< sal_uInt32 >( mnTabStyle );
-+    aReader.skipBoolProperty(); // multiple rows
-+    aReader.skipIntProperty< sal_uInt32 >(); // fixed width
-+    aReader.skipIntProperty< sal_uInt32 >(); // fixed height
-+    aReader.skipBoolProperty(); // tooltips
-+    aReader.skipUndefinedProperty();
-+    aReader.skipStringArrayProperty(); // tooltip strings
-+    aReader.skipUndefinedProperty();
-+    aReader.skipStringArrayProperty(); // tab names
-+    aReader.readIntProperty< sal_uInt32 >( mnFlags );
-+    aReader.skipBoolProperty(); // new version
-+    aReader.skipIntProperty< sal_uInt32 >(); // tabs allocated
-+    aReader.skipStringArrayProperty(); // tags
-+    aReader.readIntProperty< sal_uInt32 >( mnTabFlagCount );
-+    aReader.skipStringArrayProperty(); // accelerators
-+    aReader.skipPictureProperty(); // mouse icon
-+    return aReader.finalizeImport() && AxFontDataModel::importBinaryModel( rInStrm );
-+}
-+
-+ApiControlType AxTabStripModel::getControlType() const
-+{
-+    return API_CONTROL_TABSTRIP;
-+}
-+
-+void AxTabStripModel::convertProperties( PropertyMap& rPropMap, const ControlConverter& rConv ) const
-+{
-+    rPropMap.setProperty( PROP_Decoration, mnTabStyle != AX_TABSTRIP_NONE );
+@@ -1362,7 +1369,8 @@ void AxTabStripModel::convertProperties( PropertyMap& rPropMap, const ControlConverter& rConv ) const
+ void AxTabStripModel::convertProperties( PropertyMap& rPropMap, const ControlConverter& rConv ) const
+ {
+     rPropMap.setProperty( PROP_Decoration, mnTabStyle != AX_TABSTRIP_NONE );
+-    rPropMap.setProperty( PROP_MultiPageValue, mnSelectedTab );
 +    // adjust for openoffice
 +    rPropMap.setProperty( PROP_MultiPageValue, mnSelectedTab + 1 );
-+    rConv.convertColor( rPropMap, PROP_BackgroundColor, mnBackColor );
-+    AxFontDataModel::convertProperties( rPropMap, rConv );
-+}
-+
-+OUString AxTabStripModel::getCaption( sal_Int32 nIndex ) const
-+{
-+    return ContainerHelper::getVectorElement( maCaptions, nIndex, OUString() );
-+}
-+
-+// ============================================================================
-+
-+AxContainerModelBase::AxContainerModelBase( bool bFontSupport ) :
-     AxFontDataModel( false ),   // no support for Align property
-     maLogicalSize( AX_CONTAINER_DEFWIDTH, AX_CONTAINER_DEFHEIGHT ),
-     maScrollPos( 0, 0 ),
-@@ -1376,7 +1445,8 @@ AxContainerModelBase::AxContainerModelBase() :
-     mnSpecialEffect( AX_SPECIALEFFECT_FLAT ),
-     mnPicAlign( AX_PICALIGN_CENTER ),
-     mnPicSizeMode( AX_PICSIZE_CLIP ),
--    mbPicTiling( false )
-+    mbPicTiling( false ),
-+    mbFontSupport( bFontSupport )
- {
-     setAwtModelMode();
-     // different default size for frame
-@@ -1423,6 +1493,15 @@ bool AxContainerModelBase::importBinaryModel( BinaryInputStream& rInStrm )
-     return aReader.finalizeImport();
+     rConv.convertColor( rPropMap, PROP_BackgroundColor, mnBackColor );
+     AxFontDataModel::convertProperties( rPropMap, rConv );
  }
- 
-+void AxContainerModelBase::convertProperties( PropertyMap& rPropMap, const ControlConverter& rConv ) const
-+{
-+    if( mbFontSupport )
-+    {
-+        rConv.convertColor( rPropMap, PROP_TextColor, mnTextColor );
-+        AxFontDataModel::convertProperties( rPropMap, rConv );
-+    }
-+}
-+
- bool AxContainerModelBase::importClassTable( BinaryInputStream& rInStrm, AxClassTable& orClassTable )
- {
-     bool bValid = true;
-@@ -1457,13 +1536,14 @@ bool AxContainerModelBase::importClassTable( BinaryInputStream& rInStrm, AxClass
+@@ -1457,14 +1536,14 @@ bool AxContainerModelBase::importClassTable( BinaryInputStream& rInStrm, AxClass
  
  // ============================================================================
  
--AxFrameModel::AxFrameModel()
-+AxFrameModel::AxFrameModel() :
-+    AxContainerModelBase( true )
+ AxFrameModel::AxFrameModel() :
+     AxContainerModelBase( true )
  {
  }
  
@@ -1155,56 +695,6 @@ index 7f75218..b5d86e3 100644
  }
  
  void AxFrameModel::convertProperties( PropertyMap& rPropMap, const ControlConverter& rConv ) const
-@@ -1475,6 +1555,49 @@ void AxFrameModel::convertProperties( PropertyMap& rPropMap, const ControlConver
- 
- // ============================================================================
- 
-+AxFormPageModel::AxFormPageModel()
-+{
-+}
-+
-+ApiControlType AxFormPageModel::getControlType() const
-+{
-+    return API_CONTROL_PAGE;
-+}
-+
-+void AxFormPageModel::convertProperties( PropertyMap& rPropMap, const ControlConverter& rConv ) const
-+{
-+    rPropMap.setProperty( PROP_Title, maCaption );
-+    rPropMap.setProperty( PROP_Enabled, getFlag( mnFlags, AX_CONTAINER_ENABLED ) );
-+    rConv.convertColor( rPropMap, PROP_BackgroundColor, mnBackColor );
-+    AxContainerModelBase::convertProperties( rPropMap, rConv );
-+}
-+
-+// ============================================================================
-+
-+AxMultiPageModel::AxMultiPageModel()
-+{
-+}
-+
-+ApiControlType AxMultiPageModel::getControlType() const
-+{
-+    return API_CONTROL_MULTIPAGE;
-+}
-+
-+void AxMultiPageModel::convertProperties( PropertyMap& rPropMap, const ControlConverter& rConv ) const
-+{
-+    rPropMap.setProperty( PROP_Enabled, getFlag( mnFlags, AX_CONTAINER_ENABLED ) );
-+    if( mxTabStrip.get() )
-+        mxTabStrip->convertProperties( rPropMap, rConv );
-+    AxContainerModelBase::convertProperties( rPropMap, rConv );
-+}
-+
-+void AxMultiPageModel::setTabStripModel( const AxTabStripModelRef& rxTabStrip )
-+{
-+    mxTabStrip = rxTabStrip;
-+}
-+
-+// ============================================================================
-+
- AxUserFormModel::AxUserFormModel()
- {
- }
 diff --git oox/source/ole/makefile.mk oox/source/ole/makefile.mk
 index 4e01392..e94ab3e 100644
 --- oox/source/ole/makefile.mk
@@ -1250,7 +740,7 @@ index 17cacce..a10485c 100755
 +    return getFlag( mnFlags, VBA_SITE_VISIBLE );
  }
  
- bool VbaSiteModel::isContainer() const
+ bool VbaSiteModel::isVisible() const
 @@ -274,12 +274,12 @@ ControlModelRef VbaSiteModel::createControlModel( const AxClassTable& rClassTabl
              case VBA_SITE_TEXTBOX:          xCtrlModel.reset( new AxTextBoxModel );         break;
              case VBA_SITE_LISTBOX:          xCtrlModel.reset( new AxListBoxModel );         break;
@@ -1281,24 +771,15 @@ index 17cacce..a10485c 100755
  void VbaSiteModel::convertProperties( PropertyMap& rPropMap,
          const ControlConverter& rConv, ApiControlType eCtrlType, sal_Int32 nCtrlIndex ) const
  {
-@@ -327,7 +333,7 @@ void VbaSiteModel::convertProperties( PropertyMap& rPropMap,
-         if( (0 <= nCtrlIndex) && (nCtrlIndex <= SAL_MAX_INT16) )
-             rPropMap.setProperty( PROP_TabIndex, static_cast< sal_Int16 >( nCtrlIndex ) );
-         // progress bar and group box support TabIndex, but not Tabstop...
--        if( (eCtrlType != API_CONTROL_PROGRESSBAR) && (eCtrlType != API_CONTROL_GROUPBOX) )
-+        if( (eCtrlType != API_CONTROL_PROGRESSBAR) && (eCtrlType != API_CONTROL_GROUPBOX) && (eCtrlType != API_CONTROL_FRAME) && (eCtrlType != API_CONTROL_PAGE) )
-             rPropMap.setProperty( PROP_Tabstop, getFlag( mnFlags, VBA_SITE_TABSTOP ) );
-         rConv.convertPosition( rPropMap, maPos );
-     }
-@@ -368,7 +374,13 @@ OUString VbaFormControl::getControlName() const
+@@ -368,12 +374,13 @@ OUString VbaFormControl::getControlName() const
      return mxSiteModel.get() ? mxSiteModel->getName() : OUString();
  }
  
-+sal_Int32 VbaFormControl::getControlId() const
-+{
-+    return mxSiteModel.get() ? mxSiteModel->getId() : -1;
-+}
-+
+ sal_Int32 VbaFormControl::getControlId() const
+ {
+     return mxSiteModel.get() ? mxSiteModel->getId() : -1;
+ }
+ 
  void VbaFormControl::createAndConvert( sal_Int32 nCtrlIndex,
 +         const Reference< XModel >& rxDocModel,
          const Reference< XNameContainer >& rxParentNC, const ControlConverter& rConv ) const
@@ -1669,22 +1150,6 @@ index 2b32b0a..7dbc10b 100644
  Coordinates
  CopyBack
  CopyFormulas
-@@ -103,6 +104,7 @@ D3DScenePerspective
- D3DSceneShadeMode
- DDELinks
- DatabaseRanges
-+Decoration
- DefaultContext
- DefaultScrollValue
- DefaultSpinValue
-@@ -260,6 +262,7 @@ MinorTickmarks
- MissingValueTreatment
- Model
- MultiLine
-+MultiPageValue
- MultiSelection
- Name
- NamedRanges
 @@ -343,6 +346,7 @@ RotationHorizontal
  RotationVertical
  RowGrand
@@ -1775,29 +1240,13 @@ index 1b60aec..ffed051 100644
  } // namespace xls
  } // namespace oox
 -
-diff --git oox/source/xls/formulabase.cxx oox/source/xls/formulabase.cxx
-index 8e37f5c..edf99ff 100644
---- oox/source/xls/formulabase.cxx
-+++ oox/source/xls/formulabase.cxx
-@@ -1262,6 +1262,11 @@ bool OpCodeProviderImpl::initFuncOpCode( FunctionInfo& orFuncInfo, const ApiToke
-                 maParserMap.push_back( aEntry );
-             }
-         }
-+        else
-+        {
-+            // ignore entries for functions unknown by Calc *and* by Excel
-+            bIsValid = orFuncInfo.maOoxFuncName.getLength() == 0;
-+        }
-     }
-     else if( orFuncInfo.mnBiffFuncId == BIFF_FUNC_EXTERNCALL )
-     {
 diff --git sc/source/filter/excel/excimp8.cxx sc/source/filter/excel/excimp8.cxx
 index a0e75b1..7e1a181 100644
 --- sc/source/filter/excel/excimp8.cxx
 +++ sc/source/filter/excel/excimp8.cxx
-@@ -105,10 +105,14 @@
+@@ -105,9 +105,14 @@
+ #include <com/sun/star/script/ModuleInfo.hpp>
  #include <cppuhelper/component_context.hxx>
- #include <com/sun/star/container/XNameContainer.hpp>
  #include <sfx2/app.hxx>
 +#include <com/sun/star/document/XFilter.hpp>
 +#include <com/sun/star/document/XImporter.hpp>
@@ -1806,11 +1255,10 @@ index a0e75b1..7e1a181 100644
  #include "xltoolbar.hxx"
  
  using namespace com::sun::star;
--
 +using namespace ::comphelper;
+ using ::rtl::OUString;
  
- #define	INVALID_POS		0xFFFFFFFF
- 
+ // defined in docfunc.cxx ( really this needs a new name )
 @@ -268,9 +272,10 @@ void ImportExcel8::ReadBasic( void )
          bool bLoadCode = pFilterOpt->IsLoadExcelBasicCode();
          bool bLoadExecutable = pFilterOpt->IsLoadExcelBasicExecutable();
@@ -2141,16 +1589,16 @@ index d595981..42139bc 100644
 --- toolkit/inc/toolkit/awt/vclxwindows.hxx
 +++ toolkit/inc/toolkit/awt/vclxwindows.hxx
 @@ -83,6 +83,7 @@
+ #include <com/sun/star/awt/XDateField.hpp>
  #include <com/sun/star/awt/XComboBox.hpp>
  #include <com/sun/star/awt/XCheckBox.hpp>
- #include <com/sun/star/awt/XImageConsumer.hpp>
 +#include <com/sun/star/awt/XSimpleTabController.hpp>
  #include <com/sun/star/awt/XItemListListener.hpp>
  #include <cppuhelper/weak.hxx>
  #include <cppuhelper/implbase3.hxx>
 @@ -95,6 +96,7 @@
+ 
  #include <vcl/pointr.hxx>
- #include <vcl/imgcons.hxx>
  #include <vcl/image.hxx>
 +#include <vcl/tabctrl.hxx>
  
@@ -2691,9 +2139,9 @@ index d6d63f0..73d58ed 100644
      
      ::com::sun::star::uno::Reference< ::com::sun::star::graphic::XGraphicObject > mxGrfObj;
 +    ::com::sun::star::uno::Reference< ::com::sun::star::graphic::XGraphic > getGraphicFromURL_nothrow( const ::rtl::OUString& _rURL );
+ 
  protected:
-     ImageProducerControlModel() : mbAdjustingImagePosition( false ), mbAdjustingGraphic( false ) { }
-     ImageProducerControlModel( const ImageProducerControlModel& _rSource ) : com::sun::star::awt::XImageProducer(), UnoControlModel( _rSource ), mbAdjustingImagePosition( false ), mbAdjustingGraphic( false ) { }
+     GraphicControlModel() : mbAdjustingImagePosition( false ), mbAdjustingGraphic( false ) { }
 @@ -672,44 +683,6 @@ public:
  
  };
@@ -5099,7 +4547,7 @@ index df3214d..10823ad 100644
      ::rtl::OUString baseLocation;
      ::rtl::OUString url;
  
-@@ -2194,17 +2992,9 @@ throw (RuntimeException)
+@@ -2194,16 +2194,9 @@ throw (RuntimeException)
      ::rtl::OUString absoluteURL( url );
      if ( url.getLength() > 0 )
      {
@@ -5113,10 +4561,9 @@ index df3214d..10823ad 100644
 -		}
 -		else
 -			ret = url;
--
-         ::rtl::OUString testAbsoluteURL;
-         if ( ::osl::FileBase::E_None == ::osl::FileBase::getAbsoluteFileURL( baseLocation, url, testAbsoluteURL ) )
-             absoluteURL = testAbsoluteURL;
+ 
+         const INetURLObject protocolCheck( url );
+         const INetProtocol protocol = protocolCheck.GetProtocol();
 diff --git toolkit/source/controls/unocontrolcontainer.cxx toolkit/source/controls/unocontrolcontainer.cxx
 index 0fa370e..501aa09 100644
 --- toolkit/source/controls/unocontrolcontainer.cxx
@@ -5165,7 +4612,7 @@ index 30246ae..71fcd3a 100644
 +        return ImageHelper::getGraphicAndGraphicObjectFromURL_nothrow( mxGrfObj, _rURL );
 +    }
 +
- void SAL_CALL ImageProducerControlModel::setFastPropertyValue_NoBroadcast( sal_Int32 nHandle, const ::com::sun::star::uno::Any& rValue ) throw (::com::sun::star::uno::Exception)
+ void SAL_CALL GraphicControlModel::setFastPropertyValue_NoBroadcast( sal_Int32 nHandle, const ::com::sun::star::uno::Any& rValue ) throw (::com::sun::star::uno::Exception)
  {
      UnoControlModel::setFastPropertyValue_NoBroadcast( nHandle, rValue );
 @@ -627,7 +632,7 @@ void SAL_CALL ImageProducerControlModel::setFastPropertyValue_NoBroadcast( sal_I
@@ -5296,9 +4743,9 @@ index 0c0edea..eb3f294 100644
              DECL_PROP_2     ( "EnableVisible",          ENABLEVISIBLE,          sal_Bool,           BOUND, MAYBEDEFAULT ),
              DECL_PROP_3     ( "ReferenceDevice",        REFERENCE_DEVICE,       Reference< XDevice >,BOUND, MAYBEDEFAULT, TRANSIENT ),
 -            DECL_PROP_2     ( "VBAForm",                VBAFORM,                sal_Bool,           BOUND, MAYBEDEFAULT ),
-             DECL_PROP_3     ( "EvenRowBackgroundColor",  GRID_EVEN_ROW_BACKGROUND,     sal_Int32,      BOUND, MAYBEDEFAULT, MAYBEVOID ),
-             DECL_PROP_3     ( "HeaderBackgroundColor",   GRID_HEADER_BACKGROUND,       sal_Int32,      BOUND, MAYBEDEFAULT, MAYBEVOID ),
-             DECL_PROP_3     ( "LineColor",               GRID_LINE_COLOR,              sal_Int32,      BOUND, MAYBEDEFAULT, MAYBEVOID ),
+             DECL_PROP_3     ( "EvenRowBackgroundColor", GRID_EVEN_ROW_BACKGROUND, sal_Int32,      BOUND, MAYBEDEFAULT, MAYBEVOID ),
+             DECL_PROP_3     ( "HeaderBackgroundColor",  GRID_HEADER_BACKGROUND,  sal_Int32,      BOUND, MAYBEDEFAULT, MAYBEVOID ),
+             DECL_PROP_3     ( "GridLineColor",          GRID_LINE_COLOR,         sal_Int32,      BOUND, MAYBEDEFAULT, MAYBEVOID ),
 -            DECL_PROP_3     ( "RowBackgroundColor",     GRID_ROW_BACKGROUND,     sal_Int32,      BOUND, MAYBEDEFAULT, MAYBEVOID )		
 +            DECL_PROP_3     ( "RowBackgroundColor",     GRID_ROW_BACKGROUND,     sal_Int32,      BOUND, MAYBEDEFAULT, MAYBEVOID ),
 +            DECL_DEP_PROP_3 ( "MultiPageValue",          MULTIPAGEVALUE,      sal_Int32,          BOUND, MAYBEDEFAULT, MAYBEVOID ),
@@ -5409,12 +4856,12 @@ index 35ecda7..4cc1082 100644
  
 @@ -190,6 +191,7 @@ class VBAHELPER_DLLPUBLIC UserFormGeometryHelper : public AbstractGeometryAttrib
  {
- 
+     css::uno::Reference< css::awt::XUnitConversion > mxControlUnits;
      css::uno::Reference< css::beans::XPropertySet > mxModel;
 +    std::auto_ptr< oox::GraphicHelper > mpGraphicHelper;
- public:
-     UserFormGeometryHelper( const css::uno::Reference< css::uno::XComponentContext >& xContext, const css::uno::Reference< css::awt::XControl >& xControl );
-     virtual double getLeft();
+ 
+     sal_Int32 ConvertLogicToPixel( sal_Int32 nValue, sal_Bool bIsPoint, sal_Bool bIsX, sal_Int16 nSourceUnit );
+     sal_Int32 ConvertPixelToLogic( sal_Int32 nValue, sal_Bool bIsPoint, sal_Bool bIsX, sal_Int16 nTargetUnit );
 diff --git vbahelper/prj/build.lst vbahelper/prj/build.lst
 index 20001db..ded9ee2 100644
 --- vbahelper/prj/build.lst
@@ -5430,9 +4877,9 @@ index 994da25..12ea0b5 100644
 --- vbahelper/source/msforms/vbacontrol.cxx
 +++ vbahelper/source/msforms/vbacontrol.cxx
 @@ -559,6 +559,11 @@ ScVbaControl* ScVbaControlFactory::createControl( const uno::Reference< awt::XCo
-     pControl = new ScVbaMultiPage( xVbaParent, m_xContext, xControl, m_xModel, new UserFormGeometryHelper( m_xContext, xControl ), xParent );
-     else if ( xServiceInfo->supportsService( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM("com.sun.star.awt.UnoControlSpinButtonModel") ) ) )
      pControl = new ScVbaSpinButton( xVbaParent, m_xContext, xControl, m_xModel, new UserFormGeometryHelper( m_xContext, xControl ) );
+     else if ( xServiceInfo->supportsService( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM("com.sun.star.custom.awt.UnoControlSystemAXContainerModel") ) ) )
+     pControl = new VbaSystemAXControl( xVbaParent, m_xContext, xControl, m_xModel, new UserFormGeometryHelper( m_xContext, xControl ) );
 +    // #FIXME implement a page control
 +    else if ( xServiceInfo->supportsService( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM("com.sun.star.awt.UnoPageModel") ) ) )
 +	pControl = new ScVbaControl( xVbaParent, m_xContext, xControl, m_xModel, new UserFormGeometryHelper( m_xContext, xControl ) );
@@ -5445,10 +4892,15 @@ diff --git vbahelper/source/msforms/vbacontrols.cxx vbahelper/source/msforms/vba
 index a82c9a4..73d67cc 100644
 --- vbahelper/source/msforms/vbacontrols.cxx
 +++ vbahelper/source/msforms/vbacontrols.cxx
-@@ -55,20 +55,32 @@ class ControlArrayWrapper : public ArrayWrapImpl
-         xProp->getPropertyValue( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( "Name" ) ) ) >>= sName;
-         return sName;
+@@ -66,20 +66,33 @@ private:
+                 msNames.realloc( nIndex );
+ 
+             msNames[ nIndex ] = getControlName( xCtrl );
+-            mControls.push_back( xCtrl );
+             mIndices[ msNames[ nIndex ] ] = nIndex;
+         } 
      }
+ 
 +    void getNestedControls( ControlVec& vControls, uno::Reference< awt::XControlContainer >& xContainer )
 +    {
 +        uno::Sequence< uno::Reference< awt::XControl > > aControls = xContainer->getControls();
@@ -5462,9 +4914,8 @@ index a82c9a4..73d67cc 100644
 +                getNestedControls( vControls, xC );
 +        }
 +    }
- 
++
  public:
- 
      ControlArrayWrapper( const uno::Reference< awt::XControl >& xDialog )
      {
          mxDialog.set( xDialog, uno::UNO_QUERY_THROW );
@@ -5472,18 +4923,15 @@ index a82c9a4..73d67cc 100644
 -    
 -        msNames.realloc( sXControls.getLength() );
 -        for ( sal_Int32 i = 0; i < sXControls.getLength(); ++i )
+-            SetArrayElementTo( sXControls[ i ], i );
 +//        uno::Sequence< uno::Reference< awt::XControl > > sXControls = mxDialog->getControls();
 +        getNestedControls( mControls, mxDialog );
 +        msNames.realloc( mControls.size() );
 +        for ( sal_uInt32 i = 0; i < mControls.size(); ++i )
-         {
--            uno::Reference< awt::XControl > xCtrl = sXControls[ i ];
-+            uno::Reference< awt::XControl > xCtrl = mControls[ i ];
-             msNames[ i ] = getControlName( xCtrl );
--            mControls.push_back( xCtrl );
-             mIndices[ msNames[ i ] ] = i;
-         }
++            SetArrayElementTo( mControls[ i ], i );
      }
+  
+     static rtl::OUString getControlName( const uno::Reference< awt::XControl >& xCtrl )
 diff --git vbahelper/source/msforms/vbamultipage.cxx vbahelper/source/msforms/vbamultipage.cxx
 index 8b3592c..e42d49d 100644
 --- vbahelper/source/msforms/vbamultipage.cxx
@@ -5651,111 +5099,132 @@ diff --git vbahelper/source/vbahelper/vbahelper.cxx vbahelper/source/vbahelper/v
 index 89892d7..c02569d 100644
 --- vbahelper/source/vbahelper/vbahelper.cxx
 +++ vbahelper/source/vbahelper/vbahelper.cxx
-@@ -987,49 +987,95 @@ void setOrAppendPropertyValue( uno::Sequence< beans::PropertyValue >& aProp, con
+# FIXME ooo330m2: upstream added another conversion related hack; it might obsolete this changes
+#                 the only still needed think might be the oox::GraphicHelper.reset => created new hunk just for this change
+#@@ -987,49 +987,95 @@ void setOrAppendPropertyValue( uno::Sequence< beans::PropertyValue >& aProp, con
+# 
+# #define VBA_LEFT "PositionX"
+# #define VBA_TOP "PositionY"
+#-UserFormGeometryHelper::UserFormGeometryHelper( const uno::Reference< uno::XComponentContext >& /*xContext*/, const uno::Reference< awt::XControl >& xControl )
+#+UserFormGeometryHelper::UserFormGeometryHelper( const uno::Reference< uno::XComponentContext >& xContext, const uno::Reference< awt::XControl >& xControl )
+# {
+#     mxModel.set( xControl->getModel(), uno::UNO_QUERY_THROW );
+#+    uno::Reference< lang::XMultiServiceFactory > xFac( ( xContext.is() ? xContext->getServiceManager() : NULL ), uno::UNO_QUERY_THROW );
+#+    // TODO We need access to a document GraphicHelper (  shared with oox ? )
+#+    // maybe wrap this in an uno service? It's purty naff creating these
+#+    // per control object
+#+    mpGraphicHelper.reset( new oox::GraphicHelper( xFac, NULL ) );
+# }
+#     double UserFormGeometryHelper::getLeft()
+#     {
+#     sal_Int32 nLeft = 0;
+#     mxModel->getPropertyValue( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( VBA_LEFT ) ) ) >>= nLeft;	
+#-    return Millimeter::getInPoints( nLeft );
+#+        //control units are in appfont
+#+        awt::Point aPoint( nLeft, nLeft );
+#+        //covert appfont to hmm
+#+        aPoint = mpGraphicHelper->convertAppFontToHmm( aPoint );
+#+        //convert hmm to Points
+#+        return Millimeter::getInPoints( aPoint.X );
+#     }
+#     void UserFormGeometryHelper::setLeft( double nLeft )
+#     {
+#-        mxModel->setPropertyValue( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( VBA_LEFT ) ), uno::makeAny( Millimeter::getInHundredthsOfOneMillimeter( nLeft ) ) );
+#+        //covert Points to hmm
+#+        awt::Point aPoint( Millimeter::getInHundredthsOfOneMillimeter( nLeft ), 
+#+          Millimeter::getInHundredthsOfOneMillimeter( nLeft ) );
+#+        //convert hmm to appfont
+#+        aPoint = mpGraphicHelper->convertHmmToAppFont( aPoint );
+#+        mxModel->setPropertyValue( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( VBA_LEFT ) ), uno::makeAny( aPoint.X ) );
+#     }
+#     double UserFormGeometryHelper::getTop()
+#     {
+#     sal_Int32 nTop = 0;
+#     mxModel->getPropertyValue( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( VBA_TOP ) ) ) >>= nTop;	
+#-    return Millimeter::getInPoints( nTop );
+#+        //control units are in appfont
+#+        awt::Point aPoint( nTop, nTop );
+#+        //covert appfont to hmm
+#+        aPoint = mpGraphicHelper->convertAppFontToHmm( aPoint );
+#+        //convert hmm to Points
+#+	return Millimeter::getInPoints( aPoint.X );
+#     }
+#     void UserFormGeometryHelper::setTop( double nTop )
+#     {
+#-    mxModel->setPropertyValue( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( 	VBA_TOP ) ), uno::makeAny( Millimeter::getInHundredthsOfOneMillimeter( nTop ) ) );
+#+        //covert Points to hmm
+#+        awt::Point aPoint( Millimeter::getInHundredthsOfOneMillimeter( nTop ), 
+#+          Millimeter::getInHundredthsOfOneMillimeter( nTop ) );
+#+        //convert hmm to appfont
+#+        aPoint = mpGraphicHelper->convertHmmToAppFont( aPoint );
+#+        mxModel->setPropertyValue( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( VBA_TOP ) ), uno::makeAny( aPoint.X ) );
+#     }
+#     double UserFormGeometryHelper::getHeight()
+#     {
+#     sal_Int32 nHeight = 0;
+#     mxModel->getPropertyValue( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( NAME_HEIGHT ) ) ) >>= nHeight;	
+#-    return Millimeter::getInPoints( nHeight );
+#+        //control units are in appfont
+#+        awt::Point aPoint( nHeight, nHeight );
+#+        //covert appfont to hmm
+#+        aPoint = mpGraphicHelper->convertAppFontToHmm( aPoint );
+#+        //convert hmm to Points
+#+	return Millimeter::getInPoints( aPoint.X );
+#     }
+#+
+#     void UserFormGeometryHelper::setHeight( double nHeight )
+#     {
+#-    mxModel->setPropertyValue( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( 	NAME_HEIGHT ) ), uno::makeAny( Millimeter::getInHundredthsOfOneMillimeter( nHeight ) ) );
+#+        //covert Points to hmm
+#+        awt::Point aPoint( Millimeter::getInHundredthsOfOneMillimeter( nHeight ), 
+#+          Millimeter::getInHundredthsOfOneMillimeter( nHeight ) );
+#+        //convert hmm to appfont
+#+        aPoint = mpGraphicHelper->convertHmmToAppFont( aPoint );
+#+        mxModel->setPropertyValue( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( NAME_HEIGHT ) ), uno::makeAny( aPoint.X ) );
+#     }
+#     double UserFormGeometryHelper::getWidth()
+#     {
+#     sal_Int32 nWidth = 0;
+#     mxModel->getPropertyValue( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( 	NAME_WIDTH ) ) ) >>= nWidth;	
+#-    return Millimeter::getInPoints( nWidth );
+#+        //control units are in appfont
+#+        awt::Point aPoint( nWidth, nWidth );
+#+        //covert appfont to hmm
+#+        aPoint = mpGraphicHelper->convertAppFontToHmm( aPoint );
+#+        //convert hmm to Points
+#+	return Millimeter::getInPoints( aPoint.X );
+#     }
+#     void UserFormGeometryHelper::setWidth( double nWidth)
+#     {
+#-    mxModel->setPropertyValue( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( 	NAME_WIDTH ) ), uno::makeAny(  Millimeter::getInHundredthsOfOneMillimeter( nWidth ) ) );
+#+        //covert Points to hmm
+#+        awt::Point aPoint( Millimeter::getInHundredthsOfOneMillimeter( nWidth ), 
+#+          Millimeter::getInHundredthsOfOneMillimeter( nWidth ) );
+#+        //convert hmm to appfont
+#+        aPoint = mpGraphicHelper->convertHmmToAppFont( aPoint );
+#+	mxModel->setPropertyValue( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( 	NAME_WIDTH ) ), uno::makeAny(  aPoint.X ) );
+#     }
+# 
+#     double ConcreteXShapeGeometryAttributes::getLeft()
+@@ -987,11 +987,17 @@ void setOrAppendPropertyValue( uno::Sequ
  
- #define VBA_LEFT "PositionX"
- #define VBA_TOP "PositionY"
+ // ====UserFormGeomentryHelper====
+ //---------------------------------------------
 -UserFormGeometryHelper::UserFormGeometryHelper( const uno::Reference< uno::XComponentContext >& /*xContext*/, const uno::Reference< awt::XControl >& xControl )
 +UserFormGeometryHelper::UserFormGeometryHelper( const uno::Reference< uno::XComponentContext >& xContext, const uno::Reference< awt::XControl >& xControl )
  {
-     mxModel.set( xControl->getModel(), uno::UNO_QUERY_THROW );
+     if ( !xControl.is() )
+         throw uno::RuntimeException();
+ 
 +    uno::Reference< lang::XMultiServiceFactory > xFac( ( xContext.is() ? xContext->getServiceManager() : NULL ), uno::UNO_QUERY_THROW );
 +    // TODO We need access to a document GraphicHelper (  shared with oox ? )
 +    // maybe wrap this in an uno service? It's purty naff creating these
 +    // per control object
 +    mpGraphicHelper.reset( new oox::GraphicHelper( xFac, NULL ) );
- }
-     double UserFormGeometryHelper::getLeft()
-     {
-     sal_Int32 nLeft = 0;
-     mxModel->getPropertyValue( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( VBA_LEFT ) ) ) >>= nLeft;	
--    return Millimeter::getInPoints( nLeft );
-+        //control units are in appfont
-+        awt::Point aPoint( nLeft, nLeft );
-+        //covert appfont to hmm
-+        aPoint = mpGraphicHelper->convertAppFontToHmm( aPoint );
-+        //convert hmm to Points
-+        return Millimeter::getInPoints( aPoint.X );
-     }
-     void UserFormGeometryHelper::setLeft( double nLeft )
-     {
--        mxModel->setPropertyValue( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( VBA_LEFT ) ), uno::makeAny( Millimeter::getInHundredthsOfOneMillimeter( nLeft ) ) );
-+        //covert Points to hmm
-+        awt::Point aPoint( Millimeter::getInHundredthsOfOneMillimeter( nLeft ), 
-+          Millimeter::getInHundredthsOfOneMillimeter( nLeft ) );
-+        //convert hmm to appfont
-+        aPoint = mpGraphicHelper->convertHmmToAppFont( aPoint );
-+        mxModel->setPropertyValue( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( VBA_LEFT ) ), uno::makeAny( aPoint.X ) );
-     }
-     double UserFormGeometryHelper::getTop()
-     {
-     sal_Int32 nTop = 0;
-     mxModel->getPropertyValue( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( VBA_TOP ) ) ) >>= nTop;	
--    return Millimeter::getInPoints( nTop );
-+        //control units are in appfont
-+        awt::Point aPoint( nTop, nTop );
-+        //covert appfont to hmm
-+        aPoint = mpGraphicHelper->convertAppFontToHmm( aPoint );
-+        //convert hmm to Points
-+	return Millimeter::getInPoints( aPoint.X );
-     }
-     void UserFormGeometryHelper::setTop( double nTop )
-     {
--    mxModel->setPropertyValue( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( 	VBA_TOP ) ), uno::makeAny( Millimeter::getInHundredthsOfOneMillimeter( nTop ) ) );
-+        //covert Points to hmm
-+        awt::Point aPoint( Millimeter::getInHundredthsOfOneMillimeter( nTop ), 
-+          Millimeter::getInHundredthsOfOneMillimeter( nTop ) );
-+        //convert hmm to appfont
-+        aPoint = mpGraphicHelper->convertHmmToAppFont( aPoint );
-+        mxModel->setPropertyValue( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( VBA_TOP ) ), uno::makeAny( aPoint.X ) );
-     }
-     double UserFormGeometryHelper::getHeight()
-     {
-     sal_Int32 nHeight = 0;
-     mxModel->getPropertyValue( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( NAME_HEIGHT ) ) ) >>= nHeight;	
--    return Millimeter::getInPoints( nHeight );
-+        //control units are in appfont
-+        awt::Point aPoint( nHeight, nHeight );
-+        //covert appfont to hmm
-+        aPoint = mpGraphicHelper->convertAppFontToHmm( aPoint );
-+        //convert hmm to Points
-+	return Millimeter::getInPoints( aPoint.X );
-     }
 +
-     void UserFormGeometryHelper::setHeight( double nHeight )
-     {
--    mxModel->setPropertyValue( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( 	NAME_HEIGHT ) ), uno::makeAny( Millimeter::getInHundredthsOfOneMillimeter( nHeight ) ) );
-+        //covert Points to hmm
-+        awt::Point aPoint( Millimeter::getInHundredthsOfOneMillimeter( nHeight ), 
-+          Millimeter::getInHundredthsOfOneMillimeter( nHeight ) );
-+        //convert hmm to appfont
-+        aPoint = mpGraphicHelper->convertHmmToAppFont( aPoint );
-+        mxModel->setPropertyValue( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( NAME_HEIGHT ) ), uno::makeAny( aPoint.X ) );
-     }
-     double UserFormGeometryHelper::getWidth()
-     {
-     sal_Int32 nWidth = 0;
-     mxModel->getPropertyValue( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( 	NAME_WIDTH ) ) ) >>= nWidth;	
--    return Millimeter::getInPoints( nWidth );
-+        //control units are in appfont
-+        awt::Point aPoint( nWidth, nWidth );
-+        //covert appfont to hmm
-+        aPoint = mpGraphicHelper->convertAppFontToHmm( aPoint );
-+        //convert hmm to Points
-+	return Millimeter::getInPoints( aPoint.X );
-     }
-     void UserFormGeometryHelper::setWidth( double nWidth)
-     {
--    mxModel->setPropertyValue( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( 	NAME_WIDTH ) ), uno::makeAny(  Millimeter::getInHundredthsOfOneMillimeter( nWidth ) ) );
-+        //covert Points to hmm
-+        awt::Point aPoint( Millimeter::getInHundredthsOfOneMillimeter( nWidth ), 
-+          Millimeter::getInHundredthsOfOneMillimeter( nWidth ) );
-+        //convert hmm to appfont
-+        aPoint = mpGraphicHelper->convertHmmToAppFont( aPoint );
-+	mxModel->setPropertyValue( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( 	NAME_WIDTH ) ), uno::makeAny(  aPoint.X ) );
-     }
- 
-     double ConcreteXShapeGeometryAttributes::getLeft()
+     mxControlUnits.set( xControl->getPeer(), uno::UNO_QUERY_THROW );
+     mxModel.set( xControl->getModel(), uno::UNO_QUERY_THROW );
+ }
 diff --git vbahelper/util/makefile.mk vbahelper/util/makefile.mk
 index 33c4900..4b08391 100644
 --- vbahelper/util/makefile.mk
