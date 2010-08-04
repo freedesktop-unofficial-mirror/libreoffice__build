@@ -18974,7 +18974,7 @@ index 2722781..6c4ffb3 100644
  
  using namespace ::com::sun::star;
  using namespace ::ooo::vba;
-@@ -41,6 +42,83 @@ namespace vba
+@@ -41,6 +42,94 @@ namespace vba
  {
  namespace excel
  {
@@ -19034,6 +19034,17 @@ index 2722781..6c4ffb3 100644
 +    }
 +    return pScCellRangesBase->GetDocShell();
 +}
++
++ScDocShell* GetDocShellFromRanges( const uno::Reference< sheet::XSheetCellRangeContainer >& xRanges ) throw ( uno::RuntimeException ) 
++{ 
++    // need the ScCellRangesBase to get docshell 
++    uno::Reference< uno::XInterface > xIf( xRanges, uno::UNO_QUERY_THROW ); 
++
++    ScCellRangesBase* pUno = ScCellRangesBase::getImplementation( xIf ); 
++    if ( !pUno ) 
++        throw uno::RuntimeException( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( "Failed to access underlying uno range object" ) ), uno::Reference< uno::XInterface >()  ); 
++    return pUno->GetDocShell(); 
++} 
 +
 +ScDocument* GetDocumentFromRange( const uno::Reference< uno::XInterface >& xRange ) throw ( uno::RuntimeException )
 +{
@@ -19129,7 +19140,7 @@ index ce6ba35..4c8c4a1 100644
  
  class ScCellRangesBase;
  
-@@ -36,24 +42,34 @@ namespace ooo
+@@ -36,24 +42,35 @@ namespace ooo
  {
      namespace vba 
      {
@@ -19163,6 +19174,7 @@ index ce6ba35..4c8c4a1 100644
 +            css::uno::Reference< ooo::vba::XHelperInterface > getUnoSheetModuleObj( const css::uno::Reference< css::sheet::XSheetCellRangeContainer >& xRanges ) throw ( css::uno::RuntimeException );
 +            css::uno::Reference< ooo::vba::XHelperInterface > getUnoSheetModuleObj( const css::uno::Reference< css::table::XCellRange >& xRange ) throw ( css::uno::RuntimeException );
 +            ScDocShell* GetDocShellFromRange( const css::uno::Reference< css::uno::XInterface >& xRange ) throw ( css::uno::RuntimeException );
++            ScDocShell* GetDocShellFromRanges( const css::uno::Reference< css::sheet::XSheetCellRangeContainer >& xRanges ) throw ( css::uno::RuntimeException );
 +            ScDocument* GetDocumentFromRange( const css::uno::Reference< css::uno::XInterface >& xRange ) throw ( css::uno::RuntimeException );
 +            css::uno::Reference< css::frame::XModel > GetModelFromRange( const css::uno::Reference< css::uno::XInterface >& xRange ) throw ( css::uno::RuntimeException );
 +
@@ -25702,6 +25714,26 @@ index fd136e6..d9cc4ea 100644
          if ( xNameAccess->hasByName( sAddress ) )
          {
              uno::Reference< sheet::XNamedRange > xNamed( xNameAccess->getByName( sAddress ), uno::UNO_QUERY_THROW );
+# FIXME ooo330-m2: this is new hunk added to me the complier happy
+@@ -1136,7 +1136,7 @@ uno::Reference< sheet::XSheetCellRangeCo
+         ScUnoConversion::FillScRange( aScRange, aRangeAddr );
+         aScRanges.Append( aScRange );
+     }
+-    return new ScCellRangesObj( getDocShellFromRanges( rxCellRanges ), aScRanges );
++    return new ScCellRangesObj( excel::GetDocShellFromRanges( rxCellRanges ), aScRanges );
+ }
+ 
+ void lclExpandAndMerge( const uno::Reference< table::XCellRange >& rxCellRange, bool bMerge ) throw (uno::RuntimeException)
+# FIXME ooo330-m2: this is new hunk added to me the complier happy
+@@ -1150,7 +1150,7 @@ util::TriState lclGetMergedState( const 
+         of a merged range is part of this range are not covered. */
+     ScRange aScRange;
+     ScUnoConversion::FillScRange( aScRange, aRangeAddr );
+-    bool bHasMerged = getDocumentFromRange( rxCellRange )->HasAttrib( aScRange, HASATTR_MERGED | HASATTR_OVERLAPPED );
++    bool bHasMerged = excel::GetDocumentFromRange( rxCellRange )->HasAttrib( aScRange, HASATTR_MERGED | HASATTR_OVERLAPPED );
+     return bHasMerged ? util::TriState_INDETERMINATE : util::TriState_NO;
+ }
+ 
 @@ -1163,6 +1164,28 @@ ScVbaRange::getRangeObjectForName( const uno::Reference< uno::XComponentContext
      return getRangeForName( xParent, xContext, sRangeName, pDocSh, refAddr, eConv );
  }
@@ -27590,6 +27622,8 @@ index 2af3a04..8bc6dcf 100644
  #define STANDARDWIDTH 2267
  #define STANDARDHEIGHT 427
 # FIXME ooo320-m2: upstream removed this code at all; see also the change in sc/source/ui/vba/vbawindow.cxx
+#                  they started to call ScVbaWorksheets::nameExists instead of nameExists
+#                  => disabled this hunk and replaced nameExists with ScVbaWorksheets::nameExists in three locations below
 #@@ -94,7 +96,7 @@
 # using namespace com::sun::star;
 # using namespace ooo::vba;
@@ -27644,6 +27678,7 @@ index 2af3a04..8bc6dcf 100644
      uno::Any aValue( bVisible );
      xProps->setPropertyValue
              (rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( "IsVisible" ) ), aValue);
+# FIXME ooo330-m2: replaced nameExists with ScVbaWorksheets::nameExists
 @@ -406,6 +428,18 @@ ScVbaWorksheet::getProtectContents()throw (uno::RuntimeException)
  sal_Bool 
  ScVbaWorksheet::getProtectDrawingObjects() throw (uno::RuntimeException) 
@@ -27651,7 +27686,7 @@ index 2af3a04..8bc6dcf 100644
 +	SCTAB nTab = 0;
 +	rtl::OUString aSheetName = getName();
 +	uno::Reference <sheet::XSpreadsheetDocument> xSpreadDoc( getModel(), uno::UNO_QUERY_THROW );
-+	bool bSheetExists = nameExists (xSpreadDoc, aSheetName, nTab);
++	bool bSheetExists = ScVbaWorksheets::nameExists (xSpreadDoc, aSheetName, nTab);
 +	if ( bSheetExists )
 +	{
 +		uno::Reference< frame::XModel > xModel( getModel(), uno::UNO_QUERY_THROW );
@@ -27697,6 +27732,9 @@ index 2af3a04..8bc6dcf 100644
  }
  
  void 
+# FIXME ooo330-m2: replaced nameExists with ScVbaWorksheets::nameExists
+#                  only in the "if ( bSameDoc || ScVbaWorksheets::nameExists( xDestDoc, aCurrSheetName, nDummy ) ) " line
+#                  it has already been used in the other lines starting with "bool b"
 @@ -486,18 +540,42 @@ ScVbaWorksheet::Copy( const uno::Any& Before, const uno::Any& After ) throw (uno
          return;
      }
@@ -27726,7 +27764,7 @@ index 2af3a04..8bc6dcf 100644
 -        getNewSpreadsheetName(aSheetName,aCurrSheetName,xSpreadDoc);
 -        xSheets->copyByName(aCurrSheetName,aSheetName,nDest);
 +        uno::Reference<sheet::XSpreadsheets> xSheets = xDestDoc->getSheets();
-+        if ( bSameDoc || nameExists( xDestDoc, aCurrSheetName, nDummy ) )
++        if ( bSameDoc || ScVbaWorksheets::nameExists( xDestDoc, aCurrSheetName, nDummy ) )
 +            getNewSpreadsheetName(aSheetName,aCurrSheetName,xDestDoc);
 +        if ( bSameDoc )
 +            xSheets->copyByName(aCurrSheetName,aSheetName,nDest);
@@ -27811,6 +27849,7 @@ index 2af3a04..8bc6dcf 100644
      return xAddressable->getRangeAddress().Sheet;
  }
  
+# FIXME ooo330-m2: replaced nameExists with ScVbaWorksheets::nameExists
 @@ -960,6 +1049,50 @@ ScVbaWorksheet::PrintOut( const uno::Any& From, const uno::Any& To, const uno::A
      PrintOutHelper( excel::getBestViewShell( xModel ), From, To, Copies, Preview, ActivePrinter, PrintToFile, Collate, PrToFileName, bSelection );
  }
@@ -27821,7 +27860,7 @@ index 2af3a04..8bc6dcf 100644
 +    uno::Reference< sheet::XDatabaseRange > xDBRange;
 +    uno::Reference <sheet::XSpreadsheetDocument> xSpreadDoc( xModel, uno::UNO_QUERY_THROW );
 +    SCTAB nTab(0);
-+    bool bSheetExists = nameExists (xSpreadDoc, aSheetName, nTab);
++    bool bSheetExists = ScVbaWorksheets::nameExists (xSpreadDoc, aSheetName, nTab);
 +    if ( bSheetExists )    
 +    {
 +        rtl::OUString sAutofilterRngName;
