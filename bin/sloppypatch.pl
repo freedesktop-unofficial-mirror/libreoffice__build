@@ -60,6 +60,9 @@ my $line_matched = 0;
 while (<STDIN>) {
     my $line = $_;
 
+    # ignore comments
+    next if $line =~ m/^\#/;
+
     # ignore the git headers
     # especially "index " line" drives the patch tool mad when:
     #   + it is included but the related --- and +++ lines are not used in the end
