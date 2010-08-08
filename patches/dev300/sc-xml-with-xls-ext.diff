@@ -1,5 +1,5 @@
---- sc/source/ui/unoobj/scdetect.cxx	2010-07-16 21:20:23.000000000 +0530
-+++ sc/source/ui/unoobj/scdetect.cxx	2010-07-29 19:15:55.000000000 +0530
+--- sc/source/ui/unoobj/scdetect.cxx	2010-04-22 13:57:38.000000000 +0530
++++ sc/source/ui/unoobj/scdetect.cxx	2010-08-02 16:01:59.000000000 +0530
 @@ -117,6 +117,7 @@ static const sal_Char __FAR_DATA pFilter
  static const sal_Char __FAR_DATA pFilterEx95Temp[]	= "MS Excel 95 Vorlage/Template";
  static const sal_Char __FAR_DATA pFilterExcel97[]	= "MS Excel 97";
@@ -8,16 +8,73 @@
  static const sal_Char __FAR_DATA pFilterDBase[]		= "dBase";
  static const sal_Char __FAR_DATA pFilterDif[]		= "DIF";
  static const sal_Char __FAR_DATA pFilterSylk[]		= "SYLK";
-@@ -758,7 +759,11 @@ static BOOL lcl_IsAnyXMLFilter( const Sf
+@@ -256,6 +257,7 @@ static BOOL lcl_IsAnyXMLFilter( const Sf
+     sal_Int32 nIndexOfReadOnlyFlag = -1;
+     sal_Int32 nIndexOfTemplateFlag = -1;
+     sal_Int32 nIndexOfDocumentTitle = -1;
++    bool bFakeXLS = false;
+ 
+     for( sal_Int32 nProperty=0; nProperty<nPropertyCount; ++nProperty )
+     {
+@@ -436,8 +438,11 @@ static BOOL lcl_IsAnyXMLFilter( const Sf
+             }
+             else
+             {
++                bool bIsXLS = false;
+                 SvStream* pStream = aMedium.GetInStream();
+                 const SfxFilter* pPreselectedFilter = pFilter;
++                if ( pPreselectedFilter && pPreselectedFilter->GetName().SearchAscii("Excel") != STRING_NOTFOUND )
++                    bIsXLS = true;
+                 pFilter = 0;
+                 if ( pStream )
+                 {
+@@ -718,7 +723,8 @@ static BOOL lcl_IsAnyXMLFilter( const Sf
+                             // further checks for filters only if they are preselected: ASCII, HTML, RTF, DBase
+                             // without the preselection other filters (Writer) take precedence
+                             // DBase can't be detected reliably, so it also needs preselection
+-                            if ( pPreselectedFilter->GetFilterName().EqualsAscii(pFilterAscii) && lcl_MayBeAscii( rStr ) )
++                            bool bMaybeText = lcl_MayBeAscii( rStr );
++                            if ( pPreselectedFilter->GetFilterName().EqualsAscii(pFilterAscii) && bMaybeText )
+                             {
+                                 // Text filter is accepted if preselected
+                                 pFilter = pPreselectedFilter;
+@@ -747,8 +753,19 @@ static BOOL lcl_IsAnyXMLFilter( const Sf
+                                     else
+                                     {
+                                         pFilter = aMatcher.GetFilter4FilterName( String::CreateFromAscii(pFilterHtmlWeb) );
++                                        if ( bIsXLS )
++                                            bFakeXLS = true;
+                                     }
                                  }
-                                 else if ( bIsXLS && bMaybeText )
-                                 {
--                                    pFilter = aMatcher.GetFilter4FilterName( String::CreateFromAscii(pFilterAscii) );
++                                else if ( bIsXLS && bMaybeText )
++                                {
 +                                    aHeader.EraseLeadingChars();
 +                                    if( aHeader.CompareTo( "<?xml", 5 ) == COMPARE_EQUAL )
 +                                        pFilter = aMatcher.GetFilter4FilterName( String::CreateFromAscii(pFilter2003XML) );
 +                                    else
 +                                        pFilter = aMatcher.GetFilter4FilterName( String::CreateFromAscii(pFilterAscii) );
-                                     bFakeXLS = true;
-                                 }
++                                    bFakeXLS = true;
++                                }
                                  else if ( aHeader.CompareTo( "{\\rtf", 5 ) == COMPARE_EQUAL )
+                                 {
+                                     // test for RTF
+@@ -834,6 +851,19 @@ static BOOL lcl_IsAnyXMLFilter( const Sf
+             lDescriptor[nIndexOfDocumentTitle].Value <<= aDocumentTitle;
+     }
+ 
++    if ( bFakeXLS )
++    {
++        if ( nIndexOfFilterName == -1 )
++        {
++            lDescriptor.realloc( nPropertyCount + 1 );
++            lDescriptor[nPropertyCount].Name = ::rtl::OUString::createFromAscii("FilterName");
++            lDescriptor[nPropertyCount].Value <<= rtl::OUString(pFilter->GetName());
++            nPropertyCount++;
++        }
++        else
++            lDescriptor[nIndexOfFilterName].Value <<= rtl::OUString(pFilter->GetName());
++    }
++
+     if ( pFilter )
+         aTypeName = pFilter->GetTypeName();
+     else
