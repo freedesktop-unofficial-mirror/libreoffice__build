@@ -1,8 +1,68 @@
+diff --git sfx2/inc/sfx2/linkmgr.hxx sfx2/inc/sfx2/linkmgr.hxx
+index b2f0c98..95e2805 100644
+--- sfx2/inc/sfx2/linkmgr.hxx
++++ sfx2/inc/sfx2/linkmgr.hxx
+@@ -33,8 +33,16 @@
+ #include <tools/string.hxx>
+ #include <svtools/svarray.hxx>
+ 
++#include <vector>
++
+ class SfxObjectShell;
+ 
++namespace com { namespace sun { namespace star {
++    namespace lang {
++        class XComponent;
++    }
++}}}
++
+ namespace sfx2
+ {
+ 
+@@ -49,6 +57,10 @@ SV_DECL_PTRARR( SvLinkSources, SvLinkSourcePtr, 1, 1 )
+ 
+ class SFX2_DLLPUBLIC SvLinkManager
+ {
++    typedef ::std::vector< ::com::sun::star::uno::Reference< ::com::sun::star::lang::XComponent > >
++        CompVector;
++    CompVector maCachedComps;
++
+     SvBaseLinks		aLinkTbl;
+     SvLinkSources aServerTbl;
+ 
+@@ -59,6 +71,17 @@ protected:
+ public:
+                 SvLinkManager();
+     virtual		~SvLinkManager();
++
++    /**
++     * Insert a component loaded during link update, which needs to be closed 
++     * when the update is complete. 
++     * 
++     * @param xComp component loaded during link update.
++     */
++    void        InsertCachedComp(const ::com::sun::star::uno::Reference< ::com::sun::star::lang::XComponent >& xComp);
++
++    void        CloseCachedComps();
++
+     SfxObjectShell*    GetPersist() const              { return pPersist; }
+     void        SetPersist( SfxObjectShell * p )   { pPersist = p; }
+ 
 diff --git sfx2/inc/sfx2/objsh.hxx sfx2/inc/sfx2/objsh.hxx
-index a1396a3..4faccea 100644
+index a1396a3..d3f3649 100644
 --- sfx2/inc/sfx2/objsh.hxx
 +++ sfx2/inc/sfx2/objsh.hxx
-@@ -528,6 +528,9 @@ public:
+@@ -129,6 +129,9 @@ namespace com { namespace sun { namespace star {
+     namespace document {
+         class XDocumentProperties;
+     }
++    namespace lang {
++        class XComponent;
++    }
+ } } }
+ 
+ typedef sal_uInt32 SfxObjectShellFlags;
+@@ -528,6 +531,9 @@ public:
                                              const String& rMimeType,
                                  const ::com::sun::star::uno::Any & rValue );
      virtual ::sfx2::SvLinkSource* 		DdeCreateLinkSource( const String& rItem );
@@ -12,6 +72,28 @@ index a1396a3..4faccea 100644
  
      // Contents
      virtual SfxStyleSheetBasePool*	GetStyleSheetPool();
+@@ -639,6 +645,9 @@ public:
+     static SfxObjectShell*		CreateObject( const String& rServiceName, SfxObjectCreateMode = SFX_CREATE_MODE_STANDARD );
+     static SfxObjectShell*		CreateObjectByFactoryName( const String& rURL, SfxObjectCreateMode = SFX_CREATE_MODE_STANDARD );
+     static SfxObjectShell*      CreateAndLoadObject( const SfxItemSet& rSet, SfxFrame* pFrame=0 );
++    static ::com::sun::star::uno::Reference< ::com::sun::star::lang::XComponent >
++                                CreateAndLoadComponent( const SfxItemSet& rSet, SfxFrame* pFrame = NULL );
++    static SfxObjectShell*      GetShellFromComponent( const ::com::sun::star::uno::Reference< ::com::sun::star::lang::XComponent >& xComp );
+     static String				GetServiceNameFromFactory( const String& rFact );
+     BOOL						IsInPlaceActive();
+     BOOL						IsUIActive();
+diff --git sfx2/inc/sfx2/sfxsids.hrc sfx2/inc/sfx2/sfxsids.hrc
+index 470e80b..99f67eb 100644
+--- sfx2/inc/sfx2/sfxsids.hrc
++++ sfx2/inc/sfx2/sfxsids.hrc
+@@ -629,6 +629,7 @@
+ #define SID_OPENCOPY                        (SID_SFX_START + 674)
+ #define SID_SOURCEVIEW                      (SID_SFX_START + 675)
+ #define SID_DOC_STARTPRESENTATION           (SID_SFX_START + 695)
++#define SID_DDE_RECONNECT_ONLOAD            (SID_SFX_START + 696)
+ 
+ #define SID_PLUGFRAMEARG                    (SID_SFX_START + 666)
+ #define SID_NEWWINDOWFOREDIT                (SID_SFX_START + 667)
 diff --git sfx2/source/appl/appdde.cxx sfx2/source/appl/appdde.cxx
 index 3cc38c9..ce4fe23 100644
 --- sfx2/source/appl/appdde.cxx
@@ -40,16 +122,179 @@ index 3cc38c9..ce4fe23 100644
  //========================================================================
  
  long SfxViewFrame::DdeExecute
+diff --git sfx2/source/appl/appuno.cxx sfx2/source/appl/appuno.cxx
+index 8f8af45..bf9b7f1 100644
+--- sfx2/source/appl/appuno.cxx
++++ sfx2/source/appl/appuno.cxx
+@@ -151,6 +151,7 @@ static const String sOpenNewView    = String::CreateFromAscii( "OpenNewView"
+ static const String sViewId         = String::CreateFromAscii( "ViewId"         );
+ static const String sPluginMode     = String::CreateFromAscii( "PluginMode"     );
+ static const String sReadOnly       = String::CreateFromAscii( "ReadOnly"       );
++static const String sDdeReconnect   = String::CreateFromAscii( "DDEReconnect"   );
+ static const String sStartPresentation = String::CreateFromAscii( "StartPresentation"       );
+ static const String sFrameName      = String::CreateFromAscii( "FrameName"      );
+ static const String sMediaType      = String::CreateFromAscii( "MediaType"    );
+@@ -606,6 +607,14 @@ void TransformParameters( sal_uInt16 nSlotId, const ::com::sun::star::uno::Seque
+                     if (bOK)
+                         rSet.Put( SfxBoolItem( SID_DOC_READONLY, bVal ) );
+                 }
++                else if ( aName == sDdeReconnect )
++                {
++                    sal_Bool bVal = sal_True;
++                    sal_Bool bOK = (rProp.Value >>= bVal);
++                    DBG_ASSERT( bOK, "invalid type for DDEReconnect" );
++                    if (bOK)
++                        rSet.Put( SfxBoolItem( SID_DDE_RECONNECT_ONLOAD, bVal ) );
++                }
+                 else if ( aName == sStartPresentation )
+                 {
+                     sal_Bool bVal = sal_False;
+@@ -1009,6 +1018,8 @@ void TransformItems( sal_uInt16 nSlotId, const SfxItemSet& rSet, ::com::sun::sta
+                 nAdditional++;
+             if ( rSet.GetItemState( SID_DOC_READONLY ) == SFX_ITEM_SET )
+                 nAdditional++;
++            if ( rSet.GetItemState( SID_DDE_RECONNECT_ONLOAD ) == SFX_ITEM_SET )
++                nAdditional++;
+             if ( rSet.GetItemState( SID_DOC_STARTPRESENTATION ) == SFX_ITEM_SET )
+                 nAdditional++;
+             if ( rSet.GetItemState( SID_SELECTION ) == SFX_ITEM_SET )
+@@ -1419,6 +1430,11 @@ void TransformItems( sal_uInt16 nSlotId, const SfxItemSet& rSet, ::com::sun::sta
+                 pValue[nActProp].Name = sReadOnly;
+                 pValue[nActProp++].Value <<= ( ((SfxBoolItem*)pItem)->GetValue() );
+             }
++            if ( rSet.GetItemState( SID_DDE_RECONNECT_ONLOAD, sal_False, &pItem ) == SFX_ITEM_SET )
++            {
++                pValue[nActProp].Name = sDdeReconnect;
++                pValue[nActProp++].Value <<= ( ((SfxBoolItem*)pItem)->GetValue() );
++            }
+             if ( rSet.GetItemState( SID_DOC_STARTPRESENTATION, sal_False, &pItem ) == SFX_ITEM_SET )
+             {
+                 pValue[nActProp].Name = sStartPresentation;
+diff --git sfx2/source/appl/linkmgr2.cxx sfx2/source/appl/linkmgr2.cxx
+index 81f2eed..7e11548 100644
+--- sfx2/source/appl/linkmgr2.cxx
++++ sfx2/source/appl/linkmgr2.cxx
+@@ -46,6 +46,13 @@
+ 
+ #include <svtools/svstdarr.hxx>
+ 
++#include <com/sun/star/lang/XComponent.hpp>
++#include <com/sun/star/util/XCloseable.hpp>
++
++using ::com::sun::star::uno::UNO_QUERY;
++using ::com::sun::star::uno::Reference;
++using ::com::sun::star::lang::XComponent;
++using ::com::sun::star::util::XCloseable;
+ 
+ namespace sfx2
+ {
+@@ -72,6 +79,24 @@ SvLinkManager::~SvLinkManager()
+     }
+ }
+ 
++void SvLinkManager::InsertCachedComp(const Reference<XComponent>& xComp)
++{
++    maCachedComps.push_back(xComp);
++}
++
++void SvLinkManager::CloseCachedComps()
++{
++    CompVector::iterator itr = maCachedComps.begin(), itrEnd = maCachedComps.end();
++    for (; itr != itrEnd; ++itr)
++    {
++        Reference<XCloseable> xCloseable(*itr, UNO_QUERY);
++        if (!xCloseable.is())
++            continue;
++
++        xCloseable->close(true);
++    }
++    maCachedComps.clear();
++}
+ 
+ /************************************************************************
+ |*    SvLinkManager::Remove()
+@@ -276,6 +301,7 @@ void SvLinkManager::UpdateAllLinks(
+ 
+         pLink->Update();
+     }
++    CloseCachedComps();
+ }
+ 
+ /************************************************************************
 diff --git sfx2/source/doc/objstor.cxx sfx2/source/doc/objstor.cxx
-index 89e1618..4f4c540 100644
+index 89e1618..cde0bd6 100644
 --- sfx2/source/doc/objstor.cxx
 +++ sfx2/source/doc/objstor.cxx
-@@ -1011,6 +1011,8 @@ sal_Bool SfxObjectShell::DoLoad( SfxMedium *pMed )
+@@ -1011,6 +1011,16 @@ sal_Bool SfxObjectShell::DoLoad( SfxMedium *pMed )
              }
          }
  
-+        ReconnectDdeLinks(*this);
++        const SfxBoolItem* pDdeReconnectItem = static_cast<const SfxBoolItem*>(
++            SfxRequest::GetItem(pMedium->GetItemSet(), SID_DDE_RECONNECT_ONLOAD, false, TYPE(SfxBoolItem)));
++
++        bool bReconnectDde = true; // by default, we try to auto-connect DDE connections.
++        if (pDdeReconnectItem)
++            bReconnectDde = pDdeReconnectItem->GetValue();
++
++        if (bReconnectDde)
++            ReconnectDdeLinks(*this);
 +
  #if 0
          if ( pMedium->HasStorage_Impl() )
          {
+diff --git sfx2/source/doc/objxtor.cxx sfx2/source/doc/objxtor.cxx
+index 6f3741a..2ff1513 100644
+--- sfx2/source/doc/objxtor.cxx
++++ sfx2/source/doc/objxtor.cxx
+@@ -1135,6 +1135,12 @@ SfxObjectShell* SfxObjectShell::CreateObject( const String& rServiceName, SfxObj
+ 
+ SfxObjectShell* SfxObjectShell::CreateAndLoadObject( const SfxItemSet& rSet, SfxFrame* pFrame )
+ {
++    Reference<lang::XComponent> xComp = CreateAndLoadComponent(rSet, pFrame);
++    return GetShellFromComponent(xComp);
++}
++
++Reference<lang::XComponent> SfxObjectShell::CreateAndLoadComponent( const SfxItemSet& rSet, SfxFrame* pFrame )
++{
+     uno::Sequence < beans::PropertyValue > aProps;
+     TransformItems( SID_OPENDOC, rSet, aProps );
+     SFX_ITEMSET_ARG(&rSet, pFileNameItem, SfxStringItem, SID_FILE_NAME, FALSE);
+@@ -1155,20 +1161,31 @@ SfxObjectShell* SfxObjectShell::CreateAndLoadObject( const SfxItemSet& rSet, Sfx
+         xLoader = uno::Reference < frame::XComponentLoader >( comphelper::getProcessServiceFactory()->createInstance(
+             ::rtl::OUString::createFromAscii("com.sun.star.frame.Desktop") ), uno::UNO_QUERY );
+ 
+-    uno::Reference < lang::XUnoTunnel > xObj;
++    Reference <lang::XComponent> xComp;
+     try
+     {
+-        xObj = uno::Reference< lang::XUnoTunnel >( xLoader->loadComponentFromURL( aURL, aTarget, 0, aProps ), uno::UNO_QUERY );
++        xComp = xLoader->loadComponentFromURL(aURL, aTarget, 0, aProps);
+     }
+     catch( uno::Exception& )
+     {}
+ 
+-    if ( xObj.is() )
++    return xComp;
++}
++
++SfxObjectShell* SfxObjectShell::GetShellFromComponent( const Reference<lang::XComponent>& xComp )
++{
++    try
++    {
++        Reference<lang::XUnoTunnel> xTunnel(xComp, UNO_QUERY_THROW);
++        Sequence <sal_Int8> aSeq( SvGlobalName( SFX_GLOBAL_CLASSID ).GetByteSequence() );
++        sal_Int64 nHandle = xTunnel->getSomething( aSeq );
++        if (!nHandle)
++            return NULL;
++
++        return reinterpret_cast< SfxObjectShell* >(sal::static_int_cast< sal_IntPtr >(  nHandle ));
++    }
++    catch (const Exception&)
+     {
+-        ::com::sun::star::uno::Sequence < sal_Int8 > aSeq( SvGlobalName( SFX_GLOBAL_CLASSID ).GetByteSequence() );
+-        sal_Int64 nHandle = xObj->getSomething( aSeq );
+-        if ( nHandle )
+-            return reinterpret_cast< SfxObjectShell* >(sal::static_int_cast< sal_IntPtr >(  nHandle ));
+     }
+ 
+     return NULL;

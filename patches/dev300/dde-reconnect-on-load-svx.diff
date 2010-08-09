@@ -1,5 +1,5 @@
 diff --git svx/inc/linkmgr.hxx svx/inc/linkmgr.hxx
-index b614aba..1b3142a 100644
+index b614aba..e3056ca 100644
 --- svx/inc/linkmgr.hxx
 +++ svx/inc/linkmgr.hxx
 @@ -33,6 +33,7 @@
@@ -10,30 +10,70 @@ index b614aba..1b3142a 100644
  
  // Damit der Link ueber den Status der zu ladenen Grafik informierten werden
  // verschickt das FileObject ein SvData, mit der FormatId
-@@ -63,6 +64,8 @@ public:
+@@ -63,6 +64,17 @@ public:
              // falls am Link schon alles eingestellt ist !
      BOOL InsertFileLink( sfx2::SvBaseLink& );
  
 +    void ReconnectDdeLink(SfxObjectShell& rServer);
 +
++    /**
++     * Reconnect the server document shell to a DDE link object.
++     * 
++     * @param rPath path to the server document
++     * @param rServer server document shell instance
++     * @param rLink link object of the client document
++     */
++    void LinkServerShell(const ::rtl::OUString& rPath, SfxObjectShell& rServer, ::sfx2::SvBaseLink& rLink) const;
++
          // erfrage die Strings fuer den Dialog
      virtual BOOL GetDisplayNames( const sfx2::SvBaseLink*,
                                      String* pType,
+@@ -90,7 +102,6 @@ public:
+     static BOOL GetGraphicFromAny( const String& rMimeType,
+                                 const ::com::sun::star::uno::Any & rValue,
+                                 Graphic& rGrf );
+-
+ };
+ 
+ 
+diff --git svx/source/cui/linkdlg.cxx svx/source/cui/linkdlg.cxx
+index d8df934..620b340 100644
+--- svx/source/cui/linkdlg.cxx
++++ svx/source/cui/linkdlg.cxx
+@@ -336,6 +336,8 @@ IMPL_LINK( SvBaseLinksDlg, UpdateNowClickHdl, PushButton *, EMPTYARG )
+             rListBox.Select( pE );
+             rListBox.MakeVisible( pE );
+         }
++
++        pNewMgr->CloseCachedComps();
+     }
+     return 0;
+ }
 diff --git svx/source/svxlink/linkmgr.cxx svx/source/svxlink/linkmgr.cxx
-index 0e2415f..86d9e97 100644
+index 0e2415f..6727f4c 100644
 --- svx/source/svxlink/linkmgr.cxx
 +++ svx/source/svxlink/linkmgr.cxx
-@@ -57,6 +57,9 @@
+@@ -50,6 +50,7 @@
+ #include <svtools/itemset.hxx>
+ #include <svtools/urihelper.hxx>
+ #include <com/sun/star/datatransfer/DataFlavor.hpp>
++#include <com/sun/star/lang/XComponent.hpp>
+ 
+ #include "linkmgr.hxx"
+ #include "fileobj.hxx"
+@@ -57,6 +58,11 @@
  #include <svx/dialogs.hrc>
  #include "unolingu.hxx"
  
 +using ::rtl::OUString;
 +using ::rtl::OUStringBuffer;
++using ::com::sun::star::uno::Reference;
++using ::com::sun::star::lang::XComponent;
 +
  class SvxInternalLink : public sfx2::SvLinkSource
  {
  public:
-@@ -107,6 +110,51 @@ BOOL SvxLinkManager::InsertFileLink( sfx2::SvBaseLink& rLink,
+@@ -107,6 +113,56 @@ BOOL SvxLinkManager::InsertFileLink( sfx2::SvBaseLink& rLink,
                                      sfx2::LINKUPDATE_ONCALL, &sCmd );
  }
  
@@ -58,8 +98,9 @@ index 0e2415f..86d9e97 100644
 +            continue;
 +
 +        String aTmp;
-+        utl::LocalFileHelper::ConvertPhysicalNameToURL(aFile, aTmp);
-+        OUString aURL = aTmp;
++        OUString aURL = aFile;
++        if (utl::LocalFileHelper::ConvertPhysicalNameToURL(aFile, aTmp))
++            aURL = aTmp;
 +
 +        if (!aURL.equalsIgnoreAsciiCase(pMed->GetName()))
 +            // This DDE link is not associated with this server shell...  Skip it.
@@ -68,24 +109,49 @@ index 0e2415f..86d9e97 100644
 +        if (!aLink.Len())
 +            continue;
 +
-+        // Reconnect the server document shell to this DDE link object.
-+        ::sfx2::SvLinkSource* pSrvSrc = rServer.DdeCreateLinkSource(aLink);
-+        if (pSrvSrc)
-+        {
-+            ::com::sun::star::datatransfer::DataFlavor aFl;
-+            SotExchange::GetFormatDataFlavor(p->GetContentType(), aFl);
-+            p->SetObj(pSrvSrc);
-+            pSrvSrc->AddDataAdvise(
-+                p, aFl.MimeType,
-+                sfx2::LINKUPDATE_ONCALL == p->GetUpdateMode() ? ADVISEMODE_ONLYONCE : 0);
-+        }
++        LinkServerShell(aLink, rServer, *p);
++    }
++}
++
++void SvxLinkManager::LinkServerShell(const OUString& rPath, SfxObjectShell& rServer, ::sfx2::SvBaseLink& rLink) const
++{
++    ::sfx2::SvLinkSource* pSrvSrc = rServer.DdeCreateLinkSource(rPath);
++    if (pSrvSrc)
++    {
++        ::com::sun::star::datatransfer::DataFlavor aFl;
++        SotExchange::GetFormatDataFlavor(rLink.GetContentType(), aFl);
++        rLink.SetObj(pSrvSrc);
++        pSrvSrc->AddDataAdvise(
++            &rLink, aFl.MimeType,
++            sfx2::LINKUPDATE_ONCALL == rLink.GetUpdateMode() ? ADVISEMODE_ONLYONCE : 0);
 +    }
 +}
 +
  BOOL SvxLinkManager::InsertFileLink( sfx2::SvBaseLink& rLink )
  {
      if( OBJECT_CLIENT_FILE == ( OBJECT_CLIENT_FILE & rLink.GetObjType() ))
-@@ -338,7 +386,23 @@ BOOL SvxInternalLink::Connect( sfx2::SvBaseLink* pLink )
+@@ -274,9 +330,8 @@ BOOL SvxInternalLink::Connect( sfx2::SvBaseLink* pLink )
+     SfxObjectShell* pFndShell = 0;
+     USHORT nUpdateMode = com::sun::star::document::UpdateDocMode::NO_UPDATE;
+     String sTopic, sItem, sReferer;
+-    if( pLink->GetLinkManager() &&
+-        pLink->GetLinkManager()->GetDisplayNames( pLink, 0, &sTopic, &sItem )
+-        && sTopic.Len() )
++    SvxLinkManager* pLinkMgr = dynamic_cast<SvxLinkManager*>(pLink->GetLinkManager());
++    if (pLinkMgr && pLinkMgr->GetDisplayNames(pLink, 0, &sTopic, &sItem) && sTopic.Len())
+     {
+         // erstmal nur ueber die DocumentShells laufen und die mit dem
+         // Namen heraussuchen:
+@@ -288,7 +343,7 @@ BOOL SvxInternalLink::Connect( sfx2::SvBaseLink* pLink )
+         TypeId aType( TYPE(SfxObjectShell) );
+ 
+         BOOL bFirst = TRUE;
+-        SfxObjectShell* pShell = pLink->GetLinkManager()->GetPersist();
++        SfxObjectShell* pShell = pLinkMgr->GetPersist();
+         if( pShell && pShell->GetMedium() )
+         {
+             sReferer = pShell->GetMedium()->GetBaseURL();
+@@ -338,7 +393,23 @@ BOOL SvxInternalLink::Connect( sfx2::SvBaseLink* pLink )
      if( !sTopic.Len() )
          return FALSE;
  
@@ -110,22 +176,36 @@ index 0e2415f..86d9e97 100644
      {
          // dann versuche die Datei zu laden:
          INetURLObject aURL( sTopic );
-@@ -353,7 +417,7 @@ BOOL SvxInternalLink::Connect( sfx2::SvBaseLink* pLink )
+@@ -353,7 +424,11 @@ BOOL SvxInternalLink::Connect( sfx2::SvBaseLink* pLink )
              SfxStringItem aTarget( SID_TARGETNAME, String::CreateFromAscii("_blank") );
              SfxStringItem aReferer( SID_REFERER, sReferer );
              SfxUInt16Item aUpdate( SID_UPDATEDOCMODE, nUpdateMode );
 -            SfxBoolItem aReadOnly(SID_DOC_READONLY, TRUE);
 +            SfxBoolItem aReadOnly(SID_DOC_READONLY, false);
++
++            // Disable automatic re-connection to avoid this link instance 
++            // being destroyed at re-connection.
++            SfxBoolItem aDdeConnect(SID_DDE_RECONNECT_ONLOAD, false);
  
              // #i14200# (DDE-link crashes wordprocessor)
              SfxAllItemSet aArgs( SFX_APP()->GetPool() );
-@@ -365,28 +429,13 @@ BOOL SvxInternalLink::Connect( sfx2::SvBaseLink* pLink )
+@@ -364,29 +439,18 @@ BOOL SvxInternalLink::Connect( sfx2::SvBaseLink* pLink )
+             aArgs.Put(aName);
              aArgs.Put(aUpdate);
              aArgs.Put(aReadOnly);
-             pFndShell = SfxObjectShell::CreateAndLoadObject( aArgs );
--        }
--    }
--
+-            pFndShell = SfxObjectShell::CreateAndLoadObject( aArgs );
++            aArgs.Put(aDdeConnect);
++            Reference<XComponent> xComp = SfxObjectShell::CreateAndLoadComponent(aArgs);
++            pFndShell = SfxObjectShell::GetShellFromComponent(xComp);
++            if (xComp.is() && pFndShell)
++            {
++                pLinkMgr->InsertCachedComp(xComp);
++                pLinkMgr->LinkServerShell(sItem, *pFndShell, *pLink);
++                return true;
++            }
+         }
+     }
+ 
 -    BOOL bRet = FALSE;
 -    if( pFndShell )
 -    {
@@ -136,19 +216,16 @@ index 0e2415f..86d9e97 100644
 -
 -            ::com::sun::star::datatransfer::DataFlavor aFl;
 -            SotExchange::GetFormatDataFlavor( pLink->GetContentType(), aFl );
- 
+-
 -            pLink->SetObj( pNewSrc );
 -            pNewSrc->AddDataAdvise( pLink, aFl.MimeType,
 -                                sfx2::LINKUPDATE_ONCALL == pLink->GetUpdateMode()
 -                                    ? ADVISEMODE_ONLYONCE
 -                                    : 0 );
-+            // When loading a new document, DDE links get connected during the loading.
-+            return true;
-         }
-     }
+-        }
+-    }
 -    return bRet;
-+
 +    return false;
  }
  
- 
+-
