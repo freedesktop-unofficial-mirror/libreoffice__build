@@ -1,9 +1,9 @@
 diff --git filter/inc/filter/msfilter/msvbahelper.hxx filter/inc/filter/msfilter/msvbahelper.hxx
 deleted file mode 100644
-index 1e2032e..0000000
+index 1623fd3..0000000
 --- filter/inc/filter/msfilter/msvbahelper.hxx
 +++ /dev/null
-@@ -1,55 +0,0 @@
+@@ -1,56 +0,0 @@
 -/*************************************************************************
 - *
 - * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
@@ -54,7 +54,8 @@ index 1e2032e..0000000
 -    };
 -
 -    MSFILTER_DLLPUBLIC String makeMacroURL( const String& sMacroName );
--    MSFILTER_DLLPUBLIC  VBAMacroResolvedInfo resolveVBAMacro( SfxObjectShell* pShell, const rtl::OUString& sMod, bool bSearchGlobalTemplates = false );
+-    MSFILTER_DLLPUBLIC ::rtl::OUString extractMacroName( const ::rtl::OUString& rMacroUrl );
+-    MSFILTER_DLLPUBLIC VBAMacroResolvedInfo resolveVBAMacro( SfxObjectShell* pShell, const rtl::OUString& sMod, bool bSearchGlobalTemplates = false );
 -    MSFILTER_DLLPUBLIC sal_Bool executeMacro( SfxObjectShell* pShell, const String& sMacroName, com::sun::star::uno::Sequence< com::sun::star::uno::Any >& aArgs, com::sun::star::uno::Any& aRet, const com::sun::star::uno::Any& aCaller );
 -} }
 -
@@ -119,10 +120,10 @@ index eead43c..3b92f80 100644
              sControlData.push_back( aProp );
 diff --git filter/source/msfilter/msvbahelper.cxx filter/source/msfilter/msvbahelper.cxx
 deleted file mode 100644
-index ef8a242..0000000
+index 0ad623d..0000000
 --- filter/source/msfilter/msvbahelper.cxx
 +++ /dev/null
-@@ -1,394 +0,0 @@
+@@ -1,411 +0,0 @@
 -/*************************************************************************
 - *
 - * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
@@ -168,14 +169,25 @@ index ef8a242..0000000
 -
 -using namespace ::com::sun::star;
 -
--const static rtl::OUString sUrlPart0 = rtl::OUString::createFromAscii( "vnd.sun.star.script:");
--const static rtl::OUString sUrlPart1 = rtl::OUString::createFromAscii( "?language=Basic&location=document"); 
--
 -namespace ooo { namespace vba {
+-
+-const static rtl::OUString sUrlPart0 = rtl::OUString::createFromAscii( "vnd.sun.star.script:");
+-const static rtl::OUString sUrlPart1 = rtl::OUString::createFromAscii( "?language=Basic&location=document");
 -
 -String makeMacroURL( const String& sMacroName )
 -{
 -    return sUrlPart0.concat( sMacroName ).concat( sUrlPart1 ) ;
+-}
+-
+-::rtl::OUString extractMacroName( const ::rtl::OUString& rMacroUrl )
+-{
+-    if( (rMacroUrl.getLength() > sUrlPart0.getLength() + sUrlPart1.getLength()) &&
+-        rMacroUrl.match( sUrlPart0 ) &&
+-        rMacroUrl.match( sUrlPart1, rMacroUrl.getLength() - sUrlPart1.getLength() ) )
+-    {
+-        return rMacroUrl.copy( sUrlPart0.getLength(), rMacroUrl.getLength() - sUrlPart0.getLength() - sUrlPart1.getLength() );
+-    }
+-    return ::rtl::OUString();
 -}
 -
 -SfxObjectShell* findShellForUrl( const rtl::OUString& sMacroURLOrPath )
@@ -330,9 +342,15 @@ index ef8a242..0000000
 -    if ( !pShell )
 -        return aRes;
 -    aRes.SetMacroDocContext( pShell );
+-    
+-    // the name may be enclosed in apostrophs
+-    ::rtl::OUString sMacroUrl = MacroName;
+-    sal_Int32 nMacroLen = MacroName.getLength();
+-    if( (nMacroLen >= 2) && (MacroName[0] == '\'') && (MacroName[nMacroLen-1] == '\'') )
+-        sMacroUrl = MacroName.copy( 1, nMacroLen - 2 );
+-    
 -    // parse the macro name
--    sal_Int32 nDocSepIndex = MacroName.indexOfAsciiL( "!", 1 );
--    String sMacroUrl = MacroName;
+-    sal_Int32 nDocSepIndex = sMacroUrl.indexOf( '!' );
 -
 -    String sContainer;
 -    String sModule;
@@ -345,8 +363,8 @@ index ef8a242..0000000
 -        // recursively
 -
 -        // assume for now that the document name is *this* document
--        String sDocUrlOrPath = MacroName.copy( 0, nDocSepIndex );
--        sMacroUrl = MacroName.copy( nDocSepIndex + 1 );
+-        String sDocUrlOrPath = sMacroUrl.copy( 0, nDocSepIndex );
+-        sMacroUrl = sMacroUrl.copy( nDocSepIndex + 1 );
 -        OSL_TRACE("doc search, current shell is 0x%x", pShell );
 -        SfxObjectShell* pFoundShell = NULL;
 -        if( bSearchGlobalTemplates )
@@ -369,7 +387,7 @@ index ef8a242..0000000
 -        // document is created from ) 
 -    
 -        // macro format = Container.Module.Procedure
--        parseMacro( MacroName, sContainer, sModule, sProcedure ); 
+-        parseMacro( sMacroUrl, sContainer, sModule, sProcedure );
 -        uno::Reference< lang::XMultiServiceFactory> xSF( pShell->GetModel(), uno::UNO_QUERY);
 -        uno::Reference< container::XNameContainer > xPrjNameCache;
 -        if ( xSF.is() )
@@ -540,10 +558,10 @@ index 0000000..e971b8c
 +#endif
 diff --git offapi/com/sun/star/script/XVBAMacroHelper.idl offapi/com/sun/star/script/XVBAMacroHelper.idl
 new file mode 100644
-index 0000000..a240259
+index 0000000..04ef842
 --- /dev/null
 +++ offapi/com/sun/star/script/XVBAMacroHelper.idl
-@@ -0,0 +1,21 @@
+@@ -0,0 +1,22 @@
 +#ifndef com_sun_star_script_XVBAMacroHelper_idl
 +#define com_sun_star_script_XVBAMacroHelper_idl
 +#ifndef __com_sun_star_uno_XInterface_idl__ 
@@ -560,6 +578,7 @@ index 0000000..a240259
 +interface XVBAMacroHelper : com::sun::star::uno::XInterface
 +{
 +    string makeMacroURL( [in] string sMacroName );
++    string extractMacroNameFromURL( [in] string sURL );
 +    com::sun::star::script::XVBAMacroResolvedInfo resolveVBAMacro( [in] com::sun::star::frame::XModel model, [in] string moduleName, [in] boolean bSearchGlobalTemplates );
 +    boolean executeMacro( [in] com::sun::star::frame::XModel model, [in] string smacroName, [inout] sequence< any > aArgs, [inout] any aRet, [in] any aCaller );
 +};
@@ -590,10 +609,10 @@ index 0000000..7d4b37e
 +}; }; }; };
 +#endif
 diff --git offapi/com/sun/star/script/makefile.mk offapi/com/sun/star/script/makefile.mk
-index c6c6416..2cdca88 100644
+index 0282816..c9927c3 100644
 --- offapi/com/sun/star/script/makefile.mk
 +++ offapi/com/sun/star/script/makefile.mk
-@@ -53,6 +53,10 @@ IDLFILES=\
+@@ -54,6 +54,10 @@ IDLFILES=\
          XVBAModuleInfo.idl\
      ModuleInfo.idl\
      ModuleType.idl\
@@ -604,10 +623,6 @@ index c6c6416..2cdca88 100644
  
  # ------------------------------------------------------------------
  
-diff --git oox/util/.makefile.mk.swp oox/util/.makefile.mk.swp
-deleted file mode 100644
-index ad7e40f..0000000
-Binary files oox/util/.makefile.mk.swp and /dev/null differ
 diff --git sc/source/filter/excel/makefile.mk sc/source/filter/excel/makefile.mk
 index a84f4aa..e8b170e 100644
 --- sc/source/filter/excel/makefile.mk
@@ -621,61 +636,65 @@ index a84f4aa..e8b170e 100644
          $(SLO)$/xlchart.obj					\
          $(SLO)$/xlformula.obj				\
 diff --git sc/source/filter/excel/xlescher.cxx sc/source/filter/excel/xlescher.cxx
-index fab4df4..23bfc24 100644
+index 13ac02f..6e1067d 100644
 --- sc/source/filter/excel/xlescher.cxx
 +++ sc/source/filter/excel/xlescher.cxx
-@@ -30,6 +30,8 @@
+@@ -32,6 +32,7 @@
  
  #include <com/sun/star/drawing/XControlShape.hpp>
  #include <com/sun/star/script/ScriptEventDescriptor.hpp>
-+#include <com/sun/star/script/theVBAMacroHelper.hpp>
 +
  #include <svx/unoapi.hxx>
+ #include "document.hxx"
+ #include "xestream.hxx"
+diff --git sc/source/filter/excel/xltools.cxx sc/source/filter/excel/xltools.cxx
+index e2bb19d..51146d5 100644
+--- sc/source/filter/excel/xltools.cxx
++++ sc/source/filter/excel/xltools.cxx
+@@ -34,7 +34,6 @@
+ #include <unotools/fontcvt.hxx>
+ #include <sfx2/objsh.hxx>
+ #include <editeng/editstat.hxx>
+-#include <filter/msfilter/msvbahelper.hxx>
  #include "xestream.hxx"
  #include "document.hxx"
-@@ -42,7 +44,7 @@
- #include <basic/sbmod.hxx>
- #include <basic/sbmeth.hxx>
- #include <basic/basmgr.hxx>
--#include <filter/msfilter/msvbahelper.hxx>
+ #include "docuno.hxx"
+@@ -46,8 +45,15 @@
+ #include "xistream.hxx"
+ #include "xiroot.hxx"
+ #include "xltools.hxx"
 +#include <comphelper/processfactory.hxx>
++#include <com/sun/star/script/theVBAMacroHelper.hpp>
  
  using ::rtl::OUString;
- using ::com::sun::star::uno::Reference;
-@@ -51,6 +53,9 @@ using ::com::sun::star::drawing::XShape;
- using ::com::sun::star::drawing::XControlShape;
- using ::com::sun::star::awt::XControlModel;
- using ::com::sun::star::script::ScriptEventDescriptor;
++using ::com::sun::star::uno::Reference;
++
 +using ::com::sun::star::script::XVBAMacroHelper;
 +using ::com::sun::star::script::XVBAMacroResolvedInfo;
 +using ::com::sun::star::script::theVBAMacroHelper;
  
- // Structs and classes ========================================================
+ // GUID import/export =========================================================
  
-@@ -339,11 +344,19 @@ Reference< XControlModel > XclControlHelper::GetControlModel( Reference< XShape
- OUString XclControlHelper::GetScMacroName( const String& rXclMacroName, SfxObjectShell* pDocShell )
+@@ -695,9 +701,16 @@ const OUString XclTools::maSbMacroSuffix( RTL_CONSTASCII_USTRINGPARAM( "?languag
+ OUString XclTools::GetSbMacroUrl( const String& rMacroName, SfxObjectShell* pDocShell )
  {
-     String sTmp( rXclMacroName );
--    if( rXclMacroName.Len() > 0 )
-+    Reference< XVBAMacroHelper > xMacroHelper;
+     OSL_ENSURE( rMacroName.Len() > 0, "XclTools::GetSbMacroUrl - macro name is empty" );
+-    ::ooo::vba::VBAMacroResolvedInfo aMacroInfo = ::ooo::vba::resolveVBAMacro( pDocShell, rMacroName, false );
+-    if( aMacroInfo.IsResolved() )
+-        return ::ooo::vba::makeMacroURL( aMacroInfo.ResolvedMacro() );
 +    try
 +    {
-+        xMacroHelper =  theVBAMacroHelper::get( comphelper::getProcessComponentContext() );
++        Reference< XVBAMacroHelper > xMacroHelper =  theVBAMacroHelper::get( comphelper::getProcessComponentContext() );
++        Reference< XVBAMacroResolvedInfo > xResolvedMacro = xMacroHelper->resolveVBAMacro( pDocShell->GetModel(), rMacroName, sal_False );
++        if ( xResolvedMacro->getResolved() )
++            return xMacroHelper->makeMacroURL( xResolvedMacro->getResolvedMacro() );
 +    }
 +    catch( com::sun::star::uno::Exception& )
 +    {
 +    }
-+    if( xMacroHelper.is() && ( rXclMacroName.Len() > 0 ) )
-     {
--        ooo::vba::VBAMacroResolvedInfo aMacro = ooo::vba::resolveVBAMacro( pDocShell, rXclMacroName, false );
--        if ( aMacro.IsResolved() )
--            return ooo::vba::makeMacroURL( aMacro.ResolvedMacro() );
-+       Reference< XVBAMacroResolvedInfo > xResolvedMacro = xMacroHelper->resolveVBAMacro( pDocShell->GetModel(), rXclMacroName, sal_False );
-+        if ( xResolvedMacro->getResolved() )
-+            return xMacroHelper->makeMacroURL( xResolvedMacro->getResolvedMacro() );
- 
-     }
      return OUString();
+ }
+ 
 diff --git sc/source/ui/vba/vbaeventshelper.cxx sc/source/ui/vba/vbaeventshelper.cxx
 index db7340e..346c05d 100644
 --- sc/source/ui/vba/vbaeventshelper.cxx
@@ -776,6 +795,94 @@ index db7340e..346c05d 100644
  	}
      
  	return result;
+diff --git sc/source/ui/vba/vbasheetobject.cxx sc/source/ui/vba/vbasheetobject.cxx
+index 215a62c..daad041 100755
+--- sc/source/ui/vba/vbasheetobject.cxx
++++ sc/source/ui/vba/vbasheetobject.cxx
+@@ -32,11 +32,12 @@
+ #include <com/sun/star/script/ScriptEventDescriptor.hpp>
+ #include <com/sun/star/script/XEventAttacherManager.hpp>
+ #include <com/sun/star/style/VerticalAlignment.hpp>
++#include <com/sun/star/script/theVBAMacroHelper.hpp>
++
+ #include <ooo/vba/excel/Constants.hpp>
+ #include <ooo/vba/excel/XlOrientation.hpp>
+ #include <ooo/vba/excel/XlPlacement.hpp>
+ #include <rtl/ustrbuf.hxx>
+-#include <filter/msfilter/msvbahelper.hxx>
+ #include <oox/helper/helper.hxx>
+ #include "vbafont.hxx"
+ 
+@@ -308,6 +309,13 @@ ScVbaControlObjectBase::ScVbaControlObjectBase(
+         break;
+         // no default, to let the compiler complain about missing case
+     }
++    try
++    {
++        m_xMacroHelper =  script::theVBAMacroHelper::get( mxContext );
++    }
++    catch( uno::Exception& )
++    {
++    }
+ }
+ 
+ // XSheetObject attributes
+@@ -333,8 +341,8 @@ OUString SAL_CALL ScVbaControlObjectBase::getOnAction() throw (uno::RuntimeExcep
+         const script::ScriptEventDescriptor* pEventEnd = pEvent + aEvents.getLength();
+         const OUString aScriptType = CREATE_OUSTRING( "Script" );
+         for( ; pEvent < pEventEnd; ++pEvent )
+-            if( (pEvent->ListenerType == maListenerType) && (pEvent->EventMethod == maEventMethod) && (pEvent->ScriptType == aScriptType) )
+-                return extractMacroName( pEvent->ScriptCode );
++            if( (pEvent->ListenerType == maListenerType) && (pEvent->EventMethod == maEventMethod) && (pEvent->ScriptType == aScriptType) && m_xMacroHelper.is() )
++                return m_xMacroHelper->extractMacroNameFromURL( pEvent->ScriptCode );
+     }
+     return OUString();
+ }
+@@ -348,16 +356,17 @@ void SAL_CALL ScVbaControlObjectBase::setOnAction( const OUString& rMacroName )
+     try { xEventMgr->revokeScriptEvent( nIndex, maListenerType, maEventMethod, OUString() ); } catch( uno::Exception& ) {}
+ 
+     // if a macro name has been passed, try to attach it to the event
+-    if( rMacroName.getLength() > 0 )
++    if( rMacroName.getLength() > 0 && m_xMacroHelper.is() )
+     {
+-        VBAMacroResolvedInfo aResolvedMacro = resolveVBAMacro( getSfxObjShell( mxModel ), rMacroName );
+-        if( !aResolvedMacro.IsResolved() )
++        uno::Reference< script::XVBAMacroResolvedInfo > xResolvedMacro = m_xMacroHelper->resolveVBAMacro( mxModel, rMacroName, sal_False );
++;
++        if( !xResolvedMacro->getResolved() )
+             throw uno::RuntimeException();
+         script::ScriptEventDescriptor aDescriptor;
+         aDescriptor.ListenerType = maListenerType;
+         aDescriptor.EventMethod = maEventMethod;
+         aDescriptor.ScriptType = CREATE_OUSTRING( "Script" );
+-        aDescriptor.ScriptCode = makeMacroURL( aResolvedMacro.ResolvedMacro() );
++        aDescriptor.ScriptCode = m_xMacroHelper->makeMacroURL( xResolvedMacro->getResolvedMacro() );
+         xEventMgr->registerScriptEvent( nIndex, aDescriptor );
+     }
+ }
+diff --git sc/source/ui/vba/vbasheetobject.hxx sc/source/ui/vba/vbasheetobject.hxx
+index a7af036..e5f3c21 100755
+--- sc/source/ui/vba/vbasheetobject.hxx
++++ sc/source/ui/vba/vbasheetobject.hxx
+@@ -33,6 +33,7 @@
+ #include <ooo/vba/excel/XControlObject.hpp>
+ #include <ooo/vba/excel/XSheetObject.hpp>
+ #include <vbahelper/vbahelperinterface.hxx>
++#include <com/sun/star/script/XVBAMacroHelper.hpp>
+ #include "vbapalette.hxx"
+ 
+ namespace com { namespace sun { namespace star {
+@@ -173,8 +174,10 @@ protected:
+ protected:
+     css::uno::Reference< css::container::XIndexContainer > mxFormIC;
+     css::uno::Reference< css::beans::XPropertySet > mxControlProps;
++    css::uno::Reference< css::script::XVBAMacroHelper > m_xMacroHelper;
+     ::rtl::OUString maListenerType;
+     ::rtl::OUString maEventMethod;
++    
+ };
+ 
+ // ============================================================================
 diff --git scripting/source/vbaevents/eventhelper.cxx scripting/source/vbaevents/eventhelper.cxx
 index 8411b09..caf2324 100644
 --- scripting/source/vbaevents/eventhelper.cxx
@@ -871,10 +978,10 @@ index 6815f28..8ea6b81 100644
          $(SLO)$/UnoNameItemTable.obj \
 diff --git svx/source/unodraw/msvbahelper.cxx svx/source/unodraw/msvbahelper.cxx
 new file mode 100644
-index 0000000..f6d0fa3
+index 0000000..2534ae4
 --- /dev/null
 +++ svx/source/unodraw/msvbahelper.cxx
-@@ -0,0 +1,509 @@
+@@ -0,0 +1,533 @@
 +/*************************************************************************
 + *
 + * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
@@ -957,6 +1064,17 @@ index 0000000..f6d0fa3
 +String makeMacroURLImpl( const String& sMacroName )
 +{
 +    return sUrlPart0.concat( sMacroName ).concat( sUrlPart1 ) ;
++}
++
++::rtl::OUString extractMacroFromURL( const ::rtl::OUString& rMacroUrl )
++{
++    if( (rMacroUrl.getLength() > sUrlPart0.getLength() + sUrlPart1.getLength()) &&
++        rMacroUrl.match( sUrlPart0 ) &&
++        rMacroUrl.match( sUrlPart1, rMacroUrl.getLength() - sUrlPart1.getLength() ) )
++    {
++        return rMacroUrl.copy( sUrlPart0.getLength(), rMacroUrl.getLength() - sUrlPart0.getLength() - sUrlPart1.getLength() );
++    }
++    return ::rtl::OUString();
 +}
 +
 +SfxObjectShell* findShellForUrl( const rtl::OUString& sMacroURLOrPath )
@@ -1111,9 +1229,15 @@ index 0000000..f6d0fa3
 +    if ( !pShell )
 +        return aRes;
 +    aRes.SetMacroDocContext( pShell );
++    
++    // the name may be enclosed in apostrophs
++    ::rtl::OUString sMacroUrl = MacroName;
++    sal_Int32 nMacroLen = MacroName.getLength();
++    if( (nMacroLen >= 2) && (MacroName[0] == '\'') && (MacroName[nMacroLen-1] == '\'') )
++        sMacroUrl = MacroName.copy( 1, nMacroLen - 2 );
++    
 +    // parse the macro name
-+    sal_Int32 nDocSepIndex = MacroName.indexOfAsciiL( "!", 1 );
-+    String sMacroUrl = MacroName;
++    sal_Int32 nDocSepIndex = sMacroUrl.indexOf( '!' );
 +
 +    String sContainer;
 +    String sModule;
@@ -1126,8 +1250,8 @@ index 0000000..f6d0fa3
 +        // recursively
 +
 +        // assume for now that the document name is *this* document
-+        String sDocUrlOrPath = MacroName.copy( 0, nDocSepIndex );
-+        sMacroUrl = MacroName.copy( nDocSepIndex + 1 );
++        String sDocUrlOrPath = sMacroUrl.copy( 0, nDocSepIndex );
++        sMacroUrl = sMacroUrl.copy( nDocSepIndex + 1 );
 +        OSL_TRACE("doc search, current shell is 0x%x", pShell );
 +        SfxObjectShell* pFoundShell = NULL;
 +        if( bSearchGlobalTemplates )
@@ -1150,7 +1274,7 @@ index 0000000..f6d0fa3
 +        // document is created from ) 
 +    
 +        // macro format = Container.Module.Procedure
-+        parseMacro( MacroName, sContainer, sModule, sProcedure ); 
++        parseMacro( sMacroUrl, sContainer, sModule, sProcedure );
 +        uno::Reference< lang::XMultiServiceFactory> xSF( pShell->GetModel(), uno::UNO_QUERY);
 +        uno::Reference< container::XNameContainer > xPrjNameCache;
 +        if ( xSF.is() )
@@ -1339,6 +1463,7 @@ index 0000000..f6d0fa3
 +    VBAMacroHelper() {}
 +    // Methods
 +    virtual ::rtl::OUString SAL_CALL makeMacroURL( const ::rtl::OUString& sMacroName ) throw (uno::RuntimeException);
++     virtual ::rtl::OUString SAL_CALL extractMacroNameFromURL( const ::rtl::OUString& sURL ) throw (uno::RuntimeException);
 +    virtual uno::Reference< script::XVBAMacroResolvedInfo > SAL_CALL resolveVBAMacro( const uno::Reference< frame::XModel >& model, const ::rtl::OUString& moduleName, ::sal_Bool bSearchGlobalTemplates ) throw (uno::RuntimeException);
 +    virtual ::sal_Bool SAL_CALL executeMacro( const uno::Reference< frame::XModel >& model, const ::rtl::OUString& smacroName, uno::Sequence< uno::Any >& aArgs, uno::Any& aRet, const uno::Any& aCaller ) throw (uno::RuntimeException);
 +};
@@ -1350,6 +1475,12 @@ index 0000000..f6d0fa3
 +    return sMacro;
 +}
 +
++::rtl::OUString SAL_CALL 
++VBAMacroHelper::extractMacroNameFromURL( const ::rtl::OUString& sURL ) throw (uno::RuntimeException)
++{
++    rtl::OUString sMacro = extractMacroFromURL( sURL );
++    return sMacro;
++}
 +uno::Reference< script::XVBAMacroResolvedInfo > SAL_CALL 
 +VBAMacroHelper::resolveVBAMacro( const uno::Reference< frame::XModel >& model, const ::rtl::OUString& moduleName, ::sal_Bool bSearchGlobalTemplates ) throw (uno::RuntimeException)
 +{
@@ -1483,7 +1614,7 @@ index 060ab89..6503abc 100644
          {
              xFactory = createSingleFactory( reinterpret_cast< lang::XMultiServiceFactory * >( pServiceManager ),
 diff --git sw/source/filter/ww8/ww8par.cxx sw/source/filter/ww8/ww8par.cxx
-index bda7b26..622f7e0 100644
+index d1ed65d..041f019 100644
 --- sw/source/filter/ww8/ww8par.cxx
 +++ sw/source/filter/ww8/ww8par.cxx
 @@ -155,7 +155,6 @@ using namespace nsHdFtFlags;
@@ -1552,6 +1683,27 @@ index 2c6f212..3008c73 100644
  	}
      
  	return result;
+diff --git vbahelper/inc/vbahelper/vbaapplicationbase.hxx vbahelper/inc/vbahelper/vbaapplicationbase.hxx
+index a320075..99d5c47 100644
+--- vbahelper/inc/vbahelper/vbaapplicationbase.hxx
++++ vbahelper/inc/vbahelper/vbaapplicationbase.hxx
+@@ -30,6 +30,8 @@
+ #include <ooo/vba/XHelperInterface.hpp>
+ #include <ooo/vba/XApplicationBase.hpp>
+ #include <vbahelper/vbahelperinterface.hxx>
++#include <com/sun/star/script/XVBAMacroHelper.hpp>
++
+ #include <sfx2/objsh.hxx>
+ 
+ typedef InheritedHelperInterfaceImpl1< ov::XApplicationBase > ApplicationBase_BASE;
+@@ -41,6 +43,7 @@ class VBAHELPER_DLLPUBLIC VbaApplicationBase : public ApplicationBase_BASE
+     VbaApplicationBase_Impl* m_pImpl;
+ 
+ protected:
++    css::uno::Reference< css::script::XVBAMacroHelper > m_xMacroHelper;
+     VbaApplicationBase( const css::uno::Reference< css::uno::XComponentContext >& xContext );
+     virtual ~VbaApplicationBase();
+ 
 diff --git vbahelper/inc/vbahelper/vbaeventshelperbase.hxx vbahelper/inc/vbahelper/vbaeventshelperbase.hxx
 index 461cfbc..5f0568f 100644
 --- vbahelper/inc/vbahelper/vbaeventshelperbase.hxx
@@ -1585,44 +1737,60 @@ index 5c05894..f7346f4 100644
  #include <basic/sbmod.hxx>
  
 diff --git vbahelper/source/vbahelper/vbaapplicationbase.cxx vbahelper/source/vbahelper/vbaapplicationbase.cxx
-index d84f400..94ef0da 100644
+index 8cfc6d1..3cee693 100644
 --- vbahelper/source/vbahelper/vbaapplicationbase.cxx
 +++ vbahelper/source/vbahelper/vbaapplicationbase.cxx
-@@ -32,9 +32,10 @@
- #include <com/sun/star/document/XDocumentInfoSupplier.hpp>
- #include <com/sun/star/document/XDocumentProperties.hpp>
- #include <com/sun/star/document/XDocumentPropertiesSupplier.hpp>
+@@ -39,10 +39,11 @@
+ #include <com/sun/star/document/XEmbeddedScripts.hpp> //Michael E. Bohn
+ #include <ooo/vba/XVBAAppService.hpp> //Michael E. Bohn
+ #include <com/sun/star/awt/XWindow2.hpp>
 +#include <com/sun/star/script/theVBAMacroHelper.hpp>
 +#include <comphelper/processfactory.hxx>
  
+ 
  #include "vbacommandbars.hxx"
 -#include <filter/msfilter/msvbahelper.hxx>
+ #include <tools/datetime.hxx>
  
  // start basic includes
- #include <basic/sbx.hxx>
-@@ -136,8 +137,9 @@ VbaApplicationBase::getVersion() throw (uno::RuntimeException)
- uno::Any SAL_CALL VbaApplicationBase::Run( const ::rtl::OUString& MacroName, const uno::Any& varg1, const uno::Any& varg2, const uno::Any& varg3, const uno::Any& varg4, const uno::Any& varg5, const uno::Any& varg6, const uno::Any& varg7, const uno::Any& varg8, const uno::Any& varg9, const uno::Any& varg10, const uno::Any& varg11, const uno::Any& varg12, const uno::Any& varg13, const uno::Any& varg14, const uno::Any& varg15, const uno::Any& varg16, const uno::Any& varg17, const uno::Any& varg18, const uno::Any& varg19, const uno::Any& varg20, const uno::Any& varg21, const uno::Any& varg22, const uno::Any& varg23, const uno::Any& varg24, const uno::Any& varg25, const uno::Any& varg26, const uno::Any& varg27, const uno::Any& varg28, const uno::Any& varg29, const uno::Any& varg30 ) throw (uno::RuntimeException)
+@@ -181,6 +182,13 @@ VbaApplicationBase::VbaApplicationBase( const uno::Reference< uno::XComponentCon
+                     : ApplicationBase_BASE( uno::Reference< XHelperInterface >(), xContext )
+                     , m_pImpl( new VbaApplicationBase_Impl )
  {
++    try
++    {
++        m_xMacroHelper =  script::theVBAMacroHelper::get( comphelper::getProcessComponentContext() );
++    }
++    catch( uno::Exception& e )
++    {
++    }
+ }
+ 
+ VbaApplicationBase::~VbaApplicationBase()
+@@ -335,8 +343,10 @@ uno::Any SAL_CALL VbaApplicationBase::Run( const ::rtl::OUString& MacroName, con
+ 
+     
      // search the global tempalte
--    VBAMacroResolvedInfo aMacroInfo = resolveVBAMacro( getSfxObjShell( getCurrentDocument() ), MacroName, sal_True );
+-    VBAMacroResolvedInfo aMacroInfo = resolveVBAMacro( getSfxObjShell( aMacroDocumentModel ), sMacro_only_Name, sal_True );
 -    if( aMacroInfo.IsResolved() )
-+    uno::Reference< script::XVBAMacroHelper > xMacroHelper =  script::theVBAMacroHelper::get( comphelper::getProcessComponentContext() );
-+    uno::Reference< script::XVBAMacroResolvedInfo > xMacroInfo = xMacroHelper->resolveVBAMacro( getCurrentDocument(), MacroName, sal_True );
++    uno::Reference< script::XVBAMacroResolvedInfo > xMacroInfo;
++    if ( m_xMacroHelper.is() )
++        xMacroInfo = m_xMacroHelper->resolveVBAMacro( getCurrentDocument(), MacroName, sal_True );
 +    if( xMacroInfo->getResolved() )
      {
          // handle the arguments
          const uno::Any* aArgsPtrArray[] = { &varg1, &varg2, &varg3, &varg4, &varg5, &varg6, &varg7, &varg8, &varg9, &varg10, &varg11, &varg12, &varg13, &varg14, &varg15, &varg16, &varg17, &varg18, &varg19, &varg20, &varg21, &varg22, &varg23, &varg24, &varg25, &varg26, &varg27, &varg28, &varg29, &varg30 };
-@@ -163,7 +165,7 @@ uno::Any SAL_CALL VbaApplicationBase::Run( const ::rtl::OUString& MacroName, con
+@@ -362,7 +372,7 @@ uno::Any SAL_CALL VbaApplicationBase::Run( const ::rtl::OUString& MacroName, con
  
          uno::Any aRet;
          uno::Any aDummyCaller;
 -        executeMacro( aMacroInfo.MacroDocContext(), aMacroInfo.ResolvedMacro(), aArgs, aRet, aDummyCaller );
-+        xMacroHelper->executeMacro( xMacroInfo->getDocumentContext(), xMacroInfo->getResolvedMacro(), aArgs, aRet, aDummyCaller );
++        m_xMacroHelper->executeMacro( xMacroInfo->getDocumentContext(), xMacroInfo->getResolvedMacro(), aArgs, aRet, aDummyCaller );
  
          return aRet;
      }
 diff --git vbahelper/source/vbahelper/vbacommandbarcontrol.cxx vbahelper/source/vbahelper/vbacommandbarcontrol.cxx
-index 8cb9f49..39ae22d 100644
+index 1b2d013..3378a4d 100644
 --- vbahelper/source/vbahelper/vbacommandbarcontrol.cxx
 +++ vbahelper/source/vbahelper/vbacommandbarcontrol.cxx
 @@ -27,7 +27,8 @@
