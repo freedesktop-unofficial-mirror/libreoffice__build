@@ -4256,7 +4256,7 @@ index 3e5493a..3633d77 100644
 --- sc/source/filter/inc/xeescher.hxx
 +++ sc/source/filter/inc/xeescher.hxx
 @@ -34,6 +34,7 @@
- #include <vcl/graph.hxx>
+ #include <filter/msfilter/escherex.hxx>
  #include "xcl97rec.hxx"
  #include "xlescher.hxx"
 +#include <com/sun/star/chart/XChartDocument.hpp>
@@ -4340,9 +4340,9 @@ index e224fc2..897373c 100644
 +#include <com/sun/star/awt/Point.hpp>
 +#include <com/sun/star/awt/Size.hpp>
 +#include <com/sun/star/container/XNamed.hpp>
- 
+
+ #include <set> 
  #include <rtl/ustrbuf.h>
- #include <vcl/bmpacc.hxx>
 @@ -69,9 +73,12 @@
  #include "userdat.hxx"
  #include "drwlayer.hxx"
@@ -4365,17 +4365,17 @@ index e224fc2..897373c 100644
  using ::oox::drawingml::DrawingML;
 +using ::oox::drawingml::ChartExport;
  
- // ============================================================================
- 
+ // Escher client anchor ======================================================= 
+
 @@ -798,7 +808,7 @@ void XclExpTbxControlObj::WriteSbs( XclExpStream& /*rStrm*/ )
  
- XclExpChartObj::XclExpChartObj( const XclExpRoot& rRoot, Reference< XShape > xShape ) :
+ XclExpChartObj::XclExpChartObj( XclExpObjectManager& rObjMgr, Reference< XShape > xShape, const Rectangle* pChildAnchor ) :
      XclObj( rObjMgr, EXC_OBJTYPE_CHART ),
 -    XclExpRoot( rObjMgr.GetRoot() )
 +    XclExpRoot( rObjMgr.GetRoot() ), mxShape( xShape )
  {
      // create the MSODRAWING record contents for the chart object
-     XclEscherEx& rEscherEx = *pMsodrawing->GetEscherEx();
+     mrEscherEx.OpenContainer( ESCHER_SpContainer );
 @@ -834,6 +844,7 @@ XclExpChartObj::XclExpChartObj( const XclExpRoot& rRoot, Reference< XShape > xSh
      ScfPropertySet aShapeProp( xShape );
      Reference< XModel > xModel;
@@ -4383,9 +4383,9 @@ index e224fc2..897373c 100644
 +    mxChartDoc.set( xModel,UNO_QUERY );
      ::com::sun::star::awt::Rectangle aBoundRect;
      aShapeProp.GetProperty( aBoundRect, CREATE_OUSTRING( "BoundRect" ) );
-     Size aSize( aBoundRect.Width, aBoundRect.Height );
+     Rectangle aChartRect( Point( aBoundRect.X, aBoundRect.Y ), Size( aBoundRect.Width, aBoundRect.Height ) );
 @@ -854,6 +865,118 @@ void XclExpChartObj::Save( XclExpStream& /*rStrm*/ )
- #endif // xlsx
+    mxChart->Save( rStrm );
  }
  
 +void XclExpChartObj::SaveXml( XclExpXmlStream& rStrm )
@@ -4623,7 +4623,7 @@ index 44a5c32..13083c7 100644
  {
      m_pSerializer->mark();
 @@ -1711,6 +1792,13 @@ void DocxAttributeOutput::OutputFlyFrame_Impl( const sw::Frame &rFrame, const Po
-                 }
+                 m_pParentFrame = &rFrame;
              }
              break;
 +        case sw::Frame::eOle:
@@ -4635,7 +4635,7 @@ index 44a5c32..13083c7 100644
 +            break;
          default:
  #if OSL_DEBUG_LEVEL > 0
-             fprintf( stderr, "TODO DocxAttributeOutput::OutputFlyFrame_Impl( const sw::Frame& rFrame, const Point& rNdTopLeft ) - frame type '%s'\n",
+             OSL_TRACE( "TODO DocxAttributeOutput::OutputFlyFrame_Impl( const sw::Frame& rFrame, const Point& rNdTopLeft ) - frame type '%s'\n",
 diff --git sw/source/filter/ww8/docxattributeoutput.hxx sw/source/filter/ww8/docxattributeoutput.hxx
 index d751e6c..ee19058 100644
 --- sw/source/filter/ww8/docxattributeoutput.hxx
@@ -4674,7 +4674,7 @@ index b66b059..e2401f4 100644
  #include <map>
  #include <algorithm>
 @@ -423,6 +425,33 @@ void DocxExport::DoFormText(const SwInputField* /*pFld*/)
- #endif
+     OSL_TRACE( "TODO DocxExport::ForFormText()\n" );
  }
  
 +rtl::OString DocxExport::OutputChart( uno::Reference< frame::XModel >& xModel, sal_Int32 nCount )
