@@ -1,0 +1,623 @@
+diff --git oox/inc/oox/ole/simplevbaprojectfilter.hxx oox/inc/oox/ole/simplevbaprojectfilter.hxx
+index 8639db1..a50fb2f 100644
+--- oox/inc/oox/ole/simplevbaprojectfilter.hxx
++++ oox/inc/oox/ole/simplevbaprojectfilter.hxx
+@@ -27,6 +27,7 @@ public:
+     explicit            SimpleWordVBAProjFilter(
+                             const ::com::sun::star::uno::Reference< ::com::sun::star::lang::XMultiServiceFactory >& rxGlobalFactory );
+ private:
++    virtual bool        importDocument() throw();
+     virtual ::rtl::OUString implGetImplementationName() const;
+ };
+ }
+diff --git oox/inc/oox/xls/excelfilter.hxx oox/inc/oox/xls/excelfilter.hxx
+index 72ed636..27956d5 100644
+--- oox/inc/oox/xls/excelfilter.hxx
++++ oox/inc/oox/xls/excelfilter.hxx
+@@ -32,6 +32,7 @@
+ #include "oox/core/binaryfilterbase.hxx"
+ #include "oox/xls/excelvbaproject.hxx"
+ #include "oox/ole/simplevbaprojectfilter.hxx"
++#include <com/sun/star/form/XFormComponent.hpp>
+ 
+ namespace oox {
+ namespace xls {
+@@ -73,6 +74,7 @@ public:
+     virtual ::oox::drawingml::chart::ChartConverter& getChartConverter();
+ 
+ private:
++    bool importFormControl( ::com::sun::star::uno::Reference< ::com::sun::star::form::XFormComponent >& rxFormComp, sal_Int32 nStrmPos );
+     virtual GraphicHelper* implCreateGraphicHelper() const;
+     virtual ::rtl::OUString implGetImplementationName() const;
+ };
+@@ -102,6 +104,7 @@ public:
+     virtual bool        importDocument() throw();
+ 
+ private:
++    bool importFormControl( ::com::sun::star::uno::Reference< ::com::sun::star::form::XFormComponent >& rxFormComp, sal_Int32 nStrmPos );
+     virtual GraphicHelper* implCreateGraphicHelper() const;
+     virtual ::rtl::OUString implGetImplementationName() const;
+ };
+diff --git oox/source/ole/simplevbaprojectfilter.cxx oox/source/ole/simplevbaprojectfilter.cxx
+index 85c1e70..d5255b6 100644
+--- oox/source/ole/simplevbaprojectfilter.cxx
++++ oox/source/ole/simplevbaprojectfilter.cxx
+@@ -1,6 +1,14 @@
+ #include "oox/ole/simplevbaprojectfilter.hxx"
+ #include "oox/ole/vbaproject.hxx"
+ #include "oox/helper/binaryinputstream.hxx"
++#include <com/sun/star/beans/XPropertySet.hpp>
++#include <com/sun/star/form/XFormComponent.hpp>
++#include <com/sun/star/awt/XControlModel.hpp>
++#include "oox/ole/axcontrol.hxx"
++
++#include "properties.hxx"
++#include "oox/helper/propertymap.hxx"
++#include "oox/helper/propertyset.hxx"
+ 
+ using ::rtl::OUString;
+ using ::com::sun::star::uno::Any;
+@@ -15,6 +23,10 @@ using ::oox::core::BinaryFilterBase;
+ using ::oox::core::Relation;
+ using ::oox::core::Relations;
+ using ::oox::core::XmlFilterBase;
++using ::com::sun::star::form::XFormComponent;
++using ::com::sun::star::awt::XControlModel;
++using ::com::sun::star::beans::XPropertySet;
++using ::com::sun::star::uno::UNO_QUERY;
+ 
+ namespace oox {
+ namespace ole {
+@@ -67,6 +79,53 @@ SimpleWordVBAProjFilter::SimpleWordVBAProjFilter( const ::com::sun::star::uno::R
+ {
+ }
+ 
++bool SimpleWordVBAProjFilter::importDocument() throw()
++{
++    Reference< XPropertySet > xProps; 
++    Reference< XFormComponent > rxFormComp; 
++    // Hack to remove msocximex filter for word ocx controls
++    if ( ( getArgument( CREATE_OUSTRING( "ImportFormControl" ) ) >>= xProps ) && xProps.is() )
++    {
++        OUString nPoolName;
++        xProps->getPropertyValue( CREATE_OUSTRING( "ObjPoolName" ) ) >>= nPoolName;
++        ::oox::ole::EmbeddedControl aControl( CREATE_OUSTRING( "Unknown" ) );
++        
++        StorageRef xPoolStrg = openSubStorage( CREATE_OUSTRING( "ObjectPool" ), false );
++        if ( xPoolStrg.get() && xPoolStrg->isStorage() )
++        {
++            StorageRef xObjStrg = xPoolStrg->openSubStorage( nPoolName, false );
++            if ( xObjStrg.get() && xObjStrg->isStorage() )
++            {
++                BinaryXInputStream aNameStream( xObjStrg->openInputStream( CREATE_OUSTRING("\3OCXNAME") ), true );
++                BinaryXInputStream aInStrm( xObjStrg->openInputStream( CREATE_OUSTRING("contents") ), true );
++                BinaryXInputStream aClsStrm( xObjStrg->openInputStream( CREATE_OUSTRING("\1CompObj") ), true );
++                aClsStrm.skip(12);
++                OUString aStrmClassId = ::oox::ole::OleHelper::importGuid( aClsStrm );
++
++                if( ::oox::ole::ControlModelBase* pModel = aControl.createModel( aStrmClassId ).get() )
++                {
++                    pModel->importBinaryModel( aInStrm );    
++                    rxFormComp.set( getGlobalFactory()->createInstance( pModel->getServiceName() ), UNO_QUERY );
++                    Reference< XControlModel > xCtlModel( rxFormComp, UNO_QUERY ); 
++                    ::oox::ole::ControlConverter aConv(  getGraphicHelper() );
++                    aControl.convertProperties( xCtlModel, aConv );
++                    OUString aName = aNameStream.readNulUnicodeArray();
++                    if ( aName.getLength() )
++                    {
++                        PropertyMap aPropMap;
++                        aPropMap.setProperty( PROP_Name, aName );
++                        FormPropertySet aPropSet( xCtlModel );    
++                        aPropSet.setProperties( aPropMap ); 
++                    }
++                } 
++            }
++        }
++        xProps->setPropertyValue( CREATE_OUSTRING( "Control" ), Any( rxFormComp ) );
++        return rxFormComp.is();
++    }
++    return SimpleVBAProjFilter::importDocument();
++}
++
+ OUString SimpleWordVBAProjFilter::implGetImplementationName() const
+ {
+     return SimpleWordVBAProjFilter_getImplementationName();
+diff --git oox/source/xls/excelfilter.cxx oox/source/xls/excelfilter.cxx
+index fed9dcd..bbfb4a7 100644
+--- oox/source/xls/excelfilter.cxx
++++ oox/source/xls/excelfilter.cxx
+@@ -33,9 +33,11 @@
+ #include "oox/xls/stylesbuffer.hxx"
+ #include "oox/xls/themebuffer.hxx"
+ #include "oox/xls/workbookfragment.hxx"
++#include "oox/ole/axcontrol.hxx"
+ #include "oox/dump/biffdumper.hxx"
+ #include "oox/dump/xlsbdumper.hxx"
+ #include <com/sun/star/container/XNameContainer.hpp>
++#include <com/sun/star/awt/XControlModel.hpp>
+ 
+ using ::rtl::OUString;
+ using ::com::sun::star::uno::Any;
+@@ -52,6 +54,9 @@ using ::oox::core::Relation;
+ using ::oox::core::Relations;
+ using ::oox::core::XmlFilterBase;
+ using ::oox::drawingml::table::TableStyleListPtr;
++using ::com::sun::star::form::XFormComponent;
++using ::com::sun::star::awt::XControlModel;
++using ::com::sun::star::beans::XPropertySet;
+ 
+ namespace oox {
+ namespace xls {
+@@ -268,6 +273,28 @@ SimpleExcelVBAProjFilter::SimpleExcelVBAProjFilter( const Reference< XMultiServi
+ {
+ }
+ 
++bool SimpleExcelVBAProjFilter::importFormControl( Reference< XFormComponent >& rxFormComp, sal_Int32 nPos )
++{
++    bool bRet = false;
++
++    ::oox::ole::EmbeddedControl aControl( CREATE_OUSTRING( "Unknown" ) );
++    BinaryXInputStream aInStrm( openInputStream( CREATE_OUSTRING( "Ctls" ) ), true );
++
++    aInStrm.skip( nPos ); 
++    OUString aStrmClassId = ::oox::ole::OleHelper::importGuid( aInStrm );
++
++    if( ::oox::ole::ControlModelBase* pModel = aControl.createModel( aStrmClassId ).get() )
++    {
++        pModel->importBinaryModel( aInStrm );    
++        rxFormComp.set( getGlobalFactory()->createInstance( pModel->getServiceName() ), UNO_QUERY );
++        Reference< XControlModel > xCtlModel( rxFormComp, UNO_QUERY ); 
++        ::oox::ole::ControlConverter aConv(  getGraphicHelper() );
++        aControl.convertProperties( xCtlModel, aConv ); 
++    }
++
++    return bRet;  
++}
++
+ bool SimpleExcelVBAProjFilter::importDocument() throw()
+ {
+     bool bRet = false;
+@@ -282,7 +309,22 @@ bool SimpleExcelVBAProjFilter::importDocument() throw()
+         getArgument( CREATE_OUSTRING( "GeneratedCodeNames" ) ) >>= sGeneratedCNames;
+         Reference< XNameContainer > xOleNameOverrideSink;
+         getArgument( CREATE_OUSTRING( "OleNameOverrideInfo" ) ) >>= xOleNameOverrideSink;
++
+         WorkbookHelperRoot aHelper( *this, eBiff );
++        // # Temporary Hack to allow at least for Excel removal of
++        // the old msocximex filter for importing controls
++        
++        Reference< XPropertySet > xProps; 
++        if ( ( getArgument( CREATE_OUSTRING( "ImportFormControl" ) ) >>= xProps ) && xProps.is() )
++        {
++            sal_Int32 nStrmPos = 0;
++            xProps->getPropertyValue( CREATE_OUSTRING( "StreamPosition" ) ) >>= nStrmPos;
++            Reference< XFormComponent > xFormComp;
++            bRet = importFormControl( xFormComp, nStrmPos ); 
++            xProps->setPropertyValue( CREATE_OUSTRING( "Control" ), Any( xFormComp ) );
++            return xFormComp.is();
++        }
++
+         StorageRef xVbaPrjStrg = openSubStorage( CREATE_OUSTRING( "_VBA_PROJECT_CUR" ), false )    ;
+         if( xVbaPrjStrg.get() && xVbaPrjStrg->isStorage() )
+         {
+diff --git sc/source/filter/excel/xiescher.cxx sc/source/filter/excel/xiescher.cxx
+index 4f53b2c..35336f7 100644
+--- sc/source/filter/excel/xiescher.cxx
++++ sc/source/filter/excel/xiescher.cxx
+@@ -114,6 +114,15 @@
+ 
+ #include "namebuff.hxx"
+ 
++#include <sfx2/docfile.hxx>
++#include <com/sun/star/document/XFilter.hpp>
++#include <comphelper/processfactory.hxx>
++#include <com/sun/star/document/XImporter.hpp>
++#include <com/sun/star/beans/XPropertyContainer.hpp>
++#include <com/sun/star/beans/XPropertySet.hpp>
++#include <com/sun/star/beans/PropertyAttribute.hpp>
++#include <comphelper/mediadescriptor.hxx>
++
+ using ::rtl::OUString;
+ using ::rtl::OUStringBuffer;
+ using ::com::sun::star::uno::Any;
+@@ -125,6 +134,7 @@ using ::com::sun::star::uno::UNO_QUERY_THROW;
+ using ::com::sun::star::uno::UNO_SET_THROW;
+ using ::com::sun::star::beans::NamedValue;
+ using ::com::sun::star::lang::XMultiServiceFactory;
++using ::com::sun::star::lang::XComponent;
+ using ::com::sun::star::container::XIndexContainer;
+ using ::com::sun::star::container::XNameContainer;
+ using ::com::sun::star::frame::XModel;
+@@ -144,7 +154,13 @@ using ::com::sun::star::script::ScriptEventDescriptor;
+ using ::com::sun::star::script::XEventAttacherManager;
+ using ::com::sun::star::table::CellAddress;
+ using ::com::sun::star::table::CellRangeAddress;
++using ::com::sun::star::document::XImporter;
++using ::com::sun::star::document::XFilter;
++using ::com::sun::star::beans::XPropertyContainer;
++using ::com::sun::star::beans::XPropertySet;
++using ::com::sun::star::beans::PropertyAttribute::MAYBEVOID;
+ 
++using namespace ::comphelper;
+ // ============================================================================
+ 
+ namespace {
+@@ -187,6 +203,54 @@ typedef TSdrObjectPtr< SdrObject > SdrObjectPtr;
+ 
+ } // namespace
+ 
++//        SfxMedium& rMedium = GetMedium();
++void importFormControl( const Reference< XModel >& xModel, SfxMedium& rMedium, Reference< XFormComponent >& xFComp, sal_Int32 nStrmPos )
++{
++    try
++    {
++        Reference< XComponent > xComponent( xModel, UNO_QUERY_THROW );
++        Sequence< NamedValue > aArgSeq(1);
++        aArgSeq[ 0 ].Name = CREATE_OUSTRING( "ImportFormControl");
++        Reference< XMultiServiceFactory > xFac( ::comphelper::getProcessServiceFactory
++(), UNO_QUERY_THROW );
++        
++        Reference< XPropertyContainer > xPropBag( xFac->createInstance( CREATE_OUSTRING( "com.sun.star.beans.PropertyBag" ) ), UNO_QUERY_THROW );
++        aArgSeq[ 0 ].Value <<= xPropBag;
++  
++        xPropBag->addProperty( CREATE_OUSTRING( "StreamPosition" ), MAYBEVOID, Any( nStrmPos ) );
++        xPropBag->addProperty( CREATE_OUSTRING( "Control" ), MAYBEVOID, Any( xFComp ) );
++
++        Sequence< Any > aArgs(2);
++        aArgs[ 0 ] <<= ::comphelper::getProcessServiceFactory();
++        aArgs[ 1 ] <<= aArgSeq;
++
++        Reference< XImporter > xImporter( ScfApiHelper::CreateInstanceWithArgs( CREATE_OUSTRING( "com.sun.star.comp.xls.SimpleExcelVBAProjFilter" ), aArgs ), UNO_QUERY_THROW );    
++        xImporter->setTargetDocument( xComponent );
++    
++        MediaDescriptor aMediaDesc;
++        SfxItemSet* pItemSet = rMedium.GetItemSet();
++        if( pItemSet )
++        {
++            if( const SfxStringItem* pItem = static_cast< const SfxStringItem* >( pItemSet->GetItem( SID_FILE_NAME ) ) )
++                aMediaDesc[ MediaDescriptor::PROP_URL() ] <<= ::rtl::OUString( pItem->GetValue() );
++            if( const SfxStringItem* pItem = static_cast< const SfxStringItem* >( pItemSet->GetItem( SID_PASSWORD ) ) )
++                aMediaDesc[ MediaDescriptor::PROP_PASSWORD() ] <<= ::rtl::OUString( pItem->GetValue() );
++        }
++        aMediaDesc[ MediaDescriptor::PROP_INPUTSTREAM() ] <<= rMedium.GetInputStream();
++        aMediaDesc[ MediaDescriptor::PROP_INTERACTIONHANDLER() ] <<= rMedium.GetInteractionHandler();
++    
++        // call the filter
++        Reference< XFilter > xFilter( xImporter, UNO_QUERY_THROW );
++        if ( xFilter->filter( aMediaDesc.getAsConstPropertyValueList() ) )
++        {
++            Reference< XPropertySet > xPropSet( xPropBag, UNO_QUERY_THROW );
++            xPropSet->getPropertyValue( CREATE_OUSTRING( "Control" ) ) >>= xFComp;
++        }
++    }
++    catch( Exception& )
++    {
++    } 
++}
+ // Drawing objects ============================================================
+ 
+ XclImpDrawObjBase::XclImpDrawObjBase( const XclImpRoot& rRoot ) :
+@@ -3158,7 +3222,7 @@ XclImpDffConverter::XclImpDffConvData::XclImpDffConvData(
+ 
+ XclImpDffConverter::XclImpDffConverter( const XclImpRoot& rRoot, SvStream& rDffStrm ) :
+     XclImpSimpleDffConverter( rRoot, rDffStrm ),
+-    SvxMSConvertOCXControls( rRoot.GetDocShell(), 0 ),
++//    SvxMSConvertOCXControls( rRoot.GetDocShell(), 0 ),
+     maStdFormName( CREATE_OUSTRING( "Standard" ) ),
+     mnOleImpFlags( 0 )
+ {
+@@ -3323,8 +3387,24 @@ SdrObject* XclImpDffConverter::CreateSdrObject( const XclImpPictureObj& rPicObj,
+                 mxCtlsStrm->Seek( rPicObj.GetCtlsStreamPos() );
+                 // read from mxCtlsStrm into xShape, insert the control model into the form
+                 Reference< XShape > xShape;
++/*
+                 if( GetConvData().mxCtrlForm.is() && ReadOCXExcelKludgeStream( mxCtlsStrm, &xShape, TRUE ) )
+                     xSdrObj.reset( rPicObj.CreateSdrObjectFromShape( xShape, rAnchorRect ) );
++*/
++                if( GetConvData().mxCtrlForm.is() )
++                {
++                     Reference< XFormComponent >  xFComp;
++                     com::sun::star::awt::Size aSz;  // not used in import
++                     SfxMedium& rMedium = GetMedium();
++                     importFormControl( GetDocShell()->GetModel(), rMedium, xFComp, rPicObj.GetCtlsStreamPos() );
++                     // recreate the method formally known as 
++                     // ReadOCXExcelKludgeStream( )
++                     if ( xFComp.is() )
++                     {
++                         InsertControl( xFComp, aSz,&xShape,TRUE);
++                         xSdrObj.reset( rPicObj.CreateSdrObjectFromShape( xShape, rAnchorRect ) );
++                     }
++                }
+             }
+             catch( Exception& )
+             {
+diff --git sc/source/filter/inc/xiescher.hxx sc/source/filter/inc/xiescher.hxx
+index 38464fa..81f1cfd 100644
+--- sc/source/filter/inc/xiescher.hxx
++++ sc/source/filter/inc/xiescher.hxx
+@@ -990,7 +990,7 @@ protected:
+     contains core implementation of DFF stream import and OCX form control
+     import.
+  */
+-class XclImpDffConverter : public XclImpSimpleDffConverter, private SvxMSConvertOCXControls
++class XclImpDffConverter : public XclImpSimpleDffConverter/*, private SvxMSConvertOCXControls*/
+ {
+ public:
+     explicit            XclImpDffConverter( const XclImpRoot& rRoot, SvStream& rDffStrm );
+diff --git sw/source/filter/ww8/wrtw8esh.cxx sw/source/filter/ww8/wrtw8esh.cxx
+index 71889e2..8c1dad3 100644
+--- sw/source/filter/ww8/wrtw8esh.cxx
++++ sw/source/filter/ww8/wrtw8esh.cxx
+@@ -106,6 +106,13 @@
+ #include <ndtxt.hxx>
+ // <--
+ #include "WW8FFData.hxx"
++#include <com/sun/star/drawing/XShape.hpp>
++#include <com/sun/star/beans/XPropertyContainer.hpp>
++#include <com/sun/star/beans/XPropertySet.hpp>
++#include <com/sun/star/beans/PropertyAttribute.hpp>
++#include <com/sun/star/form/XFormComponent.hpp>
++#include <comphelper/processfactory.hxx>
++#include "docsh.hxx"
+ 
+ using namespace com::sun::star;
+ using namespace sw::util;
+@@ -2764,6 +2771,40 @@ UINT32 SwEscherEx::QueryTextID(
+     return nId;
+ }
+ 
++// A bit ugly but lets keep the old signature ( but remove all calls to
++// filter/source/msocximex.cxx )
++
++sal_Bool  SwMSConvertControls::ReadOCXStream( SotStorageRef& rSrc1,
++        com::sun::star::uno::Reference< com::sun::star::drawing::XShape > *pShapeRef,
++        BOOL bFloatingCtrl )
++{
++    uno::Sequence< beans::NamedValue > aArgSeq(1);
++    aArgSeq[ 0 ].Name = rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( "ImportFormControl") );
++
++    uno::Reference< lang::XMultiServiceFactory > xFac( ::comphelper::getProcessServiceFactory (), uno::UNO_QUERY_THROW );
++        
++    uno::Reference< beans::XPropertyContainer > xPropBag( xFac->createInstance(  rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( "com.sun.star.beans.PropertyBag" ) ) ), uno::UNO_QUERY_THROW );
++    aArgSeq[ 0 ].Value <<= xPropBag;
++ 
++    uno::Reference< form::XFormComponent > xFComp;
++    xPropBag->addProperty( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( "ObjPoolName" ) ), beans::PropertyAttribute::MAYBEVOID, uno::Any( rtl::OUString( rSrc1->GetName() ) ) );
++    xPropBag->addProperty( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( "Control" ) ), beans::PropertyAttribute::MAYBEVOID, uno::Any( xFComp ) );
++
++    BasicProjImportHelper aVBAImporter( *( static_cast< SwDocShell* >( pDocSh ) ) );
++    sal_Bool bRes = aVBAImporter.import( aArgSeq );
++    if ( bRes )
++    {
++        uno::Reference< beans::XPropertySet > xPropSet( xPropBag, uno::UNO_QUERY_THROW );
++        xPropSet->getPropertyValue( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( "Control" ) ) ) >>= xFComp;
++        if ( xFComp.is() )
++        {
++            com::sun::star::awt::Size aSz;  // not used in import
++            bRes = InsertControl( xFComp, aSz,pShapeRef,bFloatingCtrl);
++        }
++    }
++    return bRes;
++}
++
+ bool SwMSConvertControls::ExportControl(WW8Export &rWW8Wrt, const SdrObject *pObj)
+ {
+     if (!rWW8Wrt.bWrtWW8)
+diff --git sw/source/filter/ww8/ww8par.cxx sw/source/filter/ww8/ww8par.cxx
+index 041f019..97d259b 100644
+--- sw/source/filter/ww8/ww8par.cxx
++++ sw/source/filter/ww8/ww8par.cxx
+@@ -144,6 +144,13 @@
+ 
+ #include "WW8Sttbf.hxx"
+ #include "WW8FibData.hxx"
++#include <comphelper/processfactory.hxx>
++#include <com/sun/star/document/XFilter.hpp>
++#include <com/sun/star/script/XVBACompat.hpp>
++#include <com/sun/star/document/XImporter.hpp>
++#include <com/sun/star/lang/XMultiServiceFactory.hpp>
++#include <comphelper/mediadescriptor.hxx>
++
+ #define MM_250 1417             // WW-Default fuer Hor. Seitenraender: 2.5 cm
+ #define MM_200 1134             // WW-Default fuer u.Seitenrand: 2.0 cm
+ 
+@@ -152,11 +159,92 @@ using namespace sw::util;
+ using namespace sw::types;
+ using namespace nsHdFtFlags;
+ 
++using namespace ::comphelper;
++
+ #include <com/sun/star/document/XEventsSupplier.hpp>
+ #include <com/sun/star/container/XNameReplace.hpp>
+ #include <com/sun/star/frame/XModel.hpp>
+ #include <unotools/pathoptions.hxx>
+ #include <com/sun/star/ucb/XSimpleFileAccess.hpp>
++/*
++class BasicProjImportHelper
++{
++    SfxObjectShell& mrDocShell;
++public:
++    BasicProjImportHelper( SfxObjectShell& rShell ) : mrDocShell( rShell ) {}
++    bool import() { uno::Sequence< beans::NamedValue > aArgSeq; import( aArgSeq ) };
++    bool import( const uno::Sequence< beans::NamedValue >& aArgSeq );
++    rtl::OUString getProjectName();
++};
++*/
++bool BasicProjImportHelper::import()
++{
++    uno::Sequence< beans::NamedValue > aArgSeq;
++    return import( aArgSeq );
++}
++
++bool BasicProjImportHelper::import( const uno::Sequence< beans::NamedValue >& aArgSeq )
++{
++    bool bRet = false;
++    try
++    {
++        uno::Reference< lang::XComponent > xComponent( mrDocShell.GetModel(), uno::UNO_QUERY_THROW );
++        
++        uno::Reference< lang::XMultiServiceFactory > xFac( getProcessServiceFactory(), uno::UNO_QUERY_THROW );
++        uno::Reference< document::XImporter > xImporter;
++        if ( aArgSeq.getLength() )
++        {
++            uno::Sequence< uno::Any > aArgs( 2 );
++            aArgs[ 0 ] <<= getProcessServiceFactory();
++            aArgs[ 1 ] <<= aArgSeq;
++            xImporter.set( xFac->createInstanceWithArguments( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( "com.sun.star.comp.ole.SimpleWordVBAProjFilter" ) ), aArgs ), uno::UNO_QUERY_THROW );
++        }
++        else
++            xImporter.set( xFac->createInstance( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( "com.sun.star.comp.ole.SimpleWordVBAProjFilter" ) )), uno::UNO_QUERY_THROW );
++        xImporter->setTargetDocument( xComponent );
++        
++        MediaDescriptor aMediaDesc;
++        SfxMedium& rMedium = *mrDocShell.GetMedium();
++        SfxItemSet* pItemSet = rMedium.GetItemSet();
++        if( pItemSet )
++        {
++            if( const SfxStringItem* pItem = static_cast< const SfxStringItem* >( pItemSet->GetItem( SID_FILE_NAME ) ) )
++            aMediaDesc[ MediaDescriptor::PROP_URL() ] <<= ::rtl::OUString( pItem->GetValue() );
++            if( const SfxStringItem* pItem = static_cast< const SfxStringItem* >( pItemSet->GetItem( SID_PASSWORD ) ) )
++                aMediaDesc[ MediaDescriptor::PROP_PASSWORD() ] <<= ::rtl::OUString( pItem->GetValue() );
++        }
++        aMediaDesc[ MediaDescriptor::PROP_INPUTSTREAM() ] <<= rMedium.GetInputStream();
++        aMediaDesc[ MediaDescriptor::PROP_INTERACTIONHANDLER() ] <<= rMedium.GetInteractionHandler();
++        
++        // call the filter
++        uno::Reference< document::XFilter > xFilter( xImporter, uno::UNO_QUERY_THROW );
++        bRet = xFilter->filter( aMediaDesc.getAsConstPropertyValueList() );
++    }
++    catch( uno::Exception& )
++    {
++        bRet = false;
++    }            
++    return bRet;
++}
++
++rtl::OUString BasicProjImportHelper::getProjectName()
++{
++    rtl::OUString sProjName( RTL_CONSTASCII_USTRINGPARAM("Standard") );
++    uno::Reference< beans::XPropertySet > xProps( mrDocShell.GetModel(), uno::UNO_QUERY );
++    if ( xProps.is() )
++    {
++        try
++        {
++            uno::Reference< script::XVBACompat > xVBA( xProps->getPropertyValue( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( "BasicLibraries" ) ) ), uno::UNO_QUERY_THROW  );
++            sProjName = xVBA->getProjectName(); 
++                    
++        }
++        catch( uno::Exception& )
++        {
++        }
++    }
++    return sProjName;
++}
+ 
+ class Sttb : TBBase
+ {
+@@ -4007,16 +4095,11 @@ bool SwWW8ImplReader::ReadGlobalTemplateSettings( const rtl::OUString& sCreatedF
+ 
+         SotStorageRef rRoot = new SotStorage( aURL, STREAM_STD_READWRITE, STORAGE_TRANSACTED ); 
+ 
+-        // Read Macro Projects
+-        SvxImportMSVBasic aVBasic(*mpDocShell, *rRoot,
+-            pVBAFlags->IsLoadWordBasicCode(),
+-            pVBAFlags->IsLoadWordBasicStorage() );
+-
++        BasicProjImportHelper aBasicImporter( *mpDocShell );
++        // Import vba via oox filter
++        aBasicImporter.import();
+ 
+-        String s1(CREATE_CONST_ASC("Macros"));
+-        String s2(CREATE_CONST_ASC("VBA"));
+-        aVBasic.Import( s1, s2, !pVBAFlags->IsLoadWordBasicExecutable() );
+-        lcl_createTemplateToProjectEntry( xPrjNameCache, aURL, aVBasic.GetVBAProjectName() );
++        lcl_createTemplateToProjectEntry( xPrjNameCache, aURL, aBasicImporter.getProjectName() );
+         // Read toolbars & menus
+         SvStorageStreamRef refMainStream = rRoot->OpenSotStream( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM("WordDocument") ) );
+         refMainStream->SetNumberFormatInt(NUMBERFORMAT_INT_LITTLEENDIAN);
+@@ -4343,21 +4426,21 @@ ULONG SwWW8ImplReader::CoreLoad(WW8Glossary *pGloss, const SwPosition &rPos)
+             aArgs[ 0 ] <<= mpDocShell->GetModel();
+             aGlobs <<= ::comphelper::getProcessServiceFactory()->createInstanceWithArguments( ::rtl::OUString::createFromAscii( "ooo.vba.word.Globals"), aArgs );
+             mpDocShell->GetBasicManager()->SetGlobalUNOConstant( "VBAGlobals", aGlobs );
+-            
+-            SvxImportMSVBasic aVBasic(*mpDocShell, *pStg,
+-                            pVBAFlags->IsLoadWordBasicCode(),
+-                            pVBAFlags->IsLoadWordBasicStorage() );
+-            String s1(CREATE_CONST_ASC("Macros"));
+-            String s2(CREATE_CONST_ASC("VBA"));
+-            int nRet = aVBasic.Import( s1, s2, !pVBAFlags->IsLoadWordBasicExecutable() );
++
++            BasicProjImportHelper aBasicImporter( *mpDocShell );
++            // Import vba via oox filter
++            bool bRet = aBasicImporter.import();
++
+ // dissable below for 3.1 at the moment, 'cause it's kinda immature
+ // similarly the project reference in svx/source/msvba
++            
+ #if 1
+-            lcl_createTemplateToProjectEntry( xPrjNameCache, sCreatedFrom, aVBasic.GetVBAProjectName() );
++            lcl_createTemplateToProjectEntry( xPrjNameCache, sCreatedFrom, aBasicImporter.getProjectName() );
++ 
+             WW8Customizations aCustomisations( pTableStream, *pWwFib ); 
+             aCustomisations.Import( mpDocShell );
+ #endif 
+-            if( 2 & nRet )
++            if( bRet )
+             {
+                 maTracer.Log(sw::log::eContainsVisualBasic);
+                 rDoc.SetContainsMSVBasic(true);
+diff --git sw/source/filter/ww8/ww8par.hxx sw/source/filter/ww8/ww8par.hxx
+index 181b818..fb5c256 100644
+--- sw/source/filter/ww8/ww8par.hxx
++++ sw/source/filter/ww8/ww8par.hxx
+@@ -49,6 +49,7 @@
+ #include "../inc/msfilter.hxx"
+ #include <xmloff/odffields.hxx>
+ #include <IMark.hxx>
++#include <com/sun/star/beans/NamedValue.hpp>
+ 
+ class SwDoc;
+ class SwPaM;
+@@ -556,6 +557,10 @@ public:
+         com::sun::star::uno::Reference <
+         com::sun::star::drawing::XShape > *pShape,BOOL bFloatingCtrl);
+     bool ExportControl(WW8Export &rWrt, const SdrObject *pObj);
++    virtual sal_Bool ReadOCXStream( SotStorageRef& rSrc1,
++        com::sun::star::uno::Reference<
++        com::sun::star::drawing::XShape > *pShapeRef=0,
++        BOOL bFloatingCtrl=FALSE );
+ };
+ 
+ class SwMSDffManager : public SvxMSDffManager
+@@ -1633,6 +1638,19 @@ void MatchEscherMirrorIntoFlySet(const SvxMSDffImportRec &rRecord,
+ bool RTLDrawingsHack(long &rLeft, long nWidth,
+     sal_Int16 eHoriOri, sal_Int16 eHoriRel, SwTwips nPageLeft,
+     SwTwips nPageRight, SwTwips nPageSize);
++
++class BasicProjImportHelper
++{
++    SwDocShell& mrDocShell;
++public:
++    BasicProjImportHelper( SwDocShell& rShell ) : mrDocShell( rShell ) {}
++    bool import();
++    bool import( const com::sun::star::uno::Sequence< com::sun::star::beans::NamedValue >& aArgSeq );
++    rtl::OUString getProjectName();
++};
++
++
++
+ #endif
+ 
+ /* vi:set tabstop=4 shiftwidth=4 expandtab: */
+diff --git sw/util/makefile.mk sw/util/makefile.mk
+index 0fe0b68..7d51e55 100644
+--- sw/util/makefile.mk
++++ sw/util/makefile.mk
+@@ -335,7 +335,6 @@ SHL4STDLIBS= \
+     $(SALLIB) \
+     $(ICUUCLIB) \
+     $(BASICLIB)     \
+-                $(MSFILTERLIB) \
+     $(I18NUTILLIB)
+ 
+ .IF "$(ENABLE_VBA)" == "YES"
