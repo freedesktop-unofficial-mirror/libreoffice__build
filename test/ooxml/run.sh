@@ -3,8 +3,6 @@
 ooinstall=$1
 TOOLSDIR=$2
 
-set -x
-
 . $TOOLSDIR/bin/setup >/dev/null 2>&1
 
 LOGS=`dirname $0`/log
