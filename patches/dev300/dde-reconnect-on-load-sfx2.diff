@@ -1,21 +1,87 @@
 diff --git sfx2/inc/sfx2/linkmgr.hxx sfx2/inc/sfx2/linkmgr.hxx
-index 6ff4e26..941321a 100644
+index 6ff4e26..8bdcad9 100644
 --- sfx2/inc/sfx2/linkmgr.hxx
 +++ sfx2/inc/sfx2/linkmgr.hxx
-@@ -90,6 +90,8 @@ public:
-                 // falls am Link schon alles eingestellt ist !
-     BOOL 		InsertDDELink( SvBaseLink* );
+@@ -33,10 +33,18 @@
+ #include <tools/string.hxx>
+ #include <svl/svarray.hxx>
  
-+    void        ReconnectDdeLink(SfxObjectShell& rServer);
++#include <vector>
 +
-     // den Link mit einem PseudoObject verbinden und in die Liste eintragen
-     BOOL InsertFileLink( sfx2::SvBaseLink&,
-                         USHORT nFileType,
+ class SfxObjectShell;
+ class Graphic;
+ class Size;
+ 
++namespace com { namespace sun { namespace star {
++    namespace lang {
++        class XComponent;
++    }
++}}}
++
+ namespace sfx2
+ {
+     // Damit der Link ueber den Status der zu ladenen Grafik informierten werden
+@@ -55,6 +63,10 @@ SV_DECL_PTRARR( SvLinkSources, SvLinkSourcePtr, 1, 1 )
+ 
+ class SFX2_DLLPUBLIC LinkManager
+ {
++    typedef ::std::vector< ::com::sun::star::uno::Reference< ::com::sun::star::lang::XComponent > >
++        CompVector;
++    CompVector maCachedComps;
++
+     SvBaseLinks		aLinkTbl;
+     SvLinkSources aServerTbl;
+ 
+@@ -74,6 +86,16 @@ public:
+                 LinkManager( SfxObjectShell * pCacheCont );
+                 ~LinkManager();
+ 
++    /**
++     * Insert a component loaded during link update, which needs to be closed 
++     * when the update is complete. 
++     * 
++     * @param xComp component loaded during link update.
++     */
++    void        InsertCachedComp(const ::com::sun::star::uno::Reference< ::com::sun::star::lang::XComponent >& xComp);
++
++    void        CloseCachedComps();
++
+     SfxObjectShell*    GetPersist() const              { return pPersist; }
+     void        SetPersist( SfxObjectShell * p )   { pPersist = p; }
+ 
+@@ -100,6 +122,17 @@ public:
+             // falls am Link schon alles eingestellt ist !
+     BOOL InsertFileLink( sfx2::SvBaseLink& );
+ 
++    void ReconnectDdeLink(SfxObjectShell& rServer);
++
++    /**
++     * Reconnect the server document shell to a DDE link object.
++     * 
++     * @param rPath path to the server document
++     * @param rServer server document shell instance
++     * @param rLink link object of the client document
++     */
++    void LinkServerShell(const ::rtl::OUString& rPath, SfxObjectShell& rServer, ::sfx2::SvBaseLink& rLink) const;
++
+                 // erfrage die Strings fuer den Dialog
+     BOOL GetDisplayNames( const SvBaseLink *,
+                                     String* pType,
 diff --git sfx2/inc/sfx2/objsh.hxx sfx2/inc/sfx2/objsh.hxx
-index 9c6259b..a0ad22a 100755
+index 5215f94..7337da9 100755
 --- sfx2/inc/sfx2/objsh.hxx
 +++ sfx2/inc/sfx2/objsh.hxx
-@@ -520,6 +520,9 @@ public:
+@@ -127,6 +127,9 @@ namespace com { namespace sun { namespace star {
+     namespace document {
+         class XDocumentProperties;
+     }
++    namespace lang {
++        class XComponent;
++    }
+ } } }
+ 
+ typedef sal_uInt32 SfxObjectShellFlags;
+@@ -522,6 +525,9 @@ public:
                                              const String& rMimeType,
                                  const ::com::sun::star::uno::Any & rValue );
      virtual ::sfx2::SvLinkSource* 		DdeCreateLinkSource( const String& rItem );
@@ -25,6 +91,28 @@ index 9c6259b..a0ad22a 100755
  
      // Contents
      virtual SfxStyleSheetBasePool*	GetStyleSheetPool();
+@@ -629,6 +635,9 @@ public:
+     static SfxObjectShell*		CreateObject( const String& rServiceName, SfxObjectCreateMode = SFX_CREATE_MODE_STANDARD );
+     static SfxObjectShell*		CreateObjectByFactoryName( const String& rURL, SfxObjectCreateMode = SFX_CREATE_MODE_STANDARD );
+     static SfxObjectShell*      CreateAndLoadObject( const SfxItemSet& rSet, SfxFrame* pFrame=0 );
++    static ::com::sun::star::uno::Reference< ::com::sun::star::lang::XComponent >
++                                CreateAndLoadComponent( const SfxItemSet& rSet, SfxFrame* pFrame = NULL );
++    static SfxObjectShell*      GetShellFromComponent( const ::com::sun::star::uno::Reference< ::com::sun::star::lang::XComponent >& xComp );
+     static String				GetServiceNameFromFactory( const String& rFact );
+     BOOL						IsInPlaceActive();
+     BOOL						IsUIActive();
+diff --git sfx2/inc/sfx2/sfxsids.hrc sfx2/inc/sfx2/sfxsids.hrc
+index bf1cebb..a2f8d88 100644
+--- sfx2/inc/sfx2/sfxsids.hrc
++++ sfx2/inc/sfx2/sfxsids.hrc
+@@ -367,6 +367,7 @@
+ #define SID_OPENCOPY                        (SID_SFX_START + 674)
+ #define SID_SOURCEVIEW                      (SID_SFX_START + 675)
+ #define SID_DOC_STARTPRESENTATION           (SID_SFX_START + 695)
++#define SID_DDE_RECONNECT_ONLOAD            (SID_SFX_START + 696)
+ 
+ #define SID_PLUGFRAMEARG                    (SID_SFX_START + 666)
+ #define SID_NEWWINDOWFOREDIT                (SID_SFX_START + 667)
 diff --git sfx2/source/appl/appdde.cxx sfx2/source/appl/appdde.cxx
 index 789de8b..6134d9d 100644
 --- sfx2/source/appl/appdde.cxx
@@ -53,22 +141,110 @@ index 789de8b..6134d9d 100644
  //========================================================================
  
  long SfxViewFrame::DdeExecute
+diff --git sfx2/source/appl/appuno.cxx sfx2/source/appl/appuno.cxx
+index 091ffb8..bffd379 100755
+--- sfx2/source/appl/appuno.cxx
++++ sfx2/source/appl/appuno.cxx
+@@ -151,6 +151,7 @@ static char const sOpenNewView[] = "OpenNewView";
+ static char const sViewId[] = "ViewId";
+ static char const sPluginMode[] = "PluginMode";
+ static char const sReadOnly[] = "ReadOnly";
++static char const sDdeReconnect = "DDEReconnect";
+ static char const sStartPresentation[] = "StartPresentation";
+ static char const sFrameName[] = "FrameName";
+ static char const sMediaType[] = "MediaType";
+@@ -610,6 +611,14 @@ void TransformParameters( sal_uInt16 nSlotId, const ::com::sun::star::uno::Seque
+                     if (bOK)
+                         rSet.Put( SfxBoolItem( SID_DOC_READONLY, bVal ) );
+                 }
++                else if ( aName.equalsAsciiL(RTL_CONSTASCII_STRINGPARAM(sDdeReconnect)) )
++                {
++                    sal_Bool bVal = sal_True;
++                    sal_Bool bOK = (rProp.Value >>= bVal);
++                    DBG_ASSERT( bOK, "invalid type for DDEReconnect" );
++                    if (bOK)
++                        rSet.Put( SfxBoolItem( SID_DDE_RECONNECT_ONLOAD, bVal ) );
++                }
+                 else if ( aName.equalsAsciiL(RTL_CONSTASCII_STRINGPARAM(sStartPresentation)) )
+                 {
+                     sal_Bool bVal = sal_False;
+@@ -1009,6 +1018,8 @@ void TransformItems( sal_uInt16 nSlotId, const SfxItemSet& rSet, ::com::sun::sta
+                 nAdditional++;
+             if ( rSet.GetItemState( SID_DOC_READONLY ) == SFX_ITEM_SET )
+                 nAdditional++;
++            if ( rSet.GetItemState( SID_DDE_RECONNECT_ONLOAD ) == SFX_ITEM_SET )
++                nAdditional++;
+             if ( rSet.GetItemState( SID_DOC_STARTPRESENTATION ) == SFX_ITEM_SET )
+                 nAdditional++;
+             if ( rSet.GetItemState( SID_SELECTION ) == SFX_ITEM_SET )
+@@ -1425,6 +1436,11 @@ void TransformItems( sal_uInt16 nSlotId, const SfxItemSet& rSet, ::com::sun::sta
+                 pValue[nActProp].Name = rtl::OUString(RTL_CONSTASCII_USTRINGPARAM(sReadOnly));
+                 pValue[nActProp++].Value <<= ( ((SfxBoolItem*)pItem)->GetValue() );
+             }
++            if ( rSet.GetItemState( SID_DDE_RECONNECT_ONLOAD, sal_False, &pItem ) == SFX_ITEM_SET )
++            {
++                pValue[nActProp].Name = rtl::OUString(RTL_CONSTASCII_USTRINGPARAM(sDdeReconnect));
++                pValue[nActProp++].Value <<= ( ((SfxBoolItem*)pItem)->GetValue() );
++            }
+             if ( rSet.GetItemState( SID_DOC_STARTPRESENTATION, sal_False, &pItem ) == SFX_ITEM_SET )
+             {
+                 pValue[nActProp].Name = rtl::OUString(RTL_CONSTASCII_USTRINGPARAM(sStartPresentation));
 diff --git sfx2/source/appl/linkmgr2.cxx sfx2/source/appl/linkmgr2.cxx
-index 7653637..758f5e0 100644
+index 7653637..9011c39 100644
 --- sfx2/source/appl/linkmgr2.cxx
 +++ sfx2/source/appl/linkmgr2.cxx
-@@ -55,6 +55,9 @@
+@@ -55,6 +55,16 @@
  #define _SVSTDARR_STRINGSDTOR
  #include <svl/svstdarr.hxx>
  
++#include <com/sun/star/lang/XComponent.hpp>
++#include <com/sun/star/util/XCloseable.hpp>
++
++using ::com::sun::star::uno::UNO_QUERY;
++using ::com::sun::star::uno::Reference;
++using ::com::sun::star::lang::XComponent;
++using ::com::sun::star::util::XCloseable;
 +using ::rtl::OUString;
 +using ::rtl::OUStringBuffer;
 +
  namespace sfx2
  {
  
-@@ -209,6 +212,50 @@ BOOL LinkManager::InsertDDELink( SvBaseLink * pLink )
-     return Insert( pLink );
+@@ -89,6 +99,24 @@ LinkManager::~LinkManager()
+     }
+ }
+ 
++void LinkManager::InsertCachedComp(const Reference<XComponent>& xComp)
++{
++    maCachedComps.push_back(xComp);
++}
++
++void LinkManager::CloseCachedComps()
++{
++    CompVector::iterator itr = maCachedComps.begin(), itrEnd = maCachedComps.end();
++    for (; itr != itrEnd; ++itr)
++    {
++        Reference<XCloseable> xCloseable(*itr, UNO_QUERY);
++        if (!xCloseable.is())
++            continue;
++
++        xCloseable->close(true);
++    }
++    maCachedComps.clear();
++}
+ 
+ /************************************************************************
+ |*    LinkManager::Remove()
+@@ -329,6 +357,7 @@ void LinkManager::UpdateAllLinks(
+ 
+         pLink->Update();
+     }
++    CloseCachedComps();
+ }
+ 
+ /************************************************************************
+@@ -387,6 +416,56 @@ void MakeLnkName( String& rName, const String* pType, const String& rFile,
+         ((rName += cTokenSeperator ) += *pFilter).EraseLeadingChars().EraseTrailingChars();
  }
  
 +void LinkManager::ReconnectDdeLink(SfxObjectShell& rServer)
@@ -92,8 +268,9 @@ index 7653637..758f5e0 100644
 +            continue;
 +
 +        String aTmp;
-+        utl::LocalFileHelper::ConvertPhysicalNameToURL(aFile, aTmp);
-+        OUString aURL = aTmp;
++        OUString aURL = aFile;
++        if (utl::LocalFileHelper::ConvertPhysicalNameToURL(aFile, aTmp))
++            aURL = aTmp;
 +
 +        if (!aURL.equalsIgnoreAsciiCase(pMed->GetName()))
 +            // This DDE link is not associated with this server shell...  Skip it.
@@ -102,23 +279,49 @@ index 7653637..758f5e0 100644
 +        if (!aLink.Len())
 +            continue;
 +
-+        // Reconnect the server document shell to this DDE link object.
-+        ::sfx2::SvLinkSource* pSrvSrc = rServer.DdeCreateLinkSource(aLink);
-+        if (pSrvSrc)
-+        {
-+            ::com::sun::star::datatransfer::DataFlavor aFl;
-+            SotExchange::GetFormatDataFlavor(p->GetContentType(), aFl);
-+            p->SetObj(pSrvSrc);
-+            pSrvSrc->AddDataAdvise(
-+                p, aFl.MimeType,
-+                sfx2::LINKUPDATE_ONCALL == p->GetUpdateMode() ? ADVISEMODE_ONLYONCE : 0);
-+        }
++        LinkServerShell(aLink, rServer, *p);
 +    }
 +}
++
++void LinkManager::LinkServerShell(const OUString& rPath, SfxObjectShell& rServer, ::sfx2::SvBaseLink& rLink) const
++{
++    ::sfx2::SvLinkSource* pSrvSrc = rServer.DdeCreateLinkSource(rPath);
++    if (pSrvSrc)
++    {
++        ::com::sun::star::datatransfer::DataFlavor aFl;
++        SotExchange::GetFormatDataFlavor(rLink.GetContentType(), aFl);
++        rLink.SetObj(pSrvSrc);
++        pSrvSrc->AddDataAdvise(
++            &rLink, aFl.MimeType,
++            sfx2::LINKUPDATE_ONCALL == rLink.GetUpdateMode() ? ADVISEMODE_ONLYONCE : 0);
++    }
++}
++
+ BOOL LinkManager::InsertFileLink( sfx2::SvBaseLink& rLink,
+                                     USHORT nFileType,
+                                     const String& rFileNm,
+@@ -511,9 +590,8 @@ BOOL SvxInternalLink::Connect( sfx2::SvBaseLink* pLink )
+     SfxObjectShell* pFndShell = 0;
+     USHORT nUpdateMode = com::sun::star::document::UpdateDocMode::NO_UPDATE;
+     String sTopic, sItem, sReferer;
+-    if( pLink->GetLinkManager() &&
+-        pLink->GetLinkManager()->GetDisplayNames( pLink, 0, &sTopic, &sItem )
+-        && sTopic.Len() )
++    LinkManager* pLinkMgr = pLink->GetLinkManager();
++    if (pLinkMgr && pLinkMgr->GetDisplayNames(pLink, 0, &sTopic, &sItem) && sTopic.Len())
+     {
+         // erstmal nur ueber die DocumentShells laufen und die mit dem
+         // Namen heraussuchen:
+@@ -528,7 +606,7 @@ BOOL SvxInternalLink::Connect( sfx2::SvBaseLink* pLink )
+         TypeId aType( TYPE(SfxObjectShell) );
  
- // erfrage die Strings fuer den Dialog
- BOOL LinkManager::GetDisplayNames( const SvBaseLink * pLink,
-@@ -578,7 +625,23 @@ BOOL SvxInternalLink::Connect( sfx2::SvBaseLink* pLink )
+         BOOL bFirst = TRUE;
+-        SfxObjectShell* pShell = pLink->GetLinkManager()->GetPersist();
++        SfxObjectShell* pShell = pLinkMgr->GetPersist();
+         if( pShell && pShell->GetMedium() )
+         {
+             sReferer = pShell->GetMedium()->GetBaseURL();
+@@ -578,7 +656,23 @@ BOOL SvxInternalLink::Connect( sfx2::SvBaseLink* pLink )
      if( !sTopic.Len() )
          return FALSE;
  
@@ -143,21 +346,35 @@ index 7653637..758f5e0 100644
      {
          // dann versuche die Datei zu laden:
          INetURLObject aURL( sTopic );
-@@ -593,7 +656,7 @@ BOOL SvxInternalLink::Connect( sfx2::SvBaseLink* pLink )
+@@ -593,7 +687,11 @@ BOOL SvxInternalLink::Connect( sfx2::SvBaseLink* pLink )
              SfxStringItem aTarget( SID_TARGETNAME, String::CreateFromAscii("_blank") );
              SfxStringItem aReferer( SID_REFERER, sReferer );
              SfxUInt16Item aUpdate( SID_UPDATEDOCMODE, nUpdateMode );
 -            SfxBoolItem aReadOnly(SID_DOC_READONLY, TRUE);
 +            SfxBoolItem aReadOnly(SID_DOC_READONLY, false);
++
++            // Disable automatic re-connection to avoid this link instance 
++            // being destroyed at re-connection.
++            SfxBoolItem aDdeConnect(SID_DDE_RECONNECT_ONLOAD, false);
  
              // #i14200# (DDE-link crashes wordprocessor)
              SfxAllItemSet aArgs( SFX_APP()->GetPool() );
-@@ -605,28 +668,13 @@ BOOL SvxInternalLink::Connect( sfx2::SvBaseLink* pLink )
+@@ -604,29 +702,19 @@ BOOL SvxInternalLink::Connect( sfx2::SvBaseLink* pLink )
+             aArgs.Put(aName);
              aArgs.Put(aUpdate);
              aArgs.Put(aReadOnly);
-             pFndShell = SfxObjectShell::CreateAndLoadObject( aArgs );
--        }
--    }
+-            pFndShell = SfxObjectShell::CreateAndLoadObject( aArgs );
++            aArgs.Put(aDdeConnect);
++            Reference<XComponent> xComp = SfxObjectShell::CreateAndLoadComponent(aArgs);
++            pFndShell = SfxObjectShell::GetShellFromComponent(xComp);
++            if (xComp.is() && pFndShell)
++            {
++                pLinkMgr->InsertCachedComp(xComp);
++                pLinkMgr->LinkServerShell(sItem, *pFndShell, *pLink);
++                return true;
++            }
+         }
+     }
  
 -    BOOL bRet = FALSE;
 -    if( pFndShell )
@@ -175,26 +392,87 @@ index 7653637..758f5e0 100644
 -                                sfx2::LINKUPDATE_ONCALL == pLink->GetUpdateMode()
 -                                    ? ADVISEMODE_ONLYONCE
 -                                    : 0 );
-+            // When loading a new document, DDE links get connected during the loading.
-+            return true;
-         }
-     }
+-        }
+-    }
 -    return bRet;
-+
 +    return false;
  }
  
  
 diff --git sfx2/source/doc/objstor.cxx sfx2/source/doc/objstor.cxx
-index 474b4a0..1053023 100644
+index 474b4a0..7f3349d 100644
 --- sfx2/source/doc/objstor.cxx
 +++ sfx2/source/doc/objstor.cxx
-@@ -974,6 +974,8 @@ sal_Bool SfxObjectShell::DoLoad( SfxMedium *pMed )
+@@ -974,6 +974,16 @@ sal_Bool SfxObjectShell::DoLoad( SfxMedium *pMed )
              }
          }
  
-+        ReconnectDdeLinks(*this);
++        const SfxBoolItem* pDdeReconnectItem = static_cast<const SfxBoolItem*>(
++            SfxRequest::GetItem(pMedium->GetItemSet(), SID_DDE_RECONNECT_ONLOAD, false, TYPE(SfxBoolItem)));
++
++        bool bReconnectDde = true; // by default, we try to auto-connect DDE connections.
++        if (pDdeReconnectItem)
++            bReconnectDde = pDdeReconnectItem->GetValue();
++
++        if (bReconnectDde)
++            ReconnectDdeLinks(*this);
 +
  #if 0
          if ( pMedium->HasStorage_Impl() )
          {
+diff --git sfx2/source/doc/objxtor.cxx sfx2/source/doc/objxtor.cxx
+index 20d40e0..53af620 100755
+--- sfx2/source/doc/objxtor.cxx
++++ sfx2/source/doc/objxtor.cxx
+@@ -1079,6 +1079,12 @@ SfxObjectShell* SfxObjectShell::CreateObject( const String& rServiceName, SfxObj
+ 
+ SfxObjectShell* SfxObjectShell::CreateAndLoadObject( const SfxItemSet& rSet, SfxFrame* pFrame )
+ {
++    Reference<lang::XComponent> xComp = CreateAndLoadComponent(rSet, pFrame);
++    return GetShellFromComponent(xComp);
++}
++
++Reference<lang::XComponent> SfxObjectShell::CreateAndLoadComponent( const SfxItemSet& rSet, SfxFrame* pFrame )
++{
+     uno::Sequence < beans::PropertyValue > aProps;
+     TransformItems( SID_OPENDOC, rSet, aProps );
+     SFX_ITEMSET_ARG(&rSet, pFileNameItem, SfxStringItem, SID_FILE_NAME, FALSE);
+@@ -1099,20 +1105,31 @@ SfxObjectShell* SfxObjectShell::CreateAndLoadObject( const SfxItemSet& rSet, Sfx
+         xLoader = uno::Reference < frame::XComponentLoader >( comphelper::getProcessServiceFactory()->createInstance(
+             ::rtl::OUString::createFromAscii("com.sun.star.frame.Desktop") ), uno::UNO_QUERY );
+ 
+-    uno::Reference < lang::XUnoTunnel > xObj;
++    Reference <lang::XComponent> xComp;
+     try
+     {
+-        xObj = uno::Reference< lang::XUnoTunnel >( xLoader->loadComponentFromURL( aURL, aTarget, 0, aProps ), uno::UNO_QUERY );
++        xComp = xLoader->loadComponentFromURL(aURL, aTarget, 0, aProps);
+     }
+     catch( uno::Exception& )
+     {}
+ 
+-    if ( xObj.is() )
++    return xComp;
++}
++
++SfxObjectShell* SfxObjectShell::GetShellFromComponent( const Reference<lang::XComponent>& xComp )
++{
++    try
++    {
++        Reference<lang::XUnoTunnel> xTunnel(xComp, UNO_QUERY_THROW);
++        Sequence <sal_Int8> aSeq( SvGlobalName( SFX_GLOBAL_CLASSID ).GetByteSequence() );
++        sal_Int64 nHandle = xTunnel->getSomething( aSeq );
++        if (!nHandle)
++            return NULL;
++
++        return reinterpret_cast< SfxObjectShell* >(sal::static_int_cast< sal_IntPtr >(  nHandle ));
++    }
++    catch (const Exception&)
+     {
+-        ::com::sun::star::uno::Sequence < sal_Int8 > aSeq( SvGlobalName( SFX_GLOBAL_CLASSID ).GetByteSequence() );
+-        sal_Int64 nHandle = xObj->getSomething( aSeq );
+-        if ( nHandle )
+-            return reinterpret_cast< SfxObjectShell* >(sal::static_int_cast< sal_IntPtr >(  nHandle ));
+     }
+ 
+     return NULL;
