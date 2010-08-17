@@ -8,7 +8,9 @@ From: Thorsten Behrens <thb@openoffice.org>
  avmedia/inc/avmedia/mediawindow.hxx                |   23 +
  avmedia/source/framework/mediacontrol.cxx          |    2 
  avmedia/source/framework/mediaplayer.cxx           |    8 
- avmedia/source/viewer/mediawindow.cxx              |  118 ++++
+ avmedia/source/framework/soundhandler.cxx          |  130 -----
+ avmedia/source/framework/soundhandler.hxx          |   11 
+ avmedia/source/viewer/mediawindow.cxx              |  181 ++++++-
  cui/source/dialogs/cuigaldlg.cxx                   |    6 
  cui/source/dialogs/linkdlg.cxx                     |   11 
  fpicker/source/aqua/ControlHelper.cxx              |    3 
@@ -24,17 +26,21 @@ From: Thorsten Behrens <thb@openoffice.org>
  .../sun/star/ui/dialogs/TemplateDescription.idl    |    8 
  sc/source/ui/drawfunc/fuins1.cxx                   |   18 +
  sc/source/ui/view/tabvwsh9.cxx                     |    4 
+ sd/inc/diadef.h                                    |    5 
  sd/source/core/drawdoc.cxx                         |    8 
- sd/source/filter/ppt/pptin.cxx                     |  102 +---
+ sd/source/filter/ppt/ppt97animations.cxx           |    4 
+ sd/source/filter/ppt/ppt97animations.hxx           |    1 
+ sd/source/filter/ppt/pptin.cxx                     |  140 +++--
  sd/source/filter/ppt/pptin.hxx                     |    5 
- sd/source/filter/ppt/pptinanimations.cxx           |    6 
+ sd/source/filter/ppt/pptinanimations.cxx           |  160 +++---
+ sd/source/filter/ppt/pptinanimations.hxx           |    8 
  sd/source/ui/func/fuinsert.cxx                     |   11 
  sd/source/ui/view/drviews9.cxx                     |    4 
  sd/source/ui/view/sdview4.cxx                      |   82 ++-
  sfx2/inc/sfx2/lnkbase.hxx                          |    1 
  sfx2/inc/sfx2/sfx.hrc                              |    1 
  sfx2/sdi/sfx.sdi                                   |    2 
- sfx2/source/appl/fileobj.cxx                       |   22 +
+ sfx2/source/appl/fileobj.cxx                       |   28 +
  sfx2/source/appl/linkmgr2.cxx                      |   15 -
  sfx2/source/appl/sfx.src                           |    6 
  sfx2/source/dialog/filedlghelper.cxx               |   11 
@@ -43,14 +49,17 @@ From: Thorsten Behrens <thb@openoffice.org>
  svx/inc/svx/sdr/media/medialink.hxx                |   81 +++
  svx/inc/svx/sdr/media/mediamanager.hxx             |   92 +++
  svx/inc/svx/svdmodel.hxx                           |    9 
- svx/inc/svx/svdomedia.hxx                          |   16 +
+ svx/inc/svx/svdomedia.hxx                          |   21 +
+ svx/inc/svx/unoshprp.hxx                           |    2 
  svx/prj/build.lst                                  |    3 
  svx/prj/d.lst                                      |    4 
  .../sdr/contact/viewcontactofsdrmediaobj.cxx       |   20 +
  svx/source/sdr/media/makefile.mk                   |   48 ++
  svx/source/sdr/media/mediamanager.cxx              |  527 ++++++++++++++++++++
  svx/source/svdraw/svdmodel.cxx                     |   30 +
- svx/source/svdraw/svdomedia.cxx                    |  257 +++++++++-
+ svx/source/svdraw/svdomedia.cxx                    |  273 ++++++++++
+ svx/source/unodraw/unoprov.cxx                     |    1 
+ svx/source/unodraw/unoshap4.cxx                    |   19 +
  svx/util/makefile.mk                               |    3 
  sw/source/ui/shells/basesh.cxx                     |    4 
  sw/source/ui/shells/grfshex.cxx                    |   12 
@@ -58,7 +67,7 @@ From: Thorsten Behrens <thb@openoffice.org>
  unotools/source/ucbhelper/xtempfile.cxx            |   73 +++
  xmloff/source/draw/shapeexport2.cxx                |   14 -
  xmloff/source/draw/ximpshap.cxx                    |    8 
- 53 files changed, 1563 insertions(+), 188 deletions(-)
+ 62 files changed, 1805 insertions(+), 409 deletions(-)
  create mode 100644 svx/inc/svx/sdr/media/medialink.hxx
  create mode 100644 svx/inc/svx/sdr/media/mediamanager.hxx
  create mode 100644 svx/source/sdr/media/makefile.mk
@@ -66,7 +75,7 @@ From: Thorsten Behrens <thb@openoffice.org>
 
 
 diff --git avmedia/inc/avmedia/mediawindow.hxx avmedia/inc/avmedia/mediawindow.hxx
-index 8643318..c4516aa 100644
+index 8643318..036195c 100644
 --- avmedia/inc/avmedia/mediawindow.hxx
 +++ avmedia/inc/avmedia/mediawindow.hxx
 @@ -61,7 +61,20 @@ namespace rtl { class OUString; }
@@ -109,7 +118,7 @@ index 8643318..c4516aa 100644
                                                                                                    double fMediaTime = AVMEDIA_FRAMEGRABBER_DEFAULTFRAME );
  
      private:
-+        static bool         executeMediaURLDialogImpl( Window* pParent, ::rtl::OUString& rURL, sal_Bool& rLink, bool bInsertDialog );
++        static bool         executeMediaURLDialogImpl( ::rtl::OUString& rURL, sal_Bool& rLink, bool bInsertDialog );
  
                      // default: disabled copy/assignment
          MediaWindow(const MediaWindow&);
@@ -152,20 +161,235 @@ index 669f861..7af7034 100644
      }
  }
  
+diff --git avmedia/source/framework/soundhandler.cxx avmedia/source/framework/soundhandler.cxx
+index 1e2a1f9..f2afae5 100644
+--- avmedia/source/framework/soundhandler.cxx
++++ avmedia/source/framework/soundhandler.cxx
+@@ -29,13 +29,8 @@
+ //	my own includes
+ //_________________________________________________________________________________________________________________
+ 
+-#ifndef __FRAMEWORK_DISPATCH_SOUNDHANDLER_HXX_
+ #include "soundhandler.hxx"
+-#endif
+-
+-#ifndef __COMPHELPER_MEDIADESCRIPTOR_HXX_
+ #include <comphelper/mediadescriptor.hxx>
+-#endif
+ 
+ //_________________________________________________________________________________________________________________
+ //	interface includes
+@@ -164,15 +159,15 @@ css::uno::Sequence< css::uno::Type > SAL_CALL SoundHandler::getTypes() throw( cs
+ #define DECLARE_ASCII( SASCIIVALUE ) \
+         ::rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( SASCIIVALUE ) )
+ 
+-#define IMPLEMENTATIONNAME_SOUNDHANDLER DECLARE_ASCII("com.sun.star.comp.framework.SoundHandler")
+-#define SERVICENAME_CONTENTHANDLER DECLARE_ASCII("com.sun.star.frame.ContentHandler")
++#define IMPLEMENTATIONNAME_SOUNDHANDLER DECLARE_ASCII(IMPLEMENTATIONNAME_SOUNDHANDLER_ASCII)
++#define SERVICENAME_CONTENTHANDLER DECLARE_ASCII(SERVICENAME_CONTENTHANDLER_ASCII)
+ 
+ /*===========================================================================================================*/
+ /* XServiceInfo */
+ /*===========================================================================================================*/
+ ::rtl::OUString SAL_CALL SoundHandler::getImplementationName() throw( css::uno::RuntimeException )
+ {
+-    return impl_getStaticImplementationName();
++    return IMPLEMENTATIONNAME_SOUNDHANDLER;
+ }
+ 
+ /*===========================================================================================================*/
+@@ -210,56 +205,11 @@ sal_Bool SAL_CALL SoundHandler::supportsService( const ::rtl::OUString& sService
+ /*===========================================================================================================*/
+ css::uno::Sequence< ::rtl::OUString > SAL_CALL SoundHandler::getSupportedServiceNames() throw( css::uno::RuntimeException )
+ {
+-    return impl_getStaticSupportedServiceNames();
+-}
+-
+-/*===========================================================================================================*/
+-/* Helper for XServiceInfo                                                                                   */
+-/*===========================================================================================================*/
+-css::uno::Sequence< ::rtl::OUString > SoundHandler::impl_getStaticSupportedServiceNames()
+-{
+     css::uno::Sequence< ::rtl::OUString > seqServiceNames( 1 );
+     seqServiceNames.getArray() [0] = SERVICENAME_CONTENTHANDLER;
+     return seqServiceNames;
+ }
+ 
+-/*===========================================================================================================*/
+-/* Helper for XServiceInfo */
+-/*===========================================================================================================*/
+-::rtl::OUString SoundHandler::impl_getStaticImplementationName()
+-{
+-    return IMPLEMENTATIONNAME_SOUNDHANDLER;
+-}
+-
+-css::uno::Reference< css::uno::XInterface > SAL_CALL SoundHandler::impl_createInstance( const css::uno::Reference< css::lang::XMultiServiceFactory >& xServiceManager ) throw( css::uno::Exception )
+-{
+-    /* create new instance of service */
+-    SoundHandler* pClass = new SoundHandler( xServiceManager );
+-    /* hold it alive by increasing his ref count!!! */
+-    css::uno::Reference< css::uno::XInterface > xService( static_cast< ::cppu::OWeakObject* >(pClass), css::uno::UNO_QUERY );
+-    /* initialize new service instance ... he can use his own refcount ... we hold it! */
+-    pClass->impl_initService();
+-    /* return new created service as reference */
+-    return xService;
+-}
+-
+-css::uno::Reference< css::lang::XSingleServiceFactory > SoundHandler::impl_createFactory( const css::uno::Reference< css::lang::XMultiServiceFactory >& xServiceManager )
+-{
+-    css::uno::Reference< css::lang::XSingleServiceFactory > xReturn ( cppu::createSingleFactory (
+-       xServiceManager,
+-        SoundHandler::impl_getStaticImplementationName(),
+-        SoundHandler::impl_createInstance,
+-        SoundHandler::impl_getStaticSupportedServiceNames()
+-        )
+-    );
+-    return xReturn;
+-}
+-
+-void SAL_CALL SoundHandler::impl_initService()
+-{
+-}
+-
+-
+ /*-************************************************************************************************************//**
+     @short      standard ctor
+     @descr      These initialize a new instance of this class with needed informations for work.
+@@ -487,77 +437,3 @@ IMPL_LINK( SoundHandler, implts_PlayerNotify, void*, EMPTYARG )
+ }
+ 
+ } // namespace framework
+-
+-// ------------------------------------------
+-// - component_getImplementationEnvironment -
+-// ------------------------------------------
+-
+-extern "C" void SAL_CALL component_getImplementationEnvironment( const sal_Char ** ppEnvTypeName, uno_Environment ** /*ppEnv*/ )
+-{
+-       *ppEnvTypeName = CPPU_CURRENT_LANGUAGE_BINDING_NAME;
+-}
+-
+-// -----------------------
+-// - component_writeInfo -
+-// -----------------------
+-
+-extern "C" sal_Bool SAL_CALL component_writeInfo( void* /*pServiceManager*/, void* pRegistryKey )
+-{
+-    sal_Bool bRet = sal_False;
+-
+-    if( pRegistryKey )
+-    {
+-       try
+-       {
+-           rtl::OUString sKeyName = DECLARE_ASCII( "/" );
+-           sKeyName += avmedia::SoundHandler::impl_getStaticImplementationName();
+-           sKeyName += DECLARE_ASCII( "/UNO/SERVICES" );
+-           css::uno::Reference< css::registry::XRegistryKey > xNewKey(
+-               static_cast< css::registry::XRegistryKey* >( pRegistryKey )->createKey(sKeyName));
+-
+-           if ( xNewKey.is() == sal_True )
+-           {
+-               css::uno::Sequence< ::rtl::OUString > seqServiceNames = avmedia::SoundHandler::impl_getStaticSupportedServiceNames();
+-               const ::rtl::OUString* pArray = seqServiceNames.getArray();
+-               sal_Int32 nLength = seqServiceNames.getLength();
+-               for ( sal_Int32 nCounter = 0; nCounter < nLength; ++nCounter )
+-                   xNewKey->createKey( pArray[nCounter] );
+-           }
+-
+-           bRet = sal_True;
+-       }
+-       catch( css::registry::InvalidRegistryException& )
+-       {
+-           OSL_ENSURE( sal_False, "### InvalidRegistryException!" );
+-       }
+-    }
+-
+-    return bRet;
+-}
+-
+-// ------------------------
+-// - component_getFactory -
+-// ------------------------
+-
+-extern "C" void* SAL_CALL component_getFactory(const sal_Char* pImplementationName, void* pServiceManager, void* /*pRegistryKey*/ )
+-{
+-    void* pReturn = NULL;
+-    if  (pServiceManager !=  NULL )
+-    {
+-        /* Define variables which are used in following macros. */
+-        css::uno::Reference< ::com::sun::star::lang::XSingleServiceFactory > xFactory;
+-        css::uno::Reference< ::com::sun::star::lang::XMultiServiceFactory > xServiceManager;
+-            xServiceManager = reinterpret_cast< ::com::sun::star::lang::XMultiServiceFactory* >( pServiceManager )  ;
+-
+-        if ( avmedia::SoundHandler::impl_getStaticImplementationName().equals( ::rtl::OUString::createFromAscii( pImplementationName ) ) )
+-            xFactory = avmedia::SoundHandler::impl_createFactory( xServiceManager );
+-
+-        if ( xFactory.is() == sal_True )
+-        {
+-            xFactory->acquire();
+-            pReturn = xFactory.get();
+-        }
+-    }
+-    /* Return with result of this operation. */
+-    return pReturn;
+-}
+diff --git avmedia/source/framework/soundhandler.hxx avmedia/source/framework/soundhandler.hxx
+index 4a707c5..c76ae6f 100644
+--- avmedia/source/framework/soundhandler.hxx
++++ avmedia/source/framework/soundhandler.hxx
+@@ -123,14 +123,6 @@ class SoundHandler  :   // interfaces
+        virtual ::rtl::OUString                                        SAL_CALL getImplementationName              (                                                                               ) throw( css::uno::RuntimeException );   
+        virtual sal_Bool                                               SAL_CALL supportsService                    ( const ::rtl::OUString&                                        sServiceName    ) throw( css::uno::RuntimeException );   
+        virtual css::uno::Sequence< ::rtl::OUString >                  SAL_CALL getSupportedServiceNames           (                                                                               ) throw( css::uno::RuntimeException );   
+-    /* Helper for XServiceInfo */                                                                                                                                                                                                       
+-       static css::uno::Sequence< ::rtl::OUString >                   SAL_CALL impl_getStaticSupportedServiceNames(                                                                               );                                       
+-       static ::rtl::OUString                                         SAL_CALL impl_getStaticImplementationName   (                                                                               );                                       
+-    /* Helper for registry */                                                                                                                                                                                                           
+-       static css::uno::Reference< css::uno::XInterface >             SAL_CALL impl_createInstance                ( const css::uno::Reference< css::lang::XMultiServiceFactory >& xServiceManager ) throw( css::uno::Exception );          
+-       static css::uno::Reference< css::lang::XSingleServiceFactory > SAL_CALL impl_createFactory                 ( const css::uno::Reference< css::lang::XMultiServiceFactory >& xServiceManager );                                       
+-    /* Helper for initialization of service by using own reference! */                                                                                                                                                                  
+-       virtual void                                                   SAL_CALL impl_initService                   (                                                                               );                                       
+ 
+         //---------------------------------------------------------------------------------------------------------
+         //  XNotifyingDispatch
+@@ -182,6 +174,9 @@ class SoundHandler  :   // interfaces
+ 
+ };      //  class SoundHandler
+ 
++#define IMPLEMENTATIONNAME_SOUNDHANDLER_ASCII "com.sun.star.comp.framework.SoundHandler"
++#define SERVICENAME_CONTENTHANDLER_ASCII      "com.sun.star.frame.ContentHandler"
++
+ }		//	namespace avmedia
+ 
+ #endif  //  #ifndef __FRAMEWORK_HANDLER_SOUNDHANDLER_HXX_
 diff --git avmedia/source/viewer/mediawindow.cxx avmedia/source/viewer/mediawindow.cxx
-index e9ade6d..0db22b7 100644
+index e9ade6d..52c583a 100644
 --- avmedia/source/viewer/mediawindow.cxx
 +++ avmedia/source/viewer/mediawindow.cxx
-@@ -39,6 +39,8 @@
+@@ -31,14 +31,22 @@
+ #include "mediawindow_impl.hxx"
+ #include "mediamisc.hxx"
+ #include "mediawindow.hrc"
++#include "../framework/soundhandler.hxx"
+ #include <tools/urlobj.hxx>
+ #include <vcl/msgbox.hxx>
+ #include <unotools/pathoptions.hxx>
+ #include <sfx2/filedlghelper.hxx>
+ #include <comphelper/processfactory.hxx>
++#include <comphelper/servicedecl.hxx>
++#include <comphelper/uno3.hxx>
++#include <cppuhelper/implbase2.hxx>
  #include <com/sun/star/lang/XMultiServiceFactory.hpp>
++#include <com/sun/star/lang/XServiceName.hpp>
  #include <com/sun/star/media/XManager.hpp>
  #include "com/sun/star/ui/dialogs/TemplateDescription.hpp"
++#include <com/sun/star/ui/dialogs/ExecutableDialogResults.hpp>
 +#include <com/sun/star/ui/dialogs/XFilePickerControlAccess.hpp>
 +#include <com/sun/star/ui/dialogs/ExtendedFilePickerElementIds.hpp>
  
  #define AVMEDIA_FRAMEGRABBER_DEFAULTFRAME_MEDIATIME 3.0
  
-@@ -362,35 +364,95 @@ Window* MediaWindow::getWindow() const
+@@ -362,35 +370,95 @@ Window* MediaWindow::getWindow() const
  
  // -------------------------------------------------------------------------
  
@@ -217,13 +441,15 @@ index e9ade6d..0db22b7 100644
 +                                                 ::rtl::OUString::createFromAscii( pFilters[1] ),
 +                                                 ::rtl::OUString::createFromAscii( pFilters[2] ) ) );
 +        pFilters += 3;
-+    }
-+}
-+
-+// -------------------------------------------------------------------------
-+
+     }
+ }
+ 
+ // -------------------------------------------------------------------------
+ 
+-bool MediaWindow::executeMediaURLDialog( Window* /* pParent */, ::rtl::OUString& rURL, bool bInsertDialog )
 +bool MediaWindow::getMediaFilterForURL( const ::rtl::OUString& rURL, FilterInfo& rFilterInfo )
-+{
+ {
+-    ::sfx2::FileDialogHelper        aDlg( com::sun::star::ui::dialogs::TemplateDescription::FILEOPEN_SIMPLE, 0 );
 +    const INetURLObject aURL( rURL );
 +
 +    String aExtension( aURL.getExtension() );
@@ -250,37 +476,35 @@ index e9ade6d..0db22b7 100644
 +
 +            pFilters += 3;
 +        }
-     }
++    }
 +
 +    return false;
 +}
 +
 +// -------------------------------------------------------------------------
 +
-+bool MediaWindow::executeInsertMediaURLDialog( Window* pParent, ::rtl::OUString& rURL, sal_Bool& rLink )
++bool MediaWindow::executeInsertMediaURLDialog( Window* /*pParent*/, ::rtl::OUString& rURL, sal_Bool& rLink )
 +{
-+    return executeMediaURLDialogImpl( pParent, rURL, rLink, true );
- }
- 
- // -------------------------------------------------------------------------
- 
--bool MediaWindow::executeMediaURLDialog( Window* /* pParent */, ::rtl::OUString& rURL, bool bInsertDialog )
-+bool MediaWindow::executeOpenMediaURLDialog( Window* pParent, ::rtl::OUString& rURL )
- {
--    ::sfx2::FileDialogHelper        aDlg( com::sun::star::ui::dialogs::TemplateDescription::FILEOPEN_SIMPLE, 0 );
-+    sal_Bool aLink = sal_True;
-+    return executeMediaURLDialogImpl( pParent, rURL, aLink, false );
++    return executeMediaURLDialogImpl( rURL, rLink, true );
 +}
 +
 +// -------------------------------------------------------------------------
 +
-+bool MediaWindow::executeMediaURLDialogImpl( Window* /* pParent */, ::rtl::OUString& rURL, sal_Bool& rLink, bool bInsertDialog )
++bool MediaWindow::executeOpenMediaURLDialog( Window* /*pParent*/, ::rtl::OUString& rURL )
++{
++    sal_Bool aLink = sal_True;
++    return executeMediaURLDialogImpl( rURL, aLink, false );
++}
++
++// -------------------------------------------------------------------------
++
++bool MediaWindow::executeMediaURLDialogImpl( ::rtl::OUString& rURL, sal_Bool& rLink, bool bInsertDialog )
 +{
 +    ::sfx2::FileDialogHelper        aDlg( bInsertDialog ? ui::dialogs::TemplateDescription::FILEOPEN_LINK : ui::dialogs::TemplateDescription::FILEOPEN_SIMPLE, 0 );
      static const ::rtl::OUString    aWildcard( RTL_CONSTASCII_USTRINGPARAM( "*." ) );
      FilterNameVector                aFilters;
      const ::rtl::OUString           aSeparator( RTL_CONSTASCII_USTRINGPARAM( ";" ) );
-@@ -408,7 +470,7 @@ bool MediaWindow::executeMediaURLDialog( Window* /* pParent */, ::rtl::OUString&
+@@ -408,7 +476,7 @@ bool MediaWindow::executeMediaURLDialog( Window* /* pParent */, ::rtl::OUString&
              if( aAllTypes.getLength() )
                  aAllTypes += aSeparator;
  
@@ -289,7 +513,7 @@ index e9ade6d..0db22b7 100644
          }
      }
  
-@@ -424,11 +486,11 @@ bool MediaWindow::executeMediaURLDialog( Window* /* pParent */, ::rtl::OUString&
+@@ -424,11 +492,11 @@ bool MediaWindow::executeMediaURLDialog( Window* /* pParent */, ::rtl::OUString&
              if( aTypes.getLength() )
                  aTypes += aSeparator;
  
@@ -303,7 +527,7 @@ index e9ade6d..0db22b7 100644
      }
  
      // add filter for all types
-@@ -438,6 +500,16 @@ bool MediaWindow::executeMediaURLDialog( Window* /* pParent */, ::rtl::OUString&
+@@ -438,6 +506,16 @@ bool MediaWindow::executeMediaURLDialog( Window* /* pParent */, ::rtl::OUString&
      {
          const INetURLObject aURL( aDlg.GetPath() );
          rURL = aURL.GetMainURL( INetURLObject::DECODE_UNAMBIGUOUS );
@@ -320,7 +544,7 @@ index e9ade6d..0db22b7 100644
      }
      else if( rURL.getLength() )
          rURL = ::rtl::OUString();
-@@ -512,7 +584,7 @@ bool MediaWindow::isMediaURL( const ::rtl::OUString& rURL, bool bDeep, Size* pPr
+@@ -512,7 +590,7 @@ bool MediaWindow::isMediaURL( const ::rtl::OUString& rURL, bool bDeep, Size* pPr
              {
                  for( sal_Int32 nIndex = 0; nIndex >= 0 && !bRet; )
                  {
@@ -329,6 +553,68 @@ index e9ade6d..0db22b7 100644
                          bRet = true;
                  }
              }
+@@ -578,4 +656,61 @@ uno::Reference< graphic::XGraphic > MediaWindow::grabFrame( const ::rtl::OUStrin
+     return xRet;
+ }
+ 
++typedef ::cppu::WeakAggImplHelper2< ui::dialogs::XFilePicker,
++                                    lang::XServiceName > Ifc_Base;
++#define SERVICE_NAME "com.sun.star.avmedia.OpenMediaURLDialog"
++
++struct MediaFilePickerImpl : public Ifc_Base
++{
++    MediaFilePickerImpl(const uno::Reference<uno::XComponentContext>&)
++    {}
++
++    // XServiceName
++    virtual ::rtl::OUString SAL_CALL getServiceName(  ) throw (uno::RuntimeException)
++    { return ::rtl::OUString::createFromAscii(SERVICE_NAME); }
++
++    // XExecutableDialog
++    virtual void SAL_CALL setTitle( const ::rtl::OUString& ) throw (uno::RuntimeException)
++    {}
++
++    virtual ::sal_Int16 SAL_CALL execute(  ) throw (uno::RuntimeException) 
++    {
++        return MediaWindow::executeOpenMediaURLDialog(0,maFile) ? 
++            ui::dialogs::ExecutableDialogResults::OK : 
++            ui::dialogs::ExecutableDialogResults::CANCEL;
++    }
++
++    // XFilePicker
++    virtual void SAL_CALL setMultiSelectionMode( ::sal_Bool ) throw (uno::RuntimeException)
++    {}
++    virtual void SAL_CALL setDefaultName( const ::rtl::OUString& ) throw (uno::RuntimeException)
++    {}
++    virtual void SAL_CALL setDisplayDirectory( const ::rtl::OUString& ) throw (lang::IllegalArgumentException, uno::RuntimeException)
++    {}
++    virtual ::rtl::OUString SAL_CALL getDisplayDirectory(  ) throw (uno::RuntimeException)
++    { return ::rtl::OUString(); }
++    virtual uno::Sequence< ::rtl::OUString > SAL_CALL getFiles(  ) throw (uno::RuntimeException)
++    {
++        return uno::Sequence< ::rtl::OUString >(&maFile,1);
++    }
++
++    ::rtl::OUString maFile;
++};
++
++namespace sdecl = comphelper::service_decl;
++sdecl::class_<MediaFilePickerImpl> serviceImpl1;
++const sdecl::ServiceDecl serviceDecl1(
++    serviceImpl1,
++    "comp.sun.star.avmedia.OpenMediaURLDialog",
++    SERVICE_NAME );
++
++sdecl::class_<SoundHandler> serviceImpl2;
++const sdecl::ServiceDecl serviceDecl2(
++    serviceImpl2,
++    IMPLEMENTATIONNAME_SOUNDHANDLER_ASCII,
++    SERVICENAME_CONTENTHANDLER_ASCII );
++
+ } // namespace avemdia
++
++// The C shared lib entry points
++COMPHELPER_SERVICEDECL_EXPORTS2(avmedia::serviceDecl1, avmedia::serviceDecl2)
 diff --git cui/source/dialogs/cuigaldlg.cxx cui/source/dialogs/cuigaldlg.cxx
 index 9e07923..46d4202 100644
 --- cui/source/dialogs/cuigaldlg.cxx
@@ -655,6 +941,25 @@ index d1beb28..8195790 100644
                  }
              }
          }
+diff --git sd/inc/diadef.h sd/inc/diadef.h
+index c8fa533..cd91a2a 100644
+--- sd/inc/diadef.h
++++ sd/inc/diadef.h
+@@ -32,11 +32,12 @@ enum PresChange
+ {
+     PRESCHANGE_MANUAL = 0,
+     PRESCHANGE_AUTO = 1,
+-    PRESCHANGE_SEMIAUTO = 2
++    PRESCHANGE_SEMIAUTO = 2,
++    PRESCHANGE_AUTO_PPT = 3
+ };
+ 
+ // muss angepasst werden!
+-#define PRESCHANGE_COUNT 3
++#define PRESCHANGE_COUNT 4
+ 
+ #endif // _SD_DIADEF_H
+ 
 diff --git sd/source/core/drawdoc.cxx sd/source/core/drawdoc.cxx
 index c8e61c4..fa61e1b 100644
 --- sd/source/core/drawdoc.cxx
@@ -695,8 +1000,35 @@ index c8e61c4..fa61e1b 100644
      *
      **************************************************************************/
      {
+diff --git sd/source/filter/ppt/ppt97animations.cxx sd/source/filter/ppt/ppt97animations.cxx
+index 3cd9f53..20f9472 100755
+--- sd/source/filter/ppt/ppt97animations.cxx
++++ sd/source/filter/ppt/ppt97animations.cxx
+@@ -168,6 +168,10 @@ UINT32 Ppt97Animation::GetSoundRef() const
+ {
+     return m_aAtom.nSoundRef;
+ }
++UINT16 Ppt97Animation::GetSlidesCount() const
++{
++    return m_aAtom.nSlideCount;
++}
+ void Ppt97Animation::SetSoundFileUrl( const ::rtl::OUString& rSoundFileUrl )
+ {
+     m_aSoundFileUrl = rSoundFileUrl;
+diff --git sd/source/filter/ppt/ppt97animations.hxx sd/source/filter/ppt/ppt97animations.hxx
+index 3bc9fe7..3ec94fa 100755
+--- sd/source/filter/ppt/ppt97animations.hxx
++++ sd/source/filter/ppt/ppt97animations.hxx
+@@ -107,6 +107,7 @@ public: //public methods
+     bool HasSoundEffect() const;
+     sal_Int32 GetDimColor() const;
+     UINT32 GetSoundRef() const;
++    UINT16 GetSlidesCount() const;
+     bool HasAnimateAssociatedShape() const; //true if the shape should be animated in addition to the text
+ 
+     //set methods
 diff --git sd/source/filter/ppt/pptin.cxx sd/source/filter/ppt/pptin.cxx
-index 723fcbd..3d47afd 100755
+index 723fcbd..ef771f2 100755
 --- sd/source/filter/ppt/pptin.cxx
 +++ sd/source/filter/ppt/pptin.cxx
 @@ -56,6 +56,7 @@
@@ -707,7 +1039,43 @@ index 723fcbd..3d47afd 100755
  
  #include <sfx2/docinf.hxx>
  
-@@ -1819,8 +1820,9 @@ void ImplSdPPTImport::ImportPageEffect( SdPage* pPage, const sal_Bool bNewAnimat
+@@ -254,6 +255,8 @@ sal_Bool ImplSdPPTImport::Import()
+     if ( !bOk )
+         return FALSE;
+ 
++    bool bAfterSound = false;
++
+     pSdrModel->setLock( sal_True );
+     pSdrModel->EnableUndo(false);
+ 
+@@ -841,7 +844,7 @@ sal_Bool ImplSdPPTImport::Import()
+                                             {
+                                                 ::com::sun::star::uno::Reference< ::com::sun::star::drawing::XDrawPage > xPage( pMPage->getUnoPage(), ::com::sun::star::uno::UNO_QUERY );
+                                                 ppt::AnimationImporter aImporter( this, rStCtrl );
+-                                                aImporter.import( xPage, aProgTagContentHd );
++                                                aImporter.import( xPage, aProgTagContentHd, bAfterSound );
+                                                 bNewAnimationsUsed = sal_True;
+                                             }
+                                             break;
+@@ -968,7 +971,7 @@ sal_Bool ImplSdPPTImport::Import()
+                                             {
+                                                 ::com::sun::star::uno::Reference< ::com::sun::star::drawing::XDrawPage > xPage( pPage->getUnoPage(), ::com::sun::star::uno::UNO_QUERY );
+                                                 ppt::AnimationImporter aImporter( this, rStCtrl );
+-                                                aImporter.import( xPage, aProgTagContentHd );
++                                                aImporter.import( xPage, aProgTagContentHd, bAfterSound );
+                                                 bNewAnimationsUsed = sal_True;
+                                             }
+                                             break;
+@@ -1805,7 +1808,7 @@ void ImplSdPPTImport::ImportPageEffect( SdPage* pPage, const sal_Bool bNewAnimat
+ 
+                                 if ( nBuildFlags & 0x400 )                      // slidechange by time
+                                 {   // Standzeit (in Ticks)
+-                                    pPage->SetPresChange( PRESCHANGE_AUTO );
++                                    pPage->SetPresChange( PRESCHANGE_AUTO_PPT );
+                                     pPage->SetTime( nSlideTime / 1000 );
+                                 }
+                                 else
+@@ -1819,8 +1822,9 @@ void ImplSdPPTImport::ImportPageEffect( SdPage* pPage, const sal_Bool bNewAnimat
                                  if ( nBuildFlags & 16 )
                                  {	// Dia mit Soundeffekt
                                      pPage->SetSound( TRUE );
@@ -719,7 +1087,7 @@ index 723fcbd..3d47afd 100755
                                  }
                                  if ( nBuildFlags & ( 1 << 6 ) ) 	// Loop until next sound
                                      pPage->SetLoopSound( sal_True );
-@@ -1903,9 +1905,13 @@ void ImplSdPPTImport::ImportPageEffect( SdPage* pPage, const sal_Bool bNewAnimat
+@@ -1903,9 +1907,13 @@ void ImplSdPPTImport::ImportPageEffect( SdPage* pPage, const sal_Bool bNewAnimat
  //
  ///////////////////////////////////////////////////////////////////////////
  
@@ -735,7 +1103,7 @@ index 723fcbd..3d47afd 100755
      UINT32 nPosMerk = rStCtrl.Tell();
      DffRecordHeader aDocHd;
      if ( SeekToDocument( &aDocHd ) )
-@@ -1936,70 +1942,19 @@ String ImplSdPPTImport::ReadSound(UINT32 nSoundRef) const
+@@ -1936,70 +1944,19 @@ String ImplSdPPTImport::ReadSound(UINT32 nSoundRef) const
                          rStCtrl.Seek( nPosMerk2 );
                          if ( SeekToRec( rStCtrl, PPT_PST_CString, nStrLen, NULL, 0 ) )
                          {
@@ -812,7 +1180,7 @@ index 723fcbd..3d47afd 100755
                      }
                  }
                  if ( !bDone )
-@@ -2017,9 +1972,12 @@ String ImplSdPPTImport::ReadSound(UINT32 nSoundRef) const
+@@ -2017,9 +1974,12 @@ String ImplSdPPTImport::ReadSound(UINT32 nSoundRef) const
  //
  //////////////////////////////////////////////////////////////////////////
  
@@ -826,7 +1194,36 @@ index 723fcbd..3d47afd 100755
      DffRecordHeader* pHd( const_cast<ImplSdPPTImport*>(this)->aDocRecManager.GetRecordHeader( PPT_PST_ExObjList, SEEK_FROM_BEGINNING ) );
      if ( pHd )
      {
-@@ -2076,7 +2034,7 @@ String ImplSdPPTImport::ReadMedia( sal_uInt32 nMediaRef ) const
+@@ -2030,6 +1990,28 @@ String ImplSdPPTImport::ReadMedia( sal_uInt32 nMediaRef ) const
+             rStCtrl >> aHdMovie;
+             switch( aHdMovie.nRecType )
+             {
++                case DFF_PST_ExWAVAudioEmbedded :
++                {
++                    DffRecordHeader aExMediaAtomHd;
++                    if ( SeekToRec( rStCtrl, DFF_PST_ExMediaAtom, aHdMovie.GetRecEndFilePos(), &aExMediaAtomHd ) )
++                    {
++                        sal_uInt32 nRef, bLoop=0;
++                        rStCtrl >> nRef >> bLoop;
++                        if ( nRef == nMediaRef )
++                        {
++                            DffRecordHeader aExWaveAudioAtomHd;
++                            if ( SeekToRec( rStCtrl, DFF_PST_ExWAVAudioEmbeddedAtom, aExMediaAtomHd.GetRecEndFilePos(), &aExWaveAudioAtomHd ) )
++                            {
++                                sal_uInt32 nSndId;
++                                rStCtrl >> nSndId;
++                                o_bLoop = bLoop != 0;
++
++                                return ReadSound(nSndId);
++                            }
++                        }
++                    }
++                    break;
++                }
+                 case PPT_PST_ExAviMovie :
+                 case PPT_PST_ExMCIMovie :
+                 {
+@@ -2076,7 +2058,7 @@ String ImplSdPPTImport::ReadMedia( sal_uInt32 nMediaRef ) const
              aHdMovie.SeekToEndOfRecord( rStCtrl );
          }
      }
@@ -835,7 +1232,7 @@ index 723fcbd..3d47afd 100755
  }
  
  //////////////////////////////////////////////////////////////////////////
-@@ -2090,7 +2048,8 @@ void ImplSdPPTImport::FillSdAnimationInfo( SdAnimationInfo* pInfo, PptInteractiv
+@@ -2090,7 +2072,8 @@ void ImplSdPPTImport::FillSdAnimationInfo( SdAnimationInfo* pInfo, PptInteractiv
      // Lokale Informationen in pInfo eintragen
      if( pIAtom->nSoundRef )
      {
@@ -845,7 +1242,15 @@ index 723fcbd..3d47afd 100755
          pInfo->meClickAction = ::com::sun::star::presentation::ClickAction_SOUND;			// RunProgramAction
      }
  //	if ( nFlags & 0x01 )	// koennen wir nicht ( beim Anklicken markieren )
-@@ -2634,7 +2593,10 @@ SdrObject* ImplSdPPTImport::ProcessObj( SvStream& rSt, DffObjData& rObjData, voi
+@@ -2613,6 +2596,7 @@ SdrObject* ImplSdPPTImport::ProcessObj( SvStream& rSt, DffObjData& rObjData, voi
+             while( TRUE )
+             {
+                 UINT32 nClientDataLen = rHdClientData.GetRecEndFilePos();
++                sal_uInt32 nSlideCount = 1;
+                 DffRecordHeader aHd;
+                 do
+                 {
+@@ -2634,7 +2618,10 @@ SdrObject* ImplSdPPTImport::ProcessObj( SvStream& rSt, DffObjData& rObjData, voi
                                      pAnimation->SetDimColor( MSO_CLR_ToColor(pAnimation->GetDimColor()).GetColor() );
                                      // translate sound bits to file url
                                      if( pAnimation->HasSoundEffect() )
@@ -857,8 +1262,21 @@ index 723fcbd..3d47afd 100755
  
                                      bool bDontAnimateInvisibleShape = false;
                                      {
-@@ -2693,10 +2655,10 @@ SdrObject* ImplSdPPTImport::ProcessObj( SvStream& rSt, DffObjData& rObjData, voi
+@@ -2663,6 +2650,9 @@ SdrObject* ImplSdPPTImport::ProcessObj( SvStream& rSt, DffObjData& rObjData, voi
+ 
+                                     bAnimationInfoFound = TRUE;
+                                 }
++                if( pAnimation->GetSlidesCount() > 1 )
++                    nSlideCount = pAnimation->GetSlidesCount();
++
+                             }
+                         }
+                         break;
+@@ -2691,14 +2681,18 @@ SdrObject* ImplSdPPTImport::ProcessObj( SvStream& rSt, DffObjData& rObjData, voi
+                                     DffRecordHeader aObjRefAtomHd;
+                                     if ( SeekToRec( rSt, PPT_PST_ExObjRefAtom, nHdRecEnd, &aObjRefAtomHd ) )
                                      {
++                                        bool bLoop=false;
                                          sal_uInt32 nRef;
                                          rSt >> nRef;
 -                                        String aMediaURL( ReadMedia( nRef ) );
@@ -871,8 +1289,13 @@ index 723fcbd..3d47afd 100755
 +                                        if ( aMediaLink.is() )
                                          {
                                              SdrMediaObj* pMediaObj = new SdrMediaObj( pObj->GetSnapRect() );
++                                            if( nSlideCount > 1 && pMediaObj )
++                                                pMediaObj->setSlidesNumber( nSlideCount );
++ 
                                              pMediaObj->SetModel( pObj->GetModel() );
-@@ -2716,7 +2678,7 @@ SdrObject* ImplSdPPTImport::ProcessObj( SvStream& rSt, DffObjData& rObjData, voi
+                                             pMediaObj->SetMergedItemSet( pObj->GetMergedItemSet() );
+ 
+@@ -2716,7 +2710,7 @@ SdrObject* ImplSdPPTImport::ProcessObj( SvStream& rSt, DffObjData& rObjData, voi
                                              //--
  
                                              SdrObject::Free( pObj ), pObj = pMediaObj;	// SJ: hoping that pObj is not inserted in any list
@@ -905,10 +1328,404 @@ index 6eae4d8..81cbc2e 100644
      ImplSdPPTImport( SdDrawDocument* pDoc, SvStorage& rStorage, SfxMedium& rMed, PowerPointImportParam& );
      ~ImplSdPPTImport();
 diff --git sd/source/filter/ppt/pptinanimations.cxx sd/source/filter/ppt/pptinanimations.cxx
-index 43184fe..892415f 100755
+index 43184fe..d1705c3 100755
 --- sd/source/filter/ppt/pptinanimations.cxx
 +++ sd/source/filter/ppt/pptinanimations.cxx
-@@ -3112,9 +3112,9 @@ sal_Int32 AnimationImporter::importTargetElementContainer( const Atom* pAtom, An
+@@ -24,7 +24,6 @@
+  * for a copy of the LGPLv3 License.
+  *
+  ************************************************************************/
+-
+ // MARKER(update_precomp.py): autogen include statement, do not remove
+ #include "precompiled_sd.hxx"
+ #include <com/sun/star/animations/XAnimationNodeSupplier.hpp>
+@@ -240,11 +239,11 @@ AnimationImporter::AnimationImporter( ImplSdPPTImport* pPPTImport, SvStream& rSt
+ 
+ // --------------------------------------------------------------------
+ 
+-void AnimationImporter::import( const Reference< XDrawPage >& xPage, const DffRecordHeader& rProgTagContentHd )
++void AnimationImporter::import( const Reference< XDrawPage >& xPage, const DffRecordHeader& rProgTagContentHd, bool& bAfterSound )
+ {
+ #ifdef DBG_ANIM_LOG
+-    mpFile = fopen( "c:\\output.xml", "w+" );
+-    //mpFile = stdout;
++    //mpFile = fopen( "c:\\output.xml", "w+" );
++    mpFile = stdout;
+ #endif
+     dump("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+ 
+@@ -259,7 +258,7 @@ void AnimationImporter::import( const Reference< XDrawPage >& xPage, const DffRe
+             const Atom* pAtom = Atom::import( rProgTagContentHd, mrStCtrl );
+             if( pAtom )
+             {
+-                importAnimationContainer( pAtom, xParent );
++                importAnimationContainer( pAtom, xParent, bAfterSound );
+             }
+ 
+             processAfterEffectNodes();
+@@ -373,7 +372,7 @@ static bool is_random( const AnimationNode& rNode, const PropertySet& rSet, sal_
+ }
+ 
+ 
+-void AnimationImporter::importAnimationContainer( const Atom* pAtom, const Reference< XAnimationNode >& xParent )
++void AnimationImporter::importAnimationContainer( const Atom* pAtom, const Reference< XAnimationNode >& xParent, bool& bAfterSound )
+ {
+     if( pAtom->seekToContent() )
+     {
+@@ -413,7 +412,7 @@ void AnimationImporter::importAnimationContainer( const Atom* pAtom, const Refer
+         // import if we have a node and its not random
+         if( xNode.is() )
+         {
+-            fillNode( xNode, aNode, aSet );
++            fillNode( xNode, aNode, aSet, bAfterSound );
+ 
+             switch( aNode.mnGroupType )
+             {
+@@ -422,7 +421,7 @@ void AnimationImporter::importAnimationContainer( const Atom* pAtom, const Refer
+                 dump( "<par" );
+                 dump( aNode );
+                 dump( aSet );
+-                importTimeContainer( pAtom, xNode );	
++                importTimeContainer( pAtom, xNode, bAfterSound );
+                 dump( "</par>\n" );
+ 
+                 // for iteration containers, map target from childs to iteration
+@@ -473,7 +472,7 @@ void AnimationImporter::importAnimationContainer( const Atom* pAtom, const Refer
+                 dump( "<seq" );
+                 dump( aNode );
+                 dump( aSet );
+-                importTimeContainer( pAtom, xNode );	
++                importTimeContainer( pAtom, xNode, bAfterSound );
+                 dump( "</seq>\n" );
+ 
+                 if( aSet.hasProperty( DFF_ANIM_NODE_TYPE ) )
+@@ -554,7 +553,7 @@ void AnimationImporter::importAnimationContainer( const Atom* pAtom, const Refer
+                 dump( "<audio" );
+                 dump( aNode );
+                 dump( aSet );
+-                importAudioContainer( pAtom, xNode );	
++                importAudioContainer( pAtom, xNode );
+                 dump( "</audio>\n" );
+             }
+             break;
+@@ -610,7 +609,7 @@ void AnimationImporter::fixMainSequenceTiming( const ::com::sun::star::uno::Refe
+                     // with node
+                     xE2->nextElement() >>= xEA2;
+                     if( xEA2.is() )
+-                        xE2.query( xEA2->createEnumeration() );
++                        xE2.set( xEA2->createEnumeration(), UNO_QUERY );
+                     else
+                         xE2.clear();
+ 
+@@ -956,9 +955,9 @@ bool AnimationImporter::convertAnimationValue( MS_AttributeNames eAttribute, Any
+                 sal_Int32 nA = aString.getToken( 0, (sal_Unicode)',', index ).toInt32();
+                 sal_Int32 nB = aString.getToken( 0, (sal_Unicode)',', index ).toInt32();
+                 sal_Int32 nC = aString.getToken( 0, (sal_Unicode)',', index ).toInt32();
+-                dump( "hsl(%ld", nA );
+-                dump( ",%ld", nB );
+-                dump( ",%ld)", nC );
++                dump( "hsl(%d", nA );
++                dump( ",%d", nB );
++                dump( ",%d)", nC );
+                 Sequence< double > aHSL( 3 );
+                 aHSL[0] = nA * 360.0/255.0;
+                 aHSL[1] = nB / 255.0;
+@@ -1117,7 +1116,7 @@ static OUString getConvertedSubType( sal_Int16 nPresetClass, sal_Int32 nPresetId
+ 
+ // --------------------------------------------------------------------
+ 
+-void AnimationImporter::fillNode( Reference< XAnimationNode >& xNode, const AnimationNode& rNode, const PropertySet& rSet )
++void AnimationImporter::fillNode( Reference< XAnimationNode >& xNode, const AnimationNode& rNode, PropertySet& rSet, bool& bAfterSound )
+ {
+     sal_Bool bAfterEffect = false;
+ 
+@@ -1182,6 +1181,7 @@ void AnimationImporter::fillNode( Reference< XAnimationNode >& xNode, const Anim
+         if( rSet.getProperty( DFF_ANIM_NODE_TYPE ) >>= nPPTNodeType )
+         {
+             sal_Int16 nNodeType = ::com::sun::star::presentation::EffectNodeType::DEFAULT;
++
+             switch( nPPTNodeType )
+             {
+                 case DFF_ANIM_NODE_TYPE_ON_CLICK:		nNodeType = ::com::sun::star::presentation::EffectNodeType::ON_CLICK;	break;
+@@ -1191,7 +1191,11 @@ void AnimationImporter::fillNode( Reference< XAnimationNode >& xNode, const Anim
+                 case DFF_ANIM_NODE_TYPE_TIMING_ROOT:	nNodeType = ::com::sun::star::presentation::EffectNodeType::TIMING_ROOT; break;
+                 case DFF_ANIM_NODE_TYPE_INTERACTIVE_SEQ:nNodeType = ::com::sun::star::presentation::EffectNodeType::INTERACTIVE_SEQUENCE; break;
+             }
+-
++        if( bAfterSound
++        && ( nPPTNodeType == DFF_ANIM_NODE_TYPE_ON_CLICK
++             || nPPTNodeType == DFF_ANIM_NODE_TYPE_WITH_PREVIOUS
++             || nPPTNodeType == DFF_ANIM_NODE_TYPE_AFTER_PREVIOUS ) )
++        bAfterSound = false;
+             sal_Int32 nSize = aUserData.getLength();
+             aUserData.realloc(nSize+1);
+             aUserData[nSize].Name = OUString( RTL_CONSTASCII_USTRINGPARAM( "node-type" ) );
+@@ -1226,7 +1230,7 @@ void AnimationImporter::fillNode( Reference< XAnimationNode >& xNode, const Anim
+             case DFF_ANIM_PRESS_CLASS_EMPHASIS:		nEffectPresetClass = EffectPresetClass::EMPHASIS; break;
+             case DFF_ANIM_PRESS_CLASS_MOTIONPATH:	nEffectPresetClass = EffectPresetClass::MOTIONPATH; break;
+             case DFF_ANIM_PRESS_CLASS_OLE_ACTION:	nEffectPresetClass = EffectPresetClass::OLEACTION; break;
+-            case DFF_ANIM_PRESS_CLASS_MEDIACALL:	nEffectPresetClass = EffectPresetClass::MEDIACALL; break;
++        case DFF_ANIM_PRESS_CLASS_MEDIACALL:	nEffectPresetClass = EffectPresetClass::MEDIACALL; bAfterSound = true; break;
+             }
+             sal_Int32 nSize = aUserData.getLength();
+             aUserData.realloc(nSize+1);
+@@ -1416,7 +1420,7 @@ void AnimationImporter::fillNode( Reference< XAnimationNode >& xNode, const Anim
+ 
+ // --------------------------------------------------------------------
+ 
+-void AnimationImporter::importTimeContainer( const Atom* pAtom, const Reference< XAnimationNode >& xNode )
++void AnimationImporter::importTimeContainer( const Atom* pAtom, const Reference< XAnimationNode >& xNode, bool& bAfterSound )
+ {
+     DBG_ASSERT( pAtom && xNode.is(), "invalid call to ppt::AnimationImporter::importTimeContainer()!");
+     if( pAtom && xNode.is() )
+@@ -1454,13 +1458,13 @@ void AnimationImporter::importTimeContainer( const Atom* pAtom, const Reference<
+                     }
+                     else
+                     {
+-                        importAnimationContainer( pChildAtom, xNode );
++                        importAnimationContainer( pChildAtom, xNode, bAfterSound );
+                     }
+                 }
+                 break;
+                 case DFF_msofbtAnimGroup :
+                 {
+-                    importAnimationContainer( pChildAtom, xNode );
++                    importAnimationContainer( pChildAtom, xNode, bAfterSound );
+                 }
+                 break;
+                 case DFF_msofbtAnimIteration:
+@@ -1488,9 +1492,9 @@ void AnimationImporter::importTimeContainer( const Atom* pAtom, const Reference<
+                         dump( "<iterate" );
+                         dump( " iterateType=\"%s\"", (nTextUnitEffect == 0) ? "byElement" : (nTextUnitEffect == 1) ? "byWord" : "byLetter" );
+                         dump( " iterateInterval=\"%g\"", fInterval );
+-                        dump( " u1=\"%ld\"", nU1 );
+-                        dump( " u2=\"%ld\"", nU2 );
+-                        dump( " u3=\"%ld\"/>\n", nU3 );
++                        dump( " u1=\"%d\"", nU1 );
++                        dump( " u2=\"%d\"", nU2 );
++                        dump( " u3=\"%d\"/>\n", nU3 );
+                     }
+                 }
+                 break;
+@@ -1501,7 +1505,7 @@ void AnimationImporter::importTimeContainer( const Atom* pAtom, const Reference<
+                     sal_uInt32 nU1, nU2;
+                     mrStCtrl >> nU1 >> nU2;
+ 
+-                    fprintf( mpFile, "<unknown_0xf136 nU1=\"%ld\" nU2=\"%ld\"/>\n", nU1, nU2 );
++                    fprintf( mpFile, "<unknown_0xf136 nU1=\"%d\" nU2=\"%d\"/>\n", nU1, nU2 );
+ #endif
+                 }
+                 break;
+@@ -1659,7 +1663,7 @@ void AnimationImporter::importAnimateFilterContainer( const Atom* pAtom, const R
+                 break;
+ 
+             default:
+-                dump( " unknown_atom=\"%ld\"", (sal_Int32)pChildAtom->getType() );
++                dump( " unknown_atom=\"%d\"", (sal_Int32)pChildAtom->getType() );
+                 break;
+ 
+             }
+@@ -1793,7 +1797,7 @@ void AnimationImporter::importAnimateAttributeTargetContainer( const Atom* pAtom
+             break;
+ 
+             default:
+-                dump( " unknown_atom=\"%ld\"", (sal_Int32)pChildAtom->getType() );
++                dump( " unknown_atom=\"%d\"", (sal_Int32)pChildAtom->getType() );
+                 break;
+             }
+ 
+@@ -1840,17 +1844,17 @@ Any AnimationImporter::implGetColorAny( sal_Int32 nMode, sal_Int32  nA, sal_Int3
+     {
+     case 0: // rgb
+         {
+-            dump( "rgb(%ld", nA );
+-            dump( ",%ld", nB );
+-            dump( ",%ld)", nC );
++            dump( "rgb(%d", nA );
++            dump( ",%d", nB );
++            dump( ",%d)", nC );
+             Color aColor( (UINT8)nA, (UINT8)nB, (UINT8)nC );
+             return makeAny( (sal_Int32)aColor.GetRGBColor() );
+         }
+     case 1: // hsl
+         {
+-            dump( "hsl(%ld", nA );
+-            dump( ",%ld", nB );
+-            dump( ",%ld)", nC );
++            dump( "hsl(%d", nA );
++            dump( ",%d", nB );
++            dump( ",%d)", nC );
+             Sequence< double > aHSL( 3 );
+             aHSL[0] = nA * 360.0/255.0;
+             aHSL[1] = nB / 255.0;
+@@ -1862,19 +1866,19 @@ Any AnimationImporter::implGetColorAny( sal_Int32 nMode, sal_Int32  nA, sal_Int3
+         {
+             Color aColor;
+             mpPPTImport->GetColorFromPalette((USHORT)nA, aColor );
+-            dump( "index(%ld", nA );
+-            dump( " [%ld", (sal_Int32)aColor.GetRed() );
+-            dump( ",%ld", (sal_Int32)aColor.GetGreen() );
+-            dump( ",%ld])", (sal_Int32)aColor.GetBlue() );
++            dump( "index(%d", nA );
++            dump( " [%d", (sal_Int32)aColor.GetRed() );
++            dump( ",%d", (sal_Int32)aColor.GetGreen() );
++            dump( ",%d])", (sal_Int32)aColor.GetBlue() );
+             return makeAny( (sal_Int32)aColor.GetRGBColor() );
+         }
+ 
+     default:
+         {
+-            dump( "unknown_%ld(", nMode );
+-            dump( "%ld", nA );
+-            dump( ",%ld", nB );
+-            dump( ",%ld)", nC );
++            dump( "unknown_%d(", nMode );
++            dump( "%d", nA );
++            dump( ",%d", nB );
++            dump( ",%d)", nC );
+             DBG_ERROR( "ppt::implGetColorAny(), unhandled color type" );
+ 
+             Any aAny;
+@@ -1944,7 +1948,7 @@ void AnimationImporter::importAnimateColorContainer( const Atom* pAtom, const Re
+                 break;
+ 
+             default:
+-                dump( " unknown_atom=\"%ld\"", (sal_Int32)pChildAtom->getType() );
++                dump( " unknown_atom=\"%d\"", (sal_Int32)pChildAtom->getType() );
+                 break;
+             }
+ 
+@@ -1979,8 +1983,8 @@ void AnimationImporter::importAnimateSetContainer( const Atom* pAtom, const Refe
+                 sal_Int32 nU1, nU2;
+                 mrStCtrl >> nU1 >> nU2;
+ 
+-                dump( " set_1=\"%ld\"", nU1 ),
+-                dump( " set_2=\"%ld\"", nU2 );
++                dump( " set_1=\"%d\"", nU1 ),
++                dump( " set_2=\"%d\"", nU2 );
+             }
+             break;
+ 
+@@ -2003,7 +2007,7 @@ void AnimationImporter::importAnimateSetContainer( const Atom* pAtom, const Refe
+                 break;
+ 
+             default:
+-                dump( " unknown_atom=\"%ld\"", (sal_Int32)pChildAtom->getType() );
++                dump( " unknown_atom=\"%d\"", (sal_Int32)pChildAtom->getType() );
+                 break;
+             }
+ 
+@@ -2082,7 +2086,7 @@ void AnimationImporter::importAnimateContainer( const Atom* pAtom, const Referen
+                 }
+                 break;
+             default:
+-                dump( " unknown_atom=\"%ld\"", (sal_Int32)pChildAtom->getType() );
++                dump( " unknown_atom=\"%d\"", (sal_Int32)pChildAtom->getType() );
+                 break;
+             }
+ 
+@@ -2161,7 +2165,7 @@ void AnimationImporter::importAnimateMotionContainer( const Atom* pAtom, const R
+                 break;
+ 
+             default:
+-                dump( " unknown_atom=\"%ld\"", (sal_Int32)pChildAtom->getType() );
++                dump( " unknown_atom=\"%d\"", (sal_Int32)pChildAtom->getType() );
+                 break;
+             }
+ 
+@@ -2227,7 +2231,7 @@ void AnimationImporter::importCommandContainer( const Atom* pAtom, const Referen
+                 break;
+ 
+             default:
+-                dump( " unknown_atom=\"%ld\"", (sal_Int32)pChildAtom->getType() );
++                dump( " unknown_atom=\"%d\"", (sal_Int32)pChildAtom->getType() );
+                 break;
+             }
+ 
+@@ -2361,7 +2365,7 @@ void AnimationImporter::importAudioContainer( const Atom* pAtom, const Reference
+             break;
+ 
+             default:
+-                dump( " unknown_atom=\"%ld\"", (sal_Int32)pChildAtom->getType() );
++                dump( " unknown_atom=\"%d\"", (sal_Int32)pChildAtom->getType() );
+                 break;
+             }
+ 
+@@ -2467,7 +2471,7 @@ void AnimationImporter::importAnimateScaleContainer( const Atom* pAtom, const Re
+                 break;
+ 
+             default:
+-                dump( " unknown_atom=\"%ld\"", (sal_Int32)pChildAtom->getType() );
++                dump( " unknown_atom=\"%d\"", (sal_Int32)pChildAtom->getType() );
+                 break;
+             }
+ 
+@@ -2527,7 +2531,7 @@ void AnimationImporter::importAnimateRotationContainer( const Atom* pAtom, const
+                     fprintf( mpFile, " to=\"%g\"", (double)fTo );
+ 
+                 if( nU1 )
+-                    fprintf( mpFile, " rotation_1=\"%ld\"", nU1 );
++                    fprintf( mpFile, " rotation_1=\"%d\"", nU1 );
+ #endif
+             }
+             break;
+@@ -2537,7 +2541,7 @@ void AnimationImporter::importAnimateRotationContainer( const Atom* pAtom, const
+                 break;
+ 
+             default:
+-                dump( " unknown_atom=\"%ld\"", (sal_Int32)pChildAtom->getType() );
++                dump( " unknown_atom=\"%d\"", (sal_Int32)pChildAtom->getType() );
+                 break;
+             }
+ 
+@@ -2641,7 +2645,7 @@ void AnimationImporter::importAnimationValues( const Atom* pAtom, const Referenc
+                 sal_Int32 nAutoreverse;
+                 mrStCtrl >> nAutoreverse;
+                 xNode->setAutoReverse( nAutoreverse != 0 );
+-                dump( " autoreverse=\"%#lx\"", nAutoreverse );
++                dump( " autoreverse=\"%#x\"", nAutoreverse );
+             }
+             break;
+ 
+@@ -2650,7 +2654,7 @@ void AnimationImporter::importAnimationValues( const Atom* pAtom, const Referenc
+                 sal_uInt32 nUnknown;
+                 mrStCtrl >> nUnknown;
+ #ifdef DBG_ANIM_LOG
+-                fprintf(mpFile, " attribute_%d=\"%#lx\"", nType, nUnknown );
++                fprintf(mpFile, " attribute_%d=\"%#x\"", nType, nUnknown );
+ #endif
+             }
+             break;
+@@ -2773,7 +2777,7 @@ void AnimationImporter::importAnimateKeyPoints( const Atom* pAtom, const Referen
+                     else if( aValuePair.First >>= nVal )
+                         dump( "%f", nVal );
+                     else
+-                        dump( "%X", (sal_Int32)&aValuePair.First );
++                        dump( "unknown" );
+ 
+                     if( aValuePair.Second >>= aStr )
+                         dump( ",%s", 
+@@ -2782,7 +2786,7 @@ void AnimationImporter::importAnimateKeyPoints( const Atom* pAtom, const Referen
+                     else if( aValuePair.Second >>= nVal )
+                         dump( ",%f", nVal );
+                     else
+-                        dump( ",%X", (sal_Int32)&aValuePair.Second );
++                        dump( ",unknown" );
+                 }
+             }
+         }
+@@ -3022,8 +3026,8 @@ void AnimationImporter::importAnimationActions( const Atom* pAtom, const Referen
+                 dump( " endSync=\"%s\"", nEndSync == 1 ? "all" : "unknown" );
+             }
+ 
+-            dump( " action_4=\"%#lx\"", nU4 );
+-            dump( " action_5=\"%#lx\"", nU5 );
++            dump( " action_4=\"%#x\"", nU4 );
++            dump( " action_5=\"%#x\"", nU5 );
+     #endif
+         }
+     }
+@@ -3112,9 +3116,9 @@ sal_Int32 AnimationImporter::importTargetElementContainer( const Atom* pAtom, An
  
                  case 2: // sound
                      {
@@ -921,6 +1738,175 @@ index 43184fe..892415f 100755
                      }
                      break;
                  case 3: // audio object
+@@ -3138,8 +3142,8 @@ sal_Int32 AnimationImporter::importTargetElementContainer( const Atom* pAtom, An
+ #ifdef DBG_ANIM_LOG
+                 if((begin != -1) || (end != -1) )
+                 {
+-//					dump( " text_begin=\"%ld\"", begin );
+-//					dump( " text_end=\"%ld\"", end );
++//					dump( " text_begin=\"%d\"", begin );
++//					dump( " text_end=\"%d\"", end );
+                 }
+ #endif
+             }
+@@ -3150,7 +3154,7 @@ sal_Int32 AnimationImporter::importTargetElementContainer( const Atom* pAtom, An
+                 mrStCtrl >> nU1;
+     
+                 // HINT: nU1 == 1 : target document. ?
+-//				dump( " unknown_0x2b01=\"%#lx\"", nU1 );
++//				dump( " unknown_0x2b01=\"%#x\"", nU1 );
+             }
+             break;
+             default:
+@@ -3261,7 +3265,7 @@ void AnimationImporter::dump_atom_header( const Atom* pAtom, bool bOpen, bool bA
+ 
+ void AnimationImporter::dump( UINT32 nLen, bool bNewLine )
+ {
+-    char * faul = "0123456789abcdef";
++    const char * faul = "0123456789abcdef";
+ 
+     UINT32 i = 0;
+     int b = 0;
+@@ -3308,7 +3312,7 @@ void AnimationImporter::dump_atom( const Atom* pAtom, bool bNewLine )
+ 
+                         if( aValue >>= nInt )
+                         {
+-                            fprintf(mpFile, " value=\"%ld\"", nInt );
++                            fprintf(mpFile, " value=\"%d\"", nInt );
+                         }
+                         else if( aValue >>= aString )
+                         {
+@@ -3388,7 +3392,7 @@ void AnimationImporter::dump_anim_group( const Atom* pAtom, const AnimationNode&
+             break;
+         default:
+             {
+-                fprintf( mpFile, "unknown_node_%#lx", rNode.mnNodeType );
++                fprintf( mpFile, "unknown_node_%#x", rNode.mnNodeType );
+             }
+             break;
+         }
+@@ -3397,7 +3401,7 @@ void AnimationImporter::dump_anim_group( const Atom* pAtom, const AnimationNode&
+         fprintf( mpFile, "media" );
+         break;
+     default:
+-        fprintf( mpFile, "unknown_group_%#lx", rNode.mnGroupType );
++        fprintf( mpFile, "unknown_group_%#x", rNode.mnGroupType );
+         break;
+     }
+ 
+@@ -3436,9 +3440,9 @@ void AnimationImporter::dump( const AnimationNode& rNode )
+         fprintf(mpFile, " dur=\"indefinite\"" );
+     }
+     
+-    if( rNode.mnU1 ) fprintf(mpFile," u1=\"%#lx\"", rNode.mnU1);
+-    if( rNode.mnU3 ) fprintf(mpFile," u3=\"%#lx\"", rNode.mnU3);
+-    if( rNode.mnU4 ) fprintf(mpFile," u4=\"%#lx\"", rNode.mnU4);
++    if( rNode.mnU1 ) fprintf(mpFile," u1=\"%#x\"", rNode.mnU1);
++    if( rNode.mnU3 ) fprintf(mpFile," u3=\"%#x\"", rNode.mnU3);
++    if( rNode.mnU4 ) fprintf(mpFile," u4=\"%#x\"", rNode.mnU4);
+ }
+ 
+ void AnimationImporter::dump( Any& rAny )
+@@ -3470,7 +3474,7 @@ void AnimationImporter::dump( Any& rAny )
+     }
+     else if( rAny >>= nInt )
+     {
+-        fprintf( mpFile, "%ld", nInt );
++        fprintf( mpFile, "%d", nInt );
+     }
+     else if( rAny >>= bBool )
+     {
+@@ -3589,7 +3593,7 @@ void AnimationImporter::dump( const PropertySet& rSet )
+             sal_Int32 nPresetId ;
+             if( aAny >>= nPresetId )
+             {
+-                fprintf(mpFile, " presetid=\"%ld\"", nPresetId );
++                fprintf(mpFile, " presetid=\"%d\"", nPresetId );
+                 bKnown = true;
+             }
+         }
+@@ -3600,7 +3604,7 @@ void AnimationImporter::dump( const PropertySet& rSet )
+             sal_Int32 nPointsType ;
+             if( aAny >>= nPointsType )
+             {
+-                fprintf(mpFile, " presetSubType=\"%ld\"", nPointsType );
++                fprintf(mpFile, " presetSubType=\"%d\"", nPointsType );
+                 bKnown = true;
+             }
+         }
+@@ -3624,7 +3628,7 @@ void AnimationImporter::dump( const PropertySet& rSet )
+                 default:
+                 {
+                     static char buffer[128];
+-                    sprintf( buffer, "%ld", nPresetClass );
++                    sprintf( buffer, "%d", nPresetClass );
+                     pMode = buffer;
+                 }
+                 break;
+@@ -3653,7 +3657,7 @@ void AnimationImporter::dump( const PropertySet& rSet )
+                     default :
+                     {
+                         static char buffer[128];
+-                        sprintf( buffer, "%ld", nNodeType );
++                        sprintf( buffer, "%d", nNodeType );
+                         pNode = buffer;
+                     }
+                     break;
+@@ -3670,7 +3674,7 @@ void AnimationImporter::dump( const PropertySet& rSet )
+             sal_Int32 nGroupId;
+             if ( aAny >>= nGroupId )
+             {
+-                fprintf( mpFile, " groupId=\"%ld\"", nGroupId );
++                fprintf( mpFile, " groupId=\"%d\"", nGroupId );
+                 bKnown = true;
+             }
+         }
+@@ -3707,7 +3711,7 @@ void AnimationImporter::dump( const PropertySet& rSet )
+             sal_Int32 nEndAfterSlide;
+             if( aAny >>= nEndAfterSlide )
+             {
+-                fprintf(mpFile, " endAfterSlide=\"%ld\"", nEndAfterSlide );
++                fprintf(mpFile, " endAfterSlide=\"%d\"", nEndAfterSlide );
+             bKnown = true;
+             }
+         }
+@@ -3765,7 +3769,7 @@ void AnimationImporter::dump( const PropertySet& rSet )
+ 
+         if( !bKnown )
+         {
+-            fprintf( mpFile, " unknown_%lu=\"", nInstance );
++            fprintf( mpFile, " unknown_%u=\"", nInstance );
+             dump( aAny );
+             fprintf( mpFile, "\"" );
+         }
+diff --git sd/source/filter/ppt/pptinanimations.hxx sd/source/filter/ppt/pptinanimations.hxx
+index 51ba098..26beb70 100755
+--- sd/source/filter/ppt/pptinanimations.hxx
++++ sd/source/filter/ppt/pptinanimations.hxx
+@@ -56,11 +56,11 @@ class AnimationImporter
+ public:
+     AnimationImporter( ImplSdPPTImport* pPPTImport, SvStream& rStCtrl );
+ 
+-    void import( const ::com::sun::star::uno::Reference< ::com::sun::star::drawing::XDrawPage >& xPage, const DffRecordHeader& rProgTagContentHd );
++    void import( const ::com::sun::star::uno::Reference< ::com::sun::star::drawing::XDrawPage >& xPage, const DffRecordHeader& rProgTagContentHd, bool& bAfterSound );
+ 
+ private:
+-    void importAnimationContainer( const Atom* pAtom, const ::com::sun::star::uno::Reference< ::com::sun::star::animations::XAnimationNode >& xParent );
+-    void importTimeContainer( const Atom* pAtom, const ::com::sun::star::uno::Reference< ::com::sun::star::animations::XAnimationNode >& xNode );
++    void importAnimationContainer( const Atom* pAtom, const ::com::sun::star::uno::Reference< ::com::sun::star::animations::XAnimationNode >& xParent, bool& bAfterSound );
++    void importTimeContainer( const Atom* pAtom, const ::com::sun::star::uno::Reference< ::com::sun::star::animations::XAnimationNode >& xNode, bool& bAfterSound );
+     void importAnimationNodeContainer( const Atom* pAtom, const ::com::sun::star::uno::Reference< ::com::sun::star::animations::XAnimationNode >& xNode );
+ 
+     void importAnimateSetContainer( const Atom* pAtom, const ::com::sun::star::uno::Reference< ::com::sun::star::animations::XAnimationNode >& xNode );
+@@ -84,7 +84,7 @@ private:
+     bool importAttributeNamesContainer( const Atom* pAtom, rtl::OUString& rAttributeNames );
+     sal_Int32 importTargetElementContainer( const Atom* pAtom, ::com::sun::star::uno::Any& rTarget, sal_Int16& nSubType );
+ 
+-    void fillNode( ::com::sun::star::uno::Reference< ::com::sun::star::animations::XAnimationNode >& xTiming, const AnimationNode& rNode, const PropertySet& rSet );
++    void fillNode( ::com::sun::star::uno::Reference< ::com::sun::star::animations::XAnimationNode >& xTiming, const AnimationNode& rNode, PropertySet& rSet, bool& bAfterEffect );
+     ::com::sun::star::uno::Reference< ::com::sun::star::animations::XAnimationNode > createNode( const Atom* pAtom, const AnimationNode& rNode );
+ 
+     bool convertAnimationNode( const ::com::sun::star::uno::Reference< ::com::sun::star::animations::XAnimationNode >& xNode, const ::com::sun::star::uno::Reference< ::com::sun::star::animations::XAnimationNode >& xParent );
 diff --git sd/source/ui/func/fuinsert.cxx sd/source/ui/func/fuinsert.cxx
 index 916a512..06bef6c 100755
 --- sd/source/ui/func/fuinsert.cxx
@@ -1115,18 +2101,24 @@ index 30a7398..92a839b 100755
      /* flags: */
      AutoUpdate = FALSE,
 diff --git sfx2/source/appl/fileobj.cxx sfx2/source/appl/fileobj.cxx
-index 158fbb3..ee0ea79 100644
+index 158fbb3..995dbe9 100644
 --- sfx2/source/appl/fileobj.cxx
 +++ sfx2/source/appl/fileobj.cxx
-@@ -28,6 +28,7 @@
- // MARKER(update_precomp.py): autogen include statement, do not remove
- #include "precompiled_sfx2.hxx"
- 
-+#include <avmedia/mediawindow.hxx>
- #include <vcl/wrkwin.hxx>
- #include <vcl/msgbox.hxx>
- #include <tools/urlobj.hxx>
-@@ -260,6 +261,10 @@ BOOL SvFileObject::Connect( sfx2::SvBaseLink* pLink )
+@@ -1,3 +1,4 @@
++
+ /*************************************************************************
+  *
+  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+@@ -44,6 +45,8 @@
+ #include <com/sun/star/uno/Sequence.hxx>
+ #include <sfx2/docfac.hxx>
+ #include <com/sun/star/document/XTypeDetection.hpp>
++#include <com/sun/star/ui/dialogs/XFilePicker.hpp>
++#include <com/sun/star/ui/dialogs/ExecutableDialogResults.hpp>
+ #include <comphelper/mediadescriptor.hxx>
+ #include <comphelper/processfactory.hxx>
+ #include <sfx2/linkmgr.hxx>
+@@ -260,6 +263,10 @@ BOOL SvFileObject::Connect( sfx2::SvBaseLink* pLink )
          nType = FILETYPE_TEXT;
          break;
  
@@ -1137,7 +2129,7 @@ index 158fbb3..ee0ea79 100644
      case OBJECT_CLIENT_OLE:
          nType = FILETYPE_OBJECT;
          // TODO/LATER: introduce own type to be used for exchanging
-@@ -481,6 +486,23 @@ void SvFileObject::Edit( Window* pParent, sfx2::SvBaseLink* pLink, const Link& r
+@@ -481,6 +488,27 @@ void SvFileObject::Edit( Window* pParent, sfx2::SvBaseLink* pLink, const Link& r
              }
              break;
  
@@ -1146,9 +2138,13 @@ index 158fbb3..ee0ea79 100644
 +                nType = FILETYPE_OBJECT;
 +
 +                rtl::OUString aFileURL = sFile;
-+                if( avmedia::MediaWindow::executeOpenMediaURLDialog( pParent, aFileURL ) )
++                css::uno::Reference< ::com::sun::star::ui::dialogs::XFilePicker > xDlg(
++                    ::comphelper::getProcessServiceFactory()->createInstance(
++                        ::rtl::OUString::createFromAscii("com.sun.star.avmedia.OpenMediaURLDialog") ),
++                    css::uno::UNO_QUERY );
++                if ( xDlg.is() && xDlg->execute() == css::ui::dialogs::ExecutableDialogResults::OK )
 +                {
-+                    sFile = aFileURL;
++                    sFile = xDlg->getFiles()[0];
 +                    sFile += ::sfx2::cTokenSeperator;
 +                    sFile += ::sfx2::cTokenSeperator;
 +
@@ -1162,7 +2158,7 @@ index 158fbb3..ee0ea79 100644
              {
                  nType = FILETYPE_OBJECT; // if not set already
 diff --git sfx2/source/appl/linkmgr2.cxx sfx2/source/appl/linkmgr2.cxx
-index 758f5e0..b9619d2 100644
+index 758f5e0..3887cd7 100644
 --- sfx2/source/appl/linkmgr2.cxx
 +++ sfx2/source/appl/linkmgr2.cxx
 @@ -273,6 +273,7 @@ BOOL LinkManager::GetDisplayNames( const SvBaseLink * pLink,
@@ -1186,7 +2182,7 @@ index 758f5e0..b9619d2 100644
 +                        switch( pLink->GetObjType() )
 +                        {
 +                            case OBJECT_CLIENT_GRF:	nId = RID_SVXSTR_GRAFIKLINK; break;
-+                            case OBJECT_CLIENT_AVMEDIA: nId = RID_SVXSTR_AVMEDIALINK; break;
++                            case OBJECT_CLIENT_AVMEDIA: nId = RID_SFXSTR_AVMEDIALINK; break;
 +                            default: nId = RID_SVXSTR_FILELINK;
 +                        }
 +                        *pType = String( SfxResId(nId) );
@@ -1522,7 +2518,7 @@ index 39411ea..6d96d08 100644
  
  typedef tools::WeakReference< SdrModel > SdrModelWeakRef;
 diff --git svx/inc/svx/svdomedia.hxx svx/inc/svx/svdomedia.hxx
-index 914100f..6deabc0 100644
+index 914100f..cf502ca 100644
 --- svx/inc/svx/svdomedia.hxx
 +++ svx/inc/svx/svdomedia.hxx
 @@ -31,8 +31,10 @@
@@ -1544,7 +2540,7 @@ index 914100f..6deabc0 100644
  
  public:
  
-@@ -65,8 +68,13 @@ public:
+@@ -65,11 +68,19 @@ public:
  
          virtual void				AdjustToMaxRect( const Rectangle& rMaxRect, bool bShrinkOnly = false );
  
@@ -1558,7 +2554,13 @@ index 914100f..6deabc0 100644
          void						setURL( const ::rtl::OUString& rURL );
          const ::rtl::OUString&		getURL() const;
  
-@@ -79,15 +87,23 @@ public:
++        void						setSlidesNumber( sal_uInt16 nSlidesNumber );
++        sal_uInt16		        getSlidesNumber() const;
++
+         void						setMediaProperties( const ::avmedia::MediaItem& rState );
+         const ::avmedia::MediaItem& getMediaProperties() const;
+ 
+@@ -79,15 +90,25 @@ public:
          const Graphic&              getGraphic() const;
          void                        setGraphic( const Graphic* pGraphic = NULL );
  
@@ -1579,9 +2581,24 @@ index 914100f..6deabc0 100644
          ::std::auto_ptr< Graphic >  mapGraphic;
 +        ::rtl::Reference< sdr::media::MediaLink > mxMediaLink;
 +        SdrMediaLink*				mpSdrMediaLink;
++
++        sal_uInt16                  mnSlidesNumber;
  };
  
  #endif //_SVDOMEDIA_HXX
+diff --git svx/inc/svx/unoshprp.hxx svx/inc/svx/unoshprp.hxx
+index 4d537cd..d255b74 100644
+--- svx/inc/svx/unoshprp.hxx
++++ svx/inc/svx/unoshprp.hxx
+@@ -188,6 +188,8 @@
+ 
+ #define OWN_ATTR_EDGE_POLYPOLYGONBEZIER			(OWN_ATTR_VALUE_START+88)	// maximum is OWN_ATTR_VALUE_START+88, see svl/inc/svl/solar.hrc
+ 
++#define OWN_ATTR_MEDIA_SLIDES_NUMBER					(OWN_ATTR_VALUE_START+89)
++ 
+ // #FontWork#
+ #define FONTWORK_PROPERTIES \
+     { MAP_CHAR_LEN("FontWorkStyle"),			XATTR_FORMTXTSTYLE,			/*ENUM*/&::getCppuType((const sal_Int32*)0),	0,	0}, \
 diff --git svx/prj/build.lst svx/prj/build.lst
 index 9f75974..c1207d3 100644
 --- svx/prj/build.lst
@@ -2318,7 +3335,7 @@ index 1699622..1541eeb 100644
  
  TYPEINIT1(SdrHint,SfxHint);
 diff --git svx/source/svdraw/svdomedia.cxx svx/source/svdraw/svdomedia.cxx
-index 88651ed..1ae905e 100644
+index 88651ed..966d16b 100644
 --- svx/source/svdraw/svdomedia.cxx
 +++ svx/source/svdraw/svdomedia.cxx
 @@ -30,11 +30,81 @@
@@ -2406,11 +3423,12 @@ index 88651ed..1ae905e 100644
  
  // ---------------
  // - SdrMediaObj -
-@@ -45,13 +115,15 @@ TYPEINIT1( SdrMediaObj, SdrRectObj );
+@@ -45,13 +115,17 @@ TYPEINIT1( SdrMediaObj, SdrRectObj );
  // ------------------------------------------------------------------------------
  
  SdrMediaObj::SdrMediaObj()
 +: mpSdrMediaLink( 0 )
++, mnSlidesNumber( 1 )
  {
  }
  
@@ -2421,10 +3439,11 @@ index 88651ed..1ae905e 100644
 +SdrMediaObj::SdrMediaObj( const Rectangle& rRect )
 +: SdrRectObj( rRect )
 +, mpSdrMediaLink( 0 )
++, mnSlidesNumber( 1 )
  {
  }
  
-@@ -59,6 +131,7 @@ SdrMediaObj::SdrMediaObj( const Rectangle& rRect ) :
+@@ -59,6 +133,7 @@ SdrMediaObj::SdrMediaObj( const Rectangle& rRect ) :
  
  SdrMediaObj::~SdrMediaObj()
  {
@@ -2432,7 +3451,7 @@ index 88651ed..1ae905e 100644
  }
  
  // ------------------------------------------------------------------------------
-@@ -196,6 +269,21 @@ void SdrMediaObj::AdjustToMaxRect( const Rectangle& rMaxRect, bool bShrinkOnly /
+@@ -196,6 +271,21 @@ void SdrMediaObj::AdjustToMaxRect( const Rectangle& rMaxRect, bool bShrinkOnly /
  
  // ------------------------------------------------------------------------------
  
@@ -2454,7 +3473,7 @@ index 88651ed..1ae905e 100644
  void SdrMediaObj::setURL( const ::rtl::OUString& rURL )
  {
      ::avmedia::MediaItem aURLItem;
-@@ -205,6 +293,26 @@ void SdrMediaObj::setURL( const ::rtl::OUString& rURL )
+@@ -205,6 +295,26 @@ void SdrMediaObj::setURL( const ::rtl::OUString& rURL )
  }
  
  // ------------------------------------------------------------------------------
@@ -2481,7 +3500,24 @@ index 88651ed..1ae905e 100644
      
  const ::rtl::OUString& SdrMediaObj::getURL() const
  {
-@@ -216,6 +324,28 @@ const ::rtl::OUString& SdrMediaObj::getURL() const
+@@ -213,9 +323,45 @@ const ::rtl::OUString& SdrMediaObj::getURL() const
+ 
+ // ------------------------------------------------------------------------------
+ 
++void SdrMediaObj::setSlidesNumber( sal_uInt16 nSlidesNumber )
++{
++    mnSlidesNumber = nSlidesNumber;
++}
++
++// ------------------------------------------------------------------------------
++
++sal_uInt16 SdrMediaObj::getSlidesNumber() const
++{
++    return mnSlidesNumber;
++}
++
++// ------------------------------------------------------------------------------
++
  void SdrMediaObj::setMediaProperties( const ::avmedia::MediaItem& rState )
  {
      mediaPropertiesChanged( rState );
@@ -2510,7 +3546,7 @@ index 88651ed..1ae905e 100644
      static_cast< ::sdr::contact::ViewContactOfSdrMediaObj& >( GetViewContact() ).executeMediaItem( getMediaProperties() );
  }
          
-@@ -262,15 +392,25 @@ void SdrMediaObj::setGraphic( const Graphic* pGraphic )
+@@ -262,15 +408,25 @@ void SdrMediaObj::setGraphic( const Graphic* pGraphic )
  void SdrMediaObj::mediaPropertiesChanged( const ::avmedia::MediaItem& rNewProperties )
  {
      const sal_uInt32 nMaskSet = rNewProperties.getMaskSet();
@@ -2538,7 +3574,7 @@ index 88651ed..1ae905e 100644
      if( AVMEDIA_SETMASK_LOOP & nMaskSet )
          maMediaProperties.setLoop( rNewProperties.isLoop() );
      
-@@ -283,3 +423,106 @@ void SdrMediaObj::mediaPropertiesChanged( const ::avmedia::MediaItem& rNewProper
+@@ -283,3 +439,106 @@ void SdrMediaObj::mediaPropertiesChanged( const ::avmedia::MediaItem& rNewProper
      if( AVMEDIA_SETMASK_ZOOM & nMaskSet )
          maMediaProperties.setZoom( rNewProperties.getZoom() );
  }
@@ -2645,6 +3681,69 @@ index 88651ed..1ae905e 100644
 +        mxGraphicLink->disconnect();
 +*/
 +}
+diff --git svx/source/unodraw/unoprov.cxx svx/source/unodraw/unoprov.cxx
+index 91e3b9e..85181d8 100644
+--- svx/source/unodraw/unoprov.cxx
++++ svx/source/unodraw/unoprov.cxx
+@@ -746,6 +746,7 @@ SfxItemPropertyMapEntry* ImplGetSvxMediaShapePropertyMap()
+         { MAP_CHAR_LEN(UNO_NAME_LINKDISPLAYNAME), OWN_ATTR_LDNAME, &::getCppuType(( const ::rtl::OUString*)0),	::com::sun::star::beans::PropertyAttribute::READONLY, 0},
+         { MAP_CHAR_LEN("Transformation"), OWN_ATTR_TRANSFORMATION, &::getCppuType((const struct com::sun::star::drawing::HomogenMatrix3*)0), 0, 0 },
+         { MAP_CHAR_LEN("MediaURL"),	OWN_ATTR_MEDIA_URL, &::getCppuType((const ::rtl::OUString*)0), 0, 0},
++        { MAP_CHAR_LEN("MediaSlidesNumber"),	OWN_ATTR_MEDIA_SLIDES_NUMBER, &::getCppuType((const sal_uInt16*)0), 0, 0},
+         { MAP_CHAR_LEN("PreferredSize"), OWN_ATTR_MEDIA_PREFERREDSIZE, &::getCppuType((const ::com::sun::star::awt::Size*)0), ::com::sun::star::beans::PropertyAttribute::READONLY, 0},
+         { MAP_CHAR_LEN("Loop"),	OWN_ATTR_MEDIA_LOOP, &::getCppuType((const sal_Bool*)0), 0, 0},
+         { MAP_CHAR_LEN("Mute"),	OWN_ATTR_MEDIA_MUTE, &::getCppuType((const sal_Bool*)0), 0, 0},
+diff --git svx/source/unodraw/unoshap4.cxx svx/source/unodraw/unoshap4.cxx
+index 533943a..22c43a7 100644
+--- svx/source/unodraw/unoshap4.cxx
++++ svx/source/unodraw/unoshap4.cxx
+@@ -868,7 +868,7 @@ SvxMediaShape::~SvxMediaShape() throw()
+ 
+ bool SvxMediaShape::setPropertyValueImpl( const ::rtl::OUString& rName, const SfxItemPropertySimpleEntry* pProperty, const ::com::sun::star::uno::Any& rValue ) throw(::com::sun::star::beans::UnknownPropertyException, ::com::sun::star::beans::PropertyVetoException, ::com::sun::star::lang::IllegalArgumentException, ::com::sun::star::lang::WrappedTargetException, ::com::sun::star::uno::RuntimeException)
+ {
+-    if( (pProperty->nWID >= OWN_ATTR_MEDIA_URL) && (pProperty->nWID <= OWN_ATTR_MEDIA_ZOOM) )
++    if( (pProperty->nWID >= OWN_ATTR_MEDIA_URL) && (pProperty->nWID <= OWN_ATTR_MEDIA_ZOOM) || pProperty->nWID == OWN_ATTR_MEDIA_SLIDES_NUMBER )
+     {
+         SdrMediaObj* pMedia = static_cast< SdrMediaObj* >( mpObj.get() );
+         ::avmedia::MediaItem aItem;
+@@ -887,6 +887,17 @@ bool SvxMediaShape::setPropertyValueImpl( const ::rtl::OUString& rName, const Sf
+         }
+         break;
+ 
++        case OWN_ATTR_MEDIA_SLIDES_NUMBER:
++        {
++            sal_uInt16 nSlidesNumber;
++            if( rValue >>= nSlidesNumber )
++            {
++                bOk = true;
++                pMedia->setSlidesNumber( nSlidesNumber );
++            }
++        }
++        break;
++
+         case( OWN_ATTR_MEDIA_LOOP ):
+         {
+             sal_Bool bLoop = sal_Bool();
+@@ -957,7 +968,7 @@ bool SvxMediaShape::setPropertyValueImpl( const ::rtl::OUString& rName, const Sf
+ 
+ bool SvxMediaShape::getPropertyValueImpl( const ::rtl::OUString& rName, const SfxItemPropertySimpleEntry* pProperty, ::com::sun::star::uno::Any& rValue ) throw(::com::sun::star::beans::UnknownPropertyException, ::com::sun::star::lang::WrappedTargetException, ::com::sun::star::uno::RuntimeException)
+ {
+-    if( ( pProperty->nWID >= OWN_ATTR_MEDIA_URL ) && ( pProperty->nWID <= OWN_ATTR_MEDIA_ZOOM ) )
++    if( ( pProperty->nWID >= OWN_ATTR_MEDIA_URL ) && ( pProperty->nWID <= OWN_ATTR_MEDIA_ZOOM ) || pProperty->nWID == OWN_ATTR_MEDIA_SLIDES_NUMBER )
+     {
+         SdrMediaObj* pMedia = static_cast< SdrMediaObj* >( mpObj.get() );
+         const ::avmedia::MediaItem aItem( pMedia->getMediaProperties() );
+@@ -968,6 +979,10 @@ bool SvxMediaShape::getPropertyValueImpl( const ::rtl::OUString& rName, const Sf
+                 rValue <<= aItem.getURL();
+                 break;
+ 
++            case OWN_ATTR_MEDIA_SLIDES_NUMBER:
++                rValue <<= pMedia->getSlidesNumber();
++                break;
++
+             case( OWN_ATTR_MEDIA_LOOP ):
+                 rValue <<= (sal_Bool) aItem.isLoop();
+                 break;
 diff --git svx/util/makefile.mk svx/util/makefile.mk
 index 050decc..72a829c 100644
 --- svx/util/makefile.mk
