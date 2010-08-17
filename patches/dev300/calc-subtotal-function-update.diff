@@ -1,33 +1,20 @@
-From 0c4144946c2c1ee7ea833a4cb3baf33793255d9d Mon Sep 17 00:00:00 2001
-From: Jan Holesovsky <kendy@suse.cz>
-Date: Fri, 14 May 2010 17:07:54 +0200
-Subject: [PATCH 691/768] calc-subtotal-function-update.diff
-
----
- sc/inc/document.hxx                |    7 +++++
- sc/source/core/data/cell.cxx       |   16 ++++++++++++
- sc/source/core/data/document.cxx   |   48 ++++++++++++++++++++++++++++++++++++
- sc/source/ui/docshell/dbdocfun.cxx |    7 ++---
- 4 files changed, 74 insertions(+), 4 deletions(-)
-
 diff --git sc/inc/document.hxx sc/inc/document.hxx
-index 65c695b..185c2b7 100644
+index 2b5dc0f..603a005 100644
 --- sc/inc/document.hxx
 +++ sc/inc/document.hxx
-@@ -438,6 +438,8 @@ private:
- 
-     sal_Int16           mnNamedRangesLockCount;
+@@ -449,6 +449,8 @@ private:
+ 	// for worksheet calculate event
+ 	::std::vector< SCTAB > maTabs;
  
 +    ::std::set<ScFormulaCell*> maSubTotalCells;
-+
++    
  public:
      SC_DLLPUBLIC ULONG			GetCellCount() const;		// alle Zellen
      SCSIZE          GetCellCount(SCTAB nTab, SCCOL nCol) const;
-@@ -1809,6 +1811,11 @@ public:
-                             { return eStorageGrammar; }
+@@ -1829,6 +1831,10 @@ public:
+     bool IsInVBAMode() const;
+     ScRowBreakIterator* GetRowBreakIterator(SCTAB nTab) const;
  
-     SfxUndoManager*     GetUndoManager();
-+
 +    void AddSubTotalCell(ScFormulaCell* pCell);
 +    void RemoveSubTotalCell(ScFormulaCell* pCell);
 +    void SetSubTotalCellsDirty(const ScRange& rDirtyRange);
@@ -36,10 +23,10 @@ index 65c695b..185c2b7 100644
  
      /** 
 diff --git sc/source/core/data/cell.cxx sc/source/core/data/cell.cxx
-index d73bc1f..e999050 100644
+index 8104d0a..88ccbfe 100644
 --- sc/source/core/data/cell.cxx
 +++ sc/source/core/data/cell.cxx
-@@ -724,6 +724,9 @@ ScFormulaCell::ScFormulaCell( ScDocument* pDoc, const ScAddress& rPos,
+@@ -725,6 +725,9 @@ ScFormulaCell::ScFormulaCell( ScDocument* pDoc, const ScAddress& rPos,
          if ( pCode->GetNextOpCodeRPN( ocSubTotal ) )
              bSubTotal = TRUE;
      }
@@ -49,23 +36,25 @@ index d73bc1f..e999050 100644
  }
  
  ScFormulaCell::ScFormulaCell( const ScFormulaCell& rCell, ScDocument& rDoc, const ScAddress& rPos, int nCloneFlags ) :
-@@ -814,11 +817,15 @@ ScFormulaCell::ScFormulaCell( const ScFormulaCell& rCell, ScDocument& rDoc, cons
+@@ -815,11 +818,17 @@ ScFormulaCell::ScFormulaCell( const ScFormulaCell& rCell, ScDocument& rDoc, cons
  
      if( nCloneFlags & SC_CLONECELL_STARTLISTENING )
          StartListeningTo( &rDoc );
 +
 +    if (bSubTotal)
 +        pDocument->AddSubTotalCell(this);
++
  }
  
  ScFormulaCell::~ScFormulaCell()
  {
      pDocument->RemoveFromFormulaTree( this );
 +    pDocument->RemoveSubTotalCell(this);
++
+     if (pCode->HasOpCode(ocMacro))
+         pDocument->GetMacroManager()->RemoveDependentCell(this);
  
-     if (pDocument->HasExternalRefManager())
-         pDocument->GetExternalRefManager()->removeRefCell(this);
-@@ -985,6 +992,9 @@ void ScFormulaCell::CompileTokenArray( BOOL bNoListening )
+@@ -987,6 +996,9 @@ void ScFormulaCell::CompileTokenArray( BOOL bNoListening )
          }
          if ( bWasInFormulaTree )
              pDocument->PutInFormulaTree( this );
@@ -75,7 +64,7 @@ index d73bc1f..e999050 100644
      }
  }
  
-@@ -1028,6 +1038,9 @@ void ScFormulaCell::CompileXML( ScProgress& rProgress )
+@@ -1030,6 +1042,9 @@ void ScFormulaCell::CompileXML( ScProgress& rProgress )
              bCompile = FALSE;
              StartListeningTo( pDocument );
          }
@@ -85,7 +74,7 @@ index d73bc1f..e999050 100644
      }
      else
      {
-@@ -1067,6 +1080,9 @@ void ScFormulaCell::CalcAfterLoad()
+@@ -1069,6 +1084,9 @@ void ScFormulaCell::CalcAfterLoad()
          bDirty = TRUE;
          bCompile = FALSE;
          bNewCompiled = TRUE;
@@ -96,11 +85,11 @@ index d73bc1f..e999050 100644
      // irgendwie koennen unter os/2 mit rotter FPU-Exception /0 ohne Err503
      // gespeichert werden, woraufhin spaeter im NumberFormatter die BLC Lib
 diff --git sc/source/core/data/document.cxx sc/source/core/data/document.cxx
-index 2d08aa8..332d25c 100644
+index ea615c5..f3106cd 100644
 --- sc/source/core/data/document.cxx
 +++ sc/source/core/data/document.cxx
-@@ -5251,6 +5251,54 @@ SfxUndoManager* ScDocument::GetUndoManager()
-     return mpUndoManager;
+@@ -5270,6 +5270,55 @@ ScRowBreakIterator* ScDocument::GetRowBreakIterator(SCTAB nTab) const
+     return NULL;
  }
  
 +void ScDocument::AddSubTotalCell(ScFormulaCell* pCell)
@@ -151,11 +140,12 @@ index 2d08aa8..332d25c 100644
 +    SetAutoCalc(bOldRecalc);
 +    maSubTotalCells.swap(aNewSet); // update the list.
 +}
- 
++
  void ScDocument::EnableUndo( bool bVal )
  {
+     GetUndoManager()->EnableUndo(bVal);
 diff --git sc/source/ui/docshell/dbdocfun.cxx sc/source/ui/docshell/dbdocfun.cxx
-index 7e48ad5..49ae273 100644
+index 318ee76..5917798 100644
 --- sc/source/ui/docshell/dbdocfun.cxx
 +++ sc/source/ui/docshell/dbdocfun.cxx
 @@ -942,10 +942,9 @@ BOOL ScDBDocFunc::Query( SCTAB nTab, const ScQueryParam& rQueryParam,
@@ -172,6 +162,3 @@ index 7e48ad5..49ae273 100644
  
      if ( bRecord )
      {
--- 
-1.7.0.1
-
