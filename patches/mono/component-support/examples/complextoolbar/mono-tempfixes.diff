@@ -1,0 +1,134 @@
+diff --git a/cli_ure/qa/climaker/makefile.mk b/cli_ure/qa/climaker/makefile.mk
+index cde3f40..b24c701 100644
+--- a/cli_ure/qa/climaker/makefile.mk
++++ b/cli_ure/qa/climaker/makefile.mk
+@@ -38,7 +38,6 @@ PACKAGE = climaker
+ CLIMAKER*=$(WRAPCMD) $(BIN)$/climaker
+ .INCLUDE: settings.mk
+ 
+-
+ #----- compile .java files -----------------------------------------
+ 
+ JARFILES = sandbox.jar ridl.jar unoil.jar jurt.jar juh.jar java_uno.jar OOoRunner.jar
+@@ -55,7 +54,7 @@ JARCOMPRESS 	= TRUE
+ 
+ 
+ 
+-CSCFLAGS = -incr
++#CSCFLAGS = -incr
+ .IF "$(debug)" != ""
+ CSCFLAGS += -checked+ -define:DEBUG -define:TRACE -debug+
+ .ELSE
+diff --git a/cli_ure/source/mono_bridge/.bridge.cs.swp b/cli_ure/source/mono_bridge/.bridge.cs.swp
+index 994437f..0964079 100644
+Binary files a/cli_ure/source/mono_bridge/.bridge.cs.swp and b/cli_ure/source/mono_bridge/.bridge.cs.swp differ
+diff --git a/cli_ure/source/mono_bridge/bridge.cs b/cli_ure/source/mono_bridge/bridge.cs
+index bcab902..fe0b147 100644
+--- a/cli_ure/source/mono_bridge/bridge.cs
++++ b/cli_ure/source/mono_bridge/bridge.cs
+@@ -344,14 +344,18 @@ public unsafe class Bridge
+                 TypeDescription.Complete((TypeDescription **)&compTD);
+ 
+             int members = compTD->nMembers;
++            Console.WriteLine("** struct has " + members + " members " );
+             Type managedType = null;
+             if (managedData != null)
+                 managedType = managedData.GetType();
+ 
+             if (compTD->pBaseTypeDescription != null)
++            {
++                Console.WriteLine( "** probably bad that we are about to recurse here " );
+                 MapToUno(unoData, managedData,
+                          (TypeDescription *)((TypeDescription *)compTD->pBaseTypeDescription)->pWeakRef,
+                          assign);
++            }
+ 
+             TypeDescriptionReference *memberType = null;
+             for (int i = 0; i < members; ++i)
+@@ -362,6 +366,7 @@ public unsafe class Bridge
+                 if (managedData != null)
+                 {
+                     string fieldName = UString.UStringToString(compTD->ppMemberNames[i]);
++                    Console.WriteLine( "FieldName[ " + i + " ] is " + fieldName );
+                     FieldInfo fieldInfo = managedType.GetField(fieldName);
+                     // special case for Exception.Message property
+                     // The com.sun.star.uno.Exception.Message field is mapped to the
+@@ -1676,11 +1681,24 @@ public unsafe class Bridge
+ 	    unoRetPtr = (void *)unoArgs;
+ 	    unoArgs = (largest *)((byte *)unoRetPtr + returnSize);
+ 	}
+-
++        Console.WriteLine( "CallUno calling method with " + nParams + " params ");
+         for (int i = 0; i < nParams; ++i)
+         {
++            Console.WriteLine( "CallUno getting type for param " + i );
+             // FIXME it's a TypeDescriptionReference
+-            TypeDescription *type = (TypeDescription *)parameters[i].pTypeRef;
++            TypeDescriptionReference *typeref = (TypeDescriptionReference *)parameters[i].pTypeRef;
++            //TypeDescription *type = typeref->pType;
++            TypeDescription *type = null;
++            TypeDescriptionReference.GetDescription(&type, typeref);
++
++            if ( type == null )
++                Console.WriteLine( "CallUno after getting type for param " + i + " but it's null :-( ");
++            else 
++            {
++                Console.WriteLine( "CallUno after getting type for param " + i ); 
++                string paramTypeName = UString.UStringToString(type->pTypeName); 
++                Console.WriteLine( "CallUno after typename for param " + i + " is " + paramTypeName + " type size is " + type->nSize );
++            }
+ 
+             unoArgPtrs[i] = unoArgs + i;
+             if ((type->eTypeClass == TypeClass.STRUCT ||
+@@ -1695,17 +1713,21 @@ public unsafe class Bridge
+                             
+             if (parameters[i].bIn != 0)
+             {
++                Console.WriteLine( "CallUno calling maptouno for param " + i + " of " + nParams);
+                 // FIXME error handling
+-                MapToUno(unoArgPtrs[i], args[i], type, false /* no assign */);
++                MapToUno(unoArgPtrs[i], args[i], (TypeDescription*)typeref, false /* no assign */);
++                Console.WriteLine( "after CallUno calling maptouno for param " + i  + " of " + nParams);
+             }
+         }
+ 
+         uno.Binary.Any unoExceptionHolder;
+         uno.Binary.Any *unoExc = &unoExceptionHolder;
+ 
++        Console.WriteLine( "before dispatch");
+         // call binary uno      
+         uno.Binary.Interface.Dispatch(
+             unoInterface, memberTD, unoRetPtr, unoArgPtrs, &unoExc);
++        Console.WriteLine( "after dispatch");
+ 
+         if (unoExc == null)
+         {
+diff --git a/cli_ure/source/mono_bridge/uno_proxy.cs b/cli_ure/source/mono_bridge/uno_proxy.cs
+index f292bf6..f2a8420 100644
+--- a/cli_ure/source/mono_bridge/uno_proxy.cs
++++ b/cli_ure/source/mono_bridge/uno_proxy.cs
+@@ -176,6 +176,8 @@ public unsafe class UnoInterfaceProxy: RealProxy, IRemotingTypeInfo
+         Trace.Assert(info != null);
+         
+         string methodName = callmsg.MethodName;
++        Console.WriteLine( "Invoke for " +cli_uno.Cli_environment.getObjectIdentifier( this ) );
++        Console.WriteLine( "method name type " + methodName );
+         TypeDescriptionReference **ppAllMembers =
+         info.TypeDesc->ppAllMembers;
+         int numMembers = info.TypeDesc->nAllMembers;
+@@ -199,6 +201,7 @@ public unsafe class UnoInterfaceProxy: RealProxy, IRemotingTypeInfo
+                     String.Compare(memberTypeName, offset,
+                                    methodName, 0, methodName.Length) == 0)
+                 {
++                    Console.WriteLine( "member name type " + memberTypeName + " match for INTERFACEMETHOD ");
+                     TypeDescription *methodTD = null;
+ 		    // FIXME release it
+ 		    TypeDescriptionReference.GetDescription(&methodTD, memberTD);
+@@ -216,6 +219,7 @@ public unsafe class UnoInterfaceProxy: RealProxy, IRemotingTypeInfo
+                                           detail. cli_uno does the same */
+                                        (System.Type[])callmsg.MethodSignature,
+                                        out exception);
++                     
+                     return ConstructReturnMessage(result, callmsg.Args,
+ 						   (InterfaceMethodTypeDescription *)methodTD,
+                                                   callmsg, exception);
