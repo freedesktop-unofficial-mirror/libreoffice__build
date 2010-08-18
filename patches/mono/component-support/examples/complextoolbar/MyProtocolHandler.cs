@@ -10,7 +10,8 @@ using unoidl.com.sun.star.system;
 using unoidl.com.sun.star.text;
 using unoidl.com.sun.star.sheet;
 
-
+// #TODO #FIXME really use some proper Debugging class for 
+// trace messages
 using unoidl.com.sun.star.container;
 
 namespace ooo.mono.comp {
@@ -80,32 +81,20 @@ public class MyProtocolHandler : uno.util.WeakBase, XDispatchProvider, XInitiali
                 {
                 }
                 if ( xNamed != null )
-                {
-                    Console.WriteLine("** 1 ** ");
                     xNamed.setName("foo");
-                    Console.WriteLine("** 2 ** ");
-                }
+
                 if ( xList != null )
                 {
                     FeatureStateEvent aEvent = new FeatureStateEvent();
-                    Console.WriteLine("** 3 ** ");
                     xList.statusChanged( aEvent );
-                    Console.WriteLine("** 4 ** ");
                 }
             }
         }
-
-        String msg;
-        if ( mxFrame == null ) 
-            msg = "null";
-        else 
-            msg = "not null";
-        Console.WriteLine( "***  MyProtocolHandler.Initialise mxFrame ?" + msg );
     }
     // XDispatchProvider
     public XDispatch queryDispatch( URL aURL, String sTargetFrameName, int nSearchFlags )
     {
-        Console.WriteLine( "***  MyProtocolHandler.queryDispatch ( URL.Protocol ) " + aURL.Protocol );
+        Console.WriteLine( "***  MyProtocolHandler.queryDispatch ( URL.Protocol ) " + aURL.Protocol + " URL.Path " + aURL.Path );
         XDispatch xRet = null ;
         if ( mxFrame == null )
             return null;
@@ -128,7 +117,6 @@ public class MyProtocolHandler : uno.util.WeakBase, XDispatchProvider, XInitiali
                 // ohne ein entsprechendes Dokument funktioniert der Handler nicht
                 return xRet;
             
-        Console.WriteLine( "***  MyProtocolHandler.queryDispatch ( URL.Path ) " + aURL.Path );
 
             if ( aURL.Path == "Command1" ||
                  aURL.Path == "Command2" ||
@@ -138,7 +126,6 @@ public class MyProtocolHandler : uno.util.WeakBase, XDispatchProvider, XInitiali
                  aURL.Path == "Command6" ||
                  aURL.Path == "Command7" )
             {
-        Console.WriteLine( "***  MyProtocolHandler.queryDispatch HERE!!!!");
                 xRet = BaseDispatch.aListenerHelper.GetDispatch( mxFrame, aURL.Path );
                 if ( xRet == null )
                 {
@@ -211,7 +198,7 @@ public class BaseDispatch : uno.util.WeakBase, XDispatch, XControlNotificationLi
     protected XMultiServiceFactory mxMSF;
     protected XToolkit mxToolkit;
     protected String msDocService;
-    protected String maComboBoxText;
+    protected String maComboBoxText="";
     protected bool mbButtonEnabled=false;
     public static ListenerHelper aListenerHelper= new ListenerHelper();
    
@@ -225,6 +212,7 @@ public class BaseDispatch : uno.util.WeakBase, XDispatch, XControlNotificationLi
     }
     public void ShowMessageBox( XFrame rFrame, String aTitle, String aMsgText )
     {
+        Console.WriteLine("ShowMessageBox");
         if ( mxToolkit == null )
             mxToolkit = ( XToolkit )mxMSF.createInstance( "com.sun.star.awt.Toolkit" );
         if ( rFrame != null && mxToolkit != null )
@@ -293,14 +281,13 @@ public class BaseDispatch : uno.util.WeakBase, XDispatch, XControlNotificationLi
     public void dispatch( URL aURL,
         PropertyValue[] lArgs )
     {
-        Console.WriteLine( "*** BaseDispatch.dispatch " + aURL.Protocol );
-        Console.WriteLine( "*** BaseDispatch.dispatch " + aURL.Path );
+        Console.WriteLine( "*** BaseDispatch.dispatch URL.Protocol " + aURL.Protocol + " URL.Path " + aURL.Path );
         if ( aURL.Protocol == "vnd.demo.complextoolbarcontrols.demoaddon:" )
         {
             if ( aURL.Path == "Command1" )
             {
                 // open the OpenOffice.org web page
-                String sURL = "http://www.openoffice.org";
+                String sURL = "http://www.mono-project.com";
                 XSystemShellExecute xSystemShellExecute = ( XSystemShellExecute ) mxMSF.createInstance( "com.sun.star.system.SystemShellExecute" );
                 if ( xSystemShellExecute != null )
                 {        
@@ -317,22 +304,25 @@ public class BaseDispatch : uno.util.WeakBase, XDispatch, XControlNotificationLi
             {
                 // remove the text if it's in our list
                 NamedValue[] aRemoveArgs = new NamedValue[ 1 ];
+                aRemoveArgs[0] = new NamedValue();
                 aRemoveArgs[0].Name  = "Text";
                 aRemoveArgs[0].Value = new uno.Any( maComboBoxText.GetType(), maComboBoxText );
                 SendCommand( aURL, "RemoveEntryText", aRemoveArgs, true );
-
+                  
                 // add the new text to the start of the list
                 NamedValue[] aInsertArgs = new NamedValue[ 2 ];
+                aInsertArgs[0] = new NamedValue();
                 aInsertArgs[0].Name = "Pos";
                 aInsertArgs[0].Value = new uno.Any( typeof(int), 0 );
+                aInsertArgs[1] = new NamedValue();
                 aInsertArgs[1].Name = "Text";
-                aRemoveArgs[1].Value = new uno.Any( maComboBoxText.GetType(), maComboBoxText );
+                aInsertArgs[1].Value = new uno.Any( maComboBoxText.GetType(), maComboBoxText );
                 SendCommand( aURL, "InsertEntry", aInsertArgs, true );
             }
             else if ( aURL.Path == "Command3" )
             {
                 // Retrieve the text argument from the sequence property value
-                String aText = null;
+                String aText = "";
                 for ( int i = 0; i < lArgs.Length; i++ )
                 {
                     if ( String.Compare( lArgs[i].Name,0, "Text",0, 4 ) == 0 )
@@ -341,22 +331,19 @@ public class BaseDispatch : uno.util.WeakBase, XDispatch, XControlNotificationLi
                         break;
                     }
                 }
-                Console.WriteLine("about to dump aText");
                 if ( aText == null ) 
                     aText = "null";
-                Console.WriteLine("aText " + aText);
                 // create new URL to address the combox box
                 URL aCmdURL = new URL();
                 aCmdURL.Path = "Command2";
                 aCmdURL.Protocol = "vnd.demo.complextoolbarcontrols.demoaddon:";
                 aCmdURL.Complete = aCmdURL.Path + aCmdURL.Protocol;
                     
-                Console.WriteLine("URL setup");
                 // set the selected item as text into the combobox
                 NamedValue[] aArgs = new NamedValue[ 1 ];
-                aArgs[0].Name = "Text";
+                aArgs[0] = new NamedValue();
+                aArgs[0].Name ="Text";
                 aArgs[0].Value = new uno.Any( aText.GetType(), aText );
-                Console.WriteLine("NameValue setup");
                 SendCommand( aCmdURL, "SetText", aArgs, true );
             }
             else if ( aURL.Path == "Command4" )
@@ -409,21 +396,6 @@ public class BaseDispatch : uno.util.WeakBase, XDispatch, XControlNotificationLi
          Console.WriteLine( "***  BaseDispatch.addStatusListener aURL.Path " +  aURL.Path);
         if ( aURL.Protocol == "vnd.demo.complextoolbarcontrols.demoaddon:" )
         {
-/*
-            if ( aURL.Path == "CommandTest" )
-            {
-                // just enable this command
-                FeatureStateEvent aEvent = new FeatureStateEvent();
-                aEvent.FeatureURL = aURL;
-                aEvent.Source = this;
-                aEvent.IsEnabled = mbButtonEnabled;
-                aEvent.Requery = false;
-                aEvent.State = new uno.Any();
-                Console.WriteLine( "***  BaseDispatch.addStatusListener #1" );
-                xControl.statusChanged( aEvent );
-                Console.WriteLine( "***  BaseDispatch.addStatusListener #2" );
-            }
-*/
             if ( aURL.Path == "Command1" )
             {
                 // just enable this command
@@ -433,9 +405,7 @@ public class BaseDispatch : uno.util.WeakBase, XDispatch, XControlNotificationLi
                 aEvent.IsEnabled = mbButtonEnabled;
                 aEvent.Requery = false;
                 aEvent.State = new uno.Any();
-                Console.WriteLine( "***  BaseDispatch.addStatusListener #1" );
                 xControl.statusChanged( aEvent );
-                Console.WriteLine( "***  BaseDispatch.addStatusListener #2" );
             }
             else if ( aURL.Path == "Command2" )
             {
@@ -448,7 +418,6 @@ public class BaseDispatch : uno.util.WeakBase, XDispatch, XControlNotificationLi
                 aEvent.State = new uno.Any();
                 xControl.statusChanged( aEvent );
             }
-/*
             else if ( aURL.Path == "Command3" )
             {
                 // A toggle dropdown box is normally used for a group of commands
@@ -462,6 +431,7 @@ public class BaseDispatch : uno.util.WeakBase, XDispatch, XControlNotificationLi
                 aContextMenu[1] = "Command 2";
                 aContextMenu[2] = "Command 3";
                 
+                aArgs[0] = new NamedValue();
                 aArgs[0].Name = "List";
                 aArgs[0].Value = new uno.Any( aContextMenu.GetType(), aContextMenu );
                 SendCommandTo( xControl, aURL, "SetList", aArgs, true );
@@ -483,6 +453,7 @@ public class BaseDispatch : uno.util.WeakBase, XDispatch, XControlNotificationLi
                 aContextMenu[0] = "Button Enabled";
                 aContextMenu[1] = "Button Disabled";
                 
+                aArgs[0] = new NamedValue();
                 aArgs[0].Name = "List";
                 aArgs[0].Value = new uno.Any( aContextMenu.GetType(), aContextMenu );
                 SendCommandTo( xControl, aURL, "SetList", aArgs, true );            
@@ -501,14 +472,19 @@ public class BaseDispatch : uno.util.WeakBase, XDispatch, XControlNotificationLi
                 NamedValue[] aArgs = new NamedValue[ 5 ];
                 
                 // send command to initialize spin button
+                aArgs[0] = new NamedValue();
                 aArgs[0].Name = "Value";
                 aArgs[0].Value = new uno.Any( typeof( double ),  0.0 );
+                aArgs[1] = new NamedValue();
                 aArgs[1].Name = "UpperLimit";
                 aArgs[1].Value = new uno.Any( typeof( double ),  10.0 );
+                aArgs[2] = new NamedValue();
                 aArgs[2].Name = "LowerLimit";
                 aArgs[2].Value =  new uno.Any( typeof( double ),  0.0 );
+                aArgs[3] = new NamedValue();
                 aArgs[3].Name = "Step";
                 aArgs[3].Value = new uno.Any( typeof( double ), 0.1 );
+                aArgs[4] = new NamedValue();
                 aArgs[4].Name = "OutputFormat";
                 aArgs[4].Value =  new uno.Any( typeof( String ), "%.2f cm" );
     
@@ -533,11 +509,11 @@ public class BaseDispatch : uno.util.WeakBase, XDispatch, XControlNotificationLi
                 aList[8] = "Brown";
                 aList[9] = "Pink";
                 
+                aArgs[0] = new NamedValue();
                 aArgs[0].Name = "List";
                 aArgs[0].Value = new uno.Any( aList.GetType(), aList );
                 SendCommandTo( xControl, aURL, "SetList", aArgs, true );
             }
-*/
             aListenerHelper.AddListener( mxFrame, xControl, aURL.Path );
         }
     
@@ -570,6 +546,7 @@ public class BaseDispatch : uno.util.WeakBase, XDispatch, XControlNotificationLi
                                 bHasText = (aNewText.Length > 0 );
                             }
                             catch( unoidl.com.sun.star.uno.Exception ) {}
+                            catch( System.Exception ) {}
  
                             break;
                         }
