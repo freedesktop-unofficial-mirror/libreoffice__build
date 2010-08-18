@@ -94,7 +94,7 @@ public class MyProtocolHandler : uno.util.WeakBase, XDispatchProvider, XInitiali
     // XDispatchProvider
     public XDispatch queryDispatch( URL aURL, String sTargetFrameName, int nSearchFlags )
     {
-        Console.WriteLine( "***  MyProtocolHandler.queryDispatch ( URL.Protocol ) " + aURL.Protocol + " URL.Path " + aURL.Path );
+        Console.WriteLine( "***  here MyProtocolHandler.queryDispatch ( URL.Protocol ) " + aURL.Protocol + " URL.Path " + aURL.Path );
         XDispatch xRet = null ;
         if ( mxFrame == null )
             return null;
@@ -108,6 +108,12 @@ public class MyProtocolHandler : uno.util.WeakBase, XDispatchProvider, XInitiali
             try 
             {
                xView = (XSpreadsheetView )xCtrl;
+            }
+            catch ( System.Exception )
+            {
+            }
+            try 
+            {
                xCursor = ( XTextViewCursorSupplier )xCtrl;
             }
             catch ( System.Exception )
@@ -116,7 +122,6 @@ public class MyProtocolHandler : uno.util.WeakBase, XDispatchProvider, XInitiali
             if ( xCursor == null && xView == null )
                 // ohne ein entsprechendes Dokument funktioniert der Handler nicht
                 return xRet;
-            
 
             if ( aURL.Path == "Command1" ||
                  aURL.Path == "Command2" ||
