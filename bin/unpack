@@ -21,9 +21,6 @@ else
     echo_n=echo echo_c='\c'
 fi
 
-# mac does not ship flock binary
-test "z`uname -s`" = "zDarwin" || use_flock=true
-
 #"# don't confuse vim's syntax highlighting ;-)
 
 check_tarball()
@@ -43,20 +40,15 @@ check_tarball()
 
 check_git_repo()
 {
-    tree="$SRCDIR/clone/$1"
-    $echo_n "Looking for $GITTAG in $tree ... $echo_c";
+    tree="$CLONEDIR/$1"
+    $echo_n "Checking for current branch of $tree ... $echo_c";
     if cd "$tree" >/dev/null 2>&1 ; then
-        # ugly hack to always checkout latest tag of given master
-		if echo $GITTAG | grep LATEST; then
-			GITTAG=`echo $GITTAG | sed 's/_LATEST/*/'`
-			GITTAG=`git tag -l $GITTAG | tail -n1`
-			CVSTAG=`echo $GITTAG | tr '[[:upper:]]_' '[[:lower:]]-' | sed 's/ooo\///'`
-		fi
-        if git show $GITTAG >/dev/null 2>&1 ; then
+	IS_MASTER=`git branch | grep '^\* master$'`
+        if test -n "$IS_MASTER" ; then
             echo "ok"
         else
-            echo "missing the tag; run './download'"
-            exit 1;
+            $echo_n "warning, current branch is "
+	    git branch | grep '^\*' | sed 's/^.//'
         fi
     else
         echo "missing the $tree clone; run './download'"
@@ -300,31 +292,30 @@ if test "z$OOO_GIT" = "z" ; then
 	fi
     fi
 else
+    if test -d "$RAWBUILDDIR" ; then
+        echo "* removing old nonsplit dir: $RAWBUILDDIR"
+        rm -rf "$RAWBUILDDIR"
+    fi
+    mkdir "$RAWBUILDDIR"
+    echo "* creating symlinks in $RAWBUILDDIR"
+    for pkg in $CORE_PKGS; do
+	if test "$pkg" != "l10n" ; then
+	    # l10n cannot be easily handled in nonsplit/, we only copy it to
+	    # build dir (the one with the applied patches)
+	    ln -s "$CLONEDIR/$pkg"/* "$RAWBUILDDIR/"
+	fi
+    done
     if test -d $OOBUILDDIR; then
         echo "* removing old build dir: $OOBUILDDIR"
         rm -rf $OOBUILDDIR
     fi
-    mkdir $OOBUILDDIR
-    for pkg in $CORE_PKGS; do
-        export pkg
-        (
-            test -z $use_flock || flock 200
-            test -z $use_flock && echo "Warning: potential race, make sure you have exclusive access to upstream src tree $pkg"
-            tree=$SRCDIR/clone/$pkg
-            echo "* checking out $CVSTAG in $pkg..."
-            (
-                cd $tree
-                if git show $CVSTAG >/dev/null 2>&1 ; then
-                    git checkout $CVSTAG || exit 1
-                else
-                    git checkout -b $CVSTAG $GITTAG || exit 1
-                fi
-            ) || exit 1
-            echo "* copying it into place..."
-            rsync -a --exclude .git $tree/* $OOBUILDDIR/
-        ) 200>$SRCDIR/clone/$pkg-lock
-        unset pkg
-    done
+    echo "* copying $RAWBUILDDIR into $OOBUILDDIR..."
+    #cp -pLR "$RAWBUILDDIR" "$OOBUILDDIR"
+    rsync -prL --exclude .git --exclude 'unxlng??.pro' "$RAWBUILDDIR/" "$OOBUILDDIR/"
+    if test -d "$CLONEDIR/l10n" ; then
+	echo "* copying translations into $OOBUILDDIR..."
+	rsync -a --exclude .git "$CLONEDIR/l10n/*" $OOBUILDDIR/
+    fi
 fi
 
 # original upstream sources
