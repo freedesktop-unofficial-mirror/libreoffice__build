@@ -1,0 +1,730 @@
+Adding dummy fields in Writer to roundtrip the unhandled fields from WW8.
+
+From: Cédric Bosdonnat <cedricbosdo@openoffice.org>
+
+
+---
+
+ sw/inc/IDocumentMarkAccess.hxx      |    4 +
+ sw/inc/ecmaflds.hxx                 |    5 ++
+ sw/source/core/crsr/bookmrk.cxx     |   21 ++++++-
+ sw/source/core/crsr/pam.cxx         |   24 ++++++--
+ sw/source/core/doc/docbm.cxx        |    2 +
+ sw/source/core/inc/MarkManager.hxx  |    2 -
+ sw/source/core/inc/bookmrk.hxx      |    4 +
+ sw/source/filter/ww8/docxexport.cxx |    5 ++
+ sw/source/filter/ww8/docxexport.hxx |    3 +
+ sw/source/filter/ww8/wrtw8nds.cxx   |   33 +++++++++--
+ sw/source/filter/ww8/wrtww8.hxx     |    7 ++
+ sw/source/filter/ww8/wrtww8gr.cxx   |   43 ++++++++++++++
+ sw/source/filter/ww8/ww8par.hxx     |    3 +
+ sw/source/filter/ww8/ww8par5.cxx    |   88 ++++++++++++++++++++++++++++
+ sw/source/filter/ww8/ww8par6.cxx    |    4 +
+ xmloff/inc/xmloff/ecmaflds.hxx      |    2 +
+ xmloff/source/text/txtparae.cxx     |  109 +++++++++++++++++++++++------------
+ 17 files changed, 306 insertions(+), 53 deletions(-)
+
+
+diff --git sw/inc/IDocumentMarkAccess.hxx sw/inc/IDocumentMarkAccess.hxx
+index 596ba78..6d246ec 100644
+--- sw/inc/IDocumentMarkAccess.hxx
++++ sw/inc/IDocumentMarkAccess.hxx
+@@ -89,7 +89,7 @@ class IDocumentMarkAccess
+         virtual sw::mark::IFieldmark* makeNoTextFieldBookmark( const SwPaM& rPaM, 
+             const rtl::OUString& rName, 
+             const rtl::OUString& rType) = 0;
+-
++    
+         /** Returns a mark in the document for a paragraph.
+             If there is none, a mark will be created.
+ 
+@@ -241,7 +241,7 @@ class IDocumentMarkAccess
+         virtual ::sw::mark::IFieldmark* getFieldmarkFor(const SwPosition& pos) const =0;
+         virtual ::sw::mark::IFieldmark* getFieldmarkBefore(const SwPosition& pos) const =0;
+         virtual ::sw::mark::IFieldmark* getFieldmarkAfter(const SwPosition& pos) const =0;
+-
++        
+         // Returns the MarkType used to create the mark
+         static MarkType SAL_DLLPUBLIC_EXPORT GetType(const ::sw::mark::IMark& rMark);
+     protected:
+diff --git sw/inc/ecmaflds.hxx sw/inc/ecmaflds.hxx
+index 23276b1..9cf5eba 100644
+--- sw/inc/ecmaflds.hxx
++++ sw/inc/ecmaflds.hxx
+@@ -65,4 +65,9 @@
+ 
+ #define ECMA_PAGEREF "ecma.office-open-xml.field.PAGEREF"
+ 
++#define FIELD_UNHANDLED "field.unhandled"
++#define FIELD_ID_PARAM "field.id"
++#define FIELD_CODE_PARAM "field.code"
++#define FIELD_OLE_PARAM "field.ole"
++
+ #endif /*  _ECMAFLDS_HXX */
+diff --git sw/source/core/crsr/bookmrk.cxx sw/source/core/crsr/bookmrk.cxx
+index 602d3c1..e216e27 100644
+--- sw/source/core/crsr/bookmrk.cxx
++++ sw/source/core/crsr/bookmrk.cxx
+@@ -84,11 +84,12 @@ namespace
+         SwPaM aStartPaM(rStart);
+         SwPaM aEndPaM(rEnd);
+         io_pDoc->StartUndo(UNDO_UI_REPLACE, NULL);
+-        if(ch_start != aStartMark)
++        if( ( ch_start != aStartMark ) && ( rStart != rEnd ) )
+         {
+             io_pDoc->InsertString(aStartPaM, aStartMark);
++            rStart.nContent--;
+         }
+-        if ( aEndMark && ( ch_end != aEndMark ) && ( rStart != rEnd ) )
++        if ( aEndMark && ( ch_end != aEndMark ) )
+         {
+             io_pDoc->InsertString(aEndPaM, aEndMark);
+         }
+@@ -389,7 +390,7 @@ namespace sw { namespace mark
+ 
+     void CheckboxFieldmark::InitDoc(SwDoc* const io_pDoc)
+     {
+-        lcl_AssureFieldMarksSet(this, io_pDoc, CH_TXT_ATR_FORMELEMENT, CH_TXT_ATR_FIELDEND);
++        lcl_AssureFieldMarksSet(this, io_pDoc, CH_TXT_ATR_FIELDSTART, CH_TXT_ATR_FORMELEMENT);
+ 
+         // For some reason the end mark is moved from 1 by the Insert: we don't 
+         // want this for checkboxes
+@@ -401,4 +402,18 @@ namespace sw { namespace mark
+ 
+     bool CheckboxFieldmark::IsChecked() const
+         { return m_isChecked; }
++    
++    rtl::OUString CheckboxFieldmark::toString( ) const 
++    {
++        rtl::OUStringBuffer buf;
++        buf.appendAscii( "CheckboxFieldmark: ( Name, Type, [ Nd1, Id1 ], [ Nd2, Id2 ] ): ( " );
++        buf.append( m_aName ).appendAscii( ", " );
++        buf.append( GetFieldname() ).appendAscii( ", [ " );
++        buf.append( sal_Int32( GetMarkPos().nNode.GetIndex( ) ) ).appendAscii( ", " );
++        buf.append( sal_Int32( GetMarkPos( ).nContent.GetIndex( ) ) ).appendAscii( " ], [" );
++        buf.append( sal_Int32( GetOtherMarkPos().nNode.GetIndex( ) ) ).appendAscii( ", " );
++        buf.append( sal_Int32( GetOtherMarkPos( ).nContent.GetIndex( ) ) ).appendAscii( " ] ) " );
++
++        return buf.makeStringAndClear( );
++    }
+ }}
+diff --git sw/source/core/crsr/pam.cxx sw/source/core/crsr/pam.cxx
+index 2e6e709..de1dd08 100644
+--- sw/source/core/crsr/pam.cxx
++++ sw/source/core/crsr/pam.cxx
+@@ -55,6 +55,8 @@
+ #include <IMark.hxx>
+ #include <hints.hxx>
+ 
++#include <ecmaflds.hxx>
++
+ // fuer den dummen ?MSC-? Compiler
+ inline xub_StrLen GetSttOrEnd( BOOL bCondition, const SwCntntNode& rNd )
+ {
+@@ -828,19 +830,31 @@ BOOL SwPaM::HasReadonlySel( bool bFormView ) const
+     const SwDoc *pDoc = GetDoc();
+     sw::mark::IMark* pA = NULL;
+     sw::mark::IMark* pB = NULL;
++    bool bUnhandledMark = false;
+     if ( pDoc )
+     {
+         const IDocumentMarkAccess* pMarksAccess = pDoc->getIDocumentMarkAccess( );
+         pA = GetPoint() ? pMarksAccess->getFieldmarkFor( *GetPoint( ) ) : NULL;
+         pB = GetMark( ) ? pMarksAccess->getFieldmarkFor( *GetMark( ) ) : pA;
++
++        sw::mark::IFieldmark* pFieldmark = pMarksAccess->getFieldmarkFor( *GetPoint() );
++        if ( pFieldmark )
++            bUnhandledMark = pFieldmark->GetFieldname( ).equalsAscii( FIELD_UNHANDLED );
+     }
+-    
++
+     if (!bRet)
+     {
+-        bRet = ( pA != pB );
+-        bool bProtectForm = pDoc->get( IDocumentSettingAccess::PROTECT_FORM );
+-        if ( bProtectForm )
+-            bRet |= ( pA == NULL || pB == NULL );
++        // Unhandled fieldmarks case shouldn't be edited manually to avoid breaking anything
++        if ( ( pA == pB ) && bUnhandledMark )
++            bRet = TRUE;
++        else
++        {
++            // Form protection case
++            bRet = ( pA != pB );
++            bool bProtectForm = pDoc->get( IDocumentSettingAccess::PROTECT_FORM );
++            if ( bProtectForm )
++                bRet |= ( pA == NULL || pB == NULL );
++        }
+     }
+     else
+     {
+diff --git sw/source/core/doc/docbm.cxx sw/source/core/doc/docbm.cxx
+index b708309..00341b8 100644
+--- sw/source/core/doc/docbm.cxx
++++ sw/source/core/doc/docbm.cxx
+@@ -436,6 +436,7 @@ namespace sw { namespace mark
+         OSL_TRACE("Fieldmarks");
+         lcl_DebugMarks(m_vFieldmarks);
+ #endif
++
+         return pMark.get();
+     }
+ 
+@@ -828,6 +829,7 @@ namespace sw { namespace mark
+     IFieldmark* MarkManager::getFieldmarkBefore(const SwPosition& rPos) const
+         { return dynamic_cast<IFieldmark*>(lcl_getMarkBefore(m_vFieldmarks, rPos)); }
+ 
++
+     ::rtl::OUString MarkManager::getUniqueMarkName(const ::rtl::OUString& rName) const
+     {
+         OSL_ENSURE(rName.getLength(),
+diff --git sw/source/core/inc/MarkManager.hxx sw/source/core/inc/MarkManager.hxx
+index 3c5e361..d6202c0 100644
+--- sw/source/core/inc/MarkManager.hxx
++++ sw/source/core/inc/MarkManager.hxx
+@@ -82,7 +82,7 @@ namespace sw { namespace mark
+             virtual ::sw::mark::IFieldmark* getFieldmarkFor(const SwPosition& rPos) const;
+             virtual ::sw::mark::IFieldmark* getFieldmarkBefore(const SwPosition& rPos) const;
+             virtual ::sw::mark::IFieldmark* getFieldmarkAfter(const SwPosition& rPos) const;
+-
++        
+         private:
+             // make names
+             ::rtl::OUString getUniqueMarkName(const ::rtl::OUString& rName) const;
+diff --git sw/source/core/inc/bookmrk.hxx sw/source/core/inc/bookmrk.hxx
+index 5c0fb21..c3b9cea 100644
+--- sw/source/core/inc/bookmrk.hxx
++++ sw/source/core/inc/bookmrk.hxx
+@@ -34,6 +34,8 @@
+ #include <boost/scoped_ptr.hpp>
+ #include <boost/noncopyable.hpp>
+ 
++#include <rtl/ustring.hxx>
++
+ struct SwPosition;	// fwd Decl. wg. UI
+ class SwDoc;
+ 
+@@ -241,6 +243,8 @@ namespace sw { namespace mark
+             virtual void InitDoc(SwDoc* const io_pDoc);
+             bool IsChecked() const;
+             void SetChecked(bool checked);
++            
++            virtual rtl::OUString toString( ) const;
+         private:
+             bool m_isChecked;
+             //bool ffsize; // 0 = Auto, 1=Exact (see ffhps)
+diff --git sw/source/filter/ww8/docxexport.cxx sw/source/filter/ww8/docxexport.cxx
+index 63ed239..ba7fcd6 100644
+--- sw/source/filter/ww8/docxexport.cxx
++++ sw/source/filter/ww8/docxexport.cxx
+@@ -510,6 +510,11 @@ void DocxExport::OutputOLENode( const SwOLENode& )
+ #endif
+ }
+ 
++void DocxExport::OutputLinkedOLE( const OUString& )
++{
++    // Nothing to implement here: WW8 only
++}
++
+ ULONG DocxExport::ReplaceCr( BYTE )
+ {
+     // Completely unused for Docx export... only here for code sharing 
+diff --git sw/source/filter/ww8/docxexport.hxx sw/source/filter/ww8/docxexport.hxx
+index 687f834..b79afdb 100644
+--- sw/source/filter/ww8/docxexport.hxx
++++ sw/source/filter/ww8/docxexport.hxx
+@@ -151,6 +151,9 @@ protected:
+ 
+     /// Output SwOLENode
+     virtual void OutputOLENode( const SwOLENode& );
++    
++    virtual void OutputLinkedOLE( const rtl::OUString& );
++
+ 
+ 
+     virtual void AppendSection( const SwPageDesc *pPageDesc, const SwSectionFmt* pFmt, ULONG nLnNum );
+diff --git sw/source/filter/ww8/wrtw8nds.cxx sw/source/filter/ww8/wrtw8nds.cxx
+index d2c16ff..886cdce 100644
+--- sw/source/filter/ww8/wrtw8nds.cxx
++++ sw/source/filter/ww8/wrtw8nds.cxx
+@@ -114,9 +114,9 @@ using namespace sw::types;
+ using namespace sw::mark;
+ using namespace nsFieldFlags;
+ 
+-
+ static String lcl_getFieldCode( const IFieldmark* pFieldmark ) {
+     ASSERT(pFieldmark!=NULL, "where is my fieldmark???");
++
+     if ( pFieldmark->GetFieldname( ).equalsAscii( ECMA_FORMTEXT ) ) {
+     	return String::CreateFromAscii(" FORMTEXT ");
+     } else if ( pFieldmark->GetFieldname( ).equalsAscii( ECMA_FORMDROPDOWN ) ) {
+@@ -149,7 +149,7 @@ ww::eField lcl_getFieldId( const IFieldmark* pFieldmark ) {
+     } else if ( pFieldmark->GetFieldname( ).equalsAscii( ECMA_PAGEREF ) ) {
+ 	    return ww::ePAGEREF;
+     } else {
+-    	return ww::eUNKNOWN;
++        return ww::eUNKNOWN;
+     }    
+ }
+ 
+@@ -1705,20 +1705,45 @@ void MSWordExportBase::OutputTextNode( const SwTxtNode& rNode )
+ 
+                 if ( pFieldmark->GetFieldname().equalsAscii( ECMA_FORMTEXT ) )
+                     AppendBookmark( pFieldmark->GetName(), false );
+-                OutputField( NULL, lcl_getFieldId( pFieldmark ), lcl_getFieldCode( pFieldmark ), WRITEFIELD_START | WRITEFIELD_CMD_START );
++                ww::eField eFieldId = lcl_getFieldId( pFieldmark );
++                String sCode = lcl_getFieldCode( pFieldmark );
++                if ( pFieldmark->GetFieldname().equalsAscii( FIELD_UNHANDLED ) )
++                {
++                    rtl::OUString sFieldId = pFieldmark->getParam( FIELD_ID_PARAM, "" ).second;
++                    eFieldId = (ww::eField)sFieldId.toInt32();
++                    sCode = pFieldmark->getParam( FIELD_CODE_PARAM, "" ).second;
++                }
++                OutputField( NULL, eFieldId, sCode, WRITEFIELD_START | WRITEFIELD_CMD_START );
+                 if ( pFieldmark->GetFieldname( ).equalsAscii( ECMA_FORMTEXT ) )
+                     WriteFormData( *pFieldmark );
+                 else if ( pFieldmark->GetFieldname( ).equalsAscii( ECMA_HYPERLINK ) )
+                     WriteHyperlinkData( *pFieldmark );
+                 OutputField( NULL, lcl_getFieldId( pFieldmark ), String(), WRITEFIELD_CMD_END );
++
++                if ( pFieldmark->GetFieldname().equalsAscii( FIELD_UNHANDLED ) )
++                {
++                    // Check for the presence of a linked OLE object
++                    rtl::OUString sOleId = pFieldmark->getParam( FIELD_OLE_PARAM, "" ).second;
++                    if ( sOleId.getLength( ) > 0 )
++                    {
++                        OutputLinkedOLE( sOleId );
++                    }
++                }
+             }
+             else if ( ch == CH_TXT_ATR_FIELDEND )
+             {
+                 SwPosition aPosition( rNode, SwIndex( const_cast< SwTxtNode* >( &rNode ), nAktPos ) );
+                 ::sw::mark::IFieldmark const * const pFieldmark = pMarkAccess->getFieldmarkFor( aPosition );
+                 OSL_ENSURE( pFieldmark, "Looks like this doc is broken...; where is the Fieldmark for the FIELDSTART??" );
++                
++                ww::eField eFieldId = lcl_getFieldId( pFieldmark );
++                if ( pFieldmark->GetFieldname().equalsAscii( FIELD_UNHANDLED ) )
++                {
++                    rtl::OUString sFieldId = pFieldmark->getParam( FIELD_ID_PARAM, "" ).second;
++                    eFieldId = (ww::eField)sFieldId.toInt32();
++                }
+ 
+-                OutputField( NULL, lcl_getFieldId( pFieldmark ), String(), WRITEFIELD_CLOSE );
++                OutputField( NULL, eFieldId, String(), WRITEFIELD_CLOSE );
+                 if ( pFieldmark->GetFieldname().equalsAscii( ECMA_FORMTEXT ) )
+                     AppendBookmark( pFieldmark->GetName(), false );
+             }
+diff --git sw/source/filter/ww8/wrtww8.hxx sw/source/filter/ww8/wrtww8.hxx
+index fe2e7f0..9865d99 100644
+--- sw/source/filter/ww8/wrtww8.hxx
++++ sw/source/filter/ww8/wrtww8.hxx
+@@ -767,6 +767,9 @@ protected:
+ 
+     /// Output SwOLENode
+     virtual void OutputOLENode( const SwOLENode& ) = 0;
++    
++    virtual void OutputLinkedOLE( const rtl::OUString& ) = 0;
++
+ 
+     /// Output SwSectionNode
+     virtual void OutputSectionNode( const SwSectionNode& );
+@@ -777,7 +780,7 @@ protected:
+     ///
+     /// One of OutputTextNode(), OutputGrfNode(), or OutputOLENode()
+     void OutputContentNode( const SwCntntNode& );
+-    
++   
+ public:
+     MSWordExportBase( SwDoc *pDocument, SwPaM *pCurrentPam, SwPaM *pOriginalPam );
+     virtual ~MSWordExportBase();
+@@ -1095,6 +1098,8 @@ protected:
+ 
+     /// Output SwOLENode
+     virtual void OutputOLENode( const SwOLENode& );
++
++    virtual void OutputLinkedOLE( const rtl::OUString& );
+     
+     virtual void AppendSection( const SwPageDesc *pPageDesc, const SwSectionFmt* pFmt, ULONG nLnNum );
+ 
+diff --git sw/source/filter/ww8/wrtww8gr.cxx sw/source/filter/ww8/wrtww8gr.cxx
+index 593ab4f..d6264fe 100644
+--- sw/source/filter/ww8/wrtww8gr.cxx
++++ sw/source/filter/ww8/wrtww8gr.cxx
+@@ -32,6 +32,7 @@
+ 
+ #include <com/sun/star/embed/XEmbedPersist.hpp>
+ #include <com/sun/star/embed/Aspects.hpp>
++#include <com/sun/star/embed/ElementModes.hpp>
+ #include <rtl/math.hxx>
+ #include <svtools/filter.hxx>
+ #include <svtools/itemiter.hxx>
+@@ -367,6 +368,48 @@ void WW8Export::OutputOLENode( const SwOLENode& rOLENode )
+     }
+ }
+ 
++void WW8Export::OutputLinkedOLE( const rtl::OUString& rOleId )
++{
++    uno::Reference< embed::XStorage > xDocStg = pDoc->GetDocStorage();
++    uno::Reference< embed::XStorage > xOleStg = xDocStg->openStorageElement(
++            rtl::OUString::createFromAscii( "OLELinks" ), embed::ElementModes::READ );
++    SotStorageRef xObjSrc = SotStorage::OpenOLEStorage( xOleStg, rOleId, STREAM_READ );
++    
++    SotStorageRef xObjStg = GetWriter().GetStorage().OpenSotStorage(
++        CREATE_CONST_ASC(SL::aObjectPool), STREAM_READWRITE |
++        STREAM_SHARE_DENYALL );
++
++    if( xObjStg.Is() && xObjSrc.Is() )
++    {
++        SotStorageRef xOleDst = xObjStg->OpenSotStorage( rOleId,
++                STREAM_READWRITE | STREAM_SHARE_DENYALL );
++        if ( xOleDst.Is() )
++            xObjSrc->CopyTo( xOleDst );
++
++        if ( !xOleDst->GetError( ) ) 
++        {
++            xOleDst->Commit();
++
++            // Ouput the cPicLocation attribute
++            WW8Bytes* pBuf = new WW8Bytes( 128, 128 );
++            GetWriter().InsUInt16( *pBuf, NS_sprm::LN_CPicLocation );
++            GetWriter().InsUInt32( *pBuf, rOleId.copy( 1 ).toInt32() );
++
++            GetWriter().InsUInt16( *pBuf, NS_sprm::LN_CFOle2 );
++            pBuf->Insert( 1, pBuf->Count() );
++
++            GetWriter().InsUInt16( *pBuf, NS_sprm::LN_CFSpec );
++            pBuf->Insert( 1, pBuf->Count() );
++
++            GetWriter().InsUInt16( *pBuf, NS_sprm::LN_CFObj );
++            pBuf->Insert( 1, pBuf->Count() );
++
++            pChpPlc->AppendFkpEntry( Strm().Tell(), pBuf->Count(), pBuf->GetData() );
++            delete pBuf;
++        }
++    }
++}
++
+ void WW8Export::OutGrf(const sw::Frame &rFrame)
+ {
+     // GrfNode fuer spaeteres rausschreiben der Grafik merken
+diff --git sw/source/filter/ww8/ww8par.hxx sw/source/filter/ww8/ww8par.hxx
+index da6e261..cb96374 100644
+--- sw/source/filter/ww8/ww8par.hxx
++++ sw/source/filter/ww8/ww8par.hxx
+@@ -375,6 +375,7 @@ public:
+ private:
+     ::rtl::OUString msBookmarkName;
+     ::rtl::OUString msMarkType;
++    ::rtl::OUString msMarkCode;
+     Params_t maParams;
+ 
+ public:
+@@ -390,8 +391,10 @@ public:
+ 
+     ::rtl::OUString GetBookmarkName();
+     ::rtl::OUString GetBookmarkType();
++    ::rtl::OUString GetBookmarkCode();
+     void SetBookmarkName(::rtl::OUString bookmarkName);
+     void SetBookmarkType(::rtl::OUString bookmarkType);
++    void SetBookmarkCode(::rtl::OUString bookmarkCode);
+     void AddParam(::rtl::OUString name, ::rtl::OUString value);
+     Params_t &getParams();
+ };
+diff --git sw/source/filter/ww8/ww8par5.cxx sw/source/filter/ww8/ww8par5.cxx
+index a32e26f..49a6bfb 100644
+--- sw/source/filter/ww8/ww8par5.cxx
++++ sw/source/filter/ww8/ww8par5.cxx
+@@ -36,6 +36,13 @@
+ #include <sal/types.h>
+ #include <tools/solar.h>
+ 
++#include <comphelper/storagehelper.hxx>
++#include <sot/storinfo.hxx>
++#include <com/sun/star/embed/XStorage.hpp>
++#include <com/sun/star/embed/ElementModes.hpp>
++#include <com/sun/star/embed/XTransactedObject.hpp>
++#include <com/sun/star/io/XStream.hpp>
++
+ #include <com/sun/star/ucb/XCommandEnvironment.hpp>
+ #include <svtools/urihelper.hxx>
+ #include <svtools/zforlist.hxx>
+@@ -729,6 +736,67 @@ sal_uInt16 SwWW8ImplReader::End_Field()
+                 *pPaM->GetPoint() = maFieldStack.back().maStartPos;
+                 break;
+             default:
++                rtl::OUString aCode = maFieldStack.back().GetBookmarkCode();
++                if ( aCode.getLength() > 0 )
++                {
++                    // Unhandled field with stored code
++                    SwPosition aEndPos = *pPaM->GetPoint();
++                    SwPaM aFldPam( 
++                            maFieldStack.back().GetPtNode(), maFieldStack.back().GetPtCntnt(), 
++                            aEndPos.nNode, aEndPos.nContent.GetIndex());
++
++                    IDocumentMarkAccess* pMarksAccess = rDoc.getIDocumentMarkAccess( );
++
++                    IFieldmark* pFieldmark = pMarksAccess->makeFieldBookmark(
++                                aFldPam,
++                                maFieldStack.back().GetBookmarkName(),
++                                rtl::OUString::createFromAscii( FIELD_UNHANDLED ) );
++                    if ( pFieldmark )
++                    {
++                        pFieldmark->addParams(maFieldStack.back().getParams());
++                        pFieldmark->addParam(
++                            rtl::OUString::createFromAscii( FIELD_ID_PARAM ),
++                            rtl::OUString::valueOf( sal_Int32( maFieldStack.back().mnFieldId ) ) );
++                        pFieldmark->addParam( 
++                            rtl::OUString::createFromAscii( FIELD_CODE_PARAM ),
++                            aCode );
++                
++                        if ( nObjLocFc > 0 )
++                        {
++                            // Store the OLE object as an internal link
++                            String sOleId = '_';
++                            sOleId += String::CreateFromInt32( nObjLocFc );
++    
++                            SvStorageRef xSrc0 = pStg->OpenSotStorage(CREATE_CONST_ASC(SL::aObjectPool));
++                            SvStorageRef xSrc1 = xSrc0->OpenSotStorage( sOleId, STREAM_READ );
++
++                            // Store it now!
++                            uno::Reference< embed::XStorage > xDocStg = GetDoc().GetDocStorage();
++                            uno::Reference< embed::XStorage > xOleStg = xDocStg->openStorageElement( 
++                                    rtl::OUString::createFromAscii( "OLELinks" ), embed::ElementModes::WRITE );
++                            SotStorageRef xObjDst = SotStorage::OpenOLEStorage( xOleStg, sOleId );
++
++                            if ( xObjDst.Is() )
++                            {
++                                xSrc1->CopyTo( xObjDst );
++
++                                if ( !xObjDst->GetError() )
++                                    xObjDst->Commit();
++                            }
++
++                            uno::Reference< embed::XTransactedObject > xTransact( xOleStg, uno::UNO_QUERY );
++                            if ( xTransact.is() )
++                                xTransact->commit();
++
++                            // Store the OLE Id as a parameter
++                            pFieldmark->addParam(
++                                    rtl::OUString::createFromAscii( FIELD_OLE_PARAM ),
++                                    sOleId );
++                        }
++
++                    }
++                }
++
+                 break;
+         }
+         maFieldStack.pop_back();
+@@ -792,6 +860,11 @@ FieldEntry &FieldEntry::operator=(const FieldEntry &rOther) throw()
+ 	return msMarkType;
+ }
+ 
++::rtl::OUString FieldEntry::GetBookmarkCode()
++{
++	return msMarkCode;
++}
++
+ void FieldEntry::SetBookmarkName(::rtl::OUString bookmarkName) 
+ {
+     msBookmarkName=bookmarkName;
+@@ -802,6 +875,11 @@ void FieldEntry::SetBookmarkType(::rtl::OUString bookmarkType)
+     msMarkType=bookmarkType;
+ }
+ 
++void FieldEntry::SetBookmarkCode(::rtl::OUString bookmarkCode)
++{
++    msMarkCode = bookmarkCode;
++}
++
+ void FieldEntry::AddParam(::rtl::OUString name, ::rtl::OUString value)
+ {
+     maParams.push_back( IFieldmark::ParamPair_t( name, value ) );
+@@ -879,7 +957,7 @@ long SwWW8ImplReader::Read_Field(WW8PLCFManResult* pRes)
+         0,
+ 
+ 
+-        0,      // 56: VERKNUePFUNG     // fehlt noch !!!!!!!!!!!!!!!!!!!!!!!
++        0,                                          // 56
+ 
+ 
+         &SwWW8ImplReader::Read_F_Symbol,            // 57
+@@ -1001,8 +1079,16 @@ long SwWW8ImplReader::Read_Field(WW8PLCFManResult* pRes)
+              ( ( nSearchPos = aStr.Search('/') ) != STRING_NOTFOUND && nSearchPos < nSpacePos ) )
+             return aF.nLen;
+         else
++        {
++            // Link fields aren't supported, but they are bound to an OLE object
++            // that needs to be roundtripped
++            if ( aF.nId == 56 )
++                bEmbeddObj = true;
++            // Field not supported: store the field code for later use
++            maFieldStack.back().SetBookmarkCode( aStr );
+             return aF.nLen - aF.nLRes - 1;  // so viele ueberlesen, das Resultfeld
+                                             // wird wie Haupttext eingelesen
++        }
+     }
+     else
+     {                                   // Lies Feld
+diff --git sw/source/filter/ww8/ww8par6.cxx sw/source/filter/ww8/ww8par6.cxx
+index c16177e..10a3fb6 100644
+--- sw/source/filter/ww8/ww8par6.cxx
++++ sw/source/filter/ww8/ww8par6.cxx
+@@ -118,6 +118,10 @@
+ // OD 2004-05-18 #i27767#
+ #include <fmtwrapinfluenceonobjpos.hxx>
+ 
++#if DEBUG
++#include <cstdio>
++#endif
++
+ using namespace sw::util;
+ using namespace sw::types;
+ using namespace ::com::sun::star;
+diff --git xmloff/inc/xmloff/ecmaflds.hxx xmloff/inc/xmloff/ecmaflds.hxx
+index 23276b1..c21f40b 100644
+--- xmloff/inc/xmloff/ecmaflds.hxx
++++ xmloff/inc/xmloff/ecmaflds.hxx
+@@ -65,4 +65,6 @@
+ 
+ #define ECMA_PAGEREF "ecma.office-open-xml.field.PAGEREF"
+ 
++#define FIELD_OLE_PARAM "field.ole"
++
+ #endif /*  _ECMAFLDS_HXX */
+diff --git xmloff/source/text/txtparae.cxx xmloff/source/text/txtparae.cxx
+index 550f3e7..a33accb 100644
+--- xmloff/source/text/txtparae.cxx
++++ xmloff/source/text/txtparae.cxx
+@@ -117,6 +117,11 @@
+ #include <xmloff/formlayerexport.hxx>
+ #include "XMLTextCharStyleNamesElementExport.hxx"
+ 
++#include <xmloff/ecmaflds.hxx>
++#include <com/sun/star/embed/ElementModes.hpp>
++#include <com/sun/star/embed/XTransactedObject.hpp>
++#include <com/sun/star/document/XStorageBasedDocument.hpp>
++
+ // --> OD 2008-04-25 #refactorlists#
+ #include <txtlists.hxx>
+ // <--
+@@ -2236,50 +2241,82 @@ void XMLTextParagraphExport::exportTextRangeEnumeration(
+             }
+             else if (sType.equals(sTextFieldStart))
+             {
+-                Reference<XNamed> xBookmark(xPropSet->getPropertyValue(sBookmark), UNO_QUERY);
+-                if (xBookmark.is()) {
+-                    GetExport().AddAttribute(XML_NAMESPACE_TEXT, XML_NAME, xBookmark->getName());
+-                }
+-                Reference< ::com::sun::star::text::XFormField > xFormField(xPropSet->getPropertyValue(sBookmark), UNO_QUERY);
+-                if (xFormField.is()) {
+-					GetExport().AddAttribute(XML_NAMESPACE_FIELD, XML_TYPE, xFormField->getFieldType());
+-                }
+-                GetExport().StartElement(XML_NAMESPACE_FIELD, XML_FIELDMARK_START, sal_False);
+-                if (xFormField.is()) {
+-				    for(sal_Int16 i=0;i<xFormField->getParamCount();i++) {
+-					GetExport().AddAttribute(XML_NAMESPACE_FIELD, XML_NAME, xFormField->getParamName(i));
+-					GetExport().AddAttribute(XML_NAMESPACE_FIELD, XML_VALUE, xFormField->getParamValue(i));
+-                    GetExport().StartElement(XML_NAMESPACE_FIELD, XML_PARAM, sal_False);
+-                    GetExport().EndElement(XML_NAMESPACE_FIELD, XML_PARAM, sal_False);
+-				    }
++                if ( GetExport().getDefaultVersion() == SvtSaveOptions::ODFVER_LATEST )
++                {
++                    Reference<XNamed> xBookmark(xPropSet->getPropertyValue(sBookmark), UNO_QUERY);
++                    if (xBookmark.is()) {
++                        GetExport().AddAttribute(XML_NAMESPACE_TEXT, XML_NAME, xBookmark->getName());
++                    }
++                    Reference< ::com::sun::star::text::XFormField > xFormField(xPropSet->getPropertyValue(sBookmark), UNO_QUERY);
++                    if (xFormField.is()) {
++                        GetExport().AddAttribute(XML_NAMESPACE_FIELD, XML_TYPE, xFormField->getFieldType());
++                    }
++                    GetExport().StartElement(XML_NAMESPACE_FIELD, XML_FIELDMARK_START, sal_False);
++                    if (xFormField.is()) {
++                        for(sal_Int16 i=0;i<xFormField->getParamCount();i++) {
++                            rtl::OUString sName = xFormField->getParamName(i);
++                            rtl::OUString sValue = xFormField->getParamValue(i);
++
++                            GetExport().AddAttribute(XML_NAMESPACE_FIELD, XML_NAME, sName);
++                            GetExport().AddAttribute(XML_NAMESPACE_FIELD, XML_VALUE, sValue);
++                            GetExport().StartElement(XML_NAMESPACE_FIELD, XML_PARAM, sal_False);
++                            GetExport().EndElement(XML_NAMESPACE_FIELD, XML_PARAM, sal_False);
++
++                            if ( sName.equalsAscii( FIELD_OLE_PARAM ) ) {
++                                // Save the OLE object
++                                Reference< embed::XStorage > xTargetStg = GetExport().GetTargetStorage();
++                                Reference< embed::XStorage > xDstStg = xTargetStg->openStorageElement( 
++                                        rtl::OUString::createFromAscii( "OLELinks" ), embed::ElementModes::WRITE );
++
++                                if ( !xDstStg->hasByName( sValue ) ) {
++                                    Reference< XStorageBasedDocument > xStgDoc (
++                                            GetExport().GetModel( ), UNO_QUERY );
++                                    Reference< embed::XStorage > xDocStg = xStgDoc->getDocumentStorage();
++                                    Reference< embed::XStorage > xOleStg = xDocStg->openStorageElement(
++                                            rtl::OUString::createFromAscii( "OLELinks" ), embed::ElementModes::READ );
++
++                                    xOleStg->copyElementTo( sValue, xDstStg, sValue );
++                                    Reference< embed::XTransactedObject > xTransact( xDstStg, UNO_QUERY );
++                                    if ( xTransact.is( ) )
++                                        xTransact->commit( );
++                                }
++                            }
++                        }
++                    }
++                    GetExport().EndElement(XML_NAMESPACE_FIELD, XML_FIELDMARK_START, sal_False);
+                 }
+-                GetExport().EndElement(XML_NAMESPACE_FIELD, XML_FIELDMARK_START, sal_False);
+             }
+             else if (sType.equals(sTextFieldEnd))
+             {
+-                GetExport().StartElement(XML_NAMESPACE_FIELD, XML_FIELDMARK_END, sal_False);
+-                GetExport().EndElement(XML_NAMESPACE_FIELD, XML_FIELDMARK_END, sal_False);
++                if ( GetExport().getDefaultVersion() == SvtSaveOptions::ODFVER_LATEST )
++                {
++                    GetExport().StartElement(XML_NAMESPACE_FIELD, XML_FIELDMARK_END, sal_False);
++                    GetExport().EndElement(XML_NAMESPACE_FIELD, XML_FIELDMARK_END, sal_False);
++                }
+             }
+             else if (sType.equals(sTextFieldStartEnd))
+             {
+-                Reference<XNamed> xBookmark(xPropSet->getPropertyValue(sBookmark), UNO_QUERY);
+-                if (xBookmark.is()) {
+-                    GetExport().AddAttribute(XML_NAMESPACE_TEXT, XML_NAME, xBookmark->getName());
+-                }
+-                Reference< ::com::sun::star::text::XFormField > xFormField(xPropSet->getPropertyValue(sBookmark), UNO_QUERY);
+-                if (xFormField.is()) {
+-				    GetExport().AddAttribute(XML_NAMESPACE_FIELD, XML_TYPE, xFormField->getFieldType());
+-                }
+-                GetExport().StartElement(XML_NAMESPACE_FIELD, XML_FIELDMARK, sal_False);
+-                if (xFormField.is()) {
+-				    for(sal_Int16 i=0;i<xFormField->getParamCount();i++) {
+-					GetExport().AddAttribute(XML_NAMESPACE_FIELD, XML_NAME, xFormField->getParamName(i));
+-					GetExport().AddAttribute(XML_NAMESPACE_FIELD, XML_VALUE, xFormField->getParamValue(i));
+-                    GetExport().StartElement(XML_NAMESPACE_FIELD, XML_PARAM, sal_False);
+-                    GetExport().EndElement(XML_NAMESPACE_FIELD, XML_PARAM, sal_False);
+-				    }
++                if ( GetExport().getDefaultVersion() == SvtSaveOptions::ODFVER_LATEST )
++                {
++                    Reference<XNamed> xBookmark(xPropSet->getPropertyValue(sBookmark), UNO_QUERY);
++                    if (xBookmark.is()) {
++                        GetExport().AddAttribute(XML_NAMESPACE_TEXT, XML_NAME, xBookmark->getName());
++                    }
++                    Reference< ::com::sun::star::text::XFormField > xFormField(xPropSet->getPropertyValue(sBookmark), UNO_QUERY);
++                    if (xFormField.is()) {
++                        GetExport().AddAttribute(XML_NAMESPACE_FIELD, XML_TYPE, xFormField->getFieldType());
++                    }
++                    GetExport().StartElement(XML_NAMESPACE_FIELD, XML_FIELDMARK, sal_False);
++                    if (xFormField.is()) {
++                        for(sal_Int16 i=0;i<xFormField->getParamCount();i++) {
++                        GetExport().AddAttribute(XML_NAMESPACE_FIELD, XML_NAME, xFormField->getParamName(i));
++                        GetExport().AddAttribute(XML_NAMESPACE_FIELD, XML_VALUE, xFormField->getParamValue(i));
++                        GetExport().StartElement(XML_NAMESPACE_FIELD, XML_PARAM, sal_False);
++                        GetExport().EndElement(XML_NAMESPACE_FIELD, XML_PARAM, sal_False);
++                        }
++                    }
++                    GetExport().EndElement(XML_NAMESPACE_FIELD, XML_FIELDMARK, sal_False);
+                 }
+-                GetExport().EndElement(XML_NAMESPACE_FIELD, XML_FIELDMARK, sal_False);
+             }
+             else if (sType.equals(sSoftPageBreak))
+             {
