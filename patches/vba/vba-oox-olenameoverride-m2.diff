@@ -60,18 +60,19 @@ index cef676d..c93a54f 100755
                          mxDocModel;         /// Document model used to import/export the VBA project.
      ::rtl::OUString     maName;
 diff --git oox/inc/oox/ole/vbaproject.hxx oox/inc/oox/ole/vbaproject.hxx
-index 07e94ef..6968ce0 100755
+index 6198ae7..d4665b6 100755
 --- oox/inc/oox/ole/vbaproject.hxx
 +++ oox/inc/oox/ole/vbaproject.hxx
-@@ -98,6 +98,7 @@ public:
-     /** Returns true, if the document contains the specified dialog. */
-     bool                hasDialog( const ::rtl::OUString& rDialogName ) const;
- 
+@@ -248,7 +248,7 @@ public:
+                             const ::rtl::OUString& rProxyArgs,
+                             const ::rtl::OUString& rProxyType,
+                             const ::rtl::OUString& rProxyCode );
+-
 +    void                setOleOverridesSink( ::com::sun::star::uno::Reference< ::com::sun::star::container::XNameContainer >&  rxOleOverridesSink ){ mxOleOverridesSink = rxOleOverridesSink; }
  private:
                          VbaProject( const VbaProject& );
      VbaProject&         operator=( const VbaProject& );
-@@ -128,6 +129,8 @@ private:
+@@ -279,6 +279,8 @@ private:
                          mxBasicLib;         /// The Basic library of the document used for import.
      ::com::sun::star::uno::Reference< ::com::sun::star::container::XNameContainer >
                          mxDialogLib;        /// The dialog library of the document used for import.
@@ -81,7 +82,7 @@ index 07e94ef..6968ce0 100755
  };
  
 diff --git oox/source/ole/vbamodule.cxx oox/source/ole/vbamodule.cxx
-index 635991a..e60f6f6 100755
+index 156dc12..2ce7c3e 100755
 --- oox/source/ole/vbamodule.cxx
 +++ oox/source/ole/vbamodule.cxx
 @@ -27,6 +27,7 @@
@@ -91,8 +92,8 @@ index 635991a..e60f6f6 100755
 +#include <com/sun/star/container/XIndexContainer.hpp>
  #include <com/sun/star/script/ModuleInfo.hpp>
  #include <com/sun/star/script/ModuleType.hpp>
- #include <com/sun/star/script/vba/XVBAModuleInfo.hpp>
-@@ -35,6 +36,8 @@
+ #include <com/sun/star/script/XVBAModuleInfo.hpp>
+@@ -35,17 +36,28 @@
  #include "oox/helper/textinputstream.hxx"
  #include "oox/ole/vbahelper.hxx"
  #include "oox/ole/vbainputstream.hxx"
@@ -101,11 +102,31 @@ index 635991a..e60f6f6 100755
  
  using ::rtl::OUString;
  using ::rtl::OUStringBuffer;
-@@ -49,6 +52,70 @@ namespace oox {
+ using ::com::sun::star::container::XNameAccess;
+ using ::com::sun::star::container::XNameContainer;
++using ::com::sun::star::container::XIndexContainer;
++using ::com::sun::star::container::ElementExistException;
++using ::com::sun::star::container::NoSuchElementException;
++using ::com::sun::star::lang::IndexOutOfBoundsException;
++using ::com::sun::star::lang::WrappedTargetException;
++using ::com::sun::star::lang::IllegalArgumentException;
+ using ::com::sun::star::frame::XModel;
+ using ::com::sun::star::script::ModuleInfo;
+ using ::com::sun::star::script::XVBAModuleInfo;
+ using ::com::sun::star::uno::Any;
++using ::com::sun::star::uno::Type;
++using ::com::sun::star::uno::makeAny;
+ using ::com::sun::star::uno::Exception;
+ using ::com::sun::star::uno::Reference;
++using ::com::sun::star::uno::RuntimeException;
+ using ::com::sun::star::uno::UNO_QUERY;
+ using ::com::sun::star::uno::UNO_QUERY_THROW;
+ 
+@@ -55,6 +67,70 @@ namespace oox {
  namespace ole {
  
  // ============================================================================
-+typedef ::cppu::WeakImplHelper1< container::XIndexContainer > OleIdToNameContainer_BASE;
++typedef ::cppu::WeakImplHelper1< XIndexContainer > OleIdToNameContainer_BASE;
 +typedef std::hash_map< sal_Int32, rtl::OUString >  ObjIdToName;
 +class OleIdToNameContainer : public OleIdToNameContainer_BASE
 +{
@@ -119,51 +140,51 @@ index 635991a..e60f6f6 100755
 +public:
 +    OleIdToNameContainer() {}
 +    // XIndexContainer Methods
-+    virtual void SAL_CALL insertByIndex( ::sal_Int32 Index, const Any& Element ) throw (lang::IllegalArgumentException, lang::IndexOutOfBoundsException, lang::WrappedTargetException, uno::RuntimeException)
++    virtual void SAL_CALL insertByIndex( ::sal_Int32 Index, const Any& Element ) throw (IllegalArgumentException, IndexOutOfBoundsException, WrappedTargetException, RuntimeException)
 +    {
 +        ::osl::MutexGuard aGuard( m_aMutex );
 +        rtl::OUString sOleName;
 +        if ( !( Element >>= sOleName ) )
-+            throw lange::IllegalArgumentException();
++            throw IllegalArgumentException();
 +        ObjIdToNameHash[ Index ] = sOleName;
 +    }
-+    virtual void SAL_CALL removeByIndex( ::sal_Int32 Index ) throw (lang::IndexOutOfBoundsException, lang::WrappedTargetException, uno::RuntimeException)
++    virtual void SAL_CALL removeByIndex( ::sal_Int32 Index ) throw (IndexOutOfBoundsException, WrappedTargetException, RuntimeException)
 +    {
 +        ::osl::MutexGuard aGuard( m_aMutex );
 +        if ( !hasByIndex( Index ) )
-+            throw lang::IndexOutOfBoundsException();
++            throw IndexOutOfBoundsException();
 +        ObjIdToNameHash.erase( ObjIdToNameHash.find( Index ) );
 +    }
 +    // XIndexReplace Methods
-+    virtual void SAL_CALL replaceByIndex( ::sal_Int32 Index, const uno::Any& Element ) throw (lang::IllegalArgumentException, lang::IndexOutOfBoundsException, lang::WrappedTargetException, uno::RuntimeException)
++    virtual void SAL_CALL replaceByIndex( ::sal_Int32 Index, const Any& Element ) throw (IllegalArgumentException, IndexOutOfBoundsException, WrappedTargetException, RuntimeException)
 +    {
 +        ::osl::MutexGuard aGuard( m_aMutex );
 +        if ( !hasByIndex( Index ) )
-+            throw lang::IndexOutOfBoundsException();
++            throw IndexOutOfBoundsException();
 +        rtl::OUString sOleName;
 +        if ( !( Element >>= sOleName ) )
-+            throw lang::IllegalArgumentException();
++            throw IllegalArgumentException();
 +        ObjIdToNameHash[ Index ] = sOleName;
 +    }
 +    // XIndexAccess Methods
-+    virtual ::sal_Int32 SAL_CALL getCount(  ) throw (uno::RuntimeException)
++    virtual ::sal_Int32 SAL_CALL getCount(  ) throw (RuntimeException)
 +    {
 +        ::osl::MutexGuard aGuard( m_aMutex );
 +        return ObjIdToNameHash.size();
 +    }
-+    virtual Any SAL_CALL getByIndex( ::sal_Int32 Index ) throw (lang::IndexOutOfBoundsException, lang::WrappedTargetException, uno::RuntimeException)
++    virtual Any SAL_CALL getByIndex( ::sal_Int32 Index ) throw (IndexOutOfBoundsException, WrappedTargetException, RuntimeException)
 +    {
 +        ::osl::MutexGuard aGuard( m_aMutex );
 +        if ( !hasByIndex( Index ) )
-+            throw lang::IndexOutOfBoundsException();
-+        return uno::makeAny( ObjIdToNameHash[ Index ] );
++            throw IndexOutOfBoundsException();
++        return makeAny( ObjIdToNameHash[ Index ] );
 +    }
 +    // XElementAccess Methods
-+    virtual Type SAL_CALL getElementType(  ) throw (uno::RuntimeException)
++    virtual Type SAL_CALL getElementType(  ) throw (RuntimeException)
 +    {
 +        return ::getCppuType((const ::rtl::OUString*)(NULL) );
 +    }
-+    virtual ::sal_Bool SAL_CALL hasElements(  ) throw (uno::RuntimeException)
++    virtual ::sal_Bool SAL_CALL hasElements(  ) throw (RuntimeException)
 +    {
 +        ::osl::MutexGuard aGuard( m_aMutex );
 +        return ( getCount() > 0 );
@@ -172,12 +193,12 @@ index 635991a..e60f6f6 100755
  
  VbaModule::VbaModule( const Reference< XModel >& rxDocModel, const OUString& rName, rtl_TextEncoding eTextEnc, bool bExecutable ) :
      mxDocModel( rxDocModel ),
-@@ -128,8 +195,35 @@ void VbaModule::importDirRecords( BinaryInputStream& rDirStrm )
+@@ -134,8 +210,35 @@ void VbaModule::importDirRecords( BinaryInputStream& rDirStrm )
      OSL_ENSURE( mnOffset < SAL_MAX_UINT32, "VbaModule::importDirRecords - missing module stream offset" );
  }
  
 +void VbaModule::extractOleOverrideFromAttr( const String& rAttributeLine,
-+                                            const uno::Reference< container::XNameContainer >& rxOleNameOverrides ) const
++                                            const Reference< XNameContainer >& rxOleNameOverrides ) const
 +{
 +    String rAttribute = rAttributeLine;
 +    // format of the attribute we are interested in is
@@ -196,10 +217,10 @@ index 635991a..e60f6f6 100755
 +            rtl::OUStringToOString( maName, RTL_TEXTENCODING_UTF8 ).getStr(), nCntrlId,
 +            rtl::OUStringToOString( sCntrlName, RTL_TEXTENCODING_UTF8 ).getStr() );
 +        if ( !rxOleNameOverrides->hasByName( maName ) )
-+            rxOleNameOverrides->insertByName( maName, makeAny( uno::Reference< container::XIndexContainer> ( new OleIdToNameContainer() ) ) );
-+        uno::Reference< container::XIndexContainer > xIdToOleName;
++            rxOleNameOverrides->insertByName( maName, makeAny( Reference< XIndexContainer> ( new OleIdToNameContainer() ) ) );
++        Reference< XIndexContainer > xIdToOleName;
 +        if ( rxOleNameOverrides->getByName( maName ) >>= xIdToOleName )
-+            xIdToOleName->insertByIndex( nCntrlId, uno::makeAny( rtl::OUString( sCntrlName ) ) );
++            xIdToOleName->insertByIndex( nCntrlId, makeAny( rtl::OUString( sCntrlName ) ) );
 +    }
 +}
 +
@@ -209,7 +230,7 @@ index 635991a..e60f6f6 100755
  {
      if( (maName.getLength() == 0) || (maStreamName.getLength() == 0) || (mnOffset == SAL_MAX_UINT32) )
          return;
-@@ -202,6 +296,8 @@ void VbaModule::importSourceCode( StorageBase& rVbaStrg,
+@@ -208,6 +311,8 @@ void VbaModule::importSourceCode( StorageBase& rVbaStrg,
                  aSourceCode.appendAscii( RTL_CONSTASCII_STRINGPARAM( "Rem " ) );
              aSourceCode.append( aCodeLine ).append( sal_Unicode( '\n' ) );
          }
@@ -219,10 +240,10 @@ index 635991a..e60f6f6 100755
  
      // close the subroutine named after the module
 diff --git oox/source/ole/vbaproject.cxx oox/source/ole/vbaproject.cxx
-index af90e41..017790f 100755
+index 22a7019..cf419ce 100755
 --- oox/source/ole/vbaproject.cxx
 +++ oox/source/ole/vbaproject.cxx
-@@ -405,7 +405,7 @@ void VbaProject::importVba( StorageBase& rVbaPrjStrg, const GraphicHelper& rGrap
+@@ -473,7 +473,7 @@ void VbaProject::importVba( StorageBase& rVbaPrjStrg, const GraphicHelper& rGrap
              aGeneratedModules.forEachMem( &VbaModule::createEmptyDocModule,
                  ::boost::cref( xBasicLib ), ::boost::cref( xDocObjectNA ) );
              aModules.forEachMem( &VbaModule::importSourceCode,
@@ -232,7 +253,7 @@ index af90e41..017790f 100755
      }
      catch( Exception& )
 diff --git oox/source/xls/excelfilter.cxx oox/source/xls/excelfilter.cxx
-index 3947221..548245e 100644
+index 5ae1148..fed9dcd 100644
 --- oox/source/xls/excelfilter.cxx
 +++ oox/source/xls/excelfilter.cxx
 @@ -35,6 +35,7 @@
@@ -251,7 +272,7 @@ index 3947221..548245e 100644
  using ::com::sun::star::lang::XMultiServiceFactory;
  using ::com::sun::star::xml::sax::XFastDocumentHandler;
  using ::oox::core::BinaryFilterBase;
-@@ -276,11 +278,14 @@ bool SimpleExcelVBAProjFilter::importDocument() throw()
+@@ -278,11 +280,14 @@ bool SimpleExcelVBAProjFilter::importDocument() throw()
      {
          Sequence< rtl::OUString > sGeneratedCNames;
          getArgument( CREATE_OUSTRING( "GeneratedCodeNames" ) ) >>= sGeneratedCNames;
@@ -267,10 +288,10 @@ index 3947221..548245e 100644
              bRet = true;
          }
 diff --git sc/source/filter/excel/excimp8.cxx sc/source/filter/excel/excimp8.cxx
-index e300103..f4d69b5 100644
+index 4909aaf..0010cee 100644
 --- sc/source/filter/excel/excimp8.cxx
 +++ sc/source/filter/excel/excimp8.cxx
-@@ -116,6 +116,86 @@ using namespace com::sun::star;
+@@ -116,6 +116,86 @@ using namespace ::comphelper;
  using namespace ::comphelper;
  using ::rtl::OUString;
  
@@ -357,16 +378,16 @@ index e300103..f4d69b5 100644
  // defined in docfunc.cxx ( really this needs a new name )
  script::ModuleInfo lcl_InitModuleInfo( SfxObjectShell& rDocSh, String& sModule );
  
-@@ -259,7 +339,7 @@ void ImportExcel8::ReadBasic( void )
-                 try
-                 {
-                     uno::Reference< lang::XComponent > xComponent( pShell->GetModel(), uno::UNO_QUERY_THROW );
+@@ -291,7 +370,7 @@ void ImportExcel8::ReadBasic( void )
+             try
+             {
+                 uno::Reference< lang::XComponent > xComponent( pShell->GetModel(), uno::UNO_QUERY_THROW );
 -                uno::Sequence< beans::NamedValue > aArgSeq(1);
 +                uno::Sequence< beans::NamedValue > aArgSeq(2);
                  // I guess we could actually handle the GeneratedCodeNames here
                  // ( e.g. after import create the required modules ) but...
                  // better to reuse the code in the filter right?
-@@ -275,6 +355,10 @@ void ImportExcel8::ReadBasic( void )
+@@ -307,6 +386,10 @@ void ImportExcel8::ReadBasic( void )
                  }
                  aArgSeq[ 0 ].Value <<= sGeneratedCNames;
  
@@ -377,15 +398,15 @@ index e300103..f4d69b5 100644
                  uno::Sequence< uno::Any > aArgs( 2 );
                  aArgs[ 0 ] <<= getProcessServiceFactory();
                  aArgs[ 1 ] <<= aArgSeq;
-@@ -299,6 +383,7 @@ void ImportExcel8::ReadBasic( void )
-                     // call the filter
-                     uno::Reference< document::XFilter > xFilter( xImporter, uno::UNO_QUERY_THROW );
-                     xFilter->filter( aMediaDesc.getAsConstPropertyValueList() );
+@@ -331,6 +414,7 @@ void ImportExcel8::ReadBasic( void )
+                 // call the filter
+                 uno::Reference< document::XFilter > xFilter( xImporter, uno::UNO_QUERY_THROW );
+                 xFilter->filter( aMediaDesc.getAsConstPropertyValueList() );
 +                GetObjectManager().SetOleNameOverrideInfo( xOleNameOverrideSink );
-                 }
-                 catch( uno::Exception& )
-                 {
-@@ -320,11 +405,6 @@ void ImportExcel8::ReadBasic( void )
+             }
+             catch( uno::Exception& )
+             {
+@@ -355,11 +439,6 @@ void ImportExcel8::ReadBasic( void )
  #endif
  
              }
@@ -398,10 +419,10 @@ index e300103..f4d69b5 100644
      }
  }
 diff --git sc/source/filter/excel/xiescher.cxx sc/source/filter/excel/xiescher.cxx
-index 5ba8fe4..d31d5ad 100644
+index 6edcf86..afea800 100644
 --- sc/source/filter/excel/xiescher.cxx
 +++ sc/source/filter/excel/xiescher.cxx
-@@ -3185,17 +3185,14 @@ XclImpDffConverter::~XclImpDffConverter()
+@@ -3199,17 +3199,14 @@ XclImpDffConverter::~XclImpDffConverter()
  
  String XclImpObjectManager::GetOleNameOverride( SCTAB nTab, sal_uInt16 nObjId )
  {
