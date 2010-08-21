@@ -21,7 +21,7 @@ index e307720..fbd83c8 100644
  #include <com/sun/star/resource/XStringResourceResolver.hpp>
  #include <com/sun/star/resource/StringResourceWithLocation.hpp>
  #include <com/sun/star/task/XInteractionHandler.hpp>
-+#include <com/sun/star/script/XVBACompat.hpp>
++#include <com/sun/star/script/vba/XVBACompatibility.hpp>
  
  using namespace comphelper;
  using namespace	::com::sun::star;
@@ -35,10 +35,10 @@ index e307720..fbd83c8 100644
 +	// set vba mode on DialogModel ( allows it to work in 100thmm instead of MAP_APPFONT )
 +	if ( rDocument.isDocument() && rDocument.getDocument().is() )
 +	{
-+		uno::Reference< script::XVBACompat > xDocVBAMode( rDocument.getLibraryContainer( E_SCRIPTS ), uno::UNO_QUERY );
-+		uno::Reference< script::XVBACompat > xDialogModelVBAMode( xDialogModel, uno::UNO_QUERY );
++		uno::Reference< script::vba::XVBACompatibility > xDocVBAMode( rDocument.getLibraryContainer( E_SCRIPTS ), uno::UNO_QUERY );
++		uno::Reference< script::vba::XVBACompatibility > xDialogModelVBAMode( xDialogModel, uno::UNO_QUERY );
 +		if ( xDocVBAMode.is()  &&  xDialogModelVBAMode.is() )
-+			xDialogModelVBAMode->setVBACompatModeOn( xDocVBAMode->getVBACompatModeOn() );
++			xDialogModelVBAMode->setVBACompatibilityMode( xDocVBAMode->getVBACompatibilityMode() );
 +	}
      pEditor->SetDialog( xDialogModel );
  
@@ -930,6 +930,14 @@ diff --git basic/source/classes/sbxmod.cxx basic/source/classes/sbxmod.cxx
 index 834d731..0b9b351 100644
 --- basic/source/classes/sbxmod.cxx
 +++ basic/source/classes/sbxmod.cxx
+@@ -58,6 +58,7 @@
+ #include <com/sun/star/lang/XServiceInfo.hpp>
+ #include <com/sun/star/script/ModuleType.hpp>
+ #include <com/sun/star/script/vba/XVBACompatibility.hpp>
++#include <com/sun/star/document/XVbaMethodParameter.hpp>
+ #include <com/sun/star/beans/XPropertySet.hpp>
+ 
+ using namespace com::sun::star;
 @@ -500,7 +500,6 @@ IMPL_LINK( AsyncQuitHandler, OnAsyncQuit, void*, /*pNull*/ )
      return 0L;
  }
@@ -947,14 +955,13 @@ index 834d731..0b9b351 100644
  /////////////////////////////////////////////////////////////////////////////
  
  // Ein BASIC-Modul hat EXTSEARCH gesetzt, damit die im Modul enthaltenen
-@@ -795,6 +794,83 @@ void SbModule::SFX_NOTIFY( SfxBroadcaster& rBC, const TypeId& rBCType,
+@@ -795,6 +794,82 @@ void SbModule::SFX_NOTIFY( SfxBroadcaster& rBC, const TypeId& rBCType,
          SbxVariable* pVar = pHint->GetVar();
          SbProperty* pProp = PTR_CAST(SbProperty,pVar);
          SbMethod* pMeth = PTR_CAST(SbMethod,pVar);
 +		SbProcedureProperty* pProcProperty = PTR_CAST( SbProcedureProperty, pVar );
 +        if( pProcProperty )
 +        {
-+            bDone = true;
 +
 +            if( pHint->GetId() == SBX_HINT_DATAWANTED )
 +            {
@@ -962,8 +969,8 @@ index 834d731..0b9b351 100644
 +                aProcName.AppendAscii( "Property Get " );
 +                aProcName += pProcProperty->GetName();
 +
-+                SbxVariable* pMeth = Find( aProcName, SbxCLASS_METHOD );
-+                if( pMeth )
++                SbxVariable* pMethVar = Find( aProcName, SbxCLASS_METHOD );
++                if( pMethVar )
 +                {
 +                    SbxValues aVals;
 +                    aVals.eType = SbxVARIANT;
@@ -973,20 +980,20 @@ index 834d731..0b9b351 100644
 +                    if( nVarParCount > 1 )
 +                    {
 +                        SbxArrayRef xMethParameters = new SbxArray;
-+                        xMethParameters->Put( pMeth, 0 );	// Method as parameter 0
++                        xMethParameters->Put( pMethVar, 0 );	// Method as parameter 0
 +                        for( USHORT i = 1 ; i < nVarParCount ; ++i )
 +                        {
 +                            SbxVariable* pPar = pArg->Get( i );
 +                            xMethParameters->Put( pPar, i );
 +                        }
 +
-+                        pMeth->SetParameters( xMethParameters );
-+                        pMeth->Get( aVals );
-+                        pMeth->SetParameters( NULL );
++                        pMethVar->SetParameters( xMethParameters );
++                        pMethVar->Get( aVals );
++                        pMethVar->SetParameters( NULL );
 +                    }
 +                    else
 +                    {
-+                        pMeth->Get( aVals );
++                        pMethVar->Get( aVals );
 +                    }
 +
 +                    pVar->Put( aVals );
@@ -994,7 +1001,7 @@ index 834d731..0b9b351 100644
 +            }
 +            else if( pHint->GetId() == SBX_HINT_DATACHANGED )
 +            {
-+                SbxVariable* pMeth = NULL;
++                SbxVariable* pMethVar = NULL;
 +
 +                bool bSet = pProcProperty->isSet();
 +                if( bSet )
@@ -1004,27 +1011,27 @@ index 834d731..0b9b351 100644
 +                    String aProcName;
 +                    aProcName.AppendAscii( "Property Set " );
 +                    aProcName += pProcProperty->GetName();
-+                    pMeth = Find( aProcName, SbxCLASS_METHOD );
++                    pMethVar = Find( aProcName, SbxCLASS_METHOD );
 +                }
-+                if( !pMeth )	// Let
++                if( !pMethVar )	// Let
 +                {
 +                    String aProcName;
 +                    aProcName.AppendAscii( "Property Let " );
 +                    aProcName += pProcProperty->GetName();
-+                    pMeth = Find( aProcName, SbxCLASS_METHOD );
++                    pMethVar = Find( aProcName, SbxCLASS_METHOD );
 +                }
 +
-+                if( pMeth )
++                if( pMethVar )
 +                {
 +                    // Setup parameters
 +                    SbxArrayRef xArray = new SbxArray;
-+                    xArray->Put( pMeth, 0 );	// Method as parameter 0
++                    xArray->Put( pMethVar, 0 );	// Method as parameter 0
 +                    xArray->Put( pVar, 1 );
-+                    pMeth->SetParameters( xArray );
++                    pMethVar->SetParameters( xArray );
 +
 +                    SbxValues aVals;
-+                    pMeth->Get( aVals );
-+                    pMeth->SetParameters( NULL );
++                    pMethVar->Get( aVals );
++                    pMethVar->SetParameters( NULL );
 +                }
 +            }
 +        }
@@ -1612,11 +1619,10 @@ index cafa0ee..a8e7d84 100644
  #if defined (WIN) || defined (WNT) || defined (OS2)
  #include <direct.h>   // _getdcwd get current work directory, _chdrive
  #endif
-@@ -121,6 +127,10 @@ using namespace com::sun::star::io;
+@@ -121,6 +127,9 @@ using namespace com::sun::star::io;
  #include <io.h>
  #endif
  
-+using namespace rtl;
 +
 +#include <basic/sbobjmod.hxx>
 +
@@ -17493,16 +17499,16 @@ index a9a83b7..32106fa 100644
 +#include <comphelper/componentcontext.hxx>
 +#include <cppuhelper/component_context.hxx>
 +#include <vbahelper/vbaaccesshelper.hxx>
-+#include <com/sun/star/script/XVBACompat.hpp>
++#include <com/sun/star/script/vba/XVBACompatibility.hpp>
 +
  using namespace ::com::sun::star;
  
 +bool isInVBAMode( ScDocShell& rDocSh )
 +{
 +    uno::Reference<script::XLibraryContainer> xLibContainer = rDocSh.GetBasicContainer();
-+    uno::Reference<script::XVBACompat> xVBACompat( xLibContainer, uno::UNO_QUERY );
++    uno::Reference<script::vba::XVBACompatibility> xVBACompat( xLibContainer, uno::UNO_QUERY );
 +    if ( xVBACompat.is() )
-+        return xVBACompat->getVBACompatModeOn();
++        return xVBACompat->getVBACompatibilityMode();
 +    return false;
 +}
 +
@@ -26282,14 +26288,6 @@ diff --git sfx2/inc/sfx2/objsh.hxx sfx2/inc/sfx2/objsh.hxx
 index 8e4dde2..9fd0a60 100644
 --- sfx2/inc/sfx2/objsh.hxx
 +++ sfx2/inc/sfx2/objsh.hxx
-@@ -297,6 +297,7 @@ public:
-     //<!--Added by PengYunQuan for Validity Cell Range Picker
-     virtual sal_Bool			AcceptStateUpdate() const;
-     //-->Added by PengYunQuan for Validity Cell Range Picker
-+    sal_Bool                    IsInPrepareClose() const;
-     sal_Bool					HasModalViews() const;
-     sal_Bool                    IsHelpDocument() const;
- 
 @@ -404,8 +405,8 @@ public:
          ::com::sun::star::uno::Any& aRet,
          ::com::sun::star::uno::Sequence< sal_Int16 >& aOutParamIndex,
@@ -26626,7 +26624,7 @@ index 613d90c..a8695d3 100644
  #include <com/sun/star/task/InteractionClassification.hpp>
  #include <com/sun/star/security/XDocumentDigitalSignatures.hpp>
 +#include <com/sun/star/script/XLibraryQueryExecutable.hpp>
-+#include <com/sun/star/script/XVBACompat.hpp>
++#include <com/sun/star/script/vba/XVBACompatibility.hpp>
  /** === end UNO includes === **/
  
  #include <comphelper/componentcontext.hxx>
@@ -26635,7 +26633,7 @@ index 613d90c..a8695d3 100644
      using ::com::sun::star::uno::UNO_SET_THROW;
      using ::com::sun::star::script::XLibraryContainer;
 +    using ::com::sun::star::script::XLibraryQueryExecutable;
-+    using ::com::sun::star::script::XVBACompat;
++    using ::com::sun::star::script::vba::XVBACompatibility;
      using ::com::sun::star::container::XNameAccess;
      using ::com::sun::star::uno::UNO_QUERY_THROW;
 +    using ::com::sun::star::uno::UNO_QUERY;
@@ -26646,8 +26644,8 @@ index 613d90c..a8695d3 100644
              if ( xScripts.is() )
                  xContainer.set( xScripts->getBasicLibraries(), UNO_QUERY_THROW );
  
-+            Reference< XVBACompat > xDocVBAMode( xContainer, UNO_QUERY );
-+            sal_Bool bIsVBAMode = ( xDocVBAMode.is() && xDocVBAMode->getVBACompatModeOn() );
++            Reference< XVBACompatibility > xDocVBAMode( xContainer, UNO_QUERY );
++            sal_Bool bIsVBAMode = ( xDocVBAMode.is() && xDocVBAMode->getVBACompatibilityMode() );
              if ( xContainer.is() )
              {
                  // a library container exists; check if it's empty
@@ -26879,20 +26877,6 @@ index a9a7583..c535d40 100644
          // remove ThisComponent reference from AppBasic
          SfxObjectShell::SetCurrentComponent( Reference< XInterface >() );
      }
-@@ -533,6 +568,13 @@ sal_Bool SfxObjectShell::IsInPrepareClose() const
-     return pImp->bInPrepareClose;
- }
- 
-+//-------------------------------------------------------------------------
-+
-+sal_Bool SfxObjectShell::IsInPrepareClose() const
-+{
-+    return pImp->bInPrepareClose;
-+}
-+
- //------------------------------------------------------------------------
- 
- struct BoolEnv_Impl
 @@ -919,7 +961,10 @@ void SfxObjectShell::SetCurrentComponent( const Reference< XInterface >& _rxComp
      BasicManager* pAppMgr = SFX_APP()->GetBasicManager();
      s_xCurrentComponent = _rxComponent;
@@ -27025,14 +27009,17 @@ index 43c9c8b..5cc2ce8 100644
              bool bDetectHidden = ( !bSilent && pDoc );
              if ( bDetectHidden && pDoc->QueryHiddenInformation( WhenPrinting, NULL ) != RET_YES )
                  break;
-@@ -769,6 +773,16 @@ void SfxViewShell::ExecPrint_Impl( SfxRequest &rReq )
+@@ -769,6 +773,19 @@ void SfxViewShell::ExecPrint_Impl( SfxRequest &rReq )
          case SID_SETUPPRINTER :
          case SID_PRINTER_NAME : // only for recorded macros
          {
++            // #TODO FIXME is this necessary at all ?
++            // #Not sure of the impact of the new Oracle code
 +            if( nId == SID_PRINTDOC )
 +            {
++                SfxObjectShell* pDoc = GetObjectShell();
 +                // derived class may decide to abort this
-+                if( !QuerySlotExecutable( nId ) )
++                if( !pDoc->QuerySlotExecutable( nId ) )
 +                {
 +                    rReq.SetReturnValue( SfxBoolItem( 0, FALSE ) );
 +                    return;
@@ -43588,7 +43575,7 @@ index 86d8e47..b3c904e 100644
  // ====UserFormGeomentryHelper====
  //---------------------------------------------
  UserFormGeometryHelper::UserFormGeometryHelper( const uno::Reference< uno::XComponentContext >& /*xContext*/, const uno::Reference< awt::XControl >& xControl )
-@@ -1424,6 +1447,48 @@ void UserFormGeometryHelper::setHeight( double nHeight )
+@@ -1424,6 +1447,28 @@ void UserFormGeometryHelper::setHeight( double nHeight )
              return xIf;
          }
  
@@ -43613,26 +43600,6 @@ index 86d8e47..b3c904e 100644
 +	void SAL_CALL VBADispatchListener::disposing( const lang::EventObject& /*aEvent*/ ) throw( uno::RuntimeException )
 +	{
 +	}
-+
-+        uno::Reference< uno::XInterface > getUnoDocModule( const String& aModName, SfxObjectShell* pShell )
-+        {
-+            uno::Reference<  uno::XInterface > xIf;
-+            if ( pShell )
-+            {
-+                rtl::OUString sProj( RTL_CONSTASCII_USTRINGPARAM("Standard") );
-+                BasicManager* pBasMgr = pShell->GetBasicManager();
-+                if ( pBasMgr && pBasMgr->GetName().Len() )
-+                    sProj = pShell->GetBasicManager()->GetName();
-+                StarBASIC* pBasic = pShell->GetBasicManager()->GetLib( sProj );
-+                if ( pBasic )
-+                {
-+                    SbModule* pMod = pBasic->FindModule( aModName );
-+                    if ( pMod )
-+                        xIf = pMod->GetUnoModule();
-+                }
-+            }             
-+            return xIf;
-+        }
 +
          SfxObjectShell* getSfxObjShell( const uno::Reference< frame::XModel >& xModel ) throw (uno::RuntimeException)
          {
@@ -45373,7 +45340,7 @@ index 1c43cc8..37a561f 100644
  #include <com/sun/star/beans/XPropertyState.hpp>
 +#include <com/sun/star/document/XStorageBasedDocument.hpp>
 +#include <com/sun/star/document/XGraphicObjectResolver.hpp>
-+#include <com/sun/star/script/XVBACompat.hpp>
++#include <com/sun/star/script/vba/XVBACompatibility.hpp>
  
 -
 +#include <comphelper/componentcontext.hxx>
@@ -45543,13 +45510,13 @@ index 1c43cc8..37a561f 100644
 +   }
 +}
 +
-+sal_Bool isVBACompatModeOn( DialogImport* _pImport )
++sal_Bool isVBACompatibilityMode( DialogImport* _pImport )
 +{
 +	sal_Bool bVBAMode = sal_False;
-+	Reference< script::XVBACompat > xVBACompat( _pImport->getScriptLibraryContainer(), UNO_QUERY );
++	Reference< script::vba::XVBACompatibility > xVBACompat( _pImport->getScriptLibraryContainer(), UNO_QUERY );
 +	if( xVBACompat.is() )
 +	{
-+		bVBAMode = xVBACompat->getVBACompatModeOn();
++		bVBAMode = xVBACompat->getVBACompatibilityMode();
 +	}
 +	return bVBAMode;
 +}
@@ -45562,7 +45529,7 @@ index 1c43cc8..37a561f 100644
  {
 +	OUString sService( OUSTR("com.sun.star.awt.UnoControlScrollBarModel") );
 +	// we should probably limit this to vba mode also ( leave for now )
-+	if ( isVBACompatModeOn( _pImport ) )
++	if ( isVBACompatibilityMode( _pImport ) )
 +		sService = OUSTR("com.sun.star.form.component.ScrollBar");
 +
 +    OUString sLinkedCell;
@@ -45728,7 +45695,7 @@ index 1c43cc8..37a561f 100644
 +		{
 +			sLinkedCell = xAttributes->getValueByUidName( _pImport->XMLNS_DIALOGS_UID, OUSTR( "linked-cell" ) );
 +			// we should probably limit this to vba mode also ( leave for now )
-+			if ( isVBACompatModeOn( _pImport ) )
++			if ( isVBACompatibilityMode( _pImport ) )
 +				sService = OUSTR("com.sun.star.form.component.RadioButton");
 +		}
 +		catch( Exception& /*e*/ )
@@ -45773,7 +45740,7 @@ index 1c43cc8..37a561f 100644
 +		{
 +			sLinkedCell = xAttributes->getValueByUidName( _pImport->XMLNS_DIALOGS_UID, OUSTR( "linked-cell" ) );
 +			// we should probably limit this to vba mode also ( leave for now )
-+			if ( isVBACompatModeOn( _pImport ) )
++			if ( isVBACompatibilityMode( _pImport ) )
 +				sService = OUSTR("com.sun.star.form.component.RadioButton");
 +		}
 +		catch( Exception& /*e*/ )
@@ -45814,7 +45781,7 @@ index 1c43cc8..37a561f 100644
 +        OUString sListBoxService( OUSTR("com.sun.star.awt.UnoControlListBoxModel") );
 +
 +        // we should probably limit this to vba mode also ( leave for now )
-+        if ( isVBACompatModeOn( _pImport ) )
++        if ( isVBACompatibilityMode( _pImport ) )
 +            sListBoxService = OUSTR("com.sun.star.form.component.ListBox");
 +
 +        try
@@ -45860,7 +45827,7 @@ index 1c43cc8..37a561f 100644
 +        OUString sService( OUSTR("com.sun.star.awt.UnoControlComboBoxModel") );
 +
 +        // we should probably limit this to vba mode also ( leave for now )
-+        if ( isVBACompatModeOn( _pImport ) )
++        if ( isVBACompatibilityMode( _pImport ) )
 +            sService = OUSTR("com.sun.star.form.component.ComboBox");
 +
 +        OUString sLinkedCell;
@@ -45898,7 +45865,7 @@ index 1c43cc8..37a561f 100644
          return new ScrollBarElement( rLocalName, xAttributes, this, _pImport );
      }
 +	// spinbutton
-+	else if (rLocalName.equalsAsciiL( RTL_CONSTASCII_STRINGPARAM("spinbutton") ) && isVBACompatModeOn( _pImport ) )
++	else if (rLocalName.equalsAsciiL( RTL_CONSTASCII_STRINGPARAM("spinbutton") ) && isVBACompatibilityMode( _pImport ) )
 +	{
 +		return new SpinButtonElement( rLocalName, xAttributes, this, _pImport );
 +	}
@@ -45923,7 +45890,7 @@ index f3c0e55..0f03070 100644
  #include <com/sun/star/view/SelectionType.hpp>
 +#include <com/sun/star/document/XStorageBasedDocument.hpp>
 +#include <com/sun/star/script/DocumentScriptLibraryContainer.hpp>
-+#include <com/sun/star/script/XVBACompat.hpp>
++#include <com/sun/star/script/vba/XVBACompatibility.hpp>
  
  using namespace ::com::sun::star;
  using namespace ::com::sun::star::uno;
@@ -45965,10 +45932,10 @@ index f3c0e55..0f03070 100644
      SAL_THROW( (Exception) )
  {
 +    DialogImport* pImport = new DialogImport( xContext, xDialogModel, xDocument );
-+    uno::Reference< script::XVBACompat > xVBAModeSource( pImport->getScriptLibraryContainer(), uno::UNO_QUERY );
++    uno::Reference< script::vba::XVBACompatibility > xVBAModeSource( pImport->getScriptLibraryContainer(), uno::UNO_QUERY );
 +    
 +    uno::Reference< beans::XPropertySet > xDlgProps( xDialogModel, uno::UNO_QUERY );
-+    if ( xVBAModeSource.is() && xDlgProps.is() && xVBAModeSource->getVBACompatModeOn() )
++    if ( xVBAModeSource.is() && xDlgProps.is() && xVBAModeSource->getVBACompatibilityMode() )
 +        xDlgProps->setPropertyValue( OUSTR("VBAForm"), uno::makeAny( sal_True ) );
      return ::xmlscript::createDocumentHandler(
 -        static_cast< xml::input::XRoot * >(
