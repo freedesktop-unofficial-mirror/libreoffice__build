@@ -18973,13 +18973,10 @@ index e6ebe28..a25455d 100644
      virtual css::uno::Reference< ov::excel::XWorkbook > SAL_CALL getThisWorkbook() throw (css::uno::RuntimeException);
      virtual css::uno::Any SAL_CALL Workbooks( const css::uno::Any& aIndex ) throw (css::uno::RuntimeException);
      virtual css::uno::Any SAL_CALL Worksheets( const css::uno::Any& aIndex ) throw (css::uno::RuntimeException);
-@@ -101,6 +103,20 @@ public:
+@@ -101,6 +103,17 @@ public:
      virtual void SAL_CALL setStatusBar( const css::uno::Any& _statusbar ) throw (css::uno::RuntimeException);
      virtual ::sal_Int32 SAL_CALL getCursor() throw (css::uno::RuntimeException);
      virtual void SAL_CALL setCursor( ::sal_Int32 _cursor ) throw (css::uno::RuntimeException);
-+	
-+	virtual sal_Bool SAL_CALL getEnableEvents() throw (css::uno::RuntimeException);
-+	virtual void SAL_CALL setEnableEvents( sal_Bool bEnable ) throw (css::uno::RuntimeException);
 +
 +	virtual sal_Bool SAL_CALL getVisible() throw (css::uno::RuntimeException);
 +    virtual void SAL_CALL setVisible( sal_Bool bVisible ) throw (css::uno::RuntimeException);
@@ -23595,7 +23592,7 @@ index 8fcfcd5..dd93063 100755
 -         uno::Reference< table::XCellRange > xRange( new ScCellRangeObj( getDocShellFromRange( mxRange ) , aRange ) );
 -        uno::Reference< excel::XRange > xVbaRange( new ScVbaRange( mxParent, mxContext, xRange, mbIsRows, mbIsColumns ) );	
 +	 	uno::Reference< table::XCellRange > xRange( new ScCellRangeObj( excel::GetDocShellFromRange( mxRange ) , aRange ) );
-++		uno::Reference< excel::XRange > xVbaRange( new ScVbaRange( mxParent, mxContext, xRange, mbIsRows, mbIsColumns ) );
++		uno::Reference< excel::XRange > xVbaRange( new ScVbaRange( mxParent, mxContext, xRange, mbIsRows, mbIsColumns ) );
          xVbaRange->PasteSpecial( uno::Any(), uno::Any(), uno::Any(), uno::Any() );
      }
  }
@@ -27450,6 +27447,38 @@ index d6dc1bd..276df21 100644
      CDEFS+=-DENABLE_VBA
  .ENDIF
  
+--- sw/inc/doc.hxx	2010-08-21 18:03:57.000000000 +0100
++++ sw/inc/doc.hxx	2010-08-21 18:13:06.000000000 +0100
+@@ -79,9 +79,7 @@ class SwList;
+ #include "comphelper/implementationreference.hxx"
+ #include <com/sun/star/chart2/data/XDataProvider.hpp>
+ #include <com/sun/star/linguistic2/XProofreadingIterator.hpp>
+-#ifdef FUTURE_VBA
+ #include <com/sun/star/script/vba/XVBAEventProcessor.hpp>
+-#endif
+ 
+ #include <hash_map>
+ #include <stringhash.hxx>
+@@ -408,9 +406,7 @@ class SW_DLLPUBLIC SwDoc :
+ 
+     // table of forbidden characters of this document
+     vos::ORef<SvxForbiddenCharactersTable>	xForbiddenCharsTable;
+-#ifdef FUTURE_VBA
+     com::sun::star::uno::Reference< com::sun::star::script::vba::XVBAEventProcessor > mxVbaEvents;
+-#endif
+     // --> OD 2007-10-26 #i83479#
+ public:
+     struct lessThanNodeNum
+@@ -2146,9 +2142,7 @@ public:
+     {
+         return n32DummyCompatabilityOptions2;
+     }
+-#ifdef FUTURE_VBA
+     com::sun::star::uno::Reference< com::sun::star::script::vba::XVBAEventProcessor > GetVbaEventProcessor();
+-#endif
+     ::sfx2::IXmlIdRegistry& GetXmlIdRegistry();
+     ::sw::MetaFieldManager & GetMetaFieldManager();
+     SfxObjectShell* CreateCopy(bool bCallInitNew) const;
 diff --git sw/inc/docsh.hxx sw/inc/docsh.hxx
 index 3840d59..6c2fd87 100644
 --- sw/inc/docsh.hxx
@@ -27564,7 +27593,7 @@ index 03df3e1..9e71620 100644
 +#include <com/sun/star/script/ModuleInfo.hpp>
 +#include <com/sun/star/script/ModuleType.hpp>
 +#include <com/sun/star/script/ScriptEventDescriptor.hpp>
-+#include <com/sun/star/script/XVBAModuleInfo.hpp>
++#include <com/sun/star/script/vba/XVBAModuleInfo.hpp>
 +#include <vbahelper/vbaaccesshelper.hxx>
 +#include <basic/basmgr.hxx>
 +#include <comphelper/processfactory.hxx>
@@ -27597,7 +27626,7 @@ index 03df3e1..9e71620 100644
 +    
 +                uno::Reference< container::XNameAccess > xLib( xLibContainer->getByName( sProjectName ), uno::UNO_QUERY_THROW );
 +                uno::Sequence< rtl::OUString > sModuleNames = xLib->getElementNames();
-+                uno::Reference< script::XVBAModuleInfo > xVBAModuleInfo( xLib, uno::UNO_QUERY );
++                uno::Reference< script::vba::XVBAModuleInfo > xVBAModuleInfo( xLib, uno::UNO_QUERY );
 +
 +                for ( sal_Int32 i=0; i < sModuleNames.getLength(); ++i )
 +                {
@@ -29994,10 +30023,12 @@ index b0ae693..fa9765e 100644
      return nRet;
  }
  
-@@ -1531,6 +1523,31 @@ void SwDocShell::Execute(SfxRequest& rReq)
+@@ -1531,6 +1523,34 @@ void SwDocShell::Execute(SfxRequest& rReq)
      }
  }
  
++ // #FIXME - align with NEW event stuff ( if possible )
++#if 0
 +void lcl_processCompatibleSfxHint( const uno::Reference< document::XVbaEventsHelper >& xVbaEventsHelper, const SfxHint& rHint )
 +{
 +    if ( rHint.ISA( SfxEventHint ) )
@@ -30023,16 +30054,20 @@ index b0ae693..fa9765e 100644
 +        }
 +    }
 +}
++#endif
  
  /*--------------------------------------------------------------------
      Beschreibung:
-@@ -1587,6 +1604,9 @@ void SwDocShell::FillClass( SvGlobalName * pClassName,
+@@ -1587,6 +1604,12 @@ void SwDocShell::FillClass( SvGlobalName * pClassName,
          *pClipFormat	= bTemplate ? SOT_FORMATSTR_ID_STARWRITER_8_TEMPLATE : SOT_FORMATSTR_ID_STARWRITER_8;
          *pLongUserName = SW_RESSTR(STR_WRITER_DOCUMENT_FULLTYPE);
      }
++// #FIXME check with new Event handling
++#if 0 
 +    uno::Reference< document::XVbaEventsHelper > xVbaEventsHelper = pDoc->GetVbaEventsHelper();
 +    if( xVbaEventsHelper.is() )
 +        lcl_processCompatibleSfxHint( xVbaEventsHelper, rHint );
++#endif
  
      *pUserName = SW_RESSTR(STR_HUMAN_SWDOC_NAME);
  }
