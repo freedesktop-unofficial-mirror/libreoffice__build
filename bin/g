@@ -9,14 +9,19 @@ if [ "$#" -eq "0" ] ; then
     exit $?
 fi
 
+CLONEDIR=`readlink -e $0 | sed 's/\/bin\/g$/\/clone/'`
+RAWBUILDDIR=`readlink -e $0 | sed 's/\/bin\/g$/\/rawbuild/'`
+
 # extra params for some commands, like log
 EXTRA=
-PAGER=
 COMMAND="$1"
+PAGER=
+RELATIVIZE=1
 
 case "$COMMAND" in
     apply)
         EXTRA="-p0 --stat --apply --index --ignore-space-change --whitespace=error"
+        RELATIVIZE=0
         ;;
     log)
         EXTRA='-1'
@@ -24,7 +29,8 @@ case "$COMMAND" in
         ;;
 esac
 
-FILES=
+# absolutize the parameters first
+unset FILES
 FILESNUM=0
 while shift ; do
     PARAM="$1"
@@ -44,20 +50,43 @@ while shift ; do
                 exit 1
             }
         fi
-        FILES[$FILESNUM]=`readlink -n -f "$1"`
+        FILES[$FILESNUM]=`readlink -n -e "$1"`
+        if [ -z "${FILES[$FILESNUM]}" ] ; then
+            echo "'$1' not found in `pwd`."
+            exit 1
+        fi
         FILESNUM=$(($FILESNUM+1))
     fi
 done
 
-CLONEDIR=`readlink -e $0 | sed 's/\/bin\/g$/\/clone/'`
-cd "$CLONEDIR"
-
 # do it!
+cd "$CLONEDIR"
 for DIR in * ; do
     if [ -d "$DIR" -a -d "$DIR"/.git ] ; then
         (
-            echo "===== $DIR ====="
+            # executed in a subshell
             cd $DIR
+
+            # relativize the absolutized params again if we want to operate
+            # only on the files belonging to this exact repo
+            if [ "$RELATIVIZE" = "1" -a -n "$FILES" ] ; then
+                FILESNUM=0
+                INSERTNUM=0
+                PWD=`pwd`
+                PWDLEN=`pwd | wc -c`
+                for I in "${FILES[@]}" ; do
+                    unset FILES[$FILESNUM]
+                    FILESNUM=$(($FILESNUM+1))
+                    # set only those who belong to this repo
+                    if [ "${I:0:$PWDLEN}" = "$PWD/" ] ; then
+                        FILES[$INSERTNUM]="${I:$PWDLEN}"
+                        INSERTNUM=$(($INSERTNUM+1))
+                    fi
+                done
+                [ "$INSERTNUM" = "0" ] && exit 0
+            fi
+
+            # some extra params
             case "$COMMAND" in
                 apply)
                     for I in * ; do
@@ -69,9 +98,11 @@ for DIR in * ; do
                     done
                     ;;
                 commit)
-                    git status | grep '^nothing to commit' && exit 0
+                    git status | grep -qs '^nothing to commit' && exit 0
                     ;;
             esac
+
+            echo "===== $DIR ====="
             git $PAGER "$COMMAND" $EXTRA "${FILES[@]}" || exit $?
         ) || exit $?
     fi
