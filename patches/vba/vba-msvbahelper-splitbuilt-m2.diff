@@ -120,8 +120,9 @@ index eead43c..3b92f80 100644
              sControlData.push_back( aProp );
 diff --git filter/source/msfilter/msvbahelper.cxx filter/source/msfilter/msvbahelper.cxx
 deleted file mode 100644
---- filter/source/msfilter/msvbahelper.cxx	2010-08-23 14:26:18.000000000 +0200
-+++ /dev/null	2010-05-08 11:31:08.000000000 +0200
+index 0ad623d..0000000
+--- filter/source/msfilter/msvbahelper.cxx
++++ /dev/null
 @@ -1,411 +0,0 @@
 -/*************************************************************************
 - *
@@ -161,7 +162,7 @@ deleted file mode 100644
 -#include <com/sun/star/document/XDocumentPropertiesSupplier.hpp>
 -#include <com/sun/star/document/XDocumentProperties.hpp>
 -#include <com/sun/star/document/XDocumentInfoSupplier.hpp>
--#include <com/sun/star/script/vba/XVBACompatibility.hpp>
+-#include <com/sun/star/script/XVBACompat.hpp>
 -#include <tools/urlobj.hxx>
 -#include <osl/file.hxx>
 -#include <unotools/pathoptions.hxx>
@@ -416,7 +417,7 @@ deleted file mode 100644
 -            try
 -            {
 -                uno::Reference< beans::XPropertySet > xProps( pShell->GetModel(), uno::UNO_QUERY_THROW );
--                uno::Reference< script::vba::XVBACompatibility > xVBAMode( xProps->getPropertyValue( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM("BasicLibraries") ) ), uno::UNO_QUERY_THROW );
+-                uno::Reference< script::XVBACompat > xVBAMode( xProps->getPropertyValue( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM("BasicLibraries") ) ), uno::UNO_QUERY_THROW );
 -                sThisProject = xVBAMode->getProjectName();
 -            }
 -            catch( uno::Exception& /*e*/) {}
@@ -498,7 +499,7 @@ deleted file mode 100644
 -}
 -
 -// Treat the args as possible inouts ( convertion at bottom of method )
--sal_Bool executeMacro( SfxObjectShell* pShell, const String& sMacroName, uno::Sequence< uno::Any >& aArgs, uno::Any& aRet, const uno::Any& /*aCaller*/)
+-sal_Bool executeMacro( SfxObjectShell* pShell, const String& sMacroName, uno::Sequence< uno::Any >& aArgs, uno::Any& aRet, const uno::Any& aCaller )
 -{
 -    sal_Bool bRes = sal_False;
 -    if ( !pShell )
@@ -513,7 +514,7 @@ deleted file mode 100644
 -        if ( pShell )
 -        {
 -            nErr = pShell->CallXScript( sUrl,
--                               aArgs, aRet, aOutArgsIndex, aOutArgs, false ); 
+-                               aArgs, aRet, aOutArgsIndex, aOutArgs, false, &aCaller ); 
 -            sal_Int32 nLen = aOutArgs.getLength();
 -            // convert any out params to seem like they were inouts
 -            if ( nLen )
@@ -527,7 +528,7 @@ deleted file mode 100644
 -        }
 -        bRes = ( nErr == ERRCODE_NONE );
 -    }
--    catch ( uno::Exception& )
+-    catch ( uno::Exception& e )
 -    {
 -       bRes = sal_False;
 -    }
@@ -611,12 +612,10 @@ diff --git offapi/com/sun/star/script/makefile.mk offapi/com/sun/star/script/mak
 index 0282816..c9927c3 100644
 --- offapi/com/sun/star/script/makefile.mk
 +++ offapi/com/sun/star/script/makefile.mk
-@@ -54,7 +54,11 @@ IDLFILES=\
- 	XLibraryQueryExecutable.idl \
-     ModuleSizeExceededRequest.idl\
+@@ -54,6 +54,10 @@ IDLFILES=\
+         XVBAModuleInfo.idl\
      ModuleInfo.idl\
--    ModuleType.idl
-+    ModuleType.idl\
+     ModuleType.idl\
 +    XVBAMacroHelper.idl\
 +    XVBAMacroResolvedInfo.idl\
 +    VBAMacroHelper.idl\
@@ -696,107 +695,106 @@ index e2bb19d..51146d5 100644
      return OUString();
  }
  
-# FIXME ooo330-m4: resolveVBAMacro is not longer called in sc/source/ui/vba/vbaeventshelper.cxx
-#diff --git sc/source/ui/vba/vbaeventshelper.cxx sc/source/ui/vba/vbaeventshelper.cxx
-#index db7340e..346c05d 100644
-#--- sc/source/ui/vba/vbaeventshelper.cxx
-#+++ sc/source/ui/vba/vbaeventshelper.cxx
-#@@ -48,6 +48,7 @@
-# #include <com/sun/star/table/XCell.hpp> 
-# #include <com/sun/star/sheet/XSpreadsheetDocument.hpp>
-# #include <com/sun/star/sheet/XSpreadsheet.hpp>
-#+
-# #include <com/sun/star/container/XNamed.hpp>
-# #include <com/sun/star/awt/WindowEvent.hpp>
-# #include <com/sun/star/lang/EventObject.hpp>
-#@@ -62,7 +63,6 @@
-# #include <cellsuno.hxx> 
-# #include <convuno.hxx>
-# #include <map>
-#-#include <filter/msfilter/msvbahelper.hxx>
-# #include <vcl/svapp.hxx>
-# #include <basic/basmgr.hxx>
-# #include <ooo/vba/XHelperInterface.hpp>
-#@@ -586,7 +586,11 @@ ScVbaEventsHelper::getMacroPath( const sal_Int32 nEventId, const SCTAB nTab )
-# {
-# 	SfxObjectShell* pShell = pDoc->GetDocumentShell();
-#     String sMacroName = getEventName( nEventId );
-#-    VBAMacroResolvedInfo sMacroResolvedInfo;
-#+   
-#+    if ( !m_xMacroHelper.is() )
-#+        return rtl::OUString(); // no singleton ( fatal error ) #FIXME can we handle this better ? 
-#+    uno::Reference< script::XVBAMacroResolvedInfo > xResolvedMacroInfo;
-#+
-#     switch( nEventId )
-#     {
-#         // Worksheet
-#@@ -602,7 +606,7 @@ ScVbaEventsHelper::getMacroPath( const sal_Int32 nEventId, const SCTAB nTab )
-#         {
-#             String  aSheetModuleName = getSheetModuleName( nTab );
-#             sMacroName.Insert( '.', 0 ).Insert( aSheetModuleName, 0);
-#-            sMacroResolvedInfo = resolveVBAMacro( pShell, sMacroName );
-#+            xResolvedMacroInfo = m_xMacroHelper->resolveVBAMacro( pShell->GetModel(), sMacroName, sal_False );
-#             break;
-#         }
-#         // Workbook
-#@@ -636,18 +640,18 @@ ScVbaEventsHelper::getMacroPath( const sal_Int32 nEventId, const SCTAB nTab )
-#             }
-#            
-#             sMacroName.Insert( '.', 0 ).Insert( sWorkbookModuleName, 0);
-#-            sMacroResolvedInfo = resolveVBAMacro( pShell, sMacroName );
-#+            xResolvedMacroInfo = m_xMacroHelper->resolveVBAMacro( pShell->GetModel(), sMacroName, sal_False );
-#             break;
-#         }
-#     	case VBAEVENT_WORKBOOK_AUTOOPEN                       :
-#         {
-#-            sMacroResolvedInfo = resolveVBAMacro( pShell, sMacroName );
-#+            xResolvedMacroInfo = m_xMacroHelper->resolveVBAMacro( pShell->GetModel(), sMacroName, sal_False );
-#             break;
-#         }
-#         default:
-#             break;
-#     }
-#-    return sMacroResolvedInfo.ResolvedMacro();
-#+    return xResolvedMacroInfo->getResolvedMacro();
-# }
-# 
-# sal_Bool ScVbaEventsHelper::processVbaEvent( const sal_Int32 nEventId, const uno::Sequence< uno::Any >& rArgs, const SCTAB nTab )
-#@@ -663,7 +667,7 @@ sal_Bool ScVbaEventsHelper::processVbaEvent( const sal_Int32 nEventId, const uno
-#     // For most cases, there is no corresponsible event macro in the document. 
-#     // It is better fo check if the event macro exists before process the arguments to improve performance.
-#     rtl::OUString sMacroPath = getMacroPath( nEventId, nTab );
-#-	if( sMacroPath.getLength() )
-#+	if( m_xMacroHelper.is() && sMacroPath.getLength() )
-# 	{
-# 		switch( nEventId )
-# 		{
-#@@ -756,7 +760,7 @@ sal_Bool ScVbaEventsHelper::processVbaEvent( const sal_Int32 nEventId, const uno
-#                 // process Cancel argument
-#                 aArgs = uno::Sequence< uno::Any >(1);
-#                 aArgs[0] <<= bCancel;
-#-                executeMacro( pShell, sMacroPath, aArgs, aRet, aDummyCaller );
-#+                m_xMacroHelper->executeMacro( pShell->GetModel(), sMacroPath, aArgs, aRet, aDummyCaller );
-#                 aArgs[0] >>= bCancel;
-#                 return bCancel;
-#             }
-#@@ -766,7 +770,7 @@ sal_Bool ScVbaEventsHelper::processVbaEvent( const sal_Int32 nEventId, const uno
-#                 aArgs = uno::Sequence< uno::Any >(2);
-#                 aArgs[0] = rArgs[0];
-#                 aArgs[1] <<= bCancel;
-#-                executeMacro( pShell, sMacroPath, aArgs, aRet, aDummyCaller );
-#+                m_xMacroHelper->executeMacro( pShell->GetModel(), sMacroPath, aArgs, aRet, aDummyCaller );
-#                 aArgs[1] >>= bCancel;
-#                 return bCancel;
-#             }
-#@@ -784,7 +788,7 @@ sal_Bool ScVbaEventsHelper::processVbaEvent( const sal_Int32 nEventId, const uno
-# 		}
-#     
-#         // excute the macro
-#-        result = executeMacro( pShell, sMacroPath, aArgs, aRet, aDummyCaller );
-#+        result = m_xMacroHelper->executeMacro( pShell->GetModel(), sMacroPath, aArgs, aRet, aDummyCaller );
-# 	}
-#     
-# 	return result;
+diff --git sc/source/ui/vba/vbaeventshelper.cxx sc/source/ui/vba/vbaeventshelper.cxx
+index db7340e..346c05d 100644
+--- sc/source/ui/vba/vbaeventshelper.cxx
++++ sc/source/ui/vba/vbaeventshelper.cxx
+@@ -48,6 +48,7 @@
+ #include <com/sun/star/table/XCell.hpp> 
+ #include <com/sun/star/sheet/XSpreadsheetDocument.hpp>
+ #include <com/sun/star/sheet/XSpreadsheet.hpp>
++
+ #include <com/sun/star/container/XNamed.hpp>
+ #include <com/sun/star/awt/WindowEvent.hpp>
+ #include <com/sun/star/lang/EventObject.hpp>
+@@ -62,7 +63,6 @@
+ #include <cellsuno.hxx> 
+ #include <convuno.hxx>
+ #include <map>
+-#include <filter/msfilter/msvbahelper.hxx>
+ #include <vcl/svapp.hxx>
+ #include <basic/basmgr.hxx>
+ #include <ooo/vba/XHelperInterface.hpp>
+@@ -586,7 +586,11 @@ ScVbaEventsHelper::getMacroPath( const sal_Int32 nEventId, const SCTAB nTab )
+ {
+ 	SfxObjectShell* pShell = pDoc->GetDocumentShell();
+     String sMacroName = getEventName( nEventId );
+-    VBAMacroResolvedInfo sMacroResolvedInfo;
++   
++    if ( !m_xMacroHelper.is() )
++        return rtl::OUString(); // no singleton ( fatal error ) #FIXME can we handle this better ? 
++    uno::Reference< script::XVBAMacroResolvedInfo > xResolvedMacroInfo;
++
+     switch( nEventId )
+     {
+         // Worksheet
+@@ -602,7 +606,7 @@ ScVbaEventsHelper::getMacroPath( const sal_Int32 nEventId, const SCTAB nTab )
+         {
+             String  aSheetModuleName = getSheetModuleName( nTab );
+             sMacroName.Insert( '.', 0 ).Insert( aSheetModuleName, 0);
+-            sMacroResolvedInfo = resolveVBAMacro( pShell, sMacroName );
++            xResolvedMacroInfo = m_xMacroHelper->resolveVBAMacro( pShell->GetModel(), sMacroName, sal_False );
+             break;
+         }
+         // Workbook
+@@ -636,18 +640,18 @@ ScVbaEventsHelper::getMacroPath( const sal_Int32 nEventId, const SCTAB nTab )
+             }
+            
+             sMacroName.Insert( '.', 0 ).Insert( sWorkbookModuleName, 0);
+-            sMacroResolvedInfo = resolveVBAMacro( pShell, sMacroName );
++            xResolvedMacroInfo = m_xMacroHelper->resolveVBAMacro( pShell->GetModel(), sMacroName, sal_False );
+             break;
+         }
+     	case VBAEVENT_WORKBOOK_AUTOOPEN                       :
+         {
+-            sMacroResolvedInfo = resolveVBAMacro( pShell, sMacroName );
++            xResolvedMacroInfo = m_xMacroHelper->resolveVBAMacro( pShell->GetModel(), sMacroName, sal_False );
+             break;
+         }
+         default:
+             break;
+     }
+-    return sMacroResolvedInfo.ResolvedMacro();
++    return xResolvedMacroInfo->getResolvedMacro();
+ }
+ 
+ sal_Bool ScVbaEventsHelper::processVbaEvent( const sal_Int32 nEventId, const uno::Sequence< uno::Any >& rArgs, const SCTAB nTab )
+@@ -663,7 +667,7 @@ sal_Bool ScVbaEventsHelper::processVbaEvent( const sal_Int32 nEventId, const uno
+     // For most cases, there is no corresponsible event macro in the document. 
+     // It is better fo check if the event macro exists before process the arguments to improve performance.
+     rtl::OUString sMacroPath = getMacroPath( nEventId, nTab );
+-	if( sMacroPath.getLength() )
++	if( m_xMacroHelper.is() && sMacroPath.getLength() )
+ 	{
+ 		switch( nEventId )
+ 		{
+@@ -756,7 +760,7 @@ sal_Bool ScVbaEventsHelper::processVbaEvent( const sal_Int32 nEventId, const uno
+                 // process Cancel argument
+                 aArgs = uno::Sequence< uno::Any >(1);
+                 aArgs[0] <<= bCancel;
+-                executeMacro( pShell, sMacroPath, aArgs, aRet, aDummyCaller );
++                m_xMacroHelper->executeMacro( pShell->GetModel(), sMacroPath, aArgs, aRet, aDummyCaller );
+                 aArgs[0] >>= bCancel;
+                 return bCancel;
+             }
+@@ -766,7 +770,7 @@ sal_Bool ScVbaEventsHelper::processVbaEvent( const sal_Int32 nEventId, const uno
+                 aArgs = uno::Sequence< uno::Any >(2);
+                 aArgs[0] = rArgs[0];
+                 aArgs[1] <<= bCancel;
+-                executeMacro( pShell, sMacroPath, aArgs, aRet, aDummyCaller );
++                m_xMacroHelper->executeMacro( pShell->GetModel(), sMacroPath, aArgs, aRet, aDummyCaller );
+                 aArgs[1] >>= bCancel;
+                 return bCancel;
+             }
+@@ -784,7 +788,7 @@ sal_Bool ScVbaEventsHelper::processVbaEvent( const sal_Int32 nEventId, const uno
+ 		}
+     
+         // excute the macro
+-        result = executeMacro( pShell, sMacroPath, aArgs, aRet, aDummyCaller );
++        result = m_xMacroHelper->executeMacro( pShell->GetModel(), sMacroPath, aArgs, aRet, aDummyCaller );
+ 	}
+     
+ 	return result;
 diff --git sc/source/ui/vba/vbasheetobject.cxx sc/source/ui/vba/vbasheetobject.cxx
 index 215a62c..daad041 100755
 --- sc/source/ui/vba/vbasheetobject.cxx
@@ -980,8 +978,9 @@ index 6815f28..8ea6b81 100644
          $(SLO)$/UnoNameItemTable.obj \
 diff --git svx/source/unodraw/msvbahelper.cxx svx/source/unodraw/msvbahelper.cxx
 new file mode 100644
---- /dev/null	2010-05-08 11:31:08.000000000 +0200
-+++ svx/source/unodraw/msvbahelper.cxx	2010-08-23 14:55:52.000000000 +0200
+index 0000000..2534ae4
+--- /dev/null
++++ svx/source/unodraw/msvbahelper.cxx
 @@ -0,0 +1,533 @@
 +/*************************************************************************
 + *
@@ -1021,7 +1020,7 @@ new file mode 100644
 +#include <com/sun/star/document/XDocumentPropertiesSupplier.hpp>
 +#include <com/sun/star/document/XDocumentProperties.hpp>
 +#include <com/sun/star/document/XDocumentInfoSupplier.hpp>
-+#include <com/sun/star/script/vba/XVBACompatibility.hpp>
++#include <com/sun/star/script/XVBACompat.hpp>
 +#include <com/sun/star/script/XVBAMacroHelper.hpp>
 +
 +#include <tools/urlobj.hxx>
@@ -1305,7 +1304,7 @@ new file mode 100644
 +            try
 +            {
 +                uno::Reference< beans::XPropertySet > xProps( pShell->GetModel(), uno::UNO_QUERY_THROW );
-+                uno::Reference< script::vba::XVBACompatibility > xVBAMode( xProps->getPropertyValue( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM("BasicLibraries") ) ), uno::UNO_QUERY_THROW );
++                uno::Reference< script::XVBACompat > xVBAMode( xProps->getPropertyValue( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM("BasicLibraries") ) ), uno::UNO_QUERY_THROW );
 +                sThisProject = xVBAMode->getProjectName();
 +            }
 +            catch( uno::Exception& /*e*/) {}
@@ -1387,7 +1386,7 @@ new file mode 100644
 +}
 +
 +// Treat the args as possible inouts ( convertion at bottom of method )
-+sal_Bool executeMacroImpl( SfxObjectShell* pShell, const String& sMacroName, uno::Sequence< uno::Any >& aArgs, uno::Any& aRet, const uno::Any& /*aCaller*/ )
++sal_Bool executeMacroImpl( SfxObjectShell* pShell, const String& sMacroName, uno::Sequence< uno::Any >& aArgs, uno::Any& aRet, const uno::Any& aCaller )
 +{
 +    sal_Bool bRes = sal_False;
 +    if ( !pShell )
@@ -1402,7 +1401,7 @@ new file mode 100644
 +        if ( pShell )
 +        {
 +            nErr = pShell->CallXScript( sUrl,
-+                               aArgs, aRet, aOutArgsIndex, aOutArgs, false ); 
++                               aArgs, aRet, aOutArgsIndex, aOutArgs, false, &aCaller ); 
 +            sal_Int32 nLen = aOutArgs.getLength();
 +            // convert any out params to seem like they were inouts
 +            if ( nLen )
@@ -1416,7 +1415,7 @@ new file mode 100644
 +        }
 +        bRes = ( nErr == ERRCODE_NONE );
 +    }
-+    catch ( uno::Exception& )
++    catch ( uno::Exception& e )
 +    {
 +       bRes = sal_False;
 +    }
@@ -1626,65 +1625,64 @@ index d1ed65d..041f019 100644
  #include <unotools/pathoptions.hxx>
  #include <com/sun/star/ucb/XSimpleFileAccess.hpp>
  
-# FIXME ooo330-m4: resolveVBAMacro is not longer called in sw/source/ui/vba/vbaeventshelper.cxx
-#diff --git sw/source/ui/vba/vbaeventshelper.cxx sw/source/ui/vba/vbaeventshelper.cxx
-#index 2c6f212..3008c73 100644
-#--- sw/source/ui/vba/vbaeventshelper.cxx
-#+++ sw/source/ui/vba/vbaeventshelper.cxx
-#@@ -37,7 +37,7 @@
-# #include <sfx2/objsh.hxx> 
-# #include <comphelper/processfactory.hxx>
-# #include <cppuhelper/implbase1.hxx>
-#-#include <filter/msfilter/msvbahelper.hxx>
-#+
-# #include "wordvbahelper.hxx"
-# 
-# using namespace com::sun::star;
-#@@ -70,7 +70,11 @@ rtl::OUString
-# SwVbaEventsHelper::getMacroPath( const sal_Int32 nEventId )
-# {
-#     String sMacroName = getEventName( nEventId );
-#-    VBAMacroResolvedInfo sMacroResolvedInfo;
-#+
-#+    if ( !m_xMacroHelper.is() )
-#+        return rtl::OUString(); // failed to get helper singleton, #FIXME can we handle this more elegantly
-#+    uno::Reference< script::XVBAMacroResolvedInfo > xMacroResolvedInfo;
-#+
-#     switch( nEventId )
-#     {
-#         // Document events
-#@@ -79,19 +83,19 @@ SwVbaEventsHelper::getMacroPath( const sal_Int32 nEventId )
-#     	case VBAEVENT_DOCUMENT_CLOSE:
-#         {
-#             sMacroName.Insert( '.', 0 ).Insert( sThisDocument, 0);
-#-            sMacroResolvedInfo = resolveVBAMacro( pDocShell, sMacroName );
-#+            xMacroResolvedInfo = m_xMacroHelper->resolveVBAMacro( pDocShell->GetModel(), sMacroName, sal_False );
-#             break;
-#         }
-#     	case VBAEVENT_DOCUMENT_AUTONEW:
-#     	case VBAEVENT_DOCUMENT_AUTOOPEN:
-#         {
-#-            sMacroResolvedInfo = resolveVBAMacro( pDocShell, sMacroName );
-#+            xMacroResolvedInfo = m_xMacroHelper->resolveVBAMacro( pDocShell->GetModel(), sMacroName, sal_False );
-#             break;
-#         }
-#         default:
-#             break;
-#     }
-#-    return sMacroResolvedInfo.ResolvedMacro();
-#+    return xMacroResolvedInfo->getResolvedMacro();
-# }
-# 
-# sal_Bool SwVbaEventsHelper::processVbaEvent( const sal_Int32 nEventId, const uno::Sequence< uno::Any >& /*rArgs*/ )
-#@@ -107,7 +111,7 @@ sal_Bool SwVbaEventsHelper::processVbaEvent( const sal_Int32 nEventId, const uno
-# 	if( sMacroPath.getLength() )
-# 	{
-#         // excute the macro
-#-        result = executeMacro( pDocShell, sMacroPath, aArgs, aRet, aDummyCaller );
-#+        result = m_xMacroHelper->executeMacro( pDocShell->GetModel(), sMacroPath, aArgs, aRet, aDummyCaller );
-# 	}
-#     
-# 	return result;
+diff --git sw/source/ui/vba/vbaeventshelper.cxx sw/source/ui/vba/vbaeventshelper.cxx
+index 2c6f212..3008c73 100644
+--- sw/source/ui/vba/vbaeventshelper.cxx
++++ sw/source/ui/vba/vbaeventshelper.cxx
+@@ -37,7 +37,7 @@
+ #include <sfx2/objsh.hxx> 
+ #include <comphelper/processfactory.hxx>
+ #include <cppuhelper/implbase1.hxx>
+-#include <filter/msfilter/msvbahelper.hxx>
++
+ #include "wordvbahelper.hxx"
+ 
+ using namespace com::sun::star;
+@@ -70,7 +70,11 @@ rtl::OUString
+ SwVbaEventsHelper::getMacroPath( const sal_Int32 nEventId )
+ {
+     String sMacroName = getEventName( nEventId );
+-    VBAMacroResolvedInfo sMacroResolvedInfo;
++
++    if ( !m_xMacroHelper.is() )
++        return rtl::OUString(); // failed to get helper singleton, #FIXME can we handle this more elegantly
++    uno::Reference< script::XVBAMacroResolvedInfo > xMacroResolvedInfo;
++
+     switch( nEventId )
+     {
+         // Document events
+@@ -79,19 +83,19 @@ SwVbaEventsHelper::getMacroPath( const sal_Int32 nEventId )
+     	case VBAEVENT_DOCUMENT_CLOSE:
+         {
+             sMacroName.Insert( '.', 0 ).Insert( sThisDocument, 0);
+-            sMacroResolvedInfo = resolveVBAMacro( pDocShell, sMacroName );
++            xMacroResolvedInfo = m_xMacroHelper->resolveVBAMacro( pDocShell->GetModel(), sMacroName, sal_False );
+             break;
+         }
+     	case VBAEVENT_DOCUMENT_AUTONEW:
+     	case VBAEVENT_DOCUMENT_AUTOOPEN:
+         {
+-            sMacroResolvedInfo = resolveVBAMacro( pDocShell, sMacroName );
++            xMacroResolvedInfo = m_xMacroHelper->resolveVBAMacro( pDocShell->GetModel(), sMacroName, sal_False );
+             break;
+         }
+         default:
+             break;
+     }
+-    return sMacroResolvedInfo.ResolvedMacro();
++    return xMacroResolvedInfo->getResolvedMacro();
+ }
+ 
+ sal_Bool SwVbaEventsHelper::processVbaEvent( const sal_Int32 nEventId, const uno::Sequence< uno::Any >& /*rArgs*/ )
+@@ -107,7 +111,7 @@ sal_Bool SwVbaEventsHelper::processVbaEvent( const sal_Int32 nEventId, const uno
+ 	if( sMacroPath.getLength() )
+ 	{
+         // excute the macro
+-        result = executeMacro( pDocShell, sMacroPath, aArgs, aRet, aDummyCaller );
++        result = m_xMacroHelper->executeMacro( pDocShell->GetModel(), sMacroPath, aArgs, aRet, aDummyCaller );
+ 	}
+     
+ 	return result;
 diff --git vbahelper/inc/vbahelper/vbaapplicationbase.hxx vbahelper/inc/vbahelper/vbaapplicationbase.hxx
 index a320075..99d5c47 100644
 --- vbahelper/inc/vbahelper/vbaapplicationbase.hxx
@@ -1707,23 +1705,24 @@ index a320075..99d5c47 100644
      virtual ~VbaApplicationBase();
  
 diff --git vbahelper/inc/vbahelper/vbaeventshelperbase.hxx vbahelper/inc/vbahelper/vbaeventshelperbase.hxx
---- vbahelper/inc/vbahelper/vbaeventshelperbase.hxx.old	2010-08-11 13:35:12.000000000 +0200
-+++ vbahelper/inc/vbahelper/vbaeventshelperbase.hxx	2010-08-23 15:50:35.000000000 +0200
-@@ -30,6 +30,7 @@
+index 461cfbc..5f0568f 100644
+--- vbahelper/inc/vbahelper/vbaeventshelperbase.hxx
++++ vbahelper/inc/vbahelper/vbaeventshelperbase.hxx
+@@ -32,12 +32,15 @@
  
- #include <com/sun/star/lang/XEventListener.hpp>
- #include <com/sun/star/script/vba/XVBAEventProcessor.hpp>
+ #include <com/sun/star/uno/XComponentContext.hpp>
+ #include <vbahelper/vbahelperinterface.hxx>
 +#include <com/sun/star/script/XVBAMacroHelper.hpp>
- #include <cppuhelper/implbase2.hxx>
++
  #include <map>
- #include <deque>
-@@ -147,6 +148,7 @@ private:
-     void stopListening();
  
+ class VBAHELPER_DLLPUBLIC VbaEventsHelperBase
+ {
  protected:
+     css::uno::Reference< css::uno::XComponentContext > m_xContext;
 +    css::uno::Reference< css::script::XVBAMacroHelper > m_xMacroHelper;
-     css::uno::Reference< css::frame::XModel > mxModel;
-     SfxObjectShell* mpShell;
+     sal_Bool mbIgnoreEvents;
+     std::map< sal_Int32, rtl::OUString > m_aEventNameMap;
  
 diff --git vbahelper/source/msforms/vbacombobox.cxx vbahelper/source/msforms/vbacombobox.cxx
 index 5c05894..f7346f4 100644
@@ -1741,18 +1740,19 @@ diff --git vbahelper/source/vbahelper/vbaapplicationbase.cxx vbahelper/source/vb
 index 8cfc6d1..3cee693 100644
 --- vbahelper/source/vbahelper/vbaapplicationbase.cxx
 +++ vbahelper/source/vbahelper/vbaapplicationbase.cxx
-@@ -40,9 +40,10 @@
- #include <com/sun/star/document/XDocumentPropertiesSupplier.hpp>
- #include <com/sun/star/document/XEmbeddedScripts.hpp>
+@@ -39,10 +39,11 @@
+ #include <com/sun/star/document/XEmbeddedScripts.hpp> //Michael E. Bohn
+ #include <ooo/vba/XVBAAppService.hpp> //Michael E. Bohn
  #include <com/sun/star/awt/XWindow2.hpp>
 +#include <com/sun/star/script/theVBAMacroHelper.hpp>
 +#include <comphelper/processfactory.hxx>
  
- #include <hash_map>
+ 
+ #include "vbacommandbars.hxx"
 -#include <filter/msfilter/msvbahelper.hxx>
  #include <tools/datetime.hxx>
  
- #include <basic/sbx.hxx>
+ // start basic includes
 @@ -181,6 +182,13 @@ VbaApplicationBase::VbaApplicationBase( const uno::Reference< uno::XComponentCon
                      : ApplicationBase_BASE( uno::Reference< XHelperInterface >(), xContext )
                      , m_pImpl( new VbaApplicationBase_Impl )
@@ -1819,27 +1819,26 @@ index 1b2d013..3378a4d 100644
          setPropertyValue( m_aPropertyValues, rtl::OUString::createFromAscii("CommandURL"), uno::makeAny( aCommandURL ) );
          ApplyChange();
 diff --git vbahelper/source/vbahelper/vbaeventshelperbase.cxx vbahelper/source/vbahelper/vbaeventshelperbase.cxx
---- vbahelper/source/vbahelper/vbaeventshelperbase.cxx.old	2010-08-11 13:35:12.000000000 +0200
-+++ vbahelper/source/vbahelper/vbaeventshelperbase.cxx	2010-08-23 15:47:11.000000000 +0200
-@@ -26,6 +26,7 @@
+index 52aba1f..9c331b4 100644
+--- vbahelper/source/vbahelper/vbaeventshelperbase.cxx
++++ vbahelper/source/vbahelper/vbaeventshelperbase.cxx
+@@ -28,11 +28,19 @@
+  *
   ************************************************************************/
- 
- #include "vbahelper/vbaeventshelperbase.hxx"
+ #include <vbahelper/vbaeventshelperbase.hxx>
 +#include <com/sun/star/script/theVBAMacroHelper.hpp>
- #include <filter/msfilter/msvbahelper.hxx>
  
  using namespace ::com::sun::star;
-@@ -48,6 +49,13 @@ VbaEventsHelperBase::VbaEventsHelperBase
-     }
-     catch( uno::Exception& )
-     {
-+    }
+ 
+ VbaEventsHelperBase::VbaEventsHelperBase( const css::uno::Reference< css::uno::XComponentContext >& xContext ) : m_xContext( xContext ), mbIgnoreEvents( sal_False )
+ {
 +    try
 +    {
 +        m_xMacroHelper =  script::theVBAMacroHelper::get( m_xContext );
 +    }
 +    catch( uno::Exception& )
 +    {
-     }
++    }
  }
  
+ void VbaEventsHelperBase::insert( const sal_Int32 nId, const rtl::OUString& sEventName )
