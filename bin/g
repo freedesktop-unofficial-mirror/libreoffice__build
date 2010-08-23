@@ -3,9 +3,6 @@
 # Wrapper for git to handle more subdirs at the same time
 #
 
-CLONEDIR=`readlink -e $0 | sed 's#/bin/g$#/clone#'`
-cd "$CLONEDIR"
-
 # no params, no action
 if [ "$#" -eq "0" ] ; then
     git
@@ -16,21 +13,59 @@ fi
 EXTRA=
 PAGER=
 COMMAND="$1"
-shift
 
 case "$COMMAND" in
-    log) EXTRA='-1'
-	 PAGER='--no-pager'
-	 ;;
+    apply)
+        EXTRA="-p0 --stat --apply --index --ignore-space-change --whitespace=error"
+        ;;
+    log)
+        EXTRA='-1'
+        PAGER='--no-pager'
+        ;;
 esac
+
+FILES=
+FILESNUM=0
+while shift ; do
+    PARAM="$1"
+    if [ -z "$PARAM" ] ; then
+        #ignore
+        :
+    elif [ "${PARAM:0:1}" = "-" ] ; then
+        FILES[$FILESNUM]="$1"
+        FILESNUM=$(($FILESNUM+1))
+    else
+        FILES[$FILESNUM]=`readlink -n -f "$1"`
+        FILESNUM=$(($FILESNUM+1))
+    fi
+done
+
+CLONEDIR=`readlink -e $0 | sed 's#/bin/g$#/clone#'`
+cd "$CLONEDIR"
 
 # do it!
 for dir in * ; do
     if [ -d "$dir" -a -d "$dir"/.git ] ; then
-	(
-	    echo "===== $dir ====="
-	    cd $dir
-	    git $PAGER "$COMMAND" $EXTRA "$@" || exit $?
-	) || exit $?
+        (
+            echo "===== $dir ====="
+            cd $dir
+            case "$COMMAND" in
+                apply)
+                    for I in * ; do
+                        if [ -d "$I" ] ; then
+                            EXTRA="$EXTRA --include=$I/*"
+                        else
+                            EXTRA="$EXTRA --include=$I"
+                        fi
+                    done
+                    ;;
+                commit)
+                    git status | grep '^nothing to commit' && exit 0
+                    ;;
+            esac
+            git $PAGER "$COMMAND" $EXTRA "${FILES[@]}" || exit $?
+        ) || exit $?
     fi
 done
+
+# vi:set expandtab:
