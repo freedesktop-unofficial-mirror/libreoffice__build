@@ -8,12 +8,12 @@ if test -d test-files ;then
     cd test-files
     git fetch -t origin
 else
-    # TODO Replace by the ooo-build/contrib URL once the repo is created 
-    git clone git://anongit.freedesktop.org/~cbosdo/test-files
+    git clone git://anongit.freedesktop.org/ooo-build/contrib/test-files
 fi
 
 # OfficeOTron
 # TODO Replace by the SVN copy once the patch is integrated upstream
+#      http://code.google.com/p/officeotron/issues/detail?id=6
 OFFICEOTRON=officeotron-0.5.5-Beta.jar
 if test ! -a $SRCDIR/$OFFICEOTRON ; then
     cd $SRCDIR
