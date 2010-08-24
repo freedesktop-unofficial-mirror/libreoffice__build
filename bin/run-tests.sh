@@ -19,17 +19,24 @@ ooinstall=$1
 
 TESTDIR=$TOOLSDIR/test/
 
+if [ -n $COLORTERM ]; then
+	RED="\033[31m"
+	GREEN="\033[32m"
+	ORANGE="\033[33m"
+	CLEAR="\033[0m"
+fi
+
 for t in `ls -1 $TESTDIR`
 do
     # Is there a run.sh executable script inside?
     if test -x $TESTDIR/$t/run.sh ; then
         sh $TESTDIR/$t/run.sh "$ooinstall" "$TOOLSDIR"
         if test $? ; then
-            echo -e "$t\t:\tPASSED"
+            echo -e "$t\t:\t${GREEN}PASSED${CLEAR}"
         else
-            echo -e "$t\t:\tFAILED" 
+            echo -e "$t\t:\t${RED}FAILED${CLEAR}"
         fi
     else
-        echo -e "$t\t:\tSKIPPED"
+        echo -e "$t\t:\t${ORANGE}SKIPPED${CLEAR}"
     fi
 done
