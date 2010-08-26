@@ -1,5 +1,5 @@
---- sc/source/ui/unoobj/scdetect.cxx	2010-04-22 13:57:38.000000000 +0530
-+++ sc/source/ui/unoobj/scdetect.cxx	2010-08-02 16:01:59.000000000 +0530
+--- sc/source/ui/unoobj/scdetect.cxx	2010-08-26 11:53:13.000000000 +0530
++++ sc/source/ui/unoobj/scdetect.cxx	2010-08-26 12:07:38.000000000 +0530
 @@ -117,6 +117,7 @@ static const sal_Char __FAR_DATA pFilter
  static const sal_Char __FAR_DATA pFilterEx95Temp[]	= "MS Excel 95 Vorlage/Template";
  static const sal_Char __FAR_DATA pFilterExcel97[]	= "MS Excel 97";
@@ -16,7 +16,7 @@
  
      for( sal_Int32 nProperty=0; nProperty<nPropertyCount; ++nProperty )
      {
-@@ -297,7 +298,7 @@ static BOOL lcl_IsAnyXMLFilter( const Sf
+@@ -297,7 +299,7 @@ static BOOL lcl_IsAnyXMLFilter( const Sf
          }
          else if( lDescriptor[nProperty].Name == OUString(RTL_CONSTASCII_USTRINGPARAM("InteractionHandler")) )
              lDescriptor[nProperty].Value >>= xInteraction;
@@ -37,37 +37,92 @@
                  pFilter = 0;
                  if ( pStream )
                  {
-@@ -718,7 +723,8 @@ static BOOL lcl_IsAnyXMLFilter( const Sf
+@@ -718,45 +723,52 @@ static BOOL lcl_IsAnyXMLFilter( const Sf
                              // further checks for filters only if they are preselected: ASCII, HTML, RTF, DBase
                              // without the preselection other filters (Writer) take precedence
                              // DBase can't be detected reliably, so it also needs preselection
 -                            if ( pPreselectedFilter->GetFilterName().EqualsAscii(pFilterAscii) && lcl_MayBeAscii( rStr ) )
+-                            {
+-                                // Text filter is accepted if preselected
+-                                pFilter = pPreselectedFilter;
 +                            bool bMaybeText = lcl_MayBeAscii( rStr );
-+                            if ( pPreselectedFilter->GetFilterName().EqualsAscii(pFilterAscii) && bMaybeText )
-                             {
-                                 // Text filter is accepted if preselected
-                                 pFilter = pPreselectedFilter;
-@@ -747,8 +753,19 @@ static BOOL lcl_IsAnyXMLFilter( const Sf
-                                     else
-                                     {
-                                         pFilter = aMatcher.GetFilter4FilterName( String::CreateFromAscii(pFilterHtmlWeb) );
-+                                        if ( bIsXLS )
-+                                            bFakeXLS = true;
-                                     }
-                                 }
-+                                else if ( bIsXLS && bMaybeText )
-+                                {
-+                                    aHeader.EraseLeadingChars();
-+                                    if( aHeader.CompareTo( "<?xml", 5 ) == COMPARE_EQUAL )
-+                                        pFilter = aMatcher.GetFilter4FilterName( String::CreateFromAscii(pFilter2003XML) );
-+                                    else
-+                                        pFilter = aMatcher.GetFilter4FilterName( String::CreateFromAscii(pFilterAscii) );
-+                                    bFakeXLS = true;
-+                                }
-                                 else if ( aHeader.CompareTo( "{\\rtf", 5 ) == COMPARE_EQUAL )
++
++                            // get file header
++                            rStr.Seek( 0 );
++                            const int nTrySize = 80;
++                            ByteString aHeader;
++                            for ( int j = 0; j < nTrySize && !rStr.IsEof(); j++ )
++                            {
++                                sal_Char c;
++                                rStr >> c;
++                                aHeader += c;
+                             }
+-                            else
+-                            {
+-                                // get file header
+-                                rStr.Seek( 0 );
+-                                const int nTrySize = 80;
+-                                ByteString aHeader;
+-                                for ( int j = 0; j < nTrySize && !rStr.IsEof(); j++ )
+-                                {
+-                                    sal_Char c;
+-                                    rStr >> c;
+-                                    aHeader += c;
+-                                }
+-                                aHeader += '\0';
++                            aHeader += '\0';
+ 
+-                                if ( HTMLParser::IsHTMLFormat( aHeader.GetBuffer() ) )
++                            if ( HTMLParser::IsHTMLFormat( aHeader.GetBuffer() ) )
++                            {
++                                // test for HTML
++                                if ( pPreselectedFilter->GetName().EqualsAscii(pFilterHtml) )
                                  {
-                                     // test for RTF
-@@ -834,6 +851,19 @@ static BOOL lcl_IsAnyXMLFilter( const Sf
+-                                    // test for HTML
+-                                    if ( pPreselectedFilter->GetName().EqualsAscii(pFilterHtml) )
+-                                    {
+-                                        pFilter = pPreselectedFilter;
+-                                    }
+-                                    else
+-                                    {
+-                                        pFilter = aMatcher.GetFilter4FilterName( String::CreateFromAscii(pFilterHtmlWeb) );
+-                                    }
++                                    pFilter = pPreselectedFilter;
+                                 }
+-                                else if ( aHeader.CompareTo( "{\\rtf", 5 ) == COMPARE_EQUAL )
++                                else
+                                 {
+-                                    // test for RTF
+-                                    pFilter = aMatcher.GetFilter4FilterName( String::CreateFromAscii(pFilterRtf) );
++                                    pFilter = aMatcher.GetFilter4FilterName( String::CreateFromAscii(pFilterHtmlWeb) );
++                                    if ( bIsXLS )
++                                        bFakeXLS = true;
+                                 }
+-                                else if ( pPreselectedFilter->GetName().EqualsAscii(pFilterDBase) && lcl_MayBeDBase( rStr ) )
+-                                    pFilter = pPreselectedFilter;
+                             }
++                            else if ( bIsXLS && bMaybeText )
++                            {
++                                aHeader.EraseLeadingChars();
++                                if( aHeader.CompareTo( "<?xml", 5 ) == COMPARE_EQUAL )
++                                    pFilter = aMatcher.GetFilter4FilterName( String::CreateFromAscii(pFilter2003XML) );
++                                else
++                                    pFilter = aMatcher.GetFilter4FilterName( String::CreateFromAscii(pFilterAscii) );
++                                bFakeXLS = true;
++                            }
++                            else if ( aHeader.CompareTo( "{\\rtf", 5 ) == COMPARE_EQUAL )
++                            {
++                                // test for RTF
++                                pFilter = aMatcher.GetFilter4FilterName( String::CreateFromAscii(pFilterRtf) );
++                            }
++                            else if ( pPreselectedFilter->GetName().EqualsAscii(pFilterDBase) && lcl_MayBeDBase( rStr ) )
++                                pFilter = pPreselectedFilter;
++                            else if ( pPreselectedFilter->GetFilterName().EqualsAscii(pFilterAscii) && bMaybeText )
++                                pFilter = pPreselectedFilter;
+                         }
+                     }
+                 }
+@@ -834,6 +846,19 @@ static BOOL lcl_IsAnyXMLFilter( const Sf
              lDescriptor[nIndexOfDocumentTitle].Value <<= aDocumentTitle;
      }
  
