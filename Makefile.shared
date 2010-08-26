@@ -36,7 +36,7 @@ $(STAMP_DIR)/autocorr.apply: $(OOBUILDDIR)/unpack \
 	$(top_srcdir)/bin/add_acor.py $(OOBUILDDIR) $(top_srcdir)/src/acor.csv
 	touch $@
 
-patch.apply: $(OOBUILDDIR)/unpack $(STAMP_DIR)/patch.apply 
+patch.apply: $(OOBUILDDIR)/unpack $(STAMP_DIR)/refresh $(STAMP_DIR)/patch.apply
 $(STAMP_DIR)/patch.apply : $(top_srcdir)/patches/apply.pl \
 			   $(top_srcdir)/patches/*/*.diff \
 			   $(APPLY_DIR)/apply
@@ -74,6 +74,22 @@ patch.list:
 	CURRTAG=$(CVSTAG); test -f $(OOBUILDDIR)/.tag && CURRTAG=`cat $(OOBUILDDIR)/.tag`; \
 	chmod +x $(TOOLSDIR)/patches/apply.pl && $(TOOLSDIR)/patches/apply.pl $(APPLY_DIR) $(OOBUILDDIR) $$FLAGS --dry-run --quiet --tag=$$CURRTAG
 
+$(STAMP_DIR)/refresh : $(CLONEDIR)/repos_changed
+	echo blah
+	echo $(OOO_GIT)
+	if test "z$(OOO_GIT)" != "z" ; then \
+	    $(TOOLSDIR)/bin/transform --revert $(TOOLSDIR) $(OOBUILDDIR) ; \
+	    FLAGS=`$(TOOLSDIR)/bin/applyflags $(TOOLSDIR)/bin` ; \
+	    chmod +x $(TOOLSDIR)/patches/apply.pl && $(TOOLSDIR)/patches/apply.pl $(APPLY_DIR) $(OOBUILDDIR) $$FLAGS -R ; \
+	    echo "Rsyncing changes from the repos to the build tree - [ go and have some $(DRINK) ] ..." ; \
+	    rsync -prL --exclude .git --exclude 'unxlng??.pro' --exclude '/solver' --exclude '/install' "$(RAWBUILDDIR)/" "$(OOBUILDDIR)/" ; \
+	    rm -f $(STAMP_DIR)/patch.apply ; \
+	fi
+	touch $@
+
+$(CLONEDIR)/repos_changed :
+	if test ! -e $@ ; then touch $@ ; fi
+
 # Build bits:
 
 prebuild : $(STAMP_DIR)/prebuild
@@ -98,12 +114,14 @@ $(STAMP_DIR)/build.tools : $(STAMP_DIR)/prebuild
 
 build.prepare : $(STAMP_DIR)/build_prepared
 $(STAMP_DIR)/build_prepared : $(OOBUILDDIR)/unpack \
+		     $(STAMP_DIR)/refresh \
 		     $(STAMP_DIR)/patch.apply \
 		     $(STAMP_DIR)/artwork.install \
-			 $(STAMP_DIR)/autocorr.apply \
+		     $(STAMP_DIR)/autocorr.apply \
 		     $(STAMP_DIR)/build.tools \
 		     $(STAMP_DIR)/prebuild
 	touch $@
+
 build : $(STAMP_DIR)/build
 $(STAMP_DIR)/build : $(STAMP_DIR)/build_prepared
 	cd $(top_srcdir)/bin ; ./build-ooo
