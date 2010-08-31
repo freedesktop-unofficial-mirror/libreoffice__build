@@ -1,40 +1,68 @@
 #!/usr/bin/perl -w
 use Switch;
-
+use File::Temp qw/ tempfile tempdir /;
 
 sub webget($$$$)
 {
     my ($src, $dest, $name, $is_cgit) = @_;
+    my $result;
 
     $save_as = '';
     if ( $name ne '' ) {
         $save_as = "-O \"$name\"";
     }
 
-    print "Get $src -> $dest/$name\n";
+    if ( $is_cgit && $name ne '' ) {
+        # it must be piece source and must be repacked
+        my $ooo_sourceversion = '@OOO_SOURCEVERSION@';
+        # helper tool to repack ooo piece sources from cgit
+        my $ooo_pack_sources = '@TOOLSDIR@' . "/bin/ooo-pack-sources";
 
-    my $result = system( "cd $dest ; $WGET \"$src\" $save_as" );
-    
-    if ( !$is_cgit || $name eq '' ) {
-        return ( $result == 0 );
-    } else {
-        # cgit is known to be broken, we need some additional checks, and
-        # a plan B if they fail
-        if ( $result != 0 || system( "bunzip2 --test \"$dest/$name\" > /dev/null 2>&1" ) != 0 ) {
-            ( my $gzip_src = $src ) =~ s/\.bz2$/.gz/;
-            return 0 if ( $gzip_src eq $src );
+        print "Get $src -> $dest/ooo-build-${ooo_sourceversion}-$name.tar.bz2\n";
 
-            print "Bad archive, go for plan B: get $gzip_src -> repack -> $dest/$name\n";
+        # first try to get the tarball into a temporary directory
+        my $tempdir = tempdir( '/tmp/ooo-build-download-XXXXXX' );
 
-            # it seems that downloading the gzip version is more reliable
-            $result = system( "cd $dest ; $WGET \"$gzip_src\" -O - | gunzip | bzip2 > $name" );
-            if ( $result == 0 ) {
-                # double-check
-                $result = system( "bunzip2 --test \"$dest/$name\" > /dev/null 2>&1" );
+        $result = system( "cd $tempdir ; $WGET \"$src\" -O temp.tar.bz2" );
+
+        if ( $result == 0 ) {
+                # try to unpack the tarball in the temp dir
+                $result = system( "cd $tempdir ; tar -xjf temp.tar.bz2 > /dev/null 2>&1" );
             }
-        }
-        return ( $result == 0 );
+
+        # cgit is known to be broken, try plan B (download gzip variant) if bzip2 download failed
+        if ( $result != 0 ) {
+            my $gzip_src = $src;
+            $gzip_src =~ s/\.bz2$/.gz/;
+
+            if ( $gzip_src ne $src ) {
+                print "Bad archive, go for plan B: get $gzip_src and repack\n";
+                $result = system( "cd $tempdir ; $WGET \"$gzip_src\"  -O temp.tar.gz" );
+                    if ( $result == 0 ) {
+                        # try to unpack the tarball in the temp dir
+                        $result = system( "cd $tempdir ; tar -xzf temp.tar.gz > /dev/null 2>&1" );
+                    }
+                }
+            }
+
+        # pack the files to the final archive, use the ooo-pack-source helper tool
+        if ( $result == 0 ) {
+                # first, remove temp tarballs
+                unlink "$tempdir/temp.tar.bz2", "$tempdir/temp.tar.gz";
+                # pack the files
+                # FIXME: it would be more safe to use $temp_dir/$git_tag instead of $tempdir/*
+                $result = system( "cd $dest; $ooo_pack_sources --set-version=$ooo_sourceversion --piece=$name $tempdir/*" );
+            }
+
+            # remove temp files
+            system( "rm -rf $tempdir" );
+    } else {
+        # normal file, easy go
+        print "Get $src -> $dest/$name\n";
+        my $result = system( "cd $dest ; $WGET \"$src\" $save_as" );
     }
+
+    return ( $result == 0 );
 }
 
 sub usage {
@@ -55,7 +83,7 @@ sub trim($)
 }
 
 sub download_external_sources() {
-	system("./download_external_sources.sh")
+        system("./download_external_sources.sh")
 }
 
 sub download_tests_dependencies() {
@@ -64,61 +92,61 @@ sub download_tests_dependencies() {
 
 %SRC_URLS = (
     'http:\/\/.*'                        => '',
-    'binutils-.*'			 => '@MIRROR@/support',
-    'gcc-.*'			 	 => '@MIRROR@/support',
-    'beb300-m.*'			 => '@MIRROR@/BEB300',
-    'dev300-m.*'			 => '@MIRROR@/DEV300',
-    'ooo300-m.*'			 => '@MIRROR@/OOO300',
-    'swext-dev300-m.*'			 => '@MIRROR@/DEV300',
-    'src680-m.*'			 => '@MIRROR@/SRC680',
-    'ooa680-m.*'			 => '@MIRROR@/OOA680',
-    'oob680-m.*'			 => '@MIRROR@/OOB680',
-    'ooc680-m.*'			 => '@MIRROR@/OOC680',
-    'ood680-m.*'			 => '@MIRROR@/OOD680',
-    'ooe680-m.*'			 => '@MIRROR@/OOE680',
-    'oof680-m.*'			 => '@MIRROR@/OOF680',
-    'oog680-m.*'			 => '@MIRROR@/OOG680',
-    'ooh680-m.*'			 => '@MIRROR@/OOH680',
-    'ooo300-m.*'			 => '@MIRROR@/OOO300',
-    'ooo310-m.*'			 => '@MIRROR@/OOO310',
-    'ooo680-m.*'			 => '@MIRROR@/OOO680',
-    'OOO_2_0_2.*'			 => '@MIRROR@/OOB680',
+    'binutils-.*'                        => '@MIRROR@/support',
+    'gcc-.*'                             => '@MIRROR@/support',
+    'beb300-m.*'                         => '@MIRROR@/BEB300',
+    'dev300-m.*'                         => '@MIRROR@/DEV300',
+    'ooo300-m.*'                         => '@MIRROR@/OOO300',
+    'swext-dev300-m.*'                   => '@MIRROR@/DEV300',
+    'src680-m.*'                         => '@MIRROR@/SRC680',
+    'ooa680-m.*'                         => '@MIRROR@/OOA680',
+    'oob680-m.*'                         => '@MIRROR@/OOB680',
+    'ooc680-m.*'                         => '@MIRROR@/OOC680',
+    'ood680-m.*'                         => '@MIRROR@/OOD680',
+    'ooe680-m.*'                         => '@MIRROR@/OOE680',
+    'oof680-m.*'                         => '@MIRROR@/OOF680',
+    'oog680-m.*'                         => '@MIRROR@/OOG680',
+    'ooh680-m.*'                         => '@MIRROR@/OOH680',
+    'ooo300-m.*'                         => '@MIRROR@/OOO300',
+    'ooo310-m.*'                         => '@MIRROR@/OOO310',
+    'ooo680-m.*'                         => '@MIRROR@/OOO680',
+    'OOO_2_0_2.*'                        => '@MIRROR@/OOB680',
     'OOO_2_0_3.*'                        => '@MIRROR@/OOC680',
     'OOO_2_0_4.*'                        => '@MIRROR@/OOD680',
     'images_gnome-.*'                    => '@MIRROR@/SRC680',
     'images_kde-.*'                      => '@MIRROR@/SRC680',
-    'extras-.*'				 => '@MIRROR@/SRC680',
+    'extras-.*'                          => '@MIRROR@/SRC680',
     'ooo_custom_images.*'                => '@MIRROR@/SRC680',
     'ooo_crystal_images.*'               => '@MIRROR@/SRC680',
     'ooo_oxygen_images-*'                => '@MIRROR@/DEV300',
     'ooo-cli-prebuilt-*'                 => '@MIRROR@/DEV300',
     'mdbtools.*'                         => '@MIRROR@/SRC680',
-    'libpixman-.*'			 => '@MIRROR@/SRC680',
-    'glitz-.*'			         => '@MIRROR@/SRC680',
-    'biblio.*'				 => '@MIRROR@/SRC680',
+    'libpixman-.*'                       => '@MIRROR@/SRC680',
+    'glitz-.*'                           => '@MIRROR@/SRC680',
+    'biblio.*'                           => '@MIRROR@/SRC680',
 # Prebuilt dictionaries for Novell Windows builds
     'writingaids.*\.zip'                 => '@MIRROR@/SRC680',
 
 # Prebuilt extension dictionaries for OxygenOffice and FSFhu builds
-    'extensionaids.*\.zip'                 => 'http://ftp.devall.hu/kami/go-oo/',
+    'extensionaids.*\.zip'               => 'http://ftp.devall.hu/kami/go-oo/',
 
 # FIXME: Hacky packinfo from setup_native; is needed in bootstrap for the split build
     'setup_native_packinfo-.*'           => '@MIRROR@/DEV300',
 # Win32 bits:
-    'unicows\.exe'			 => 'http://download.microsoft.com/download/b/7/5/b75eace3-00e2-4aa0-9a6f-0b6882c71642',
+    'unicows\.exe'                       => 'http://download.microsoft.com/download/b/7/5/b75eace3-00e2-4aa0-9a6f-0b6882c71642',
     # from http://www.microsoft.com/downloads/release.asp?releaseid=30682'
-    'dbghinst\.EXE'			 => 'http://download.microsoft.com/download/platformsdk/Redist/5.0.2195.1/W9XNT4/EN-US',
-    'instmsia.exe'			 => 'http://download.microsoft.com/download/WindowsInstaller/Install/2.0/W9XMe/EN-US',
-    'instmsiw.exe'			 => 'http://download.microsoft.com/download/WindowsInstaller/Install/2.0/NT45/EN-US',
-    '5_11_98Odma20\.zip'		 => '@MIRROR@/support',
-    'openclipart-.*'			 => 'http://www.openclipart.org/downloads/@OPENCLIPART_VER@',
+    'dbghinst\.EXE'                      => 'http://download.microsoft.com/download/platformsdk/Redist/5.0.2195.1/W9XNT4/EN-US',
+    'instmsia.exe'                       => 'http://download.microsoft.com/download/WindowsInstaller/Install/2.0/W9XMe/EN-US',
+    'instmsiw.exe'                       => 'http://download.microsoft.com/download/WindowsInstaller/Install/2.0/NT45/EN-US',
+    '5_11_98Odma20\.zip'                 => '@MIRROR@/support',
+    'openclipart-.*'                     => 'http://www.openclipart.org/downloads/@OPENCLIPART_VER@',
 #Update fonts:
-    'dejavu-fonts-ttf-.*'		 => '@MIRROR@/DEV300',
-    'liberation-fonts-ttf-.*'		 => '@MIRROR@/DEV300',
+    'dejavu-fonts-ttf-.*'                => '@MIRROR@/DEV300',
+    'liberation-fonts-ttf-.*'            => '@MIRROR@/DEV300',
 # Win32 ant binaries ...
     'apache-ant-.*'                      => 'http://archive.apache.org/dist/ant/binaries',
 # Mozilla source and libraries
-    'mozilla-source-1\.7\.5.*'          => 'http://download.go-oo.org/src/',
+    'mozilla-source-1\.7\.5.*'           => 'http://download.go-oo.org/src/',
     'seamonkey-.*'                       => 'http://download.go-oo.org/src/',
     'glib-1\.2\..*'                      => 'http://ftp.gtk.org/pub/gtk/v1.2/',
     'libIDL-.*'                          => 'http://ftp.mozilla.org/pub/mozilla.org/mozilla/libraries/source/',
@@ -128,70 +156,70 @@ sub download_tests_dependencies() {
 # SDK bits
     'unowinreg\.dll'                     => 'http://tools.openoffice.org/unowinreg_prebuild/680/',
 # Windows .ico icons
-    'ooo-windows-icons-0.2.tar.bz2'     => '@MIRROR@/OOO300',
+    'ooo-windows-icons-0.2.tar.bz2'      => '@MIRROR@/OOO300',
 # Updated libwpd
-    '*libwpd-*'                           => '@MIRROR@/libwpd',
+    '*libwpd-*'                          => '@MIRROR@/libwpd',
 # MS Works importer bits
-    '*libwps-*'                           => '@MIRROR@/SRC680',
+    '*libwps-*'                          => '@MIRROR@/SRC680',
 # WPG importer bits
-    '*libwpg-*'                           => '@MIRROR@/SRC680',
+    '*libwpg-*'                          => '@MIRROR@/SRC680',
 # cairo sources
-    'cairo-.*'			         => 'http://cairographics.org/releases/',
+    'cairo-.*'                           => 'http://cairographics.org/releases/',
 # OxygenOffice extras
-#    'OOOP-.*\.zip'                 	 => 'http://kent.dl.sf.net/sourceforge/ooop/'
-    'OOOP-.*\.zip'                 	 => 'http://ftp.devall.hu/kami/go-oo/',
+#    'OOOP-.*\.zip'                         => 'http://kent.dl.sf.net/sourceforge/ooop/'
+    'OOOP-.*\.zip'                          => 'http://ftp.devall.hu/kami/go-oo/',
 # Sun Professional Template Pack
-#    'Sun_ODF_Template_Pack_en-US.oxt'	 => 'http://extensions.services.openoffice.org/files/273/0/',
-#    'Sun_ODF_Template_Pack_de.oxt'	 => 'http://extensions.services.openoffice.org/files/295/1/',
-#    'Sun_ODF_Template_Pack_it.oxt'	 => 'http://extensions.services.openoffice.org/files/299/0/',
-#    'Sun_ODF_Template_Pack_fr.oxt'	 => 'http://extensions.services.openoffice.org/files/297/0/',
-#    'Sun_ODF_Template_Pack_es.oxt'	 => 'http://extensions.services.openoffice.org/files/301/1/'
-#    'Sun_ODF_Template_Pack_*'	 => 'http://kent.dl.sf.net/sourceforge/ooop/',
+#    'Sun_ODF_Template_Pack_en-US.oxt'         => 'http://extensions.services.openoffice.org/files/273/0/',
+#    'Sun_ODF_Template_Pack_de.oxt'         => 'http://extensions.services.openoffice.org/files/295/1/',
+#    'Sun_ODF_Template_Pack_it.oxt'         => 'http://extensions.services.openoffice.org/files/299/0/',
+#    'Sun_ODF_Template_Pack_fr.oxt'         => 'http://extensions.services.openoffice.org/files/297/0/',
+#    'Sun_ODF_Template_Pack_es.oxt'         => 'http://extensions.services.openoffice.org/files/301/1/'
+#    'Sun_ODF_Template_Pack_*'         => 'http://kent.dl.sf.net/sourceforge/ooop/',
 
-    'Sun_ODF_Template_Pack_*'	 => 'ftp://ftp.devall.hu/kami/go-oo/',
+    'Sun_ODF_Template_Pack_*'            => 'ftp://ftp.devall.hu/kami/go-oo/',
 
 # Lightproof extension
-    'lightproof-*'			 => 'http://ftp.devall.hu/kami/go-oo/',
+    'lightproof-*'                       => 'http://ftp.devall.hu/kami/go-oo/',
 
 # Numbertext extension
-    'numbertext-*'			 => 'http://ftp.fsf.hu/OpenOffice.org_hu/numbertext/',
+    'numbertext-*'                       => 'http://ftp.fsf.hu/OpenOffice.org_hu/numbertext/',
 
 # Hungarian Cross-reference toolbar extension
-    'hunart-*'			 => 'http://ftp.fsf.hu/OpenOffice.org_hu/hunart/',
+    'hunart-*'                           => 'http://ftp.fsf.hu/OpenOffice.org_hu/hunart/',
 
 # Typography toolbar extension
-    'typo-*'			 => 'http://ftp.fsf.hu/OpenOffice.org_hu/typo/',
+    'typo-*'                         	 => 'http://ftp.fsf.hu/OpenOffice.org_hu/typo/',
 
 # ConvertTextToNumber extension
-    'ConvertTextToNumber-*'		 => 'http://download.go-oo.org/src/',
+    'ConvertTextToNumber-*'              => 'http://download.go-oo.org/src/',
 
 # Watch Window extension
-    'WatchWindow*'			 => 'http://ftp.devall.hu/kami/go-oo/',
+    'WatchWindow*'                       => 'http://ftp.devall.hu/kami/go-oo/',
 
 # Google Docs Extension
-    'gdocs*'                => 'http://download.go-oo.org/src/',
+    'gdocs*'                             => 'http://download.go-oo.org/src/',
 
 # NLPSolver Extension
-    'NLPSolver*'                => 'http://download.go-oo.org/src/',
-    '*nlpsolver*'                => 'http://download.go-oo.org/src/',
+    'NLPSolver*'                	 => 'http://download.go-oo.org/src/',
+    '*nlpsolver*'                	 => 'http://download.go-oo.org/src/',
 
 # LanguageTool Extension
-    '*JLanguageTool*'            => 'http://download.go-oo.org/src/',
+    '*JLanguageTool*'            	 => 'http://download.go-oo.org/src/',
 
 # oooblogger Extension
-    'oooblogger*'                => 'http://download.go-oo.org/src/',
+    'oooblogger*'                	 => 'http://download.go-oo.org/src/',
 
 # MySQL Connector/C++
     'mysql-connector-cpp.zip'            => 'http://svn.services.openoffice.org/ooo/cws/mysqlnative/mysqlcppconn/download/mysql-connector-cpp.zip',
 
 # Magyar Linux Libertine fonts
-    'MagyarLinLibertine.*\.zip' => 'http://numbertext.org/linux/',
+    'MagyarLinLibertine.*\.zip' 	 => 'http://numbertext.org/linux/',
 
 # Multi-dimensional data structure
     'cf8a6967f7de535ae257fa411c98eb88-mdds_0.3.0.tar.bz2' => 'http://hg.services.openoffice.org/binaries/',
 
 # Updated zlib
-    '*-zlib-*' => 'http://download.go-oo.org/src/',
+    '*-zlib-*' 				 => 'http://download.go-oo.org/src/',
 );
 
 
@@ -228,13 +256,13 @@ sub source_file_ooo($)
     my $what = $upstream_what;
 
     if (!$SPLIT) {
-	if ( "$upstream_what" eq "l10n" ) {
-	    $what = "lang";
-	} elsif ( "$upstream_what" eq "sdk" ) {
-	    $what = "sdk_oo";
-	} elsif ( "$upstream_what" eq "libs_extern_sys" ) {
-	    $what = "system";
-	}
+        if ( "$upstream_what" eq "l10n" ) {
+            $what = "lang";
+        } elsif ( "$upstream_what" eq "sdk" ) {
+            $what = "sdk_oo";
+        } elsif ( "$upstream_what" eq "libs_extern_sys" ) {
+            $what = "system";
+        }
     }
 
     my $tag = '@CVSTAG@';
@@ -247,7 +275,7 @@ sub source_file_ooo($)
         system( "cd @CLONEDIR@/$what ; git status | grep '^# Your branch is'" );
         system( "for file in `cd git-hooks ; echo *`
                  do
-		     cd @CLONEDIR@/$what
+                     cd @CLONEDIR@/$what
                      hook=\".git/hooks/\$file\"
                      if [ ! -x \"\$hook\" -a ! -L \"\$hook\" ] ; then
                          rm -f \"\$hook\"
@@ -263,12 +291,13 @@ sub source_file_ooo($)
         source_file( '@UPSTREAM_NAME@' . "_$upstream_what.tar.bz2" );
     }
     elsif ( '@SOURCE_TYPE@' eq "CGIT" ) {
-        my $upstream_tag = $tag;
-        $upstream_tag =~ tr/a-z/A-Z/;
-        $upstream_tag =~ s/-M/_m/;
+        my $git_tag = $tag;
+        $git_tag =~ tr/a-z/A-Z/;
+        $git_tag =~ s/-/_/g;
+        $git_tag =~ s/\./_/g;
 
-        source_file( "http://cgit.freedesktop.org/ooo-build/$what/snapshot/ooo/$upstream_tag.tar.bz2",
-            '@CVSTAG@' . "-$what.tar.bz2", 1 );
+        print "Trying to get http://cgit.freedesktop.org/ooo-build/$what/snapshot/$git_tag.tar.bz2\n";
+        source_file( "http://cgit.freedesktop.org/ooo-build/$what/snapshot/$git_tag.tar.bz2", $what, 1);
     }
     else {
         source_file( '@CVSTAG@' . "-$what.tar.bz2" );
@@ -290,7 +319,19 @@ sub download_files($$$)
             my $is_cgit = $record->{'is_cgit'};
 
             if ( $file ne '' ) {
-                my $to_check = ( $save_as ne '' )? "$dest/$save_as": "$dest/$file";
+                my $to_check;
+                if ( $save_as ne '' ) {
+                    if ($is_cgit) {
+                        # it must be ooo-build piece source; $save_as include just a file name
+                        $to_check = "$dest/ooo-build-" . '@OOO_SOURCEVERSION@' . "-$save_as.tar.bz2";
+                    } else {
+                        # $save_as provides full file name
+                        $to_check = "$dest/$save_as";
+                        }
+                    } else {
+                        $to_check = "$dest/$file";
+                    }
+
                 if ( -f "$to_check" ) {
                     print "Skipping $file\n";
                 } elsif ( defined $ENV{'DOWNLOADCACHE'} &&
@@ -367,7 +408,7 @@ if ($download_all && '@BUILD_WIN32@' eq '')
 }
 
 # Misc. bits for Win32
-if ('@BUILD_WIN32@' ne '') 
+if ('@BUILD_WIN32@' ne '')
 {
     source_file( 'unicows.exe' ) unless '@DISTRO@' =~ m/NovellWin32|GoOoWin32/;
     source_file( 'dbghinst.EXE' );
@@ -517,7 +558,7 @@ if ('@OOOP_TEMPLATES_PACK@' ne '') {
 $lightprooffilenames = trim('@LIGHTPROOF_FILENAMES@');
 @lightprooffile = split (/ /, $lightprooffilenames);
 foreach (@lightprooffile) {
-	    source_file( $_ );
+            source_file( $_ );
 }
 
 
@@ -577,8 +618,8 @@ if ($distro eq 'ArchLinux' ||
     $distro eq 'SUSE-9.1' || $distro eq 'SUSE-9.2' || $distro eq 'SUSE-9.3' ||
     $distro eq 'Slackware' ||
     $distro eq 'NovellWin32' || $distro eq 'GoOoWin32' ||
-    $distro eq 'OxygenOfficeLinux' || $distro eq 'OxygenOfficeWindows' || 
-    $distro eq 'FSFhuLinux' || $distro eq 'FSFhuWindows' || 
+    $distro eq 'OxygenOfficeLinux' || $distro eq 'OxygenOfficeWindows' ||
+    $distro eq 'FSFhuLinux' || $distro eq 'FSFhuWindows' ||
     $distro eq 'translate-org-za-linux' || $distro eq 'translate-org-za-win32' || $distro eq 'Pardus') {
     source_file_ooo( "libs_extern_sys" ) if !$SPLIT;
 }
@@ -587,7 +628,7 @@ if ($download_all ||
     $distro =~ m/Debian/ ||
     $distro =~ m/Ubuntu/ ||
     $distro =~ m/Frugalware/ ||
-    $distro eq 'OxygenOfficeLinux' || $distro eq 'OxygenOfficeWindows' || 
+    $distro eq 'OxygenOfficeLinux' || $distro eq 'OxygenOfficeWindows' ||
     '@BUILD_WIN32@' ne '') {
     source_file_ooo( "sdk" );
 }

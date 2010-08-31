@@ -3,7 +3,7 @@
 . ./bin/setup
 
 export TARFILE_LOCATION
-TAG=`echo $CVSTAG | tr a-z A-Z | sed -e s/-M/_m/`
+TAG=`echo $OOO_TAG | tr a-z A-Z | sed -e s/-M/_m/`
 MWS=`echo $TAG | cut -d_ -f1`
 tmp=`mktemp -q -d`
 
