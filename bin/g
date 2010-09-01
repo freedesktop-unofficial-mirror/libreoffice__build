@@ -14,9 +14,11 @@ RAWBUILDDIR=`readlink -e $0 | sed 's/\/bin\/g$/\/rawbuild/'`
 
 # extra params for some commands, like log
 EXTRA=
+EXTRA_END=
 COMMAND="$1"
 PAGER=
 RELATIVIZE=1
+ALWAYS_PUSH=
 
 case "$COMMAND" in
     apply)
@@ -61,6 +63,44 @@ while shift ; do
                     FILESNUM=$(($FILESNUM+1))
                     ;;
             esac
+        elif [ "$COMMAND" = "push" ] ; then
+            # special handling of --tags
+            case "$PARAM" in
+                --tags)
+                    ALWAYS_PUSH=1
+                    FILES[$FILESNUM]="$PARAM"
+                    FILESNUM=$(($FILESNUM+1))
+                    ;;
+                 *)
+                    FILES[$FILESNUM]="$PARAM"
+                    FILESNUM=$(($FILESNUM+1))
+                    ;;
+            esac
+        elif [ "$COMMAND" = "tag" ] ; then
+            # special handling of -m
+            case "$PARAM" in
+                -m)
+                    shift
+                    FILES[$FILESNUM]="-m $1"
+                    FILESNUM=$(($FILESNUM+1))
+                    ;;
+                 *)
+                    FILES[$FILESNUM]="$PARAM"
+                    FILESNUM=$(($FILESNUM+1))
+                    ;;
+            esac
+        elif [ "$COMMAND" = "checkout" ] ; then
+            # special handling of -b
+            case "$PARAM" in
+                -b)
+                    shift
+                    EXTRA_END="$EXTRA_END -b $1"
+                    ;;
+                 *)
+                    FILES[$FILESNUM]="$PARAM"
+                    FILESNUM=$(($FILESNUM+1))
+                    ;;
+            esac
         else
             FILES[$FILESNUM]="$PARAM"
             FILESNUM=$(($FILESNUM+1))
@@ -77,8 +117,10 @@ while shift ; do
         fi
         FILES[$FILESNUM]=`readlink -n -e "$PARAM"`
         if [ -z "${FILES[$FILESNUM]}" ] ; then
-            if [ "$COMMAND" = "checkout" ] ; then
-                EXTRA="$EXTRA $PARAM"
+            # empty parameter caused problems
+            unset FILES[$FILESNUM]
+            if [ "$COMMAND" = "checkout" -o "$COMMAND" = "tag" ] ; then
+                EXTRA_END="$EXTRA_END $PARAM"
             else
                 echo "'$PARAM' not found in `pwd`."
                 exit 1
@@ -134,7 +176,9 @@ for DIR in * ; do
                     git status | grep -qs '^nothing to commit' && exit 0
                     ;;
                 push)
-                    git status | grep -qs '^# Your branch is ahead of' || exit 0
+                    if [ "$ALWAYS_PUSH" != "1" ] ; then
+                        git status | grep -qs '^# Your branch is ahead of' || exit 0
+                    fi
                     ;;
                 status)
                     AHEAD="`git status | grep '^# Your branch is ahead of'`"
@@ -149,7 +193,7 @@ for DIR in * ; do
             # check for changes
             HEADREF=`git show-ref --head HEAD`
 
-            git $PAGER "$COMMAND" $EXTRA "${FILES[@]}"
+            git $PAGER "$COMMAND" $EXTRA "${FILES[@]}" $EXTRA_END
             RETURN=$?
 
             # update stamp if the repo changed
