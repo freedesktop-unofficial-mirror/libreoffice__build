@@ -1,0 +1,195 @@
+diff -u vcl.bak/inc/vcl/salwtype.hxx vcl/inc/vcl/salwtype.hxx
+--- vcl.bak/inc/vcl/salwtype.hxx	2010-06-25 12:56:57.000000000 +0300
++++ vcl/inc/vcl/salwtype.hxx	2010-06-28 15:07:57.464065800 +0300
+@@ -293,6 +293,7 @@
+ #define SAL_FRAMESTATE_ROLLUP               ((ULONG)0x00000008)
+ #define SAL_FRAMESTATE_MAXIMIZED_HORZ       ((ULONG)0x00000010)
+ #define SAL_FRAMESTATE_MAXIMIZED_VERT       ((ULONG)0x00000020)
++#define SAL_FRAMESTATE_MAXIMIZED_NONPRIMARY ((ULONG)0x00000040)
+ #define SAL_FRAMESTATE_SYSTEMMASK           ((ULONG)0x0000FFFF)
+ 
+ struct SalFrameState
+diff -u vcl.bak/inc/vcl/syswin.hxx vcl/inc/vcl/syswin.hxx
+--- vcl.bak/inc/vcl/syswin.hxx	2010-06-25 12:56:57.000000000 +0300
++++ vcl/inc/vcl/syswin.hxx	2010-07-08 14:01:58.727537300 +0300
+@@ -84,6 +84,7 @@
+ #define WINDOWSTATE_STATE_ROLLUP         ((ULONG)0x00000008)
+ #define WINDOWSTATE_STATE_MAXIMIZED_HORZ ((ULONG)0x00000010)
+ #define WINDOWSTATE_STATE_MAXIMIZED_VERT ((ULONG)0x00000020)
++#define WINDOWSTATE_STATE_MAXIMIZED_NONPRIMARY ((ULONG)0x00000040)
+ 
+ class VCL_DLLPUBLIC WindowStateData
+ {
+Only in vcl/inc/vcl: syswin.hxx.orig
+Only in vcl/inc/vcl: syswin.hxx~
+diff -u vcl.bak/source/window/syswin.cxx vcl/source/window/syswin.cxx
+--- vcl.bak/source/window/syswin.cxx	2010-06-25 12:56:57.000000000 +0300
++++ vcl/source/window/syswin.cxx	2010-08-24 19:42:34.845823200 +0300
+@@ -533,6 +533,7 @@
+         // #94144# allow Minimize again, should be masked out when read from configuration
+         // 91625 - ignore Minimize
+         ULONG nState = (ULONG)aTokenStr.ToInt32();
++	// char buf[100]; sprintf(buf, "nState=%x", nState); MessageBox(NULL, buf, "ImplWindowStateFromStr", MB_OK);
+         //nState &= ~(WINDOWSTATE_STATE_MINIMIZED);
+         rData.SetState( nState );
+         nValidMask |= WINDOWSTATE_MASK_STATE;
+@@ -726,7 +727,8 @@
+         // do a synchronous resize for layout reasons
+         //  but use rData only when the window is not to be maximized (#i38089#)
+         //  otherwise we have no useful size information
+-        if( (rData.GetMask() & WINDOWSTATE_MASK_STATE) && (nState & WINDOWSTATE_STATE_MAXIMIZED) )
++        if( (rData.GetMask() & WINDOWSTATE_MASK_STATE) && (nState & (WINDOWSTATE_STATE_MAXIMIZED |
++                                                                     WINDOWSTATE_STATE_MAXIMIZED_NONPRIMARY)) )
+         {
+             // query maximized size from frame
+             SalFrameGeometry aGeometry = mpWindowImpl->mpFrame->GetGeometry();
+Only in vcl/source/window: syswin.cxx.orig
+Only in vcl/source/window: syswin.cxx~
+diff -u vcl.bak/win/source/window/salframe.cxx vcl/win/source/window/salframe.cxx
+--- vcl.bak/win/source/window/salframe.cxx	2010-06-25 12:56:57.000000000 +0300
++++ vcl/win/source/window/salframe.cxx	2010-08-24 19:42:45.576437000 +0300
+@@ -168,15 +168,28 @@
+     if ( !pFrame->mbFullScreen )
+     {
+         BOOL bVisible = (GetWindowStyle( pFrame->mhWnd ) & WS_VISIBLE) != 0;
++        RECT aRect;
++        GetWindowRect( pFrame->mhWnd, &aRect );
++        HMONITOR hmonitor = MonitorFromWindow( pFrame->mhWnd, MONITOR_DEFAULTTONEAREST );
++        MONITORINFOEX monitorinfo;
++        monitorinfo.cbSize = sizeof( monitorinfo );
++        GetMonitorInfo( hmonitor, &monitorinfo );
++
+         if ( IsIconic( pFrame->mhWnd ) )
+         {
+             pFrame->maState.mnState |= SAL_FRAMESTATE_MINIMIZED;
+             if ( bVisible )
+                 pFrame->mnShowState = SW_SHOWMAXIMIZED;
+         }
+-        else if ( IsZoomed( pFrame->mhWnd ) )
++        /* If the window is maximized on the primary monitor,
++         * recognize it indeed as maximized. If maximized but on a
++         * non-primary monitor, do a hack.
++         */
++        else if ( IsZoomed( pFrame->mhWnd ) &&
++                  (monitorinfo.dwFlags & MONITORINFOF_PRIMARY) )
+         {
+-            pFrame->maState.mnState &= ~SAL_FRAMESTATE_MINIMIZED;
++            pFrame->maState.mnState &= ~(SAL_FRAMESTATE_MINIMIZED |
++                                         SAL_FRAMESTATE_MAXIMIZED_NONPRIMARY);
+             pFrame->maState.mnState |= SAL_FRAMESTATE_MAXIMIZED;
+             if ( bVisible )
+                 pFrame->mnShowState = SW_SHOWMAXIMIZED;
+@@ -184,9 +197,6 @@
+         }
+         else
+         {
+-            RECT aRect;
+-            GetWindowRect( pFrame->mhWnd, &aRect );
+-
+             // to be consistent with Unix, the frame state is without(!) decoration
+             RECT aRect2 = aRect;
+             AdjustWindowRectEx( &aRect2, GetWindowStyle( pFrame->mhWnd ),
+@@ -196,7 +206,9 @@
+             long nBottomDeco = abs( aRect.bottom - aRect2.bottom );
+             long nRightDeco = abs( aRect.right - aRect2.right );
+ 
+-            pFrame->maState.mnState &= ~(SAL_FRAMESTATE_MINIMIZED | SAL_FRAMESTATE_MAXIMIZED);
++            pFrame->maState.mnState &= ~(SAL_FRAMESTATE_MINIMIZED | 
++                                         SAL_FRAMESTATE_MAXIMIZED |
++                                         SAL_FRAMESTATE_MAXIMIZED_NONPRIMARY);
+             // subtract decoration
+             pFrame->maState.mnX      = aRect.left+nLeftDeco;
+             pFrame->maState.mnY      = aRect.top+nTopDeco;
+@@ -205,6 +217,37 @@
+             if ( bVisible )
+                 pFrame->mnShowState = SW_SHOWNORMAL;
+             pFrame->mbRestoreMaximize = FALSE;
++
++            if ( IsZoomed( pFrame->mhWnd ) )
++            {
++                pFrame->maState.mnState  |= SAL_FRAMESTATE_MAXIMIZED_NONPRIMARY;
++#if 1
++                /* If the window is actually maximized (on a
++                 * non-primary monitor), pretend the window is a
++                 * bit smaller... The necessary shrinkage was determined just
++                 * by testing on Windows 7, and on Windows XP in a
++                 * virtual machine, no idea how well it works on other
++                 * Windows versions, or various appearance
++                 * configurations. In a newly started OOo, the
++                 * corresponding window will be positioned in this
++                 * shrinked state but then explicitly maximized. Silly
++                 * but hopefully good enough.
++                 */
++
++                /* Now bogus comment: Don't do this, it leads to the
++                 * window flashing first in the shrinked state before
++                 * then being maximized, and. Just let the restored
++                 * state of the window be the "maximized" one, so that
++                 * if the user tries to un-maximize it, the client
++                 * area stays the same size. Ugly, but less annoying
++                 * than the flash I think.
++                 */
++                pFrame->maState.mnX      += 30;
++                pFrame->maState.mnY      += 30;
++                pFrame->maState.mnWidth  -= 60;
++                pFrame->maState.mnHeight -= 60;
++#endif
++            }
+         }
+     }
+ }
+@@ -1264,6 +1307,12 @@
+     if ( !pFrame )
+         return;
+ 
++    bool bNonPrimaryMaximize = false;
++    if ( pFrame->maState.mnState & SAL_FRAMESTATE_MAXIMIZED_NONPRIMARY )
++      bNonPrimaryMaximize = true;
++
++    // char buf[100]; sprintf(buf, "bVisible=%d, bNonPrimaryMaximize=%d", bVisible, bNonPrimaryMaximize); MessageBox(NULL, buf, "ImplSalShow", MB_OK);
++
+     if ( bVisible )
+     {
+         pFrame->mbDefPos = FALSE;
+@@ -1277,6 +1326,8 @@
+         vcl::DeletionListener aDogTag( pFrame );
+         if( bNoActivate )
+             ShowWindow( hWnd, SW_SHOWNOACTIVATE );
++        else if ( bNonPrimaryMaximize )
++            ShowWindow( hWnd, SW_MAXIMIZE );
+         else
+             ShowWindow( hWnd, pFrame->mnShowState );
+         if( aDogTag.isDeleted() )
+@@ -1896,6 +1947,7 @@
+     // Status setzen
+     BOOL bVisible = (GetWindowStyle( mhWnd ) & WS_VISIBLE) != 0;
+     BOOL bUpdateHiddenFramePos = FALSE;
++    maState = *pState;
+     if ( !bVisible )
+     {
+         aPlacement.showCmd = SW_HIDE;
+@@ -1911,6 +1963,12 @@
+                     mnShowState = SW_SHOWMAXIMIZED;
+                     bUpdateHiddenFramePos = TRUE;
+                 }
++#if 0
++                else if ( pState->mnState & SAL_FRAMESTATE_MAXIMIZED_NONPRIMARY )
++                {
++                    mnShowState = SW_SHOWMAXIMIZED;
++                }
++#endif
+                 else if ( pState->mnState & SAL_FRAMESTATE_NORMAL )
+                     mnShowState = SW_SHOWNORMAL;
+             }
+@@ -1926,7 +1984,8 @@
+                     aPlacement.flags |= WPF_RESTORETOMAXIMIZED;
+                 aPlacement.showCmd = SW_SHOWMINIMIZED;
+             }
+-            else if ( pState->mnState & SAL_FRAMESTATE_MAXIMIZED )
++            else if ( pState->mnState & (SAL_FRAMESTATE_MAXIMIZED |
++                                         SAL_FRAMESTATE_MAXIMIZED_NONPRIMARY) )
+                 aPlacement.showCmd = SW_SHOWMAXIMIZED;
+             else if ( pState->mnState & SAL_FRAMESTATE_NORMAL )
+                 aPlacement.showCmd = SW_RESTORE;
+Only in vcl/win/source/window: salframe.cxx.orig
+Only in vcl/win/source/window: salframe.cxx~
