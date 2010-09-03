@@ -14,11 +14,10 @@ RAWBUILDDIR=`readlink -e $0 | sed 's/\/bin\/g$/\/rawbuild/'`
 
 # extra params for some commands, like log
 EXTRA=
-EXTRA_END=
 COMMAND="$1"
 PAGER=
 RELATIVIZE=1
-ALWAYS_PUSH=
+PUSH_ALL=
 
 case "$COMMAND" in
     apply)
@@ -40,68 +39,22 @@ FILESNUM=0
 while shift ; do
     PARAM="$1"
     if [ -z "$PARAM" ] ; then
-        #ignore
-        :
+        continue
     elif [ "${PARAM:0:1}" = "-" ] ; then
-        if [ "$COMMAND" = "commit" ] ; then
-            # special handling of -m
-            case "$PARAM" in
-                -m)
-                    shift
-                    FILES[$FILESNUM]="--message=$1"
-                    FILESNUM=$(($FILESNUM+1))
-                    ;;
-                -am)
-                    FILES[$FILESNUM]="-a"
-                    FILESNUM=$(($FILESNUM+1))
-                    shift
-                    FILES[$FILESNUM]="--message=$1"
-                    FILESNUM=$(($FILESNUM+1))
-                    ;;
-                 *)
-                    FILES[$FILESNUM]="$PARAM"
-                    FILESNUM=$(($FILESNUM+1))
-                    ;;
-            esac
-        elif [ "$COMMAND" = "push" ] ; then
-            # special handling of --tags
-            case "$PARAM" in
-                --tags)
-                    ALWAYS_PUSH=1
-                    FILES[$FILESNUM]="$PARAM"
-                    FILESNUM=$(($FILESNUM+1))
-                    ;;
-                 *)
-                    FILES[$FILESNUM]="$PARAM"
-                    FILESNUM=$(($FILESNUM+1))
-                    ;;
-            esac
-        elif [ "$COMMAND" = "tag" ] ; then
-            # special handling of -m
-            case "$PARAM" in
-                -m)
-                    shift
-                    FILES[$FILESNUM]="-m $1"
-                    FILESNUM=$(($FILESNUM+1))
-                    ;;
-                 *)
-                    FILES[$FILESNUM]="$PARAM"
-                    FILESNUM=$(($FILESNUM+1))
-                    ;;
-            esac
-        elif [ "$COMMAND" = "checkout" ] ; then
-            # special handling of -b
-            case "$PARAM" in
-                -b)
-                    shift
-                    EXTRA_END="$EXTRA_END -b $1"
-                    ;;
-                 *)
-                    FILES[$FILESNUM]="$PARAM"
-                    FILESNUM=$(($FILESNUM+1))
-                    ;;
-            esac
+        if [ \( "$COMMAND" = "checkout" -a "$PARAM" = "-b" \) -o \
+             \( "$COMMAND" = "commit"   -a "$PARAM" = "-m" \) -o \
+             \( "$COMMAND" = "commit"   -a "$PARAM" = "-am" \) -o \
+             \( "$COMMAND" = "tag"      -a "$PARAM" = "-m" \) ]
+        then
+            # params that take an argument
+            FILES[$FILESNUM]="$PARAM"
+            FILESNUM=$(($FILESNUM+1))
+            shift
+            FILES[$FILESNUM]="$1"
+            FILESNUM=$(($FILESNUM+1))
         else
+            [ "$COMMAND" = "push" -a "$PARAM" = "--tags" ] && PUSH_ALL=1
+
             FILES[$FILESNUM]="$PARAM"
             FILESNUM=$(($FILESNUM+1))
         fi
@@ -115,19 +68,19 @@ while shift ; do
                 exit 1
             }
         fi
+
+        # make the paths absolute
         FILES[$FILESNUM]=`readlink -n -e "$PARAM"`
         if [ -z "${FILES[$FILESNUM]}" ] ; then
-            # empty parameter caused problems
-            unset FILES[$FILESNUM]
+            # commands that take params other than files
             if [ "$COMMAND" = "checkout" -o "$COMMAND" = "tag" ] ; then
-                EXTRA_END="$EXTRA_END $PARAM"
+                FILES[$FILESNUM]="$PARAM"
             else
                 echo "'$PARAM' not found in `pwd`."
                 exit 1
             fi
-        else
-            FILESNUM=$(($FILESNUM+1))
         fi
+        FILESNUM=$(($FILESNUM+1))
     fi
 done
 
@@ -149,12 +102,14 @@ for DIR in * ; do
                 for I in "${FILES[@]}" ; do
                     unset FILES[$FILESNUM]
                     FILESNUM=$(($FILESNUM+1))
-                    # set only those that are parameters, or belong to this repo
-                    if [ "${I:0:1}" = "-" ] ; then
+                    # filter out files that don't belong to this repo
+                    if [ "${I:0:1}" = "/" ] ; then
+                        if [ "${I:0:$PWDLEN}" = "$PWD/" ] ; then
+                            FILES[$INSERTNUM]="${I:$PWDLEN}"
+                            INSERTNUM=$(($INSERTNUM+1))
+                        fi
+                    else
                         FILES[$INSERTNUM]="$I"
-                        INSERTNUM=$(($INSERTNUM+1))
-                    elif [ "${I:0:$PWDLEN}" = "$PWD/" ] ; then
-                        FILES[$INSERTNUM]="${I:$PWDLEN}"
                         INSERTNUM=$(($INSERTNUM+1))
                     fi
                 done
@@ -176,7 +131,7 @@ for DIR in * ; do
                     git status | grep -qs '^nothing to commit' && exit 0
                     ;;
                 push)
-                    if [ "$ALWAYS_PUSH" != "1" ] ; then
+                    if [ "$PUSH_ALL" != "1" ] ; then
                         git status | grep -qs '^# Your branch is ahead of' || exit 0
                     fi
                     ;;
@@ -193,7 +148,8 @@ for DIR in * ; do
             # check for changes
             HEADREF=`git show-ref --head HEAD`
 
-            git $PAGER "$COMMAND" $EXTRA "${FILES[@]}" $EXTRA_END
+            # do it!
+            git $PAGER "$COMMAND" $EXTRA "${FILES[@]}"
             RETURN=$?
 
             # update stamp if the repo changed
