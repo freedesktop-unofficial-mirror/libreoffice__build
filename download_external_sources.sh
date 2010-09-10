@@ -3,13 +3,12 @@
 . ./bin/setup
 
 export TARFILE_LOCATION
-TAG=`echo $OOO_TAG | tr a-z A-Z | sed -e s/-M/_m/`
-MWS=`echo $TAG | cut -d_ -f1`
+GIT_TAG=`echo $CVSTAG | tr "a-z.-" "A-Z__"`
 tmp=`mktemp -q -d`
 
 cd $tmp
-wget http://hg.services.openoffice.org/${MWS}/raw-file/${TAG}/fetch_tarballs.sh && chmod 755 ./fetch_tarballs.sh
-wget http://hg.services.openoffice.org/${MWS}/raw-file/${TAG}/ooo.lst
+wget http://cgit.freedesktop.org/ooo-build/bootstrap/plain/fetch_tarballs.sh?id=$GIT_TAG -O fetch_tarballs.sh && chmod 755 fetch_tarballs.sh
+wget http://cgit.freedesktop.org/ooo-build/bootstrap/plain/ooo.lst?id=$GIT_TAG -O ooo.lst
 ./fetch_tarballs.sh ooo.lst &&  rm -f fetch_tarballs.sh ooo.lst
 cd ..
 rmdir $tmp
