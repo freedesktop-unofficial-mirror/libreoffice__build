@@ -3,7 +3,7 @@
 . ./bin/setup
 
 export TARFILE_LOCATION
-GIT_TAG=`echo $CVSTAG | tr "a-z.-" "A-Z__"`
+GIT_TAG=`echo $OOO_SOURCEDIRNAME | tr "a-z.-" "A-Z__"`
 tmp=`mktemp -q -d`
 
 cd $tmp
