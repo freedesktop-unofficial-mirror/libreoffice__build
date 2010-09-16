@@ -31,6 +31,7 @@ script_files = \
 	ootool.in \
 	ootouch \
 	ooo-pack-sources \
+	ooo-unpack-sources \
 	openoffice-xlate-lang \
 	owner \
 	package-lang-win32 \
