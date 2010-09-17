@@ -1,0 +1,1005 @@
+diff --git basic/source/classes/image.cxx basic/source/classes/image.cxx
+index c04cfef..76672b4 100644
+--- basic/source/classes/image.cxx
++++ basic/source/classes/image.cxx
+@@ -433,7 +433,7 @@ void SbiImage::AddString( const String& r )
+                 memcpy( p, pStrings, nStringSize * sizeof( sal_Unicode ) );
+                 delete[] pStrings;
+                 pStrings = p;
+-                nStringSize = sal::static_int_cast< UINT16 >(nNewLen);
++				nStringSize = sal::static_int_cast< UINT32 >(nNewLen);
+             }
+             else
+                 bError = TRUE;
+diff --git forms/source/misc/InterfaceContainer.cxx forms/source/misc/InterfaceContainer.cxx
+index d0deb50..c2616fd 100644
+--- forms/source/misc/InterfaceContainer.cxx
++++ forms/source/misc/InterfaceContainer.cxx
+@@ -154,9 +154,16 @@ void OInterfaceContainer::impl_addVbEvents_nolck_nothrow(  const sal_Int32 i_nIn
+             xProps->getPropertyValue( rtl::OUString::createFromAscii("DefaultControl" ) ) >>= sServiceName;
+ 
+             Reference< ooo::vba::XVBAToOOEventDescGen > xDescSupplier( m_xServiceFactory->createInstance( rtl::OUString::createFromAscii( "ooo.vba.VBAToOOEventDesc" ) ), UNO_QUERY_THROW );
+-            Sequence< ScriptEventDescriptor > vbaEvents = xDescSupplier->getEventDescriptions( m_xServiceFactory->createInstance( sServiceName ), sCodeName );
++			Reference< XInterface > xInterface = m_xServiceFactory->createInstance( sServiceName );
++			Sequence< ScriptEventDescriptor > vbaEvents = xDescSupplier->getEventDescriptions( xInterface, sCodeName );
+             // register the vba script events
+             m_xEventAttacher->registerScriptEvents( i_nIndex, vbaEvents );
++
++			Reference< XComponent > xComponent( xInterface, UNO_QUERY );
++			if ( xComponent.is() )
++			{
++				xComponent->dispose();
++			}
+         }
+         while ( false );
+     }
+diff --git oovbaapi/ooo/vba/excel/XName.idl oovbaapi/ooo/vba/excel/XName.idl
+index 6397e7a..dd51d33 100644
+--- oovbaapi/ooo/vba/excel/XName.idl
++++ oovbaapi/ooo/vba/excel/XName.idl
+@@ -50,12 +50,12 @@ interface XName
+     [attribute] string Name;
+     [attribute] string NameLocal;
+     [attribute] boolean Visible;
+-        [attribute, readonly] string Value;
+-        [attribute, readonly] string RefersTo;
+-        [attribute, readonly] string RefersToLocal;
+-        [attribute, readonly] string RefersToR1C1;
+-        [attribute, readonly] string RefersToR1C1Local;
+-        [attribute, readonly] XRange RefersToRange;
++	[attribute] string Value;
++	[attribute, readonly] string RefersTo;
++	[attribute, readonly] string RefersToLocal;
++	[attribute, readonly] string RefersToR1C1;
++	[attribute, readonly] string RefersToR1C1Local;
++	[attribute, readonly] XRange RefersToRange;
+ 
+     void Delete( );
+ };
+diff --git oovbaapi/ooo/vba/excel/XRange.idl oovbaapi/ooo/vba/excel/XRange.idl
+index 4ed6fc4..1654749 100644
+--- oovbaapi/ooo/vba/excel/XRange.idl
++++ oovbaapi/ooo/vba/excel/XRange.idl
+@@ -83,6 +83,7 @@ interface XRange
+     interface ::ooo::vba::excel::XFormat;
+     //interface ::ooo::vba::XHelperInterface;
+ 
++	[attribute, readonly] any Name;
+     [attribute] any Value; 
+     [attribute] any Formula;
+     [attribute] any FormulaArray;
+diff --git sc/inc/document.hxx sc/inc/document.hxx
+index 7eaf99f..e59bdee 100644
+--- sc/inc/document.hxx
++++ sc/inc/document.hxx
+@@ -593,6 +593,7 @@ public:
+     BOOL			HasSelectedBlockMatrixFragment( SCCOL nStartCol, SCROW nStartRow,
+                                             SCCOL nEndCol, SCROW nEndRow,
+                                             const ScMarkData& rMark ) const;
++	BOOL			HasSelectedBlockMatrixFragment( SCCOL nStartCol, SCROW nStartRow, SCCOL nEndCol, SCROW nEndRow, SCTAB nTAB ) const;
+ 
+     BOOL			GetMatrixFormulaRange( const ScAddress& rCellPos, ScRange& rMatrix );
+ 
+@@ -1050,6 +1051,9 @@ public:
+                                const ScMarkData* pMarks = NULL, bool bAllTabs = false, bool bKeepScenarioFlags = false,
+                                bool bIncludeObjects = false, bool bCloneNoteCaptions = true);
+ 
++    void			CopyToClip4VBA(const ScClipParam& rClipParam, ScDocument* pClipDoc, bool bKeepScenarioFlags = false, 
++                                   bool bIncludeObjects = false, bool bCloneNoteCaptions = true);
++
+     void			CopyTabToClip(SCCOL nCol1, SCROW nRow1, SCCOL nCol2, SCROW nRow2,
+                                 SCTAB nTab, ScDocument* pClipDoc = NULL);
+     void 			CopyBlockFromClip( SCCOL nCol1, SCROW nRow1, SCCOL nCol2, SCROW nRow2,
+@@ -1875,6 +1879,7 @@ private: // CLOOK-Impl-Methoden
+                              const ScRange& r, SCsCOL nDx, SCsROW nDy, SCsTAB nDz );
+ 
+     void    CopyRangeNamesToClip(ScDocument* pClipDoc, const ScRange& rClipRange, const ScMarkData* pMarks, bool bAllTabs);
++    void    CopyRangeNamesToClip(ScDocument* pClipDoc, const ScRange& rClipRange, SCTAB nTab);
+     void    CopyRangeNamesFromClip(ScDocument* pClipDoc, ScClipRangeNameData& rRangeNames);
+     void    UpdateRangeNamesInFormulas(
+         ScClipRangeNameData& rRangeNames, const ScRangeList& rDestRanges, const ScMarkData& rMark,
+diff --git sc/source/core/data/document.cxx sc/source/core/data/document.cxx
+index 1d13cbb..790c40b 100644
+--- sc/source/core/data/document.cxx
++++ sc/source/core/data/document.cxx
+@@ -1618,6 +1618,40 @@ void ScDocument::CopyToClip(const ScClipParam& rClipParam,
+     pClipDoc->ExtendMerge(aClipRange, true);
+ }
+ 
++// Copy the content of the Range into clipboard. Adding this method for VBA API: Range.Copy().
++void ScDocument::CopyToClip4VBA(const ScClipParam& rClipParam, ScDocument* pClipDoc, bool bKeepScenarioFlags, bool bIncludeObjects, bool bCloneNoteCaptions)
++{
++	if ( !bIsClip )
++	{
++		pClipDoc = pClipDoc ? pClipDoc : SC_MOD()->GetClipDoc();
++		if ( !pClipDoc )
++		{
++			return;
++		}
++		ScRange aClipRange = rClipParam.getWholeRange();
++		SCTAB nTab = aClipRange.aStart.Tab();
++		pClipDoc->aDocName = aDocName;
++		pClipDoc->SetClipParam( rClipParam );
++		pClipDoc->ResetClip( this, nTab );
++
++		CopyRangeNamesToClip( pClipDoc, aClipRange, nTab );
++
++		if ( pTab[nTab] && pClipDoc->pTab[nTab] )
++		{
++			pTab[nTab]->CopyToClip( rClipParam.maRanges, pClipDoc->pTab[nTab], bKeepScenarioFlags, bCloneNoteCaptions );
++			if ( pDrawLayer && bIncludeObjects )
++			{
++				// Also copy drawing objects.
++				Rectangle aObjRect = GetMMRect( aClipRange.aStart.Col(), aClipRange.aStart.Row(), aClipRange.aEnd.Col(), aClipRange.aEnd.Row(), nTab );
++				pDrawLayer->CopyToClip( pClipDoc, nTab, aObjRect );
++			}
++		}
++
++		// Make sure to mark overlapped cells.
++		pClipDoc->ExtendMerge( aClipRange, true );
++	}
++}
++
+ void ScDocument::CopyTabToClip(SCCOL nCol1, SCROW nRow1,
+                                 SCCOL nCol2, SCROW nRow2,
+                                 SCTAB nTab, ScDocument* pClipDoc)
+@@ -1739,6 +1773,31 @@ void ScDocument::CopyRangeNamesToClip(ScDocument* pClipDoc, const ScRange& rClip
+     }
+ }
+ 
++void ScDocument::CopyRangeNamesToClip(ScDocument* pClipDoc, const ScRange& rClipRange, SCTAB nTab)
++{
++	// Indexes of named ranges that are used in the copied cells
++	std::set<USHORT> aUsedNames;
++	if ( pTab[nTab] && pClipDoc->pTab[nTab] )
++	{
++		pTab[nTab]->FindRangeNamesInUse( rClipRange.aStart.Col(), rClipRange.aStart.Row(), rClipRange.aEnd.Col(), rClipRange.aEnd.Row(), aUsedNames );
++	}
++
++	pClipDoc->pRangeName->FreeAll();
++	for ( USHORT i = 0; i < pRangeName->GetCount(); i++ )
++	{
++		USHORT nIndex = ((ScRangeData*)((*pRangeName)[i]))->GetIndex();
++		bool bInUse = ( aUsedNames.find(nIndex) != aUsedNames.end() );
++		if ( bInUse )
++		{
++			ScRangeData* pData = new ScRangeData(*((*pRangeName)[i]));
++			if ( !pClipDoc->pRangeName->Insert(pData) )
++				delete pData;
++			else
++				pData->SetIndex(nIndex);
++		}
++	}
++}
++
+ ScDocument::NumFmtMergeHandler::NumFmtMergeHandler(ScDocument* pDoc, ScDocument* pSrcDoc) :
+         mpDoc(pDoc)
+ {
+@@ -4506,6 +4565,15 @@ BOOL ScDocument::HasSelectedBlockMatrixFragment( SCCOL nStartCol, SCROW nStartRo
+     return !bOk;
+ }
+ 
++BOOL ScDocument::HasSelectedBlockMatrixFragment( SCCOL nStartCol, SCROW nStartRow, SCCOL nEndCol, SCROW nEndRow, SCTAB nTab ) const
++{
++	BOOL bOk = TRUE;
++	if ( pTab[nTab] && pTab[nTab]->HasBlockMatrixFragment( nStartCol, nStartRow, nEndCol, nEndRow ) )
++	{
++		bOk = FALSE;
++	}
++	return !bOk;
++}
+ 
+ BOOL ScDocument::GetMatrixFormulaRange( const ScAddress& rCellPos, ScRange& rMatrix )
+ {
+diff --git sc/source/ui/inc/viewfunc.hxx sc/source/ui/inc/viewfunc.hxx
+index 4f56a63..2f271c9 100644
+--- sc/source/ui/inc/viewfunc.hxx
++++ sc/source/ui/inc/viewfunc.hxx
+@@ -111,6 +111,8 @@ public:
+     SC_DLLPUBLIC void			CutToClip( ScDocument* pClipDoc = NULL, BOOL bIncludeObjects = FALSE );
+     SC_DLLPUBLIC BOOL			CopyToClip( ScDocument* pClipDoc = NULL, BOOL bCut = FALSE, BOOL bApi = FALSE,
+                                 BOOL bIncludeObjects = FALSE, BOOL bStopEdit = TRUE );
++	SC_DLLPUBLIC BOOL			CopyToClip( ScDocument* pClipDoc, const ScRange& rRange, BOOL bCut = FALSE, 
++								BOOL bApi = FALSE, BOOL bIncludeObjects = FALSE, BOOL bStopEdit = TRUE );
+     ScTransferObj*              CopyToTransferable();
+     SC_DLLPUBLIC BOOL			PasteFromClip( USHORT nFlags, ScDocument* pClipDoc,
+                                     USHORT nFunction = PASTE_NOFUNC, BOOL bSkipEmpty = FALSE,
+diff --git sc/source/ui/vba/excelvbahelper.cxx sc/source/ui/vba/excelvbahelper.cxx
+index 705941b..23eb681 100644
+--- sc/source/ui/vba/excelvbahelper.cxx
++++ sc/source/ui/vba/excelvbahelper.cxx
+@@ -30,6 +30,9 @@
+ #include "transobj.hxx"
+ #include "scmod.hxx"
+ #include "cellsuno.hxx"
++#include "compiler.hxx"
++#include "token.hxx"
++#include "tokenarray.hxx"
+ #include <comphelper/processfactory.hxx>
+ #include <com/sun/star/sheet/XSheetCellRange.hpp>
+ 
+@@ -255,6 +258,15 @@ void implnPasteSpecial( const uno::Reference< frame::XModel>& xModel, USHORT nFl
+ 
+ }
+ 
++void implnCopyRange( const uno::Reference< frame::XModel>& xModel, const ScRange& rRange )
++{
++	ScTabViewShell* pViewShell = getBestViewShell( xModel );
++	if ( pViewShell )
++	{
++		pViewShell->CopyToClip( NULL, rRange, FALSE, TRUE, TRUE );
++	}
++}
++
+ ScDocShell* 
+ getDocShell( const css::uno::Reference< css::frame::XModel>& xModel ) 
+ {
+@@ -322,6 +334,84 @@ getUnoSheetModuleObj( const uno::Reference< table::XCellRange >& xRange ) throw
+     return xParent;
+ }
+ 
++formula::FormulaGrammar::Grammar GetFormulaGrammar( ScDocument* pDoc, const ScAddress& sAddress, const css::uno::Any& aFormula )
++{
++	formula::FormulaGrammar::Grammar eGrammar = formula::FormulaGrammar::GRAM_NATIVE_XL_A1;
++	if ( pDoc && aFormula.hasValue() && aFormula.getValueTypeClass() == uno::TypeClass_STRING )
++	{
++		rtl::OUString sFormula;
++		aFormula >>= sFormula;
++
++		ScCompiler aCompiler( pDoc, sAddress );
++		aCompiler.SetGrammar( formula::FormulaGrammar::GRAM_NATIVE_XL_R1C1 );
++		ScTokenArray* pCode = aCompiler.CompileString( sFormula );
++		if ( pCode )
++		{
++			USHORT nLen = pCode->GetLen();
++			formula::FormulaToken** pTokens = pCode->GetArray();
++			for ( USHORT nPos = 0; nPos < nLen; nPos++ )
++			{
++				const formula::FormulaToken& rToken = *pTokens[nPos];
++				switch ( rToken.GetType() )
++				{
++					case formula::svSingleRef:
++					case formula::svDoubleRef:
++					{
++						return formula::FormulaGrammar::GRAM_NATIVE_XL_R1C1;
++					}
++					break;
++					default: break;
++				}
++			}
++		}
++	}
++	return eGrammar;
++}
++
++void CompileExcelFormulaToODF( ScDocument* pDoc, const String& rOldFormula, String& rNewFormula )
++{
++	if ( !pDoc )
++	{
++		return;
++	}
++	ScCompiler aCompiler( pDoc, ScAddress() );
++	aCompiler.SetGrammar( excel::GetFormulaGrammar( pDoc, ScAddress(), uno::Any( rtl::OUString( rOldFormula ) ) ) );
++	ScTokenArray* pCode = aCompiler.CompileString( rOldFormula );
++	aCompiler.SetGrammar( formula::FormulaGrammar::GRAM_PODF_A1 );
++	aCompiler.CreateStringFromTokenArray( rNewFormula );
++}
++
++void CompileODFFormulaToExcel( ScDocument* pDoc, const String& rOldFormula, String& rNewFormula, const formula::FormulaGrammar::Grammar eGrammar )
++{
++	// eGrammar can be formula::FormulaGrammar::GRAM_NATIVE_XL_R1C1 and formula::FormulaGrammar::GRAM_NATIVE_XL_A1
++	if ( !pDoc )
++	{
++		return;
++	}
++	ScCompiler aCompiler( pDoc, ScAddress() );
++	aCompiler.SetGrammar( formula::FormulaGrammar::GRAM_PODF_A1 );
++	ScTokenArray* pCode = aCompiler.CompileString( rOldFormula );
++	aCompiler.SetGrammar( eGrammar );
++	if ( !pCode )
++	{
++		return;
++	}
++	USHORT nLen = pCode->GetLen();
++	formula::FormulaToken** pTokens = pCode->GetArray();
++	for ( USHORT nPos = 0; nPos < nLen && pTokens[nPos]; nPos++ )
++	{
++		String rFormula;
++		formula::FormulaToken* pToken = pTokens[nPos];
++		aCompiler.CreateStringFromToken( rFormula, pToken, TRUE );
++		if ( pToken->GetOpCode() == ocSep )
++		{
++			// Excel formula separator is ",".
++			rFormula = String::CreateFromAscii(",");
++		}
++		rNewFormula += rFormula;
++	}
++}
++
+ uno::Reference< XHelperInterface > 
+ getUnoSheetModuleObj( const uno::Reference< sheet::XSheetCellRangeContainer >& xRanges ) throw ( uno::RuntimeException )
+ {
+diff --git sc/source/ui/vba/excelvbahelper.hxx sc/source/ui/vba/excelvbahelper.hxx
+index ab0474e..d93237f 100644
+--- sc/source/ui/vba/excelvbahelper.hxx
++++ sc/source/ui/vba/excelvbahelper.hxx
+@@ -34,6 +34,7 @@
+ #include <com/sun/star/table/XCellRange.hpp>
+ #include <com/sun/star/sheet/XSheetCellRangeContainer.hpp>
+ #include <ooo/vba/XHelperInterface.hpp>
++#include <formula/grammar.hxx>
+ 
+ class ScCellRangesBase;
+ 
+@@ -49,11 +50,15 @@ namespace ooo
+             void implnPaste ( const css::uno::Reference< css::frame::XModel>& xModel );
+             void implnCut( const css::uno::Reference< css::frame::XModel>& xModel );
+             void implnPasteSpecial( const css::uno::Reference< css::frame::XModel>& xModel, sal_uInt16 nFlags,sal_uInt16 nFunction,sal_Bool bSkipEmpty, sal_Bool bTranspose);
++            void implnCopyRange( const css::uno::Reference< css::frame::XModel>& xModel, const ScRange& rRange );
+             ScTabViewShell* getBestViewShell( const css::uno::Reference< css::frame::XModel>& xModel ) ;
+             ScDocShell* getDocShell( const css::uno::Reference< css::frame::XModel>& xModel ) ;
+             ScTabViewShell* getCurrentBestViewShell( const css::uno::Reference< css::uno::XComponentContext >& xContext );
+             SfxViewFrame* getViewFrame( const css::uno::Reference< css::frame::XModel >& xModel );
+             sal_Bool IsR1C1ReferFormat( ScDocument* pDoc, const ::rtl::OUString& sRangeStr );
++            formula::FormulaGrammar::Grammar GetFormulaGrammar( ScDocument* pDoc, const ScAddress& sAddress, const css::uno::Any& aFormula );
++            void CompileExcelFormulaToODF( ScDocument* pDoc, const String& rOldFormula, String& rNewFormula );
++            void CompileODFFormulaToExcel( ScDocument* pDoc, const String& rOldFormula, String& rNewFormula, const formula::FormulaGrammar::Grammar eGrammar );
+             css::uno::Reference< css::sheet::XDatabaseRanges > GetDataBaseRanges( ScDocShell* pShell ) throw ( css::uno::RuntimeException );
+ 
+             css::uno::Reference< css::sheet::XDatabaseRange > GetAutoFiltRange( ScDocShell* pShell, sal_Int16 nSheet, rtl::OUString& sName ) throw ( css::uno::RuntimeException );
+diff --git sc/source/ui/vba/vbaname.cxx sc/source/ui/vba/vbaname.cxx
+index b5238cf..d0c3fd4 100644
+--- sc/source/ui/vba/vbaname.cxx
++++ sc/source/ui/vba/vbaname.cxx
+@@ -107,78 +107,41 @@ ScVbaName::setVisible( sal_Bool /*bVisible*/ ) throw (css::uno::RuntimeException
+ ::rtl::OUString
+ ScVbaName::getValue() throw (css::uno::RuntimeException)
+ {
+-    ::rtl::OUString sValue = mxNamedRange->getContent();
+-    ::rtl::OUString sSheetName = getWorkSheet()->getName();
+-    ::rtl::OUString sSegmentation = ::rtl::OUString::createFromAscii( ";" );
+-    ::rtl::OUString sNewSegmentation = ::rtl::OUString::createFromAscii( "," );
+-    ::rtl::OUString sResult;
+-    sal_Int32 nFrom = 0;
+-    sal_Int32 nTo = 0;
+-    nTo = sValue.indexOf( sSegmentation, nFrom );
+-    while ( nTo != -1 )
+-    {
+-        ::rtl::OUString sTmpValue = sValue.copy( nFrom, nTo - nFrom );
+-        if ( sTmpValue.toChar() == '$' )
+-        {
+-            ::rtl::OUString sTmp = sTmpValue.copy( 1 );
+-            sTmp = sTmp.replaceAt(0, (sSheetName + ::rtl::OUString::createFromAscii(".")).getLength(), sSheetName + ::rtl::OUString::createFromAscii("!"));
+-            sResult += sTmp; 
+-            sResult += sNewSegmentation;
+-        }
+-        nFrom = nTo + 1;
+-        nTo = sValue.indexOf( sSegmentation, nFrom );
+-    }
+-    ::rtl::OUString sTmpValue = sValue.copy( nFrom );
+-    if ( sTmpValue.toChar() == '$' )
++	return getValue( formula::FormulaGrammar::GRAM_NATIVE_XL_A1 );
++}
++
++::rtl::OUString
++ScVbaName::getValue(const formula::FormulaGrammar::Grammar eGrammar) throw (css::uno::RuntimeException)
++{
++	rtl::OUString sValue = mxNamedRange->getContent();
++	ScDocShell* pDocShell = excel::getDocShell( mxModel );
++	ScDocument* pDoc = pDocShell ? pDocShell->GetDocument() : NULL;
++	String aContent;
++	excel::CompileODFFormulaToExcel( pDoc, sValue, aContent, eGrammar );
++	if ( aContent.Len() > 0 )
+     {
+-        ::rtl::OUString sTmp = sTmpValue.copy(1);
+-        sTmp = sTmp.replaceAt(0, (sSheetName + ::rtl::OUString::createFromAscii(".")).getLength(), sSheetName + ::rtl::OUString::createFromAscii("!"));
+-        sResult += sTmp;
+-    }
+-    if (sResult.indexOf('=') != 0)
++		sValue = aContent;
++	}
++	if ( sValue.indexOf('=') != 0 )
+     {
+-        sResult = ::rtl::OUString::createFromAscii("=") + sResult;
++		sValue = rtl::OUString::createFromAscii("=") + sValue;
+     }
+-    return sResult;
++	return sValue;
+ }
+ 
+ void 
+ ScVbaName::setValue( const ::rtl::OUString & rValue ) throw (css::uno::RuntimeException)
+ {
+-    ::rtl::OUString sSheetName = getWorkSheet()->getName();
+     ::rtl::OUString sValue = rValue;
+-    ::rtl::OUString sSegmentation = ::rtl::OUString::createFromAscii( "," );
+-    ::rtl::OUString sNewSegmentation = ::rtl::OUString::createFromAscii( ";" );
+-    ::rtl::OUString sResult;
+-    sal_Int32 nFrom = 0;
+-    sal_Int32 nTo = 0;
+-    if (sValue.indexOf('=') == 0)
++	ScDocShell* pDocShell = excel::getDocShell( mxModel );
++	ScDocument* pDoc = pDocShell ? pDocShell->GetDocument() : NULL;
++	String aContent;
++	excel::CompileExcelFormulaToODF( pDoc, sValue, aContent );
++	if ( aContent.Len() > 0 )
+     {
+-        ::rtl::OUString sTmp = sValue.copy(1);
+-        sValue = sTmp;
++		sValue = aContent;
+     }
+-    nTo = sValue.indexOf( sSegmentation, nFrom );
+-    while ( nTo != -1 )
+-    {
+-        ::rtl::OUString sTmpValue = sValue.copy( nFrom, nTo - nFrom );
+-        sTmpValue = sTmpValue.replaceAt(0, (sSheetName + ::rtl::OUString::createFromAscii("!")).getLength(), sSheetName + ::rtl::OUString::createFromAscii("."));
+-        if (sTmpValue.copy(0, sSheetName.getLength()).equals(sSheetName))
+-        {
+-            sTmpValue = ::rtl::OUString::createFromAscii("$") + sTmpValue;
+-        }
+-        sTmpValue += sNewSegmentation;
+-        sResult += sTmpValue;
+-        nFrom = nTo + 1;
+-        nTo = sValue.indexOf( sSegmentation, nFrom );
+-    }
+-    ::rtl::OUString sTmpValue = sValue.copy( nFrom );
+-    sTmpValue = sTmpValue.replaceAt(0, (sSheetName + ::rtl::OUString::createFromAscii("!")).getLength(), sSheetName + ::rtl::OUString::createFromAscii("."));
+-    if (sTmpValue.copy(0, sSheetName.getLength()).equals(sSheetName))
+-    {
+-        sTmpValue = ::rtl::OUString::createFromAscii("$") + sTmpValue;
+-    }
+-    sResult += sTmpValue;
+-    mxNamedRange->setContent(sResult);
++	mxNamedRange->setContent( sValue );
+ }
+ 
+ ::rtl::OUString 
+@@ -208,7 +171,7 @@ ScVbaName::setRefersToLocal( const ::rtl::OUString & rRefersTo ) throw (css::uno
+ ::rtl::OUString
+ ScVbaName::getRefersToR1C1() throw (css::uno::RuntimeException)
+ {
+-    return getRefersTo();
++    return getValue( formula::FormulaGrammar::GRAM_NATIVE_XL_R1C1 );
+ }
+ 
+ void
+@@ -220,7 +183,7 @@ ScVbaName::setRefersToR1C1( const ::rtl::OUString & rRefersTo ) throw (css::uno:
+ ::rtl::OUString 
+ ScVbaName::getRefersToR1C1Local() throw (css::uno::RuntimeException)
+ {
+-    return getRefersTo();
++    return getValue( formula::FormulaGrammar::GRAM_NATIVE_XL_R1C1 );
+ }
+ 
+ void
+diff --git sc/source/ui/vba/vbaname.hxx sc/source/ui/vba/vbaname.hxx
+index 1378647..42ee8d1 100644
+--- sc/source/ui/vba/vbaname.hxx
++++ sc/source/ui/vba/vbaname.hxx
+@@ -33,6 +33,8 @@
+ 
+ #include <vbahelper/vbahelperinterface.hxx>
+ 
++#include <formula/grammar.hxx>
++
+ class ScDocument; 
+ 
+ typedef InheritedHelperInterfaceImpl1< ov::excel::XName > NameImpl_BASE;
+@@ -48,6 +50,8 @@ class ScVbaName : public NameImpl_BASE
+ protected:
+     virtual css::uno::Reference< css::frame::XModel >  getModel() { return mxModel; }
+     virtual css::uno::Reference< ov::excel::XWorksheet > getWorkSheet() throw (css::uno::RuntimeException);
++	// Get value by FormulaGrammar, such as FormulaGrammar::GRAM_NATIVE_XL_R1C1
++	virtual ::rtl::OUString SAL_CALL getValue(const formula::FormulaGrammar::Grammar eGrammar) throw (css::uno::RuntimeException);
+ 
+ public:
+     ScVbaName( const css::uno::Reference< ov::XHelperInterface >& xParent,  const css::uno::Reference< css::uno::XComponentContext >& xContext, const css::uno::Reference< css::sheet::XNamedRange >& xName , const css::uno::Reference< css::sheet::XNamedRanges >& xNames , const css::uno::Reference< css::frame::XModel >& xModel );
+diff --git sc/source/ui/vba/vbanames.cxx sc/source/ui/vba/vbanames.cxx
+index 6a32914..02c1728 100644
+--- sc/source/ui/vba/vbanames.cxx
++++ sc/source/ui/vba/vbanames.cxx
+@@ -87,6 +87,33 @@ ScVbaNames::getScDocument()
+     return pViewData->GetDocument();
+ }
+ 
++void GetRangeOrRefersTo( const css::uno::Any& RefersTo, const uno::Reference< uno::XComponentContext >& xContext, css::uno::Reference< excel::XRange >& xRange, rtl::OUString& sRefersTo )
++{
++	if ( RefersTo.getValueTypeClass() == uno::TypeClass_STRING )
++	{
++		RefersTo >>= sRefersTo;
++	}
++	else if ( RefersTo.getValueTypeClass() == uno::TypeClass_INTERFACE )
++	{
++		RefersTo >>= xRange;
++	}
++	else if ( RefersTo.hasValue() )
++	{
++		uno::Reference< script::XTypeConverter > xConverter = getTypeConverter( xContext );
++		try
++		{
++			if ( xConverter.is() )
++			{
++				uno::Any aConverted = xConverter->convertTo( RefersTo, getCppuType((rtl::OUString*)0) );
++				aConverted >>= sRefersTo;
++			}
++		}
++		catch( uno::Exception& )
++		{
++		}
++	}
++}
++
+ css::uno::Any
+ ScVbaNames::Add( const css::uno::Any& Name ,
+                                         const css::uno::Any& RefersTo,
+@@ -100,8 +127,9 @@ ScVbaNames::Add( const css::uno::Any& Name ,
+                                         const css::uno::Any& RefersToR1C1,
+                                         const css::uno::Any& RefersToR1C1Local ) throw (css::uno::RuntimeException)
+ {
+-    
++	rtl::OUString sSheetName;
+     rtl::OUString sName;
++	rtl::OUString sRefersTo;
+     uno::Reference< excel::XRange > xRange;
+     if ( Name.hasValue() )
+         Name >>= sName;
+@@ -109,6 +137,12 @@ ScVbaNames::Add( const css::uno::Any& Name ,
+         NameLocal >>= sName;
+     if ( sName.getLength() != 0 )
+     {
++		sal_Int32 nTokenIndex = sName.indexOf('!');
++		if ( nTokenIndex >= 0 )
++		{
++			sSheetName = sName.copy( 0, nTokenIndex );
++			sName = sName.copy( nTokenIndex + 1 );
++		}
+         if ( !ScRangeData::IsNameValid( sName , getScDocument() ) )
+         {
+             ::rtl::OUString sResult ;
+@@ -121,19 +155,22 @@ ScVbaNames::Add( const css::uno::Any& Name ,
+                 sResult = sName.copy( nIndex );
+             sName = sResult ;
+             if ( !ScRangeData::IsNameValid( sName , getScDocument() ) )
+-                throw uno::RuntimeException( rtl::OUString::createFromAscii("This Name is a valid ."), uno::Reference< uno::XInterface >() );
++				throw uno::RuntimeException( rtl::OUString::createFromAscii("This Name is a invalid ."), uno::Reference< uno::XInterface >() );
+         }
+     }
+     if ( RefersTo.hasValue() || RefersToR1C1.hasValue() || RefersToR1C1Local.hasValue() )
+     {
+         if ( RefersTo.hasValue() )
+-            RefersTo >>= xRange;
++			GetRangeOrRefersTo( RefersTo, mxContext, xRange, sRefersTo );
+         if ( RefersToR1C1.hasValue() )
+-            RefersToR1C1 >>= xRange;
++			GetRangeOrRefersTo( RefersToR1C1, mxContext, xRange, sRefersTo );
+         if ( RefersToR1C1Local.hasValue() )
+-            RefersToR1C1Local >>= xRange;
++			GetRangeOrRefersTo( RefersToR1C1Local, mxContext, xRange, sRefersTo );		
+     }
+ 
++	String aContent;
++	table::CellAddress aPosition;
++	RangeType nType = RT_NAME;
+     if ( xRange.is() )
+     {
+         ScVbaRange* pRange = dynamic_cast< ScVbaRange* >( xRange.get() );
+@@ -146,19 +183,36 @@ ScVbaNames::Add( const css::uno::Any& Name ,
+         ScAddress aPos( static_cast< SCCOL >( aAddr.StartColumn ) , static_cast< SCROW >( aAddr.StartRow ) , static_cast< SCTAB >(aAddr.Sheet ) );
+         uno::Any xAny2 ;
+         String sRangeAdd = xRange->Address( xAny2, xAny2 , xAny2 , xAny2, xAny2 );
+-        String sTmp;
+-        sTmp += String::CreateFromAscii("$");
+-        sTmp += UniString(xRange->getWorksheet()->getName());
+-        sTmp += String::CreateFromAscii(".");
+-        sTmp += sRangeAdd;
+-        if ( mxNames.is() )
++		aContent += String::CreateFromAscii("$");
++		aContent += UniString(xRange->getWorksheet()->getName());
++		aContent += String::CreateFromAscii(".");
++		aContent += sRangeAdd;
++		aPosition = table::CellAddress( aAddr.Sheet , aAddr.StartColumn , aAddr.StartRow );
++	}
++	else
++	{
++		ScDocShell* pDocShell = excel::getDocShell( mxModel );
++		ScDocument* pDoc = pDocShell ? pDocShell->GetDocument() : NULL;
++		excel::CompileExcelFormulaToODF( pDoc, sRefersTo, aContent );
++		if ( aContent.Len() == 0 )
+         {
+-            RangeType nType = RT_NAME; 
+-            table::CellAddress aCellAddr( aAddr.Sheet , aAddr.StartColumn , aAddr.StartRow );
+-            if ( mxNames->hasByName( sName ) )
+-                mxNames->removeByName(sName);
+-            mxNames->addNewByName( sName , rtl::OUString(sTmp) , aCellAddr , (sal_Int32)nType);
++			aContent = sRefersTo;
+         }
++	}
++
++	uno::Reference< sheet::XNamedRange > xNewNamedRange;
++	if ( mxNames.is() )
++	{
++		if ( mxNames->hasByName( sName ) )
++		{
++			mxNames->removeByName( sName );
++		}
++		mxNames->addNewByName( sName, rtl::OUString( aContent ), aPosition, (sal_Int32) nType );
++		xNewNamedRange = uno::Reference< sheet::XNamedRange >( mxNames->getByName( sName ), uno::UNO_QUERY );
++	}
++	if ( xNewNamedRange.is() )
++	{
++		return uno::makeAny( uno::Reference< excel::XName >( new ScVbaName( mxParent, mxContext, xNewNamedRange ,mxNames , mxModel ) ) );
+     }
+     return css::uno::Any();
+ }
+diff --git sc/source/ui/vba/vbaoleobject.cxx sc/source/ui/vba/vbaoleobject.cxx
+index 9ca23d9..4e0ee2e 100644
+--- sc/source/ui/vba/vbaoleobject.cxx
++++ sc/source/ui/vba/vbaoleobject.cxx
+@@ -67,7 +67,7 @@ ScVbaOLEObject::ScVbaOLEObject( const uno::Reference< XHelperInterface >& xParen
+ uno::Reference< uno::XInterface > SAL_CALL 
+ ScVbaOLEObject::getObject() throw (uno::RuntimeException)
+ {
+-    return uno::Reference< uno::XInterface >( m_xControlShape, uno::UNO_QUERY_THROW );
++    return uno::Reference< uno::XInterface >( m_xControl, uno::UNO_QUERY_THROW );
+ }
+ 
+ sal_Bool SAL_CALL 
+diff --git sc/source/ui/vba/vbarange.cxx sc/source/ui/vba/vbarange.cxx
+index fe1a89d..1dfbc79 100755
+--- sc/source/ui/vba/vbarange.cxx
++++ sc/source/ui/vba/vbarange.cxx
+@@ -50,6 +50,7 @@
+ #include <com/sun/star/sheet/XSheetCellCursor.hpp>
+ #include <com/sun/star/sheet/XArrayFormulaRange.hpp>
+ #include <com/sun/star/sheet/XNamedRange.hpp>
++#include <com/sun/star/sheet/XNamedRanges.hpp>
+ #include <com/sun/star/sheet/XPrintAreas.hpp>
+ #include <com/sun/star/sheet/XCellRangesQuery.hpp>
+ #include <com/sun/star/beans/XPropertySet.hpp>
+@@ -176,6 +177,8 @@
+ 
+ #include "vbaglobals.hxx"
+ #include "vbastyle.hxx"
++#include "vbaname.hxx"
++#include "vbanames.hxx"
+ #include <vector>
+ #include <vbahelper/vbacollectionimpl.hxx>
+ // begin test includes
+@@ -1472,7 +1475,53 @@ ScVbaRange::visitArray( ArrayVisitor& visitor )
+     }
+ }
+ 
++uno::Any SAL_CALL ScVbaRange::getName() throw (uno::RuntimeException)
++{
++	uno::Reference< excel::XName > xName;
++
++	ScDocShell* pDocShell = getScDocShell();
++	uno::Reference< frame::XModel > xModel = pDocShell ? pDocShell->GetModel() : NULL;
++	if ( !xModel.is() )
++	{
++		throw uno::RuntimeException( rtl::OUString::createFromAscii( "Invalid document" ), uno::Reference< uno::XInterface >() );
++	}
++	uno::Reference< beans::XPropertySet > xPropertySet( xModel, uno::UNO_QUERY_THROW );
++	uno::Reference< sheet::XNamedRanges > xNamedRanges( xPropertySet->getPropertyValue( rtl::OUString::createFromAscii("NamedRanges")) , uno::UNO_QUERY_THROW );
+ 
++	uno::Reference< excel::XNames > xNames( new ScVbaNames( uno::Reference< XHelperInterface >(), mxContext , xNamedRanges , xModel ) );
++	sal_Int32 nCount = xNames->getCount();
++	ScCellRangesBase* pUnoRangesBase = getCellRangesBase();
++	if ( pUnoRangesBase && nCount > 0 )
++	{
++		ScRangeList aRangeList = pUnoRangesBase->GetRangeList();
++		for ( sal_Int32 nIndex = 0; nIndex < nCount; nIndex++ )
++		{
++			uno::Reference< excel::XName > xTmpName( xNames->Item( uno::makeAny( nIndex + 1 ), uno::Any() ), uno::UNO_QUERY );
++			if ( xTmpName.is() )
++			{
++				try
++				{
++					uno::Reference< excel::XRange > xRange = xTmpName->getRefersToRange();
++					if ( xRange.is() )
++					{
++						ScVbaRange* pRange = dynamic_cast< ScVbaRange* >( xRange.get() );
++						ScCellRangesBase* pCurRangesBase = pRange ? pRange->getCellRangesBase() : NULL;
++						if ( pCurRangesBase && aRangeList ==  pCurRangesBase->GetRangeList() )
++						{
++							xName = xTmpName;
++							break;
++						}
++					}
++				}
++				catch (const uno::Exception&)
++				{
++				}
++			}
++		}
++	}
++
++	return uno::makeAny( xName );
++}
+ 
+ uno::Any 
+ ScVbaRange::getValue( ValueGetter& valueGetter) throw (uno::RuntimeException)
+@@ -2129,24 +2178,42 @@ ScVbaRange::Cells( const uno::Any &nRowIndex, const uno::Any &nColumnIndex ) thr
+     // set in the Any, we should convert as appropriate
+     // #FIXME - perhaps worth turning this into some sort of
+     // convertion routine e.g. bSuccess = getValueFromAny( nRow, nRowIndex, getCppuType((sal_Int32*)0) )
+-    if ( nRowIndex.hasValue() && !( nRowIndex >>= nRow ) )
++	uno::Any aRowIndexAny = nRowIndex;
++	if ( aRowIndexAny.getValueTypeClass() == uno::TypeClass_INTERFACE )
++	{
++		try
++		{
++			aRowIndexAny = getDefaultPropByIntrospection( aRowIndexAny );
++		}
++		catch( uno::Exception& ) {}
++	}
++	if ( aRowIndexAny.hasValue() && !( aRowIndexAny >>= nRow ) )
+     {
+         uno::Reference< script::XTypeConverter > xConverter = getTypeConverter( mxContext );
+         uno::Any aConverted;
+         try
+         {
+-            aConverted = xConverter->convertTo( nRowIndex, getCppuType((sal_Int32*)0) );
++			aConverted = xConverter->convertTo( aRowIndexAny, getCppuType((sal_Int32*)0) );
+             bIsIndex = ( aConverted >>= nRow );
+         }
+         catch( uno::Exception& ) {} // silence any errors
+     }
+-    if ( bIsColumnIndex && !( nColumnIndex >>= nColumn ) )
++	uno::Any aColumnAny = nColumnIndex;
++	if ( aColumnAny.getValueTypeClass() == uno::TypeClass_INTERFACE )
++	{
++		try
++		{
++			aColumnAny = getDefaultPropByIntrospection( aColumnAny );
++		}
++		catch( uno::Exception& ) {}
++	}
++	if ( bIsColumnIndex && !( aColumnAny >>= nColumn ) )
+     {
+         uno::Reference< script::XTypeConverter > xConverter = getTypeConverter( mxContext );
+         uno::Any aConverted;
+         try
+         {
+-            aConverted = xConverter->convertTo( nColumnIndex, getCppuType((sal_Int32*)0) );
++			aConverted = xConverter->convertTo( aColumnAny, getCppuType((sal_Int32*)0) );
+             bIsColumnIndex = ( aConverted >>= nColumn );
+         }
+         catch( uno::Exception& ) {} // silence any errors
+@@ -2463,9 +2530,11 @@ ScVbaRange::Copy(const ::uno::Any& Destination) throw (uno::RuntimeException)
+     }
+     else
+     {
++		ScRange aRange;
++		RangeHelper thisRange( mxRange );
++		ScUnoConversion::FillScRange( aRange, thisRange.getCellRangeAddressable()->getRangeAddress() );
+ 		uno::Reference< frame::XModel > xModel = excel::GetModelFromRange( mxRange );
+-        Select();
+-        excel::implnCopy( xModel );
++		excel::implnCopyRange( xModel, aRange );
+     }
+ }
+ 
+diff --git sc/source/ui/vba/vbarange.hxx sc/source/ui/vba/vbarange.hxx
+index 50b18ba..eb6999d 100644
+--- sc/source/ui/vba/vbarange.hxx
++++ sc/source/ui/vba/vbarange.hxx
+@@ -154,7 +154,8 @@ public:
+         formula::FormulaGrammar::AddressConvention eConv = formula::FormulaGrammar::CONV_XL_A1  ) throw ( css::uno::RuntimeException );
+ 	css::table::CellAddress getLeftUpperCellAddress();
+ 
+-    // Attributes
++	// Attributes
++	virtual css::uno::Any SAL_CALL getName() throw (css::uno::RuntimeException);
+     virtual css::uno::Any SAL_CALL getValue() throw (css::uno::RuntimeException);
+     virtual void   SAL_CALL setValue( const css::uno::Any& aValue ) throw ( css::uno::RuntimeException);
+     virtual css::uno::Any SAL_CALL getFormula() throw (css::uno::RuntimeException);
+diff --git sc/source/ui/view/viewfun3.cxx sc/source/ui/view/viewfun3.cxx
+index 4c353f0..e8aa10e 100644
+--- sc/source/ui/view/viewfun3.cxx
++++ sc/source/ui/view/viewfun3.cxx
+@@ -502,6 +502,76 @@ BOOL ScViewFunc::CopyToClip( ScDocument* pClipDoc, BOOL bCut, BOOL bApi, BOOL bI
+     {
+         if (!bApi)
+             ErrorMessage(STR_NOMULTISELECT);
++	}
++
++	return bDone;
++}
++
++// Copy the content of the Range into clipboard. Adding this method for VBA API: Range.Copy().
++BOOL ScViewFunc::CopyToClip( ScDocument* pClipDoc, const ScRange& rRange, BOOL bCut, BOOL bApi, BOOL bIncludeObjects, BOOL bStopEdit )
++{
++	BOOL bDone = FALSE;
++	if ( bStopEdit )
++		UpdateInputLine();
++
++	ScRange aRange = rRange;
++	ScDocument* pDoc = GetViewData()->GetDocument();
++	if ( pDoc && !pDoc->HasSelectedBlockMatrixFragment( aRange.aStart.Col(), aRange.aStart.Row(), aRange.aEnd.Col(), aRange.aEnd.Row(), aRange.aStart.Tab() ) )
++	{
++		BOOL bSysClip = FALSE;
++		if ( !pClipDoc )
++		{
++			// Create one (deleted by ScTransferObj).
++			pClipDoc = new ScDocument( SCDOCMODE_CLIP );
++			bSysClip = TRUE;
++		}
++		if ( !bCut )
++		{
++			ScChangeTrack* pChangeTrack = pDoc->GetChangeTrack();
++			if ( pChangeTrack )
++				pChangeTrack->ResetLastCut();
++		}
++
++		if ( bSysClip && bIncludeObjects )
++		{
++			BOOL bAnyOle = pDoc->HasOLEObjectsInArea( aRange );
++			// Update ScGlobal::pDrawClipDocShellRef.
++			ScDrawLayer::SetGlobalDrawPersist( ScTransferObj::SetDrawClipDoc( bAnyOle ) );
++		}
++
++		ScClipParam aClipParam( aRange, bCut );
++		pDoc->CopyToClip4VBA( aClipParam, pClipDoc, false, bIncludeObjects );
++		if ( bSysClip )
++		{
++			ScDrawLayer::SetGlobalDrawPersist(NULL);
++			ScGlobal::SetClipDocName( pDoc->GetDocumentShell()->GetTitle( SFX_TITLE_FULLNAME ) );
++		}
++		pClipDoc->ExtendMerge( aRange, TRUE );
++
++		if ( bSysClip )
++		{
++			ScDocShell* pDocSh = GetViewData()->GetDocShell();
++			TransferableObjectDescriptor aObjDesc;
++			pDocSh->FillTransferableObjectDescriptor( aObjDesc );
++			aObjDesc.maDisplayName = pDocSh->GetMedium()->GetURLObject().GetURLNoPass();
++
++			ScTransferObj* pTransferObj = new ScTransferObj( pClipDoc, aObjDesc );
++			uno::Reference<datatransfer::XTransferable> xTransferable( pTransferObj );
++			if ( ScGlobal::pDrawClipDocShellRef )
++			{
++				SfxObjectShellRef aPersistRef( &(*ScGlobal::pDrawClipDocShellRef) );
++				pTransferObj->SetDrawPersist( aPersistRef );
++			}
++			pTransferObj->CopyToClipboard( GetActiveWin() );
++			SC_MOD()->SetClipObject( pTransferObj, NULL );
++		}
++
++		bDone = TRUE;
++	}
++	else
++	{
++		if ( !bApi )
++			ErrorMessage(STR_MATRIXFRAGMENTERR);
+     }
+ 
+     return bDone;
+diff --git vbahelper/inc/vbahelper/vbahelper.hxx vbahelper/inc/vbahelper/vbahelper.hxx
+index e13e847..4ec41a9 100644
+--- vbahelper/inc/vbahelper/vbahelper.hxx
++++ vbahelper/inc/vbahelper/vbahelper.hxx
+@@ -112,6 +112,7 @@ namespace ooo
+         VBAHELPER_DLLPUBLIC sal_Int32 getPointerStyle( const css::uno::Reference< css::frame::XModel >& );
+         VBAHELPER_DLLPUBLIC void setCursorHelper( const css::uno::Reference< css::frame::XModel >& xModel, const Pointer& rPointer, sal_Bool bOverWrite );
+         VBAHELPER_DLLPUBLIC void setDefaultPropByIntrospection( const css::uno::Any& aObj, const css::uno::Any& aValue  ) throw ( css::uno::RuntimeException );
++        VBAHELPER_DLLPUBLIC css::uno::Any getDefaultPropByIntrospection( const css::uno::Any& aObj ) throw ( css::uno::RuntimeException );
+         VBAHELPER_DLLPUBLIC css::uno::Any getPropertyValue( const css::uno::Sequence< css::beans::PropertyValue >& aProp, const rtl::OUString& aName );
+         VBAHELPER_DLLPUBLIC sal_Bool setPropertyValue( css::uno::Sequence< css::beans::PropertyValue >& aProp, const rtl::OUString& aName, const css::uno::Any& aValue );
+         VBAHELPER_DLLPUBLIC void setOrAppendPropertyValue( css::uno::Sequence< css::beans::PropertyValue >& aProp, const rtl::OUString& aName, const css::uno::Any& aValue );
+diff --git vbahelper/source/msforms/vbauserform.cxx vbahelper/source/msforms/vbauserform.cxx
+index db98591..5e14d80 100644
+--- vbahelper/source/msforms/vbauserform.cxx
++++ vbahelper/source/msforms/vbauserform.cxx
+@@ -27,6 +27,7 @@
+ #include <vbahelper/helperdecl.hxx>
+ #include "vbauserform.hxx"
+ #include <com/sun/star/awt/XControl.hpp>
++#include <com/sun/star/awt/XWindow2.hpp>
+ #include <com/sun/star/beans/PropertyConcept.hpp>
+ #include <com/sun/star/container/XNameContainer.hpp>
+ #include <basic/sbx.hxx>
+@@ -106,6 +107,24 @@ ScVbaUserForm::Hide(  ) throw (uno::RuntimeException)
+         m_xDialog->endExecute();
+ }
+ 
++sal_Bool SAL_CALL ScVbaUserForm::getVisible() throw (uno::RuntimeException)
++{
++	uno::Reference< awt::XWindow2 > xWindow2( getWindowPeer(), uno::UNO_QUERY_THROW );
++	return xWindow2->isVisible();
++}
++
++void SAL_CALL ScVbaUserForm::setVisible( sal_Bool bVisible ) throw (uno::RuntimeException)
++{
++	if ( bVisible )
++	{
++		Show();
++	}
++	else
++	{
++		Hide();
++	}
++}
++
+ void SAL_CALL 
+ ScVbaUserForm::RePaint(  ) throw (uno::RuntimeException)
+ {
+diff --git vbahelper/source/msforms/vbauserform.hxx vbahelper/source/msforms/vbauserform.hxx
+index ccc853e..bd609ad 100644
+--- vbahelper/source/msforms/vbauserform.hxx
++++ vbahelper/source/msforms/vbauserform.hxx
+@@ -50,6 +50,8 @@ public:
+     ScVbaUserForm( css::uno::Sequence< css::uno::Any > const& aArgs, css::uno::Reference< css::uno::XComponentContext >const& xContext ) throw ( css::lang::IllegalArgumentException );
+     virtual ~ScVbaUserForm();
+     static css::uno::Reference< css::awt::XControl > nestedSearch( const rtl::OUString& aPropertyName, css::uno::Reference< css::awt::XControlContainer >& xContainer );
++    virtual sal_Bool SAL_CALL getVisible() throw (css::uno::RuntimeException);
++    virtual void SAL_CALL setVisible( sal_Bool _visible ) throw (css::uno::RuntimeException);
+     // XUserForm
+     virtual void SAL_CALL RePaint(  ) throw (css::uno::RuntimeException);
+     virtual void SAL_CALL Show(  ) throw (css::uno::RuntimeException);
+diff --git vbahelper/source/vbahelper/vbadocumentsbase.cxx vbahelper/source/vbahelper/vbadocumentsbase.cxx
+index d3eb535..b7686c2 100644
+--- vbahelper/source/vbahelper/vbadocumentsbase.cxx
++++ vbahelper/source/vbahelper/vbadocumentsbase.cxx
+@@ -50,6 +50,7 @@
+ #include <sfx2/objsh.hxx>
+ #include <tools/urlobj.hxx>
+ #include <vbahelper/vbahelper.hxx>
++#include <vbahelper/vbadocumentbase.hxx>
+ #include <hash_map>
+ #include <osl/file.hxx>
+ 
+@@ -144,18 +145,13 @@ public:
+             {
+                 uno::Reference< frame::XModel > xModel( xServiceInfo, uno::UNO_QUERY_THROW ); // that the spreadsheetdocument is a xmodel is a given
+                 m_documents.push_back( xModel );
+-                rtl::OUString sName = xModel->getURL();
+-                if( sName.getLength() )
+-                {
+-				    INetURLObject aURL( xModel->getURL() );
+-				    namesToIndices[ aURL.GetLastName() ] = nIndex++;
+-                }    
+-                else
+-                {
+-                    uno::Reference< frame::XTitle > xTitle( xModel, uno::UNO_QUERY_THROW );
+-                    sName = xTitle->getTitle();
+-                    namesToIndices[ sName ] = nIndex++;
+-                }
++				rtl::OUString sName;
++				uno::Reference< ::ooo::vba::XDocumentBase > xVbaDocument = new VbaDocumentBase( uno::Reference< XHelperInterface >(), xContext, xModel );
++				if ( xVbaDocument.is() )
++				{
++					sName = xVbaDocument->getName();
++				}
++				namesToIndices[ sName ] = nIndex++;
+             }
+         }
+             
+diff --git vbahelper/source/vbahelper/vbahelper.cxx vbahelper/source/vbahelper/vbahelper.cxx
+index 2dc02a0..ed90dc5 100644
+--- vbahelper/source/vbahelper/vbahelper.cxx
++++ vbahelper/source/vbahelper/vbahelper.cxx
+@@ -971,6 +971,23 @@ void setDefaultPropByIntrospection( const uno::Any& aObj, const uno::Any& aValue
+         throw uno::RuntimeException();
+ }
+ 
++uno::Any getDefaultPropByIntrospection( const uno::Any& aObj ) throw ( uno::RuntimeException )
++{
++    uno::Any aValue;
++    uno::Reference< beans::XIntrospectionAccess > xUnoAccess( getIntrospectionAccess( aObj ) );
++    uno::Reference< script::XDefaultProperty > xDefaultProperty( aObj, uno::UNO_QUERY_THROW );
++    uno::Reference< beans::XPropertySet > xPropSet;
++
++    if ( xUnoAccess.is() )
++        xPropSet.set( xUnoAccess->queryAdapter( ::getCppuType( (const uno::Reference< beans::XPropertySet > *)0 ) ), uno::UNO_QUERY );
++
++    if ( xPropSet.is() )
++        aValue = xPropSet->getPropertyValue( xDefaultProperty->getDefaultPropertyName() );
++    else
++        throw uno::RuntimeException();
++    return aValue;
++}
++
+ uno::Any getPropertyValue( const uno::Sequence< beans::PropertyValue >& aProp, const rtl::OUString& aName )
+ {
+     uno::Any result;
