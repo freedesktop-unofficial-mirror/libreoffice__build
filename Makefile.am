@@ -7,9 +7,12 @@ SUBDIRS = po desktop distro-configs bin etc patches man doc src stamp templates 
 include $(top_srcdir)/Makefile.shared
 
 EXTRA_DIST = \
+        autogen.sh              \
 	emacs.el		\
 	MAINTAINERS		\
 	download.in		\
+        download_external_sources.sh \
+        download_tests_dependencies.sh \
 	Makefile.shared		\
 	intltool-merge.in	\
 	intltool-update.in	\
