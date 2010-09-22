@@ -1,0 +1,2307 @@
+diff --git svx/inc/galbrws.hxx svx/inc/galbrws.hxx
+index f8e2ff0..93f891d 100644
+--- svx/inc/galbrws.hxx
++++ svx/inc/galbrws.hxx
+@@ -73,6 +73,7 @@ class GalleryBrowser : public SfxDockingWindow
+     friend class GalleryBrowser1;
+     friend class GalleryBrowser2;
+     friend class GallerySplitter;
++    friend class GalleryThemeTree;
+     using Window::KeyInput;
+ 
+ private:
+diff --git svx/inc/gallery.hrc svx/inc/gallery.hrc
+index c4900a4..7fcd28a 100644
+--- svx/inc/gallery.hrc
++++ svx/inc/gallery.hrc
+@@ -126,6 +126,8 @@
+ #define RID_SVXSTR_GALLERY_ICONVIEW				(RID_SVX_GALLERY_START + 86)
+ #define RID_SVXSTR_GALLERY_LISTVIEW				(RID_SVX_GALLERY_START + 87)
+ 
++#define RID_SVXSTR_GALLERY_SEARCHONLINE			(RID_SVX_GALLERY_START + 88)
++
+ // lokale Defines
+ #define BTN_OK 1
+ #define BTN_CANCEL 1
+diff --git svx/inc/gallery.hxx svx/inc/gallery.hxx
+index 8bd21c4..58e0f95 100644
+--- svx/inc/gallery.hxx
++++ svx/inc/gallery.hxx
+@@ -86,8 +86,9 @@
+ #define GALLERY_THEME_SCREENBEANS       35
+ #define GALLERY_THEME_FONTWORK			36
+ #define GALLERY_THEME_FONTWORK_VERTICAL	37
++#define GALLERY_THEME_OPENCLIPART       38
+ 
+-#define GALLERY_THEME_DUMMY5            38
++#define GALLERY_THEME_DUMMY5            39
+ 
+ // -------------------
+ // - GalleryExplorer -
+diff --git svx/inc/gallery1.hxx svx/inc/gallery1.hxx
+index bdcde37..336cd53 100644
+--- svx/inc/gallery1.hxx
++++ svx/inc/gallery1.hxx
+@@ -37,6 +37,7 @@
+ 
+ #include <cstdio>
+ #include <list>
++#include <vector>
+ 
+ // ---------------------
+ // - GalleryThemeEntry -
+@@ -46,7 +47,7 @@ class SvStream;
+ 
+ class GalleryThemeEntry
+ {
+-private:
++protected:
+ 
+     String					aName;
+     INetURLObject			aThmURL;
+@@ -58,16 +59,17 @@ private:
+     BOOL					bImported;
+     BOOL					bModified;
+     BOOL					bThemeNameFromResource;
+-                            
++    BOOL                    bIsOnline;
++
+                             GalleryThemeEntry();
+-    INetURLObject			ImplGetURLIgnoreCase( const INetURLObject& rURL ) const;
++    virtual INetURLObject  	ImplGetURLIgnoreCase( const INetURLObject& rURL ) const;
+                             
+ public:						
+-                            
++
+                             GalleryThemeEntry( const INetURLObject& rBaseURL, const String& rName,
+                                                UINT32 nFileNumber, BOOL bReadOnly, BOOL bImported,
+                                                BOOL bNewFile, UINT32 nId, BOOL bThemeNameFromResource );
+-                            ~GalleryThemeEntry() {};
++                            virtual ~GalleryThemeEntry() {};
+                             
+     const String&			GetThemeName() const { return aName; }
+     UINT32					GetFileNumber() const { return nFileNumber; }
+@@ -78,6 +80,7 @@ public:
+ 
+     BOOL					IsImported() const { return bImported; }
+     BOOL					IsReadOnly() const { return bReadOnly; }
++    BOOL                    IsOnline  ()   const { return bIsOnline; }
+     BOOL					IsDefault() const { return( ( nId > 0 ) && ( nId != ( RID_GALLERYSTR_THEME_MYTHEME - RID_GALLERYSTR_THEME_START ) ) ); }
+                             
+     BOOL					IsHidden() const { return aName.SearchAscii( "private://gallery/hidden/" ) == 0; }
+@@ -118,7 +121,7 @@ SvStream& operator>>( SvStream& rIn, GalleryImportThemeEntry& rEntry );
+ 
+ class SfxListener;
+ class GalleryTheme;
+-
++class OnlineGalleryThemeEntry;
+ class Gallery : public SfxBroadcaster
+ {
+     // only for gengal utility!
+@@ -138,6 +141,7 @@ private:
+                                 
+     void						ImplLoad( const String& rMultiPath );
+     void						ImplLoadSubDirs( const INetURLObject& rBaseURL, sal_Bool& rbIsReadOnly );
++    void						ImplLoadOnlineThemes( const std::vector<rtl::OUString>& keywords );
+     void						ImplLoadImports();
+     void 						ImplWriteImportList();
+     
+@@ -163,6 +167,7 @@ public:
+     String						GetThemeName( ULONG nThemeId ) const;
+ 
+     SVX_DLLPUBLIC BOOL			CreateTheme( const String& rThemeName, UINT32 nNumFrom = 0 );
++    SVX_DLLPUBLIC BOOL          AddNewOnlineTheme( OnlineGalleryThemeEntry* pEntry);
+     BOOL						CreateImportTheme( const INetURLObject& rURL, const String& rFileName );
+     BOOL						RenameTheme( const String& rOldName, const String& rNewName );
+     SVX_DLLPUBLIC BOOL						RemoveTheme( const String& rThemeName );
+diff --git svx/inc/galobj.hxx svx/inc/galobj.hxx
+index 9ccbe25..d09781b 100644
+--- svx/inc/galobj.hxx
++++ svx/inc/galobj.hxx
+@@ -85,6 +85,7 @@ enum GalSoundType
+ class SVX_DLLPUBLIC SgaObject
+ {
+     friend class GalleryTheme;
++    friend class OnlineGalleryTheme;
+ 
+ private:
+ 
+@@ -203,7 +204,7 @@ private:
+ public:
+ 
+                         SgaObjectBmp();
+-                        SgaObjectBmp( const INetURLObject& rURL );
++                        SgaObjectBmp( const INetURLObject& rURL, BOOL bShowProgress = FALSE );
+                         SgaObjectBmp( const Graphic& rGraphic, const INetURLObject& rURL, const String& rFormat );
+     virtual				~SgaObjectBmp() {};
+ 
+diff --git svx/inc/galtheme.hxx svx/inc/galtheme.hxx
+index 915505d..2fbbc2b 100644
+--- svx/inc/galtheme.hxx
++++ svx/inc/galtheme.hxx
+@@ -85,49 +85,53 @@ namespace unogallery
+ class GalleryTheme : public SfxBroadcaster
+ {
+     friend class Gallery;
++    friend class GalleryBrowser1;
+     friend class GalleryThemeCacheEntry;
+     friend class ::unogallery::GalleryTheme;
+     friend class ::unogallery::GalleryItem;
+ 
+-private:
+-
+-    GalleryObjectList			aObjectList;
+-    String						aImportName;
+-    String						m_aDestDir;
+-    SotStorageRef				aSvDrawStorageRef;
++protected:
+     Gallery*					pParent;
+     GalleryThemeEntry*			pThm;
+     ULONG                       mnThemeLockCount;
+     ULONG						mnBroadcasterLockCount;
+     ULONG						nDragPos;
+     BOOL						bDragging;
+-    BOOL						bAbortActualize;
++    
++    GalleryObjectList			aObjectList;
++    virtual SVX_DLLPUBLIC SgaObject*					ImplReadSgaObject( GalleryObject* pEntry );
++    
++    virtual INetURLObject				ImplGetURL( const GalleryObject* pObject ) const;
++    virtual const GalleryObject*		ImplGetGalleryObject( ULONG nPos ) const { return aObjectList.GetObject( nPos ); }
++    GalleryTheme();
++    GalleryTheme( Gallery* pGallery, GalleryThemeEntry* pThemeEntry );
++
++virtual ~GalleryTheme();
+ 
++private:
++    String						aImportName;
++    String						m_aDestDir;
++    SotStorageRef				aSvDrawStorageRef;
++    BOOL						bAbortActualize;
++    ULONG						ImplGetGalleryObjectPos( const GalleryObject* pObj ) const { return aObjectList.GetPos( pObj ); }
++    SVX_DLLPUBLIC const GalleryObject*		ImplGetGalleryObject( const INetURLObject& rURL );
+     void						ImplCreateSvDrawStorage();
+-    SVX_DLLPUBLIC SgaObject*					ImplReadSgaObject( GalleryObject* pEntry );
++   
+     BOOL						ImplWriteSgaObject( const SgaObject& rObj, ULONG nPos, GalleryObject* pExistentEntry );
+     void						ImplRead();
+     void						ImplWrite();
+-    const GalleryObject*		ImplGetGalleryObject( ULONG nPos ) const { return aObjectList.GetObject( nPos ); }
+-    SVX_DLLPUBLIC const GalleryObject*		ImplGetGalleryObject( const INetURLObject& rURL );
+-    ULONG						ImplGetGalleryObjectPos( const GalleryObject* pObj ) const { return aObjectList.GetPos( pObj ); }
+-    INetURLObject				ImplGetURL( const GalleryObject* pObject ) const;
+     INetURLObject               ImplCreateUniqueURL( SgaObjKind eObjKind, ULONG nFormat = CVT_UNKNOWN );
+     void						ImplSetModified( BOOL bModified ) { pThm->SetModified( bModified ); }
+     void						ImplBroadcast( ULONG nUpdatePos );
+ 
+-                                GalleryTheme();
+-                                GalleryTheme( Gallery* pGallery, GalleryThemeEntry* pThemeEntry );
+-                                ~GalleryTheme();
+-
+ public:
+ 
+     static GalleryThemeEntry*	CreateThemeEntry( const INetURLObject& rURL, BOOL bReadOnly );
+ 
+-    ULONG					GetObjectCount() const { return aObjectList.Count(); }
++    virtual ULONG					GetObjectCount() const { return aObjectList.Count(); }
+ 
+     SVX_DLLPUBLIC SgaObject*					AcquireObject( ULONG nPos );
+-    SVX_DLLPUBLIC void						ReleaseObject( SgaObject* pObj );
++    virtual SVX_DLLPUBLIC void						ReleaseObject( SgaObject* pObj );
+ 
+     SVX_DLLPUBLIC BOOL						InsertObject( const SgaObject& rObj, ULONG nPos = LIST_APPEND );
+     SVX_DLLPUBLIC BOOL						RemoveObject( ULONG nPos );
+@@ -167,7 +171,7 @@ public:
+     BOOL						IsReadOnly() const { return pThm->IsReadOnly(); }
+     BOOL						IsDefault() const { return pThm->IsDefault(); }
+     BOOL						IsModified() const { return pThm->IsModified(); }
+-
++    BOOL                        IsOnline() const { return pThm->IsOnline(); }
+     SVX_DLLPUBLIC void						Actualize( const Link& rActualizeLink, GalleryProgress* pProgress = NULL );
+     void						AbortActualize() { bAbortActualize = TRUE; }
+ 
+@@ -191,7 +195,7 @@ public:
+ 
+     BOOL						GetThumb( ULONG nPos, Bitmap& rBmp, BOOL bProgress = FALSE );
+ 
+-    SVX_DLLPUBLIC BOOL						GetGraphic( ULONG nPos, Graphic& rGraphic, BOOL bProgress = FALSE );
++    SVX_DLLPUBLIC virtual BOOL	GetGraphic( ULONG nPos, Graphic& rGraphic, BOOL bProgress = FALSE );
+     SVX_DLLPUBLIC BOOL						InsertGraphic( const Graphic& rGraphic, ULONG nInsertPos = LIST_APPEND );
+ 
+     SVX_DLLPUBLIC BOOL						GetModel( ULONG nPos, SdrModel& rModel, BOOL bProgress = FALSE );
+diff --git svx/inc/helpid.hrc svx/inc/helpid.hrc
+index 0c27bc4..36eda59 100644
+--- svx/inc/helpid.hrc
++++ svx/inc/helpid.hrc
+@@ -478,6 +478,9 @@
+ #define HID_OPTIONS_COLORCONFIG_SAVE_SCHEME     (HID_SVX_START + 430)
+ #define HID_OPTIONS_ACCESSIBILITYCONFIG         (HID_SVX_START + 431)
+ 
++#define HID_GALLERY_SEARCHONLINE                (HID_SVX_START + 432)
++#define HID_GALLERY_SEARCHTEXT                  (HID_SVX_START + 433)
++
+ //no new entries here!! HID_SVX_EXT0_START == 39868
+ 
+ #define HID_FILL_ATTR_LISTBOX                   (HID_SVX_EXT0_START + 1)
+diff --git svx/inc/openclipart-parse.hxx svx/inc/openclipart-parse.hxx
+new file mode 100644
+index 0000000..22a931b
+--- /dev/null
++++ svx/inc/openclipart-parse.hxx
+@@ -0,0 +1,192 @@
++#ifndef __OPEN_CLIPART_PARSE_H__
++#define __OPEN_CLIPART_PARSE_H__
++
++#include <com/sun/star/uno/Sequence.h>
++#include <com/sun/star/uno/Reference.h>
++#include <com/sun/star/xml/sax/XFastTokenHandler.hpp>
++
++#include <com/sun/star/xml/sax/FastToken.hpp>
++
++#include <com/sun/star/lang/XMultiServiceFactory.hpp>
++#include <com/sun/star/io/XStream.hpp>
++#include <com/sun/star/xml/sax/XFastParser.hpp>
++#include <com/sun/star/xml/sax/XFastContextHandler.hpp>
++
++#include <comphelper/mediadescriptor.hxx>
++#include <comphelper/sequence.hxx>
++
++#include <iostream>
++#include <map>
++
++#include <comphelper/comphelperdllapi.h>
++
++
++#include <comphelper/processfactory.hxx>
++#include <rtl/ustring.hxx>
++#include <cppuhelper/implbase1.hxx>
++
++#include <openclipart.hxx>
++
++using ::com::sun::star::xml::sax::XLocator;
++using ::com::sun::star::uno::Sequence;
++
++using rtl::OUString;
++using std::vector;
++
++// Uncomment these lines to debug the OpenClipart XML parsing
++// #define DEBUG 1
++// #define DEBUG_TOKENIZER 1
++
++
++enum OCToken {
++    OC_channel,            // 0
++    OC_creator,
++    OC_description,
++    OC_enclosure,
++    OC_guid,
++    OC_height,             // 5
++    OC_image,
++    OC_item,
++    OC_language,
++    OC_license,
++    OC_link,               // 10
++    OC_pubDate,
++    OC_rss,
++    OC_thumbnail,
++    OC_title,
++    OC_type,               // 15
++    OC_url,
++    OC_width
++};
++
++const sal_Int32 TOKEN_MASK                  = SAL_MAX_UINT16;
++const sal_Int32 NMSP_MASK                   = SAL_MAX_INT16 << 16;
++
++enum RSSNamespace {
++    RSS_NS_content  = 1 << 16,
++    RSS_NS_cc       = 2 << 16,
++    RSS_NS_dc       = 3 << 16,
++    RSS_NS_itunes   = 4 << 16,
++    RSS_NS_media    = 5 << 16,
++    RSS_NS_atom     = 6 << 16
++};
++
++inline sal_Int32 getToken( sal_Int32 nElement ) { return nElement & TOKEN_MASK; }
++inline sal_Int32 getNamespace( sal_Int32 nElement ) { return nElement & NMSP_MASK; }
++
++
++class OpenClipartItemContext : public ::cppu::WeakImplHelper1< ::com::sun::star::xml::sax::XFastContextHandler>
++{
++    OpenClipartItem* _currentItem;
++    OUString _currentTokenValue;
++public : 
++    OpenClipartItemContext(OpenClipartItem* pItem) { _currentItem = pItem; } 
++
++    /* from XFastContextHandler */
++    void startFastElement(
++        sal_Int32  Element , 
++        const ::com::sun::star::uno::Reference<  ::com::sun::star::xml::sax::XFastAttributeList >& /* Attribs */ ) 
++        throw ( com::sun::star::xml::sax::SAXException );
++    
++    void endFastElement(sal_Int32  Element )
++        throw ( com::sun::star::xml::sax::SAXException );
++    
++    void characters(const rtl::OUString& aChars ) 
++        throw ( com::sun::star::xml::sax::SAXException, ::com::sun::star::uno::RuntimeException );
++    
++    ::com::sun::star::uno::Reference< XFastContextHandler > 
++    createUnknownChildContext( 
++        const rtl::OUString& Namespace, 
++        const rtl::OUString& Name, 
++        const ::com::sun::star::uno::Reference<  ::com::sun::star::xml::sax::XFastAttributeList >& Attribs)
++        throw ( com::sun::star::xml::sax::SAXException, ::com::sun::star::uno::RuntimeException );
++    
++    ::com::sun::star::uno::Reference< XFastContextHandler > 
++    createFastChildContext(
++        sal_Int32 Element, 
++        const ::com::sun::star::uno::Reference<  ::com::sun::star::xml::sax::XFastAttributeList >& Attribs )
++        throw ( com::sun::star::xml::sax::SAXException, ::com::sun::star::uno::RuntimeException );
++  
++    void startUnknownElement( 
++        const rtl::OUString& Namespace, 
++        const rtl::OUString& Name, 
++        const ::com::sun::star::uno::Reference<  ::com::sun::star::xml::sax::XFastAttributeList >& Attribs)   
++        throw ( com::sun::star::xml::sax::SAXException, ::com::sun::star::uno::RuntimeException );
++  
++    void endUnknownElement( 
++        const rtl::OUString& /* Namespace */, 
++        const rtl::OUString& Name ) 
++        throw ( com::sun::star::xml::sax::SAXException, ::com::sun::star::uno::RuntimeException );
++};
++
++ 
++class OpenClipartDocumentHandler : public ::cppu::WeakImplHelper1< ::com::sun::star::xml::sax::XFastDocumentHandler>
++{
++public:
++    vector<OpenClipartItem*> GetItems() const;
++
++private:
++
++    vector<OpenClipartItem*> _items;
++    ~OpenClipartDocumentHandler(); 
++    void startDocument() 
++        throw (com::sun::star::xml::sax::SAXException, ::com::sun::star::uno::RuntimeException);
++    void setDocumentLocator( const ::com::sun::star::uno::Reference< XLocator >& xLocator) 
++        throw (com::sun::star::xml::sax::SAXException, ::com::sun::star::uno::RuntimeException);
++    void endDocument() 
++        throw (com::sun::star::xml::sax::SAXException, ::com::sun::star::uno::RuntimeException);
++    void startFastElement( sal_Int32 Element, const ::com::sun::star::uno::Reference<  ::com::sun::star::xml::sax::XFastAttributeList >& Attribs ) 
++        throw (com::sun::star::xml::sax::SAXException, ::com::sun::star::uno::RuntimeException);
++    void endFastElement( sal_Int32 Element ) 
++        throw (com::sun::star::xml::sax::SAXException, ::com::sun::star::uno::RuntimeException);
++
++    void characters( const rtl::OUString& sChars ) 
++        throw (com::sun::star::xml::sax::SAXException, ::com::sun::star::uno::RuntimeException);
++
++    ::com::sun::star::uno::Reference< XFastContextHandler > 
++    createUnknownChildContext( const rtl::OUString& Namespace, 
++                               const rtl::OUString& Name, 
++                               const ::com::sun::star::uno::Reference<  ::com::sun::star::xml::sax::XFastAttributeList >& Attribs ) 
++        throw (com::sun::star::xml::sax::SAXException, ::com::sun::star::uno::RuntimeException);
++
++    void startUnknownElement( 
++        const rtl::OUString& /* Namespace */, 
++        const rtl::OUString& Name, 
++        const ::com::sun::star::uno::Reference<  ::com::sun::star::xml::sax::XFastAttributeList >& /* Attribs */ )
++        throw (com::sun::star::xml::sax::SAXException, ::com::sun::star::uno::RuntimeException);
++
++    void endUnknownElement( const rtl::OUString& /* Namespace */, 
++                            const rtl::OUString& Name ) 
++        throw (com::sun::star::xml::sax::SAXException, ::com::sun::star::uno::RuntimeException);
++    
++    ::com::sun::star::uno::Reference< XFastContextHandler > 
++    createFastChildContext(sal_Int32 Element, 
++                           const ::com::sun::star::uno::Reference<  ::com::sun::star::xml::sax::XFastAttributeList >& Attribs ) 
++        throw (com::sun::star::xml::sax::SAXException, ::com::sun::star::uno::RuntimeException);
++
++};
++
++class OpenClipartTokenHandler: public ::cppu::WeakImplHelper1< ::com::sun::star::xml::sax::XFastTokenHandler>
++{
++public:
++    OpenClipartTokenHandler();
++
++    virtual sal_Int32 getToken( const OUString& Identifier ) 
++        throw (::com::sun::star::uno::RuntimeException);
++    virtual OUString  getIdentifier( sal_Int32 Token ) 
++        throw (::com::sun::star::uno::RuntimeException);
++    virtual sal_Int32 getTokenFromUTF8( const Sequence< sal_Int8 >& Identifier ) 
++        throw (::com::sun::star::uno::RuntimeException);
++    virtual Sequence< sal_Int8 > getUTF8Identifier(sal_Int32 Token) 
++        throw (::com::sun::star::uno::RuntimeException);
++  
++private:
++    vector<OUString> _tokenVector;
++    bool addToken(sal_Int32 nToken, const char* sIdentifier);
++};
++
++namespace openclipart {
++    vector<OpenClipartItem*> GetClipart( const OUString& keyword);
++}
++
++#endif
+diff --git svx/inc/openclipart.hxx svx/inc/openclipart.hxx
+new file mode 100644
+index 0000000..f18672e
+--- /dev/null
++++ svx/inc/openclipart.hxx
+@@ -0,0 +1,112 @@
++#ifndef __OPEN_CLIPART__H__
++#define __OPEN_CLIPART__H__
++
++#include <iostream>
++#include <vector>
++#include <rtl/ustring.hxx>
++#include <gallery1.hxx>
++#include <galtheme.hxx>
++#include <map>
++
++// Uncomment these if you want to debug the parsing of the OpenClipart XML
++// #define DEBUG 1
++// #define DEBUG_TOKENIZER 1
++
++using rtl::OUString;
++using std::vector;
++
++#define OUSTR_2_STR(x) rtl::OUStringToOString(x, RTL_TEXTENCODING_UTF8).getStr()
++
++// ------------------
++// OpenClipartItem
++// ------------------
++
++class OpenClipartItem
++{
++    friend class OpenClipartItemContext;
++public:
++    OpenClipartItem();
++    void print(std::ostream& ostr) const;
++
++    OUString getThumbnailUrl() const 
++    {
++        return mThumbUrl;
++    }
++
++    OUString getGuid() const
++    {
++        return mGuid;
++    }
++    
++    OUString getTitle() const
++    {
++        return mTitle;
++    }
++
++    static rtl::OUString GetThumbnailOfSize(const INetURLObject& aURL, USHORT size);
++    rtl::OUString GetThumbnailOfSize(USHORT size) { return OpenClipartItem::GetThumbnailOfSize( INetURLObject(mThumbUrl), size); } 
++
++private:
++    
++    OUString mTitle;
++    OUString mLink;
++    OUString mDescription;
++    OUString mPubDate;
++    OUString mGuid;
++    OUString mThumbUrl;
++    OUString mLicenseUrl;
++    OUString mSvgUrl;
++    OUString mCreator;
++
++};
++
++namespace openclipart {
++    vector<OpenClipartItem*> GetClipart( const OUString& keyword);
++}
++
++// ------------------
++// OnlineGalleryThemeEntry
++// ------------------
++
++class OnlineGalleryThemeEntry: public GalleryThemeEntry {
++
++public:
++    OnlineGalleryThemeEntry() {}
++    ~OnlineGalleryThemeEntry();
++    OnlineGalleryThemeEntry(const rtl::OUString& keyword,  
++                            bool bIsUserSearch = TRUE,
++                            INetURLObject aBaseURL = INetURLObject("http://www.openclipart.org/media/feed/rss/") );
++    SgaObject* GetSgaObject( GalleryObject* pEntry);
++    void changeKeyword(OUString keyword);
++    vector<GalleryObject*> LoadImages();
++    bool IsUserSearch() const { return mbIsUserSearch; }
++private:
++    bool mbIsUserSearch;
++    INetURLObject maBaseURL;
++    OUString mCurrentKeyword;
++    std::map<const GalleryObject*, OpenClipartItem*>  mOpenClipartMap;
++    std::map<rtl::OUString, SgaObjectBmp*> mBitmapMap;
++    void clean();
++
++};
++
++// ------------------
++// OnlineGalleryTheme
++// ------------------
++class OnlineGalleryTheme: public GalleryTheme {
++    friend class Gallery;
++private:
++    SVX_DLLPUBLIC SgaObject*					ImplReadSgaObject( GalleryObject* pEntry );
++    OnlineGalleryTheme();
++    OnlineGalleryTheme( Gallery* pGallery, GalleryThemeEntry* pThemeEntry );
++    BOOL GetGraphic( ULONG nPos, Graphic& rGraphic, BOOL bProgress = TRUE);
++    // helper function
++    OUString GetURLForImageOfSize(const GalleryObject* pObject, int size) ;
++public:
++    static OnlineGalleryThemeEntry*	CreateOnlineThemeEntry(OUString keyword, 
++                                                           bool bIsUserSearch = TRUE,
++                                                           INetURLObject aBaseURL = INetURLObject("http://www.openclipart.org/media/feed/rss/") );
++    void ReleaseObject( SgaObject* pObject );
++};
++
++#endif
+diff --git svx/source/gallery2/galbrws.cxx svx/source/gallery2/galbrws.cxx
+index f0837e0..14642e0 100644
+--- svx/source/gallery2/galbrws.cxx
++++ svx/source/gallery2/galbrws.cxx
+@@ -85,7 +85,7 @@ GalleryChildWindow::GalleryChildWindow( Window* _pParent, USHORT nId, SfxBinding
+     SfxChildWindow( _pParent, nId )
+ {
+     pWindow = new GalleryBrowser( pBindings, this, _pParent, GAL_RESID( RID_SVXDLG_GALLERYBROWSER ) );
+-    eChildAlignment = SFX_ALIGN_TOP;
++    eChildAlignment = SFX_ALIGN_LEFT;
+     ( (GalleryBrowser*) pWindow )->Initialize( pInfo );
+ };
+ 
+@@ -115,7 +115,6 @@ GalleryBrowser::GalleryBrowser( SfxBindings* _pBindings, SfxChildWindow* pCW,
+     FreeResource();
+     SetMinOutputSizePixel( maLastSize = GetOutputSizePixel() );
+     
+-    mpBrowser1->SelectTheme( 0 );
+     mpBrowser1->Show( TRUE );
+     mpBrowser2->Show( TRUE );
+ 
+@@ -163,19 +162,24 @@ void GalleryBrowser::Resize()
+ 
+     const long	nFrameWidth = LogicToPixel( Size( 3, 0 ), MAP_APPFONT ).Width();
+     const long	nFrameWidth2 = nFrameWidth << 1;
++
+     Size		aMinSize( GetMinOutputSizePixel() );
+     Size		aNewSize( GetOutputSizePixel() );
++    
+     Point		aSplitPos( mpSplitter->GetPosPixel() );
+     const Size	aSplitSize( mpSplitter->GetOutputSizePixel() );
+ 
+     mpBrowser1->SetPosSizePixel( Point( nFrameWidth, nFrameWidth ), 
+-                                 Size( aSplitPos.X() - nFrameWidth, aNewSize.Height() - nFrameWidth2 ) );
++                                 Size( aNewSize.Width() - nFrameWidth2, aSplitPos.Y() - nFrameWidth ) );
+     
+-    mpSplitter->SetPosSizePixel( aSplitPos, Size( aSplitSize.Width(), aNewSize.Height() ) );
+-    mpSplitter->SetDragRectPixel( Rectangle( Point( nFrameWidth2, 0 ), Size( aNewSize.Width() - ( nFrameWidth2 << 1 ) - aSplitSize.Width(), aNewSize.Height() ) ) );
++    mpSplitter->SetPosSizePixel( aSplitPos, Size( aNewSize.Width(), aSplitSize.Height() ) );
++    mpSplitter->SetDragRectPixel( Rectangle( Point( nFrameWidth2, 0 ), 
++                                             Size( aNewSize.Width(), 
++                                                   aNewSize.Height() - ( nFrameWidth2 << 1 ) - aSplitSize.Height() ) ) );
+     
+-    mpBrowser2->SetPosSizePixel( Point( aSplitPos.X() + aSplitSize.Width(), nFrameWidth ),
+-                                 Size( aNewSize.Width() - aSplitSize.Width() - aSplitPos.X() - nFrameWidth, aNewSize.Height() - nFrameWidth2 ) );
++    mpBrowser2->SetPosSizePixel( Point(nFrameWidth, aSplitPos.Y() + aSplitSize.Height() ),
++                                 Size( aNewSize.Width() - nFrameWidth2,
++                                       aNewSize.Height() - aSplitPos.Y() - nFrameWidth) );
+ 
+     maLastSize = aNewSize;
+ }
+@@ -234,8 +238,8 @@ void GalleryBrowser::GetFocus()
+ 
+ // -----------------------------------------------------------------------------
+ 
+-void GalleryBrowser::ThemeSelectionHasChanged()
+-{
++void GalleryBrowser::ThemeSelectionHasChanged() {
++    mpBrowser1->LoadCurrentTheme();
+     mpBrowser2->SelectTheme( mpBrowser1->GetSelectedTheme() );
+ }
+ 
+diff --git svx/source/gallery2/galbrws1.cxx svx/source/gallery2/galbrws1.cxx
+index c19e0b0..27d43c2 100644
+--- svx/source/gallery2/galbrws1.cxx
++++ svx/source/gallery2/galbrws1.cxx
+@@ -40,6 +40,7 @@
+ #include "galdlg.hxx"
+ #include "galbrws1.hxx"
+ #include <com/sun/star/util/DateTime.hpp>
++#include <openclipart.hxx>
+ 
+ #include <algorithm>
+ 
+@@ -53,6 +54,9 @@
+ using namespace ::rtl;
+ using namespace ::com::sun::star;
+ 
++#define OUSTR_2_STR(x) rtl::OUStringToOString(x, RTL_TEXTENCODING_UTF8).getStr()
++#define charArray(s) OUSTR_2_STR(OUString(s))
++
+ // -----------------
+ // - GalleryButton -
+ // -----------------
+@@ -77,24 +81,33 @@ void GalleryButton::KeyInput( const KeyEvent& rKEvt )
+ }
+ 
+ // -----------------------
+-// - GalleryThemeListBox -
++// - GalleryThemeTree -
+ // -----------------------
+ 
+-GalleryThemeListBox::GalleryThemeListBox( GalleryBrowser1* pParent, WinBits nWinBits ) :
+-    ListBox( pParent, nWinBits )
++GalleryThemeTree::GalleryThemeTree( GalleryBrowser1* pParent, WinBits nWinBits ) :
++    SvTreeListBox( pParent, nWinBits )
+ {
++    SetSelectionMode(SINGLE_SELECTION);
++
++    mBuiltIn = InsertEntry(String(OUString::createFromAscii("Built-In")) );
++    mUserDefined = InsertEntry(String(OUString::createFromAscii("User Defined")) );
++    mOnline = InsertEntry(String(OUString::createFromAscii("Online")) );
++    mOnlineSearches = InsertEntry(String(OUString::createFromAscii("Online Searches")) );
++
++    SetNodeDefaultImages();
++    SetEntryHeight(16, true);
+     InitSettings();
+ }
+ 
+ // -----------------------------------------------------------------------------
+ 
+-GalleryThemeListBox::~GalleryThemeListBox()
++GalleryThemeTree::~GalleryThemeTree()
+ {
+ }
+ 
+ // ------------------------------------------------------------------------
+ 
+-void GalleryThemeListBox::InitSettings()
++void GalleryThemeTree::InitSettings()
+ {
+     SetBackground( Wallpaper( GALLERY_BG_COLOR ) );
+     SetControlBackground( GALLERY_BG_COLOR );
+@@ -103,17 +116,118 @@ void GalleryThemeListBox::InitSettings()
+ 
+ // -----------------------------------------------------------------------
+ 
+-void GalleryThemeListBox::DataChanged( const DataChangedEvent& rDCEvt )
++OUString GalleryThemeTree::GetSelectedThemeName() const 
++{
++    SvLBoxEntry* pCurrentEntry = GetCurEntry();
++    OUString themeName = GetEntryText(pCurrentEntry);
++    if (themeName.getLength() == (sal_Int32)0)
++        themeName = OUString (((GalleryThemeEntry*)(pCurrentEntry->GetUserData()))->GetThemeName());
++    else 
++        if (themeName.getLength() == (sal_Int32)0)
++            return OUString();
++    return themeName;
++}
++
++// -----------------------------------------------------------------------
++
++void GalleryThemeTree::SelectTheme ( const String& rThemeName ) 
++{
++    SvLBoxEntry* pEntry = FindEntry(rThemeName);
++    if (pEntry) 
++    {
++        Select(pEntry);
++        SvLBoxEntry* pParent = GetParent(pEntry);
++        if (pParent)
++            Expand(pParent);
++    }
++}
++
++// -----------------------------------------------------------------------
++
++void GalleryThemeTree::SelectThemePos (USHORT nPos) 
++{
++    Gallery * aGallery = ( (GalleryBrowser*)GetParent())->mpGallery;
++    SelectTheme(aGallery->GetThemeInfo(nPos)->GetThemeName());
++}
++
++// -----------------------------------------------------------------------
++
++String GalleryThemeTree::GetSelectedTheme() const
++{
++    // Since the tree list box is limited to single selection, this should be good enough
++    SvLBoxEntry* pEntry = FirstSelected();
++    if (!pEntry)
++        return String();
++    return GetEntryText(pEntry);
++}
++
++// -----------------------------------------------------------------------
++
++SvLBoxEntry* GalleryThemeTree::ChooseParent(const GalleryThemeEntry* pEntry) 
++{
++    if ( pEntry->IsOnline()) {
++        const OnlineGalleryThemeEntry* pOnlineEntry = dynamic_cast<const OnlineGalleryThemeEntry*>(pEntry);
++        if (pOnlineEntry == NULL) 
++        {
++            // OUCH! *bug*
++            std::cerr << "A theme was created as online, but the pointer isn't online!" << std::endl;
++            return mBuiltIn;
++        }
++        if (pOnlineEntry->IsUserSearch())
++            return mOnlineSearches;
++        else
++            return mOnline;
++    }
++    if ( pEntry->IsDefault() )
++        return mBuiltIn;
++    return mUserDefined;
++}
++// -----------------------------------------------------------------------
++
++SvLBoxEntry* GalleryThemeTree::ChooseParent(eGalleryTreeRootNode rootNode) 
++{
++    switch (rootNode) {
++        case BUILT_IN:
++            return mBuiltIn;
++        case USER_DEFINED:
++            return mUserDefined;
++        case ONLINE:
++            return mOnline;
++        case ONLINE_SEARCH:
++            return mOnlineSearches;
++        default:
++            return NULL;
++    }
++}
++
++// -----------------------------------------------------------------------
++
++SvLBoxEntry* GalleryThemeTree::FindEntry( const String& rThemeName ) 
++{
++    SvLBoxEntry* pCurEntry = First();
++    while( pCurEntry )
++    {
++        if( GetEntryText(pCurEntry) == rThemeName)
++            return pCurEntry;
++        pCurEntry = Next( pCurEntry );
++    }
++
++    return NULL;
++}
++
++// -----------------------------------------------------------------------
++
++void GalleryThemeTree::DataChanged( const DataChangedEvent& rDCEvt )
+ {
+     if ( ( rDCEvt.GetType() == DATACHANGED_SETTINGS ) && ( rDCEvt.GetFlags() & SETTINGS_STYLE ) )
+         InitSettings();
+     else
+-        ListBox::DataChanged( rDCEvt );
++        SvTreeListBox::DataChanged( rDCEvt );
+ }
+ 
+ // -----------------------------------------------------------------------------
+ 
+-long GalleryThemeListBox::PreNotify( NotifyEvent& rNEvt )
++long GalleryThemeTree::PreNotify( NotifyEvent& rNEvt )
+ {
+     long nDone = 0;
+ 
+@@ -132,9 +246,31 @@ long GalleryThemeListBox::PreNotify( NotifyEvent& rNEvt )
+             nDone = static_cast< GalleryBrowser1* >( GetParent() )->KeyInput( *pKEvt, this );
+     }
+ 
+-    return( nDone ? nDone : ListBox::PreNotify( rNEvt ) );
++    return( nDone ? nDone : SvTreeListBox::PreNotify( rNEvt ) );
++}
++
++// -----------------------------------------------------------------------
++
++void GalleryThemeTree::RemoveEntry(const String& rThemeName ) 
++{
++    SvLBoxEntry* pEntry = FindEntry(rThemeName);
++    if (pEntry) 
++    {
++        Select(pEntry);
++        RemoveSelection(); 
++    }
+ }
+ 
++// -----------------------------------------------------------------------
++
++void GalleryThemeTree::SelectEntry(const String& rThemeName)
++{
++    SvLBoxEntry* pEntry = FindEntry(rThemeName);
++    if (pEntry)
++        Select(pEntry);
++}
++
++
+ // -------------------
+ // - GalleryBrowser1 -
+ // -------------------
+@@ -142,7 +278,13 @@ long GalleryThemeListBox::PreNotify( NotifyEvent& rNEvt )
+ GalleryBrowser1::GalleryBrowser1( GalleryBrowser* pParent, const ResId& rResId, Gallery* pGallery ) :
+     Control               ( pParent, rResId ),
+     maNewTheme            ( this, WB_3DLOOK ),
+-    mpThemes              ( new GalleryThemeListBox( this, WB_TABSTOP | WB_3DLOOK | WB_BORDER | WB_HSCROLL | WB_VSCROLL | WB_AUTOHSCROLL | WB_SORT ) ),
++    maSearchOnline        ( this, WB_3DLOOK ),
++    maSearchText          ( this, WB_3DLOOK ),
++    mpThemes              ( new GalleryThemeTree( this, WB_HASBUTTONS | WB_HASLINES |
++                                                  WB_3DLOOK | 
++                                                  WB_BORDER | WB_TABSTOP | WB_HASBUTTONSATROOT  ) ), 
++
++/* WB_TABSTOP | WB_3DLOOK | WB_BORDER | WB_HSCROLL | WB_VSCROLL | WB_AUTOHSCROLL ) ), */ 
+     mpGallery             ( pGallery ),
+     mpExchangeData        ( new ExchangeData ),
+     mpThemePropsDlgItemSet( NULL ),
+@@ -153,14 +295,24 @@ GalleryBrowser1::GalleryBrowser1( GalleryBrowser* pParent, const ResId& rResId,
+ {
+     StartListening( *mpGallery );
+ 
++    // setup the "New Theme" button
+     maNewTheme.SetHelpId( HID_GALLERY_NEWTHEME );
+     maNewTheme.SetText( String( GAL_RESID( RID_SVXSTR_GALLERY_CREATETHEME ) ) );
+     maNewTheme.SetClickHdl( LINK( this, GalleryBrowser1, ClickNewThemeHdl ) );
+ 
++    // setup the "Search Online" button
++    maSearchOnline.SetHelpId( HID_GALLERY_SEARCHONLINE );
++    maSearchOnline.SetText( String( GAL_RESID( RID_SVXSTR_GALLERY_SEARCHONLINE ) ) );
++    maSearchOnline.SetClickHdl( LINK( this, GalleryBrowser1, ClickSearchOnlineHdl ) );
++
++    // Setup the search text Edit box 
++    maSearchText.SetHelpId( HID_GALLERY_SEARCHTEXT) ;
++    
+     // disable creation of new themes if a writable directory is not available
+     if( mpGallery->GetUserURL().GetProtocol() == INET_PROT_NOT_VALID )
+         maNewTheme.Disable();
+ 
++    // setup the themes tree
+     mpThemes->SetHelpId( HID_GALLERY_THEMELIST );
+     mpThemes->SetSelectHdl( LINK( this, GalleryBrowser1, SelectThemeHdl ) );
+ 
+@@ -170,6 +322,9 @@ GalleryBrowser1::GalleryBrowser1( GalleryBrowser* pParent, const ResId& rResId,
+     ImplAdjustControls();
+     maNewTheme.Show( TRUE );
+     mpThemes->Show( TRUE );
++    maSearchText.Show( TRUE );
++    maSearchOnline.Show( TRUE );
++
+ }
+ 
+ // -----------------------------------------------------------------------------
+@@ -178,35 +333,35 @@ GalleryBrowser1::~GalleryBrowser1()
+ {
+     EndListening( *mpGallery );
+     delete mpThemes;
+-    mpThemes = NULL;
+     delete mpExchangeData;
+-    mpExchangeData = NULL;
+ }
+ 
+ // -----------------------------------------------------------------------------
+-
+-ULONG GalleryBrowser1::ImplInsertThemeEntry( const GalleryThemeEntry* pEntry )
++SvLBoxEntry* GalleryBrowser1::ImplInsertThemeEntry( const GalleryThemeEntry* pEntry, eGalleryTreeRootNode rootNode )
+ {
+-    static const BOOL bShowHiddenThemes = ( getenv( "GALLERY_SHOW_HIDDEN_THEMES" ) != NULL );
++    return ImplInsertThemeEntry ( pEntry, mpThemes->ChooseParent(rootNode) );
++}
++
++// -----------------------------------------------------------------------------
++
++SvLBoxEntry* GalleryBrowser1::ImplInsertThemeEntry( const GalleryThemeEntry* pEntry) 
++{ 
++    return ImplInsertThemeEntry(pEntry, mpThemes->ChooseParent(pEntry) ) ;
++}
+ 
+-    ULONG nRet = LISTBOX_ENTRY_NOTFOUND;
++// -----------------------------------------------------------------------------
+ 
++SvLBoxEntry* GalleryBrowser1::ImplInsertThemeEntry( const GalleryThemeEntry* pEntry, SvLBoxEntry* pRootNode) 
++{
++    static const BOOL bShowHiddenThemes = ( getenv( "GALLERY_SHOW_HIDDEN_THEMES" ) != NULL );
++    
++    SvLBoxEntry* nRet = NULL;
++    
+     if( pEntry && ( !pEntry->IsHidden() || bShowHiddenThemes ) )
+     {
+-        const Image* pImage;
+-
+-        if( pEntry->IsImported() )
+-            pImage = &aImgImported;
+-        else if( pEntry->IsReadOnly() )
+-            pImage = &aImgReadOnly;
+-        else if( pEntry->IsDefault() )
+-            pImage = &aImgDefault;
+-        else
+-            pImage = &aImgNormal;
+-
+-        nRet = mpThemes->InsertEntry( pEntry->GetThemeName(), *pImage );
++        nRet = mpThemes->InsertEntry( pEntry->GetThemeName(), aImgNormal, aImgNormal, pRootNode, FALSE, LIST_APPEND, (void*)pEntry );
+     }
+-
++    
+     return nRet;
+ }
+ 
+@@ -215,15 +370,20 @@ ULONG GalleryBrowser1::ImplInsertThemeEntry( const GalleryThemeEntry* pEntry )
+ void GalleryBrowser1::ImplAdjustControls()
+ {
+     const Size	aOutSize( GetOutputSizePixel() );
+-    const long	nNewThemeHeight = LogicToPixel( Size( 0, 14 ), MAP_APPFONT ).Height();
+-    const long  nStartY = nNewThemeHeight + 4;
+-
++    const long	nButtonHeight = LogicToPixel( Size( 0, 14 ), MAP_APPFONT ).Height();
++    const long  nStartY = nButtonHeight + 4;
++    const long  nSearchButtonWidth = LogicToPixel( Size( 50, 0), MAP_APPFONT).Width();
++    
+     maNewTheme.SetPosSizePixel( Point(),
+-                                Size( aOutSize.Width(), nNewThemeHeight ) );
++                                Size( aOutSize.Width(), nButtonHeight ) );
+ 
+     mpThemes->SetPosSizePixel( Point( 0, nStartY ),
+-                               Size( aOutSize.Width(), aOutSize.Height() - nStartY ) );
+-}
++                               Size( aOutSize.Width(), aOutSize.Height() - 2*nStartY ) );
++    maSearchText.SetPosSizePixel ( Point(0, aOutSize.Height() - nStartY),
++                                   Size (aOutSize.Width() - nSearchButtonWidth, nButtonHeight) );
++    maSearchOnline.SetPosSizePixel( Point ( aOutSize.Width() - nSearchButtonWidth, aOutSize.Height() - nStartY),
++                                    Size ( nSearchButtonWidth, nButtonHeight) );
++} 
+ 
+ // -----------------------------------------------------------------------------
+ 
+@@ -356,7 +516,7 @@ void GalleryBrowser1::ImplEndGalleryThemeProperties( VclAbstractDialog2* pDialog
+ 
+         if ( bCreateNew )
+         {
+-            mpThemes->SelectEntry( mpExchangeData->pTheme->GetName() );
++            mpThemes->SelectTheme( mpExchangeData->pTheme->GetName() );
+             SelectThemeHdl( NULL );
+         }
+     }
+@@ -375,6 +535,36 @@ void GalleryBrowser1::ImplEndGalleryThemeProperties( VclAbstractDialog2* pDialog
+ 
+ // -----------------------------------------------------------------------------
+ 
++void GalleryBrowser1::LoadCurrentTheme() {
++    if (!mpThemes)
++        return;
++    OUString themeName = mpThemes->GetSelectedThemeName();
++    LoadTheme(themeName);
++}
++
++// -----------------------------------------------------------------------------
++
++void GalleryBrowser1::LoadTheme(const String& rThemeName) 
++{
++    GalleryTheme* pTheme = mpGallery->AcquireTheme(rThemeName, *this);
++    if (!pTheme)
++        return;
++    GalleryObject* pObject = pTheme->aObjectList.First();
++    
++    if (!pObject)
++        return;
++    if (pTheme->IsOnline()) {
++        SvLBoxEntry* pEntry = mpThemes->FindEntry(rThemeName);
++        if (pEntry)
++        { 
++            Image treeIcon((new SgaObjectBmp(OpenClipartItem::GetThumbnailOfSize(pObject->aURL, 32)))->GetThumbBmp());
++            mpThemes->SetCollapsedEntryBmp(pEntry, treeIcon);
++        }
++    }
++}
++
++// -----------------------------------------------------------------------------
++
+ IMPL_LINK( GalleryBrowser1, EndNewThemePropertiesDlgHdl, VclAbstractDialog2*, pDialog )
+ {
+     ImplEndGalleryThemeProperties( pDialog, true );
+@@ -426,7 +616,7 @@ void GalleryBrowser1::ImplExecute( USHORT nId )
+         case( MN_DELETE  ):
+         {
+             if( QueryBox( NULL, WB_YES_NO, String( GAL_RESID( RID_SVXSTR_GALLERY_DELETETHEME ) ) ).Execute() == RET_YES )
+-                mpGallery->RemoveTheme( mpThemes->GetSelectEntry() );
++                mpGallery->RemoveTheme( mpThemes->GetSelectedTheme() );
+         }
+         break;
+ 
+@@ -526,13 +716,14 @@ void GalleryBrowser1::Notify( SfxBroadcaster&, const SfxHint& rHint )
+ 
+         case( GALLERY_HINT_THEME_RENAMED ):
+         {
+-            const USHORT nCurSelectPos = mpThemes->GetSelectEntryPos();
+-            const USHORT nRenameEntryPos = mpThemes->GetEntryPos( rGalleryHint.GetThemeName() );
++            
++            const String nCurSelectedTheme = mpThemes->GetSelectedTheme();
++            const String nRenameTheme = rGalleryHint.GetThemeName();
+ 
+             mpThemes->RemoveEntry( rGalleryHint.GetThemeName() );
+             ImplInsertThemeEntry( mpGallery->GetThemeInfo( rGalleryHint.GetStringData() ) );
+ 
+-            if( nCurSelectPos == nRenameEntryPos )
++            if( nCurSelectedTheme == nRenameTheme )
+             {
+                 mpThemes->SelectEntry( rGalleryHint.GetStringData() );
+                 SelectThemeHdl( NULL );
+@@ -548,25 +739,20 @@ void GalleryBrowser1::Notify( SfxBroadcaster&, const SfxHint& rHint )
+ 
+         case( GALLERY_HINT_CLOSE_THEME ):
+         {
+-            const USHORT nCurSelectPos = mpThemes->GetSelectEntryPos();
+-            const USHORT nCloseEntryPos = mpThemes->GetEntryPos( rGalleryHint.GetThemeName() );
+-
+-            if( nCurSelectPos == nCloseEntryPos )
++            const GalleryThemeEntry* pThemeEntry = mpGallery->GetThemeInfo(rGalleryHint.GetThemeName());
++            if (pThemeEntry) 
+             {
+-                if( nCurSelectPos < ( mpThemes->GetEntryCount() - 1 ) )
+-                    mpThemes->SelectEntryPos( nCurSelectPos + 1 );
+-                else if( nCurSelectPos )
+-                    mpThemes->SelectEntryPos( nCurSelectPos - 1 );
+-                else
+-                    mpThemes->SetNoSelection();
+-
+-                SelectThemeHdl( NULL );
++                SvLBoxEntry* pThemeParent = mpThemes->ChooseParent(pThemeEntry);
++                if (pThemeParent) 
++                {
++                    mpThemes->Select(pThemeParent);
++                }
+             }
+         }
+         break;
+-
++        
+         default:
+-        break;
++            break;
+     }
+ }
+ 
+@@ -664,11 +850,19 @@ IMPL_LINK( GalleryBrowser1, ShowContextMenuHdl, void*, EMPTYARG )
+         aMenu.RemoveDisabledEntries();
+ 
+         const Rectangle aThemesRect( mpThemes->GetPosPixel(), mpThemes->GetOutputSizePixel() );
+-        Point			aSelPos( mpThemes->GetBoundingRectangle( mpThemes->GetSelectEntryPos() ).Center() );
+-
++        // Point			aSelPos( mpThemes->GetBoundingRectangle( mpThemes->GetSelectEntryPos() ).Center() );
++        ::Point ptWhere;  
++        // die  Stelle, an der geklickt wurde
++        
++        SvLBoxEntry* pCurrent = mpThemes->FirstSelected();
++        Point aSelPos(ptWhere);
++        if (pCurrent)
++            aSelPos = mpThemes->GetEntryPosition(pCurrent);
++        else 
++            aSelPos = Point();
+         aSelPos.X() = Max( Min( aSelPos.X(), aThemesRect.Right() ), aThemesRect.Left() );
+         aSelPos.Y() = Max( Min( aSelPos.Y(), aThemesRect.Bottom() ), aThemesRect.Top() );
+-
++        
+         aMenu.Execute( this, aSelPos );
+     }
+ 
+@@ -714,3 +908,34 @@ IMPL_LINK( GalleryBrowser1, ClickNewThemeHdl, void*, EMPTYARG )
+     return 0L;
+ }
+ 
++// -----------------------------------------------------------------------------
++
++IMPL_LINK( GalleryBrowser1, ClickSearchOnlineHdl, void*, EMPTYARG )
++{
++
++    const String& aKeyword = maSearchText.GetText();
++    if (!aKeyword.Len())
++        return 0L;
++    if ( mpGallery->GetThemeInfo(aKeyword) != NULL) 
++    {
++        // This theme already exists
++        mpThemes->SelectTheme(aKeyword);
++        ( (GalleryBrowser*)GetParent() ) -> ThemeSelectionHasChanged();
++        return 0L;
++    }
++    
++    OnlineGalleryThemeEntry* pEntry = OnlineGalleryTheme::CreateOnlineThemeEntry(aKeyword, TRUE);
++    
++    if( pEntry ) 
++    {
++        mpGallery->AddNewOnlineTheme(pEntry);
++        delete( new GalleryTheme( mpGallery, pEntry ) );
++        mpGallery->Broadcast( GalleryHint( GALLERY_HINT_THEME_CREATED, aKeyword ) );
++        LoadTheme( aKeyword );
++        mpThemes->SelectTheme(pEntry->GetThemeName());
++        ( (GalleryBrowser*)GetParent() ) -> ThemeSelectionHasChanged();
++    }
++    
++    return 0L;
++}
++
+diff --git svx/source/gallery2/galbrws1.hxx svx/source/gallery2/galbrws1.hxx
+index d05e678..95628aa 100644
+--- svx/source/gallery2/galbrws1.hxx
++++ svx/source/gallery2/galbrws1.hxx
+@@ -31,6 +31,10 @@
+ #include <svtools/lstner.hxx>
+ #include <vector>
+ #include "galbrws.hxx"
++#include <vcl/edit.hxx>
++
++// for the new Tree UI
++#include <svtools/svtreebx.hxx>
+ 
+ // -----------------
+ // - GalleryButton -
+@@ -44,29 +48,47 @@ private:
+ 
+ public:
+ 
+-                    GalleryButton( GalleryBrowser1* pParent, WinBits nWinBits );
+-                    ~GalleryButton();
++    GalleryButton( GalleryBrowser1* pParent, WinBits nWinBits );
++    ~GalleryButton();
+ };
+ 
+ // -----------------------
+-// - GalleryThemeListBox -
++// - GalleryThemeTree
+ // -----------------------
+ 
+-class GalleryThemeListBox : public ListBox
++enum eGalleryTreeRootNode { BUILT_IN, USER_DEFINED, ONLINE, ONLINE_SEARCH} ;
++
++class GalleryThemeTree : public SvTreeListBox
+ {
++    friend class GalleryBrowser1;
+ protected:
+-
++    SvLBoxEntry* mRootNode;
++    SvLBoxEntry* mBuiltIn;
++    SvLBoxEntry* mUserDefined;
++    SvLBoxEntry* mOnline;
++    SvLBoxEntry* mOnlineSearches;
++    
++    SvLBoxEntry* ChooseParent(const GalleryThemeEntry* pEntry);
++    SvLBoxEntry* ChooseParent(eGalleryTreeRootNode rootNode);
+     void            InitSettings();
+-
++    GalleryTheme* LoadTheme(Gallery*);
++    void SelectTheme ( const String& rThemeName );
++    void SelectThemePos (USHORT nPos);
++    String GetSelectedTheme() const;
++    rtl::OUString GetSelectedThemeName() const; // these two should be the same - temporarily here just to be safe
++    SvLBoxEntry* FindEntry( const String& rThemeName );
+     virtual void    DataChanged( const DataChangedEvent& rDCEvt );
+     virtual long	PreNotify( NotifyEvent& rNEvt );
++    void RemoveEntry(const String& rThemeName);
++    void SelectEntry(const String& rThemeName);
+ 
+ public:
+-
+-                    GalleryThemeListBox( GalleryBrowser1* pParent, WinBits nWinBits );
+-                    ~GalleryThemeListBox();
++    
++    GalleryThemeTree( GalleryBrowser1* pParent, WinBits nWinBits );
++    ~GalleryThemeTree();
+ };
+ 
++
+ // -------------------
+ // - GalleryBrowser1 -
+ // -------------------
+@@ -81,14 +103,16 @@ class SfxItemSet;
+ class GalleryBrowser1 : public Control, SfxListener
+ {
+     friend class GalleryBrowser;
+-    friend class GalleryThemeListBox;
++    friend class GalleryThemeTree;
+     using Control::Notify;
+     using Window::KeyInput;
+ 
+ private:
+ 
+     GalleryButton           maNewTheme;
+-    GalleryThemeListBox*	mpThemes;
++    GalleryButton           maSearchOnline;
++    Edit                    maSearchText;
++    GalleryThemeTree*       mpThemes;
+     Gallery*				mpGallery;
+     ExchangeData*           mpExchangeData;
+     SfxItemSet*             mpThemePropsDlgItemSet;
+@@ -99,7 +123,9 @@ private:
+     Image					aImgImported;
+ 
+     void					ImplAdjustControls();
+-    ULONG					ImplInsertThemeEntry( const GalleryThemeEntry* pEntry );
++    SvLBoxEntry*            ImplInsertThemeEntry( const GalleryThemeEntry* pEntry, eGalleryTreeRootNode rootNode);
++    SvLBoxEntry*            ImplInsertThemeEntry( const GalleryThemeEntry* pEntry, SvLBoxEntry* pRootNode);
++    SvLBoxEntry*            ImplInsertThemeEntry( const GalleryThemeEntry* pEntry);
+     void					ImplFillExchangeData( const GalleryTheme* pThm, ExchangeData& rData );
+     ::std::vector< USHORT > ImplGetExecuteVector();
+     void                    ImplExecute( USHORT nId );
+@@ -114,6 +140,7 @@ private:
+     virtual void			Notify( SfxBroadcaster& rBC, const SfxHint& rHint );
+ 
+                             DECL_LINK( ClickNewThemeHdl, void* );
++                            DECL_LINK( ClickSearchOnlineHdl, void* );
+                             DECL_LINK( SelectThemeHdl, void* );
+                             DECL_LINK( ShowContextMenuHdl, void* );
+                             DECL_LINK( PopupMenuHdl, Menu* );
+@@ -126,10 +153,11 @@ public:
+                             GalleryBrowser1( GalleryBrowser* pParent, const ResId& rResId, Gallery* pGallery );
+                             ~GalleryBrowser1();
+ 
+-    void					SelectTheme( const String& rThemeName ) { mpThemes->SelectEntry( rThemeName ); SelectThemeHdl( NULL ); }
+-    void					SelectTheme( ULONG nThemePos ) { mpThemes->SelectEntryPos( (USHORT) nThemePos ); SelectThemeHdl( NULL ); }
+-    String					GetSelectedTheme() { return mpThemes->GetEntryCount() ? mpThemes->GetEntry( mpThemes->GetSelectEntryPos() ) : String(); }
+-
++    void					SelectTheme( const String& rThemeName ) { mpThemes->SelectTheme( rThemeName ); SelectThemeHdl( NULL ); }
++    void					SelectTheme( ULONG nThemePos ) { mpThemes->SelectThemePos( (USHORT) nThemePos ); SelectThemeHdl( NULL ); }
++    String					GetSelectedTheme() { return mpThemes->GetSelectedTheme(); }
++    void                    LoadTheme(const String& themeName);
++    void					LoadCurrentTheme();
+     void					ShowContextMenu();
+     BOOL                    KeyInput( const KeyEvent& rKEvt, Window* pWindow );
+ };
+diff --git svx/source/gallery2/galbrws2.cxx svx/source/gallery2/galbrws2.cxx
+index abd489b..a34943a 100644
+--- svx/source/gallery2/galbrws2.cxx
++++ svx/source/gallery2/galbrws2.cxx
+@@ -28,7 +28,6 @@
+ // MARKER(update_precomp.py): autogen include statement, do not remove
+ #include "precompiled_svx.hxx"
+ 
+-
+ #include <sot/formats.hxx>
+ #include <vcl/msgbox.hxx>
+ #include <svtools/valueset.hxx>
+@@ -54,6 +53,23 @@
+ #include <svx/svxdlg.hxx> //CHINA001
+ //CHINA001 #include <svx/dialogs.hrc> //CHINA001
+ 
++// for parsing
++#include <com/sun/star/beans/PropertyValue.hpp>
++using  ::com::sun::star::beans::PropertyValue;
++
++#include <comphelper/sequence.hxx>
++using ::com::sun::star::uno::Sequence;
++
++#include <comphelper/mediadescriptor.hxx>
++
++#include <com/sun/star/uno/Reference.h>
++using ::com::sun::star::uno::Reference;
++
++#include <com/sun/star/io/XStream.hpp>
++using ::com::sun::star::io::XInputStream;
++using ::com::sun::star::io::XStream;
++
++#include <openclipart.hxx>
+ // -----------
+ // - Defines -
+ // -----------
+@@ -625,14 +641,17 @@ BOOL GalleryBrowser2::KeyInput( const KeyEvent& rKEvt, Window* pWindow )
+ 
+ void GalleryBrowser2::SelectTheme( const String& rThemeName )
+ {
++
++    mpCurTheme = mpGallery->AcquireTheme( rThemeName, *this );
++    if (!mpCurTheme)
++        return;
++
+     delete mpIconView, mpIconView = NULL;
+     delete mpListView, mpListView = NULL;
+     delete mpPreview, mpPreview = NULL;
+     
+-    if( mpCurTheme )
++    if( mpCurTheme && !mpCurTheme->IsOnline())
+         mpGallery->ReleaseTheme( mpCurTheme, *this );
+-
+-    mpCurTheme = mpGallery->AcquireTheme( rThemeName, *this );
+     
+     mpIconView = new GalleryIconView( this, mpCurTheme );
+     mpListView = new GalleryListView( this, mpCurTheme );
+@@ -710,7 +729,7 @@ void GalleryBrowser2::SetMode( GalleryBrowserMode eMode )
+                 {
+                     const ULONG nPos = nItemId - 1;
+ 
+-                       mpIconView->Hide();
++                    mpIconView->Hide();
+                     mpListView->Hide();
+ 
+                     if( mpCurTheme )
+@@ -722,8 +741,10 @@ void GalleryBrowser2::SetMode( GalleryBrowserMode eMode )
+                     if( mpCurTheme && mpCurTheme->GetObjectKind( nPos ) == SGA_OBJ_SOUND )
+                         mpPreview->PreviewMedia( mpCurTheme->GetObjectURL( nPos ) );
+ 
+-                    maViewBox.EnableItem( TBX_ID_ICON, FALSE );
+-                    maViewBox.EnableItem( TBX_ID_LIST, FALSE );
++                    if (meMode == GALLERYBROWSERMODE_LIST)
++                        maViewBox.EnableItem( TBX_ID_ICON, FALSE );
++                    if (meMode == GALLERYBROWSERMODE_ICON)
++                        maViewBox.EnableItem( TBX_ID_LIST, FALSE );
+                 }
+             }
+             break;
+@@ -732,6 +753,7 @@ void GalleryBrowser2::SetMode( GalleryBrowserMode eMode )
+                 break;
+         }
+ 
++
+         GalleryBrowser2::meInitMode = meMode = eMode;
+     }
+ }
+@@ -837,7 +859,6 @@ void GalleryBrowser2::ImplUpdateViews( USHORT nSelectionId )
+         default:
+         break;
+     }
+-
+     ImplUpdateInfoBar();
+ }
+ 
+@@ -847,7 +868,7 @@ void GalleryBrowser2::ImplUpdateInfoBar()
+ {
+     String aInfoText;
+ 
+-    if( mpCurTheme )
++    if( mpCurTheme && dynamic_cast<OnlineGalleryTheme*>(mpCurTheme) != NULL)
+     {
+         Point		aSelPos;
+         const ULONG nItemId = ImplGetSelectedItemId( NULL, aSelPos );
+@@ -1083,9 +1104,10 @@ String GalleryBrowser2::GetItemText( const GalleryTheme& rTheme, const SgaObject
+         aURL.removeSegment();
+         aURL.Append( rObj.GetURL().GetName() );
+     }
+-    else
++    else {
+         aURL = rObj.GetURL();
+-
++    }
++    
+     if( nItemTextFlags & GALLERY_ITEM_THEMENAME )
+     {
+         aRet += rTheme.GetName();
+diff --git svx/source/gallery2/gallery.src svx/source/gallery2/gallery.src
+index 6ad3417..2ebb73d 100644
+--- svx/source/gallery2/gallery.src
++++ svx/source/gallery2/gallery.src
+@@ -40,7 +40,7 @@ DockingWindow RID_SVXDLG_GALLERYBROWSER
+     Hide = TRUE ;
+     SVLook = TRUE ;
+     Pos = MAP_APPFONT ( 0 , 0 ) ;
+-    Size = MAP_APPFONT ( 211, 100 ) ;
++    Size = MAP_APPFONT ( 120, 300 ) ;
+     Text [ en-US ] = "Gallery";
+     Sizeable = TRUE;
+     Moveable = TRUE ;
+@@ -52,21 +52,21 @@ DockingWindow RID_SVXDLG_GALLERYBROWSER
+     Control GALLERY_BROWSER1
+     {
+         Pos = MAP_APPFONT ( 0 , 0 ) ;
+-        Size = MAP_APPFONT ( 69, 150 ) ;
++        Size = MAP_APPFONT ( 120, 125 ) ;
+         Border = FALSE;
+     };
+ 
+     Splitter GALLERY_SPLITTER
+     {
+-        Pos = MAP_APPFONT ( 70 , 0 ) ;
+-        Size = MAP_APPFONT ( 3, 150 ) ;
+-        HScroll = TRUE;
++        Pos = MAP_APPFONT ( 0 , 126 ) ;
++        Size = MAP_APPFONT ( 120, 3 ) ;
++        VScroll = TRUE;
+     };
+ 
+     Control GALLERY_BROWSER2
+     {
+-        Pos = MAP_APPFONT ( 73, 0 ) ;
+-        Size = MAP_APPFONT ( 138, 150 ) ;
++        Pos = MAP_APPFONT ( 0, 129 ) ;
++        Size = MAP_APPFONT ( 120, 171 ) ;
+         Border = FALSE;
+     };
+ };
+@@ -581,6 +581,10 @@ String RID_SVXSTR_GALLERY_CREATETHEME
+ {
+     Text [ en-US ] = "New Theme..." ;
+ };
++String RID_SVXSTR_GALLERY_SEARCHONLINE
++{
++    Text [ en-US ] = "Search Online" ;
++};
+ String RID_SVXSTR_GALLERY_READONLY
+ {
+     Text [ en-US ] = " (read-only)" ;
+diff --git svx/source/gallery2/gallery1.cxx svx/source/gallery2/gallery1.cxx
+index 6cff5ec..f869aa2 100644
+--- svx/source/gallery2/gallery1.cxx
++++ svx/source/gallery2/gallery1.cxx
+@@ -39,6 +39,7 @@
+ #include "galmisc.hxx"
+ #include "galtheme.hxx"
+ #include "gallery1.hxx"
++#include "openclipart.hxx"
+ #include <com/sun/star/sdbc/XResultSet.hpp>
+ #include <com/sun/star/ucb/XContentAccess.hpp>
+ 
+@@ -54,7 +55,7 @@ using namespace ::com::sun::star;
+ // ---------------------
+ // - GalleryThemeEntry -
+ // ---------------------
+-
++GalleryThemeEntry::GalleryThemeEntry() {}
+ GalleryThemeEntry::GalleryThemeEntry( const INetURLObject& rBaseURL, const String& rName,
+                                       UINT32 _nFileNumber, BOOL _bReadOnly, BOOL _bImported,
+                                       BOOL _bNewFile, UINT32 _nId, BOOL _bThemeNameFromResource ) :
+@@ -62,7 +63,8 @@ GalleryThemeEntry::GalleryThemeEntry( const INetURLObject& rBaseURL, const Strin
+         nId                                     ( _nId ),
+         bReadOnly                               ( _bReadOnly || _bImported ),
+         bImported                               ( _bImported ),
+-        bThemeNameFromResource  ( _bThemeNameFromResource )
++        bThemeNameFromResource                  ( _bThemeNameFromResource ),
++        bIsOnline                               ( FALSE )
+ {
+     INetURLObject aURL( rBaseURL );
+     DBG_ASSERT( aURL.GetProtocol() != INET_PROT_NOT_VALID, "invalid URL" );
+@@ -208,12 +210,19 @@ Gallery::Gallery( const String& rMultiPath )
+ Gallery::~Gallery()
+ {
+     // Themen-Liste loeschen
+-    for( GalleryThemeEntry* pThemeEntry = aThemeList.First(); pThemeEntry; pThemeEntry = aThemeList.Next() )
++    for( GalleryThemeEntry* pThemeEntry = aThemeList.First(); pThemeEntry; pThemeEntry = aThemeList.Next() ) {
++        // Remove Online Themes from the cache
++        GalleryTheme* pTheme = ImplGetCachedTheme(pThemeEntry);
++        if (pTheme)
++            ImplDeleteCachedTheme(pTheme);
++        
+         delete pThemeEntry;
+-
++    }
++    
+     // Import-Liste loeschen
+     for( GalleryImportThemeEntry* pImportEntry = aImportList.First(); pImportEntry; pImportEntry = aImportList.Next() )
+         delete pImportEntry;
++   
+ }
+ 
+ // ------------------------------------------------------------------------
+@@ -270,8 +279,17 @@ void Gallery::ImplLoad( const String& rMultiPath )
+     DBG_ASSERT( aRelURL.GetProtocol() != INET_PROT_NOT_VALID, "invalid URL" );
+ 
+     ImplLoadImports();
+-}
+ 
++    // load the online themes
++    std::vector<rtl::OUString> keywords;
++    keywords.push_back(OUString::createFromAscii("smiley"));
++    keywords.push_back(OUString::createFromAscii("office"));    
++    keywords.push_back(OUString::createFromAscii("linux"));
++    keywords.push_back(OUString::createFromAscii("tux"));
++    keywords.push_back(OUString::createFromAscii("arrow"));
++    ImplLoadOnlineThemes(keywords);
++    
++}
+ // ------------------------------------------------------------------------
+ 
+ void Gallery::ImplLoadSubDirs( const INetURLObject& rBaseURL, sal_Bool& rbDirIsReadOnly )
+@@ -465,6 +483,20 @@ void Gallery::ImplLoadSubDirs( const INetURLObject& rBaseURL, sal_Bool& rbDirIsR
+ 
+ // ------------------------------------------------------------------------
+ 
++void Gallery::ImplLoadOnlineThemes( const std::vector<rtl::OUString>& keywords ) {
++    OnlineGalleryThemeEntry* pEntry;
++    INetURLObject openClipartRootURL("http://www.openclipart.org/media/feed/rss/");
++    for (size_t i = 0; i < keywords.size(); i++) 
++    {
++        pEntry = OnlineGalleryTheme::CreateOnlineThemeEntry(keywords[i], FALSE);
++        
++        if( pEntry ) {
++            aThemeList.Insert( pEntry, LIST_APPEND );
++        }
++    }
++}
++
++
+ void Gallery::ImplLoadImports()
+ {
+     INetURLObject aURL( GetUserURL() );
+@@ -517,6 +549,8 @@ void Gallery::ImplLoadImports()
+     }
+ }
+ 
++
++
+ // ------------------------------------------------------------------------
+ 
+ void Gallery::ImplWriteImportList()
+@@ -641,6 +675,15 @@ BOOL Gallery::CreateTheme( const String& rThemeName, UINT32 nNumFrom )
+ 
+ // ------------------------------------------------------------------------
+ 
++BOOL Gallery::AddNewOnlineTheme( OnlineGalleryThemeEntry* pEntry) 
++{
++    if (pEntry)
++        aThemeList.Insert(pEntry, LIST_APPEND);
++    return (pEntry != NULL);
++}
++
++// ------------------------------------------------------------------------
++
+ BOOL Gallery::CreateImportTheme( const INetURLObject& rURL, const String& rImportName )
+ {
+     INetURLObject	aURL( rURL );
+@@ -865,7 +908,12 @@ GalleryTheme* Gallery::ImplGetCachedTheme( const GalleryThemeEntry* pThemeEntry
+                     delete pIStm;
+                 }
+             }
+-
++            else 
++                // leaving this branching this low in case we ever decide to save Online Themes to local files
++                if ( pThemeEntry->IsOnline() ) {
++                    pTheme = new OnlineGalleryTheme(this, (GalleryThemeEntry*) pThemeEntry);
++                }
++            
+             if( pTheme )
+                 aThemeCache.Insert( new GalleryThemeCacheEntry( pThemeEntry, pTheme ), LIST_APPEND );
+         }
+@@ -908,11 +956,13 @@ GalleryTheme* Gallery::AcquireTheme( const String& rThemeName, SfxListener& rLis
+ 
+ void Gallery::ReleaseTheme( GalleryTheme* pTheme, SfxListener& rListener )
+ {
+-    if( pTheme )
++    if( pTheme)
+     {
+         rListener.EndListening( *pTheme );
+ 
+-        if( !pTheme->HasListeners() )
++        if( !pTheme->HasListeners() 
++            // Leave Online themes in memory - delete with gallery
++            && !pTheme->IsOnline())
+             ImplDeleteCachedTheme( pTheme );
+     }
+ }
+diff --git svx/source/gallery2/galobj.cxx svx/source/gallery2/galobj.cxx
+index 8b056bd..364df88 100644
+--- svx/source/gallery2/galobj.cxx
++++ svx/source/gallery2/galobj.cxx
+@@ -263,12 +263,12 @@ SgaObjectBmp::SgaObjectBmp()
+ 
+ // ------------------------------------------------------------------------
+ 
+-SgaObjectBmp::SgaObjectBmp( const INetURLObject& rURL )
++SgaObjectBmp::SgaObjectBmp( const INetURLObject& rURL, BOOL bShowProgress )
+ {
+     Graphic aGraphic;
+     String	aFilter;
+ 
+-    if ( SGA_IMPORT_NONE != GalleryGraphicImport( rURL, aGraphic, aFilter ) )
++    if ( SGA_IMPORT_NONE != GalleryGraphicImport( rURL, aGraphic, aFilter, bShowProgress ) )
+         Init( aGraphic, rURL );
+ }
+ 
+diff --git svx/source/gallery2/galtheme.cxx svx/source/gallery2/galtheme.cxx
+index 9137ebb..439bbc2 100644
+--- svx/source/gallery2/galtheme.cxx
++++ svx/source/gallery2/galtheme.cxx
+@@ -69,7 +69,7 @@ using namespace ::com::sun::star;
+ // ------------
+ // - SgaTheme -
+ // ------------
+-
++GalleryTheme::GalleryTheme(){}
+ GalleryTheme::GalleryTheme( Gallery* pGallery, GalleryThemeEntry* pThemeEntry ) :
+         pParent               ( pGallery ),
+         pThm		          ( pThemeEntry ),
+@@ -102,7 +102,7 @@ GalleryTheme::~GalleryTheme()
+ 
+ void GalleryTheme::ImplCreateSvDrawStorage()
+ {
+-    if( !pThm->IsImported() )
++    if( !pThm->IsImported() && !pThm->IsOnline())
+     {
+         aSvDrawStorageRef = new SvStorage( FALSE, GetSdvURL().GetMainURL( INetURLObject::NO_DECODE ), pThm->IsReadOnly() ? STREAM_READ : STREAM_STD_READWRITE );
+         // #i50423# ReadOnly may not been set though the file can't be written (because of security reasons)
+@@ -1571,3 +1571,4 @@ SvStream& operator>>( SvStream& rIn, GalleryTheme& rTheme )
+ {
+     return rTheme.ReadData( rIn );
+ }
++
+diff --git svx/source/gallery2/makefile.mk svx/source/gallery2/makefile.mk
+index 5a4d278..ba1c9c1 100644
+--- svx/source/gallery2/makefile.mk
++++ svx/source/gallery2/makefile.mk
+@@ -51,6 +51,8 @@ SLOFILES =	\
+             $(SLO)$/codec.obj		\
+             $(SLO)$/galbrws.obj		\
+             $(SLO)$/galbrws1.obj	\
++            $(SLO)$/openclipart.obj	\
++            $(SLO)$/openclipart-parse.obj	\
+             $(SLO)$/galbrws2.obj		
+ 
+ EXCEPTIONSFILES =	\
+@@ -58,12 +60,14 @@ EXCEPTIONSFILES =	\
+                     $(SLO)$/galtheme.obj	\
+                     $(SLO)$/galmisc.obj		\
+                     $(SLO)$/galbrws1.obj	\
++                    $(SLO)$/openclipart-parse.obj	\
+                     $(SLO)$/galexpl.obj
+ 
+ RESLIB1NAME = $(TARGET)
+ RESLIB1IMAGES = $(PRJ)$/res
+ RESLIB1SRSFILES = $(SRS)$/$(TARGET).srs
+ 
++
+ # --- Targets --------------------------------------------------------------
+ 
+ .INCLUDE : target.mk
+diff --git svx/source/gallery2/openclipart-parse.cxx svx/source/gallery2/openclipart-parse.cxx
+new file mode 100644
+index 0000000..8cddc9b
+--- /dev/null
++++ svx/source/gallery2/openclipart-parse.cxx
+@@ -0,0 +1,409 @@
++#include <openclipart-parse.hxx>
++#include <fstream>
++#include <vector>
++using namespace std;
++using namespace ::com::sun::star::xml::sax;
++using namespace ::com::sun::star::uno;
++
++using namespace ::com::sun::star::beans;	// PropertyValue
++using namespace ::com::sun::star::lang; //for XMultiServiceFactory
++using namespace std; // for map
++
++using ::com::sun::star::io::XInputStream;
++using ::com::sun::star::io::XOutputStream;
++using ::com::sun::star::io::XStream;
++using ::com::sun::star::uno::Sequence;
++
++using ::com::sun::star::uno::RuntimeException;
++using ::com::sun::star::xml::sax::SAXException;
++
++using ::rtl::OUString;
++using ::osl::Mutex;
++using ::osl::MutexGuard;
++
++// Uncomment the following line if you want to debug the Openclipart XML parsing
++// #define DEBUG_PARSING 1
++
++static const char * Tokens[] = {
++    "channel",
++    "creator",
++    "description",
++    "enclosure",
++    "guid",
++    "heigh",
++    "image",
++    "item",
++    "language",
++    "license",
++    "link",
++    "pubDate",
++    "rss",
++    "thumbnail",
++    "title",
++    "type",
++    "url",
++    "width"
++};
++
++#define XML_TOKEN_COUNT sal_Int32( sizeof( Tokens ) / sizeof( char* ) )
++
++/************** Namespaces **************/
++static const char * Namespaces[] = {
++    "http://purl.org/rss/1.0/modules/content/",
++    "http://creativecommons.org/ns#",
++    "http://purl.org/dc/elements/1.1/",
++    "http://www.itunes.com/dtds/podcast-1.0.dtd",
++    "http://search.yahoo.com/mrss/",
++    "http://www.w3.org/2005/Atom"
++};
++
++#define XML_NS_COUNT sal_Int32( sizeof( Namespaces ) / sizeof( char* ) )
++
++/************** OpenClipartDocumentHandler **************/
++OpenClipartDocumentHandler::~OpenClipartDocumentHandler() {
++#ifdef DEBUG_PARSING
++    clog << "~OpenClipartDocumentHandler" << endl;
++#endif
++    for (size_t i = 0; i < _items.size(); i++)
++        delete _items[i];
++}
++
++vector<OpenClipartItem*> OpenClipartDocumentHandler::GetItems() const {
++    vector<OpenClipartItem*> result;
++    for (size_t i = 0; i < _items.size(); i++) {
++        result.push_back(new OpenClipartItem(*_items[i]));
++    }
++    return result;
++}
++
++
++void OpenClipartDocumentHandler::startDocument() throw (SAXException, RuntimeException)
++{
++#if DEBUG_PARSING
++    clog << "OpenClipartDocumentHandler::startDocument()" << endl;
++#endif
++}
++
++void OpenClipartDocumentHandler::endDocument() throw (SAXException, RuntimeException)
++{
++#if DEBUG_PARSING
++    clog << "OpenClipartDocumentHandler::endDocument()" << endl;
++    for (size_t i = 0; i < _items.size(); i++) {
++        _items[i]->print(clog);
++        clog << string(40, '-') << endl;
++    }
++#endif
++}
++
++void OpenClipartDocumentHandler::setDocumentLocator( const Reference< XLocator >& /* xLocator */ ) throw (SAXException, RuntimeException) 
++{
++#if DEBUG_PARSING
++    clog << "OpenClipartDocumentHandler::setDocumentLocator()" << endl;
++#endif
++}
++
++void OpenClipartDocumentHandler::startFastElement( sal_Int32 Element, const Reference< XFastAttributeList >& /*Attribs*/ ) throw (SAXException, RuntimeException) 
++{
++#if DEBUG_PARSING
++    clog << "OpenClipartDocumentHandler::startFastElement() - " << Tokens[getToken(Element)] << endl;
++#endif
++}
++
++void OpenClipartDocumentHandler::startUnknownElement( const rtl::OUString& /* Namespace */, const rtl::OUString& Name, const Reference< XFastAttributeList >& /* Attribs */ )
++    throw (SAXException, RuntimeException)
++{
++#if DEBUG_PARSING
++    clog << "OpenClipartDocumentHandler::startUnknownElement() - " << OUSTR_2_STR(Name) << endl;
++#endif
++}
++  
++void OpenClipartDocumentHandler::endFastElement( sal_Int32 Element ) throw (SAXException, RuntimeException)
++{
++#if DEBUG_PARSING
++    clog << "OpenClipartDocumentHandler::endFastElement() - " << Tokens[getToken(Element)] << endl;
++#endif
++}
++  
++void OpenClipartDocumentHandler::endUnknownElement( const rtl::OUString& /* Namespace */, const rtl::OUString& Name ) throw (SAXException, RuntimeException)
++{
++#if DEBUG_PARSING
++    clog << "OpenClipartDocumentHandler::endUnknownElement() - ";
++    clog << OUSTR_2_STR(Name) << endl;
++#endif
++}
++  
++Reference< XFastContextHandler > OpenClipartDocumentHandler::createFastChildContext( sal_Int32 Element, const Reference< XFastAttributeList >& /* Attribs */ ) 
++    throw (SAXException, RuntimeException)
++{
++#if DEBUG_PARSING
++    clog << "OpenClipartDocumentHandler::createFastChildContext() " << endl;
++#endif
++    if (getToken(Element) == OC_item) {
++        OpenClipartItem *pNewItem = new OpenClipartItem();
++        _items.push_back(pNewItem);
++        return new OpenClipartItemContext(pNewItem); // pipe sax events for this element to the OpenClipartItem context
++    }
++    else 
++        return this;
++    // return 0; // ignores sax events for this element and all child elements
++}
++  
++Reference< XFastContextHandler > OpenClipartDocumentHandler::createUnknownChildContext( const rtl::OUString& /* Namespace */, const rtl::OUString& Name, const Reference< XFastAttributeList >& /* Attribs */ ) throw (SAXException, RuntimeException)
++{
++#if DEBUG_PARSING
++    clog << "OpenClipartDocumentHandler::createUnknownChildContext() - " << OUSTR_2_STR( Name ) << endl;
++#endif
++    // this is called for elements with an unknown namespace or elements which are unknown to the token handler
++    // so in general they can be ignored as we don't know anything about them
++    return 0;
++}
++  
++void OpenClipartDocumentHandler::characters( const rtl::OUString& sChars ) throw (SAXException, RuntimeException){
++#if DEBUG_PARSING
++    if (sChars.pData->length > 1) {
++        clog << "OpenClipartDocumentHandler::characters() - ";
++        clog << OUSTR_2_STR(sChars) << endl; // rtl::OUStringToOString( sChars, RTL_TEXTENCODING_UTF8 ).getStr()  << endl;
++    } 
++#endif
++}
++
++
++/****************** OpenClipartItemContext ******************/
++
++void OpenClipartItemContext::startFastElement( sal_Int32  Element, const Reference< XFastAttributeList >& Attribs) 
++    throw ( com::sun::star::xml::sax::SAXException ) {
++#if DEBUG_PARSING
++    clog << "OpenClipartItemContext::startFastElement() - " << Tokens[getToken(Element)] << endl;
++#endif
++    switch (getToken(Element)) {
++        case OC_item:
++            break; //maybe something else?
++        case OC_title:
++        case OC_link:
++        case OC_pubDate:
++        case OC_creator:
++        case OC_description:
++        case OC_guid:
++        case OC_license:
++            _currentTokenValue = rtl::OUString::createFromAscii("");
++            break;
++        case OC_enclosure:
++        case OC_thumbnail:
++            if (Attribs->hasAttribute(OC_url)) {
++                _currentTokenValue = Attribs->getValue(OC_url);
++            }
++            break;
++        default:
++#if DEBUG_PARSING 
++            clog << "there should be no other tokens - this should never be reached" << endl;
++#endif
++            _currentTokenValue = rtl::OUString::createFromAscii("");
++            break;
++    }
++}
++
++void OpenClipartItemContext::endFastElement( sal_Int32  Element ) throw ( com::sun::star::xml::sax::SAXException )  {
++#if DEBUG_PARSING
++    clog << "OpenClipartItemContext::endFastElement() - " << Tokens[getToken(Element)] << endl;
++#endif
++    switch(getToken(Element)) {
++        case OC_item:
++            return;
++        case OC_title:
++            _currentItem->mTitle = _currentTokenValue;
++            break;
++        case OC_link:
++            _currentItem->mLink = _currentTokenValue;
++            break;
++        case OC_description:
++            _currentItem->mDescription = _currentTokenValue;
++            break;
++        case OC_pubDate:
++            _currentItem->mPubDate = _currentTokenValue;
++            break;
++        case OC_guid:
++            _currentItem->mGuid = _currentTokenValue;
++            break;
++        case OC_creator:
++            _currentItem->mCreator = _currentTokenValue;
++            break;
++        case OC_license:
++            _currentItem->mLicenseUrl = _currentTokenValue;
++            break;
++        case OC_thumbnail:
++        
++            _currentItem->mThumbUrl = _currentTokenValue;
++            break;
++        case OC_enclosure:
++            _currentItem->mSvgUrl = _currentTokenValue;
++            break;
++
++        default:
++#if DEBUG_PARSING
++            clog << "Unhandled token: {" << Namespaces[getNamespace(Element)] << "}" << Tokens[getToken(Element)] << endl;
++#endif
++            break;
++    }
++}
++
++void OpenClipartItemContext::startUnknownElement( const rtl::OUString& /*Namespace*/ , const rtl::OUString& Name, const Reference< XFastAttributeList >& /* Attribs */ ) 
++    throw ( SAXException, RuntimeException )
++{
++#if DEBUG_PARSING
++    clog << "OpenClipartItemContext::startUnknownElement() - " << OUSTR_2_STR( Name ) << endl;
++#endif
++}
++
++
++void OpenClipartItemContext::endUnknownElement( const rtl::OUString& /* Namespace */, const rtl::OUString& Name ) throw ( SAXException, RuntimeException )
++{
++#if DEBUG_PARSING
++    clog << "OpenClipartItemContext::endUnknownElement() - " << OUSTR_2_STR( Name ) << endl;
++#endif
++}
++
++Reference< XFastContextHandler > OpenClipartItemContext::createFastChildContext( sal_Int32 Element, const Reference< XFastAttributeList >& /*Attribs*/ ) 
++    throw ( SAXException, RuntimeException )
++{
++#if DEBUG_CONTEXTS
++    clog << "OpenClipartItemContext::createFastChildContext() "  << endl;
++#endif
++    return this;
++}
++
++Reference< XFastContextHandler > 
++OpenClipartItemContext::createUnknownChildContext( 
++                                                  const rtl::OUString& /*Namespace*/, 
++                                                  const rtl::OUString& Name,
++                                                  const Reference< XFastAttributeList >& /*Attribs*/ ) 
++    throw ( SAXException, RuntimeException )
++{
++#if DEBUG_CONTEXTS
++    clog << "OpenClipartItemContext::createUnknownChildContext() - " << OUSTR_2_STR( Name ) << endl;
++#endif
++    return 0; //ignore the unknown elements
++}
++
++void OpenClipartItemContext::characters( const rtl::OUString& aChars ) throw ( SAXException, RuntimeException ) {
++#if DEBUG_CHARACTERS
++    if (aChars.pData->length > 1) {
++        clog << "OpenClipartItemContext::characters( ) - " << OUSTR_2_STR( aChars ) << endl;
++    }
++#endif
++    _currentTokenValue = _currentTokenValue + aChars;
++}
++
++Mutex& getTokenMutex()
++{
++	static Mutex aMutex;
++	return aMutex;
++}
++
++/************** OpenClipartTokenHandler **************/
++
++
++OpenClipartTokenHandler::OpenClipartTokenHandler() {
++    _tokenVector.resize(XML_TOKEN_COUNT);
++    
++    for ( int i = 0; i < XML_TOKEN_COUNT; i++ ) {
++        if (!addToken( i, Tokens[i] ))
++            clog << "Token not added properly" << endl;
++    }    
++}
++bool OpenClipartTokenHandler::addToken(sal_Int32 nToken, const char* sIdentifier) {
++    if (nToken >= XML_TOKEN_COUNT || nToken >= sal_Int32(_tokenVector.size()))
++        return false;
++    _tokenVector[nToken] = OUString::createFromAscii(sIdentifier);
++    return true;
++}
++
++sal_Int32 OpenClipartTokenHandler::getToken( const OUString& sIdentifier ) throw (RuntimeException)
++{
++    MutexGuard guard( getTokenMutex() );
++#if DEBUG_TOKENIZER
++    clog << "OpenClipartTokenHandler::getToken() - " << OUSTR_2_STR(sIdentifier) << endl;
++#endif
++  
++    vector<OUString>::iterator it;
++    for (it = _tokenVector.begin(); it != _tokenVector.end(); it++)
++        if (rtl_ustr_compare(*it, sIdentifier) == 0)
++            return it-_tokenVector.begin();
++    rtl::OString id = ::rtl::OUStringToOString( sIdentifier, RTL_TEXTENCODING_ASCII_US);
++    return FastToken::DONTKNOW;
++}
++
++OUString OpenClipartTokenHandler::getIdentifier( sal_Int32 nToken ) throw (RuntimeException) 
++{
++    MutexGuard guard( getTokenMutex() );
++    OUString result;
++
++    if( nToken < XML_TOKEN_COUNT )
++        result = _tokenVector[nToken];
++
++    return result;
++}
++
++sal_Int32 OpenClipartTokenHandler::getTokenFromUTF8( const Sequence< sal_Int8 >& Identifier) throw (RuntimeException)
++{
++    MutexGuard guard( getTokenMutex() );
++    string idAsString = string(reinterpret_cast<const char* >(Identifier.getConstArray()), Identifier.getLength());
++
++    OUString ouStringIdentifier = OUString::createFromAscii(idAsString.c_str());
++    return getToken(ouStringIdentifier);
++}
++
++Sequence< sal_Int8 > OpenClipartTokenHandler::getUTF8Identifier(sal_Int32 nToken) throw (RuntimeException)
++{
++    if (nToken < 0 || nToken >= XML_TOKEN_COUNT)
++        return Sequence< sal_Int8 > ();
++    OUString Identifier = getIdentifier(nToken);
++    rtl::OString utf8Identifier = rtl::OUStringToOString(Identifier, RTL_TEXTENCODING_UTF8);
++    return reinterpret_cast<const sal_Int8 * >(utf8Identifier.getStr() ), utf8Identifier.getLength();
++}
++
++
++vector<OpenClipartItem*> openclipart::GetClipart( const OUString& keyword)
++{
++    try 
++    {
++        PropertyValue xmlUrl;
++        xmlUrl.Name =  rtl::OUString(RTL_CONSTASCII_USTRINGPARAM("URL"));
++
++        rtl::OUString rootUrl = rtl::OUString(RTL_CONSTASCII_USTRINGPARAM("http://www.openclipart.org/media/feed/rss/")); 
++        xmlUrl.Value <<= rootUrl + keyword;
++        Sequence<PropertyValue> values(1);
++        values[0] = xmlUrl;
++        
++        ::comphelper::MediaDescriptor aMediaDesc(values);
++        aMediaDesc.addInputStream();
++        
++        Reference< XInputStream > xInStrm = aMediaDesc.getUnpackedValueOrDefault( ::comphelper::MediaDescriptor::PROP_INPUTSTREAM(), Reference< XInputStream >());
++        
++        // initializing parser
++        OpenClipartDocumentHandler* myDocumentHandler = new OpenClipartDocumentHandler;
++        Reference< XFastDocumentHandler > xDocumentHandler( myDocumentHandler );
++        Reference< XFastTokenHandler > xTokenHandler( new OpenClipartTokenHandler, UNO_SET_THROW);
++        Reference< XMultiServiceFactory > mxServiceFactory = ::comphelper::getProcessServiceFactory();
++
++        rtl::OUString aFastParserName =  rtl::OUString(RTL_CONSTASCII_USTRINGPARAM("com.sun.star.xml.sax.FastParser"));  
++        Reference< XFastParser > xParser( mxServiceFactory->createInstance( aFastParserName), UNO_QUERY_THROW );
++        xParser->setFastDocumentHandler( xDocumentHandler );
++        xParser->setTokenHandler( xTokenHandler);
++
++        // Loop over the namespaces
++        for ( int i = 0; i < XML_NS_COUNT; i++ )
++            xParser->registerNamespace( OUString::createFromAscii( Namespaces[i] ), (i + 1) << 16 );
++
++        InputSource aParserInput;
++        aParserInput.aInputStream = xInStrm;
++        xParser->parseStream( aParserInput );
++        OpenClipartDocumentHandler* temp = dynamic_cast<OpenClipartDocumentHandler*>(myDocumentHandler);
++        return temp->GetItems();
++    }
++    catch ( Exception e )
++        {
++            clog << "Exception caught: " << OUSTR_2_STR( e.Message ) << endl;
++        }
++    return vector<OpenClipartItem*>();
++}
++
+diff --git svx/source/gallery2/openclipart.cxx svx/source/gallery2/openclipart.cxx
+new file mode 100644
+index 0000000..fc489a0
+--- /dev/null
++++ svx/source/gallery2/openclipart.cxx
+@@ -0,0 +1,218 @@
++#include <openclipart.hxx>
++#include <string>
++#include <sstream>
++#include <rtl/ustrbuf.hxx>
++#define GET_FROM_WEB 1 // switch off for offline work only
++
++OpenClipartItem::OpenClipartItem() 
++{}
++
++// -----------------------------------------------------------------------------
++
++OUString OpenClipartItem::GetThumbnailOfSize(const INetURLObject& aURL, USHORT size)
++{
++    
++    OUString newURL = OUString::createFromAscii(""); // maybe this is the default ctor?
++    OUString thumbnailURL = aURL.GetMainURL(INetURLObject::DECODE_TO_IURI);
++    sal_Int32 pxIndex = thumbnailURL.indexOfAsciiL("px", 2);
++
++    if (pxIndex == -1)
++        return newURL;
++    
++    sal_Int32 slashIndex = thumbnailURL.lastIndexOf('/', pxIndex);
++    if (slashIndex != -1) {
++        rtl::OUStringBuffer aBuffer;
++        aBuffer.append((sal_Int32)size);
++        newURL = thumbnailURL.replaceAt(slashIndex+1, 2, aBuffer.makeStringAndClear());
++    }
++    
++    return newURL;
++}
++
++// -----------------------------------------------------------------------------
++
++void OpenClipartItem::print(std::ostream& ostr) const
++{
++    using namespace std;
++    ostr << "OpenClipartItem {" << endl;
++    ostr << "\tTitle: " << OUSTR_2_STR( mTitle ) << endl;
++    ostr << "\tLink: " << OUSTR_2_STR( mLink ) << endl;
++    ostr << "\tDescription: " << OUSTR_2_STR( mDescription ) << endl;
++    ostr << "\tPubDate: " << OUSTR_2_STR( mPubDate ) << endl;
++    ostr << "\tGuid: " << OUSTR_2_STR( mGuid ) << endl;
++    ostr << "\tCreator: " << OUSTR_2_STR( mCreator ) << endl;
++    ostr << "\tLicense Url: " << OUSTR_2_STR( mLicenseUrl ) << endl;
++    ostr << "\tThumbnail Url: " << OUSTR_2_STR( mThumbUrl ) << endl;
++    ostr << "\tSVG Url: " << OUSTR_2_STR( mSvgUrl ) << endl;    
++    ostr << "}" << endl;
++}
++
++// Theme and ThemeEntry
++
++// ----------------------
++// - OnlineGalleryTheme -
++// ----------------------
++
++OnlineGalleryTheme::OnlineGalleryTheme( Gallery* pGallery, GalleryThemeEntry* pThemeEntry ) 
++{
++    pParent =  pGallery;
++    pThm = pThemeEntry;
++    mnThemeLockCount = 0;      
++    mnBroadcasterLockCount = 0;
++    nDragPos = 0;
++    bDragging = TRUE;
++    vector<GalleryObject*> themeImages = ((OnlineGalleryThemeEntry*)pThm)->LoadImages();
++    for (size_t i = 0; i < themeImages.size(); i++) 
++        aObjectList.Insert( themeImages[i], i );
++}
++
++// -----------------------------------------------------------------------------
++
++SgaObject* OnlineGalleryTheme::ImplReadSgaObject( GalleryObject* pEntry ) 
++{
++    if (!pEntry || !pThm) 
++        return NULL;
++    return ((OnlineGalleryThemeEntry*)pThm)->GetSgaObject(pEntry);
++}
++
++// -----------------------------------------------------------------------------
++
++void OnlineGalleryTheme::ReleaseObject( SgaObject*  ) {
++    // Don't touch my objects! They will be removed when the theme entry is destroyed
++}
++
++OUString OnlineGalleryTheme::GetURLForImageOfSize(const GalleryObject* pObject, int size) 
++{
++    
++    const INetURLObject aURL( ImplGetURL( pObject ) );
++    OUString newURL  = OpenClipartItem::GetThumbnailOfSize(aURL, size);
++    if (newURL.getLength() == 0)
++        return ImplGetURL(pObject).GetMainURL(INetURLObject::DECODE_TO_IURI);
++    return newURL;
++}
++
++// -----------------------------------------------------------------------------
++// Get the large image for GetGraphic - used for Preview and Insert
++BOOL OnlineGalleryTheme::GetGraphic( ULONG nPos, Graphic& rGraphic, BOOL /* bProgress */ ) {
++    const GalleryObject*	pObject = ImplGetGalleryObject( nPos );
++    
++    if( !pObject )
++        return FALSE;
++    
++    // TODO item: make the graphic size configurable
++    OUString newURL = GetURLForImageOfSize(pObject, 500);
++    if (newURL.getLength() == (sal_Int32)0)
++        return GalleryTheme::GetGraphic(nPos, rGraphic, true);
++    
++    String aFilterDummy;
++    return ( GalleryGraphicImport( newURL, rGraphic, aFilterDummy, true ) != SGA_IMPORT_NONE );
++}
++
++// -----------------------------------------------------------------------------
++
++OnlineGalleryThemeEntry* OnlineGalleryTheme::CreateOnlineThemeEntry( OUString keyword, bool bIsUserSearch, INetURLObject aBaseURL) 
++{
++    return new OnlineGalleryThemeEntry(keyword,  bIsUserSearch, aBaseURL);
++}
++
++// ----------------------------
++// Online Gallery Theme Entry -
++// ----------------------------
++
++OnlineGalleryThemeEntry::OnlineGalleryThemeEntry(const rtl::OUString& keyword , bool bIsUserSearch /* = TRUE */ , INetURLObject aBaseURL)
++{
++    mbIsUserSearch = bIsUserSearch;
++    nId = 0;
++    bReadOnly = FALSE;
++    bImported = FALSE;
++    bThemeNameFromResource = FALSE;
++    maBaseURL = aBaseURL;
++    aName = keyword; // consider removing and overloading GetName if we decide to keep name == keyword
++    bIsOnline = TRUE;
++    mCurrentKeyword = keyword;
++}
++
++// -----------------------------------------------------------------------------s
++
++OnlineGalleryThemeEntry::~OnlineGalleryThemeEntry() {
++    clean();
++}
++
++// -----------------------------------------------------------------------------
++
++void OnlineGalleryThemeEntry::clean() 
++{
++    while ( !mOpenClipartMap.empty() ) 
++    {
++        const GalleryObject* tempGalleryObject = mOpenClipartMap.begin()->first;
++        OpenClipartItem* tempOpenClipartItem = mOpenClipartMap.begin()->second;
++        mOpenClipartMap.erase(mOpenClipartMap.begin());
++        delete tempOpenClipartItem;
++        delete tempGalleryObject;
++    }
++    
++    while ( !mBitmapMap.empty() ) 
++    {
++        SgaObjectBmp *tBmp = mBitmapMap.begin()->second;
++        mBitmapMap.erase(mBitmapMap.begin());
++        delete tBmp;
++    } 
++}
++
++// -----------------------------------------------------------------------------
++
++vector<GalleryObject*> OnlineGalleryThemeEntry::LoadImages()
++{
++    vector<GalleryObject*> result;
++    vector<OpenClipartItem*> newItems = openclipart::GetClipart(mCurrentKeyword);
++    if (newItems.size() == 0) // no results
++        return result;
++    // just temporary due to my slow internet - cut this just to 10 first items!
++    if (newItems.size() > 10) 
++        newItems.erase(newItems.begin() + 10, newItems.end() ); 
++
++    result.reserve(newItems.size());
++    GalleryObject* pEntry;
++    
++    for (size_t i = 0; i < newItems.size(); i++) 
++    {
++        pEntry = new GalleryObject;
++                
++        pEntry->aURL = INetURLObject(newItems[i]->getThumbnailUrl());
++        pEntry->nOffset = i;
++        pEntry->eObjKind = SGA_OBJ_BMP; 
++        result.push_back(pEntry);
++        mOpenClipartMap[pEntry] = newItems[i];
++    }
++    return result;
++}
++
++// ------------------------------------------------------------------------
++
++// we might never need this
++void OnlineGalleryThemeEntry::changeKeyword(OUString keyword) {
++    clean();
++    mCurrentKeyword = keyword;
++}
++
++// -----------------------------------------------------------------------------
++
++SgaObject* OnlineGalleryThemeEntry::GetSgaObject( GalleryObject* pEntry) {
++    if (mOpenClipartMap.find(pEntry) != mOpenClipartMap.end()) 
++    {
++        OpenClipartItem* pClipartItem = mOpenClipartMap[pEntry];
++        if (!pClipartItem) 
++            return NULL;
++        rtl::OUString guid = pClipartItem->getGuid();
++        if (mBitmapMap.find(guid) != mBitmapMap.end() && mBitmapMap[guid] != NULL)
++            return mBitmapMap[guid];
++        
++        SgaObjectBmp* pObjectBmp = new SgaObjectBmp(INetURLObject(pClipartItem->GetThumbnailOfSize(64)), TRUE);
++        pObjectBmp->SetTitle(pClipartItem->getTitle());
++        mBitmapMap[guid] = pObjectBmp;
++        return pObjectBmp;
++    }
++    return NULL;
++}
++
++// -----------------------------------------------------------------------------
+diff --git svx/util/hidother.src svx/util/hidother.src
+index 5509b7c..33c0a9b 100644
+--- svx/util/hidother.src
++++ svx/util/hidother.src
+@@ -169,7 +169,8 @@ hidspecial HID_WARN_NAME_DUPLICATE				{ HelpID = HID_WARN_NAME_DUPLICATE ;};
+ 
+ hidspecial HID_GALLERY_NEWTHEME					{ HelpID = HID_GALLERY_NEWTHEME ;};
+ hidspecial HID_GALLERY_THEMELIST				{ HelpID = HID_GALLERY_THEMELIST ;};
+-
++hidspecial HID_GALLERY_SEARCHONLINE				{ HelpID = HID_GALLERY_SEARCHONLINE ;};
++hidspecial HID_GALLERY_SEARCHTEXT				{ HelpID = HID_GALLERY_SEARCHTEXT ;};
+ hidspecial HID_GALLERY_ICONVIEW					{ HelpID = HID_GALLERY_ICONVIEW ;};
+ hidspecial HID_GALLERY_LISTVIEW					{ HelpID = HID_GALLERY_LISTVIEW ;};
+ hidspecial HID_OPTIONS_COLORCONFIG_SAVE_SCHEME  { HelpID = HID_OPTIONS_COLORCONFIG_SAVE_SCHEME ;};
