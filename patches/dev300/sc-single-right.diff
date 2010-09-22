@@ -1,0 +1,603 @@
+--- sc/source/ui/view/gridwin.cxx.orig2	2010-08-10 11:27:53.922000033 -0500
++++ sc/source/ui/view/gridwin.cxx	2010-08-15 22:09:59.868000093 -0500
+@@ -123,6 +123,8 @@
+ #include "cellsh.hxx"
+ #include "overlayobject.hxx"
+ 
++#include "popmenu.hxx"
++
+ #include "drawview.hxx"
+ #include <svx/sdrpagewindow.hxx>
+ #include <svx/sdr/overlay/overlaymanager.hxx>
+@@ -449,7 +451,8 @@
+             nPaintCount( 0 ),
+             bNeedsRepaint( FALSE ),
+             bAutoMarkVisible( FALSE ),
+-            bListValButton( FALSE )
++            bListValButton( FALSE ),
++            bMoveSingle( false )
+ {
+     switch(eWhich)
+     {
+@@ -1512,6 +1515,29 @@
+ 
+     aCurMousePos = rMEvt.GetPosPixel();
+ 
++    std::vector<Rectangle> aPixelRects;
++    GetSelectionRects( aPixelRects );
++
++    // is there a better way to test if the selected rectangle is only 1 cell
++    BOOL test;
++    std::vector<Rectangle>::iterator it = aPixelRects.begin();
++    if( aPixelRects.size() )
++        test = it->Top() == it->Bottom() && it->Left() == it->Right();
++
++    ScRange aRange;
++    ScMarkType eMarkType = pViewData->GetSimpleArea( aRange );
++
++    if( bMoveSingle && /*rMEvt.IsLeft() &&*/ ( ( eMarkType != SC_MARK_MULTI && test ) || !pViewData->GetMarkData().IsMarked() ) )
++    {
++        //bMoveSingle = false;
++
++        SCCOL nCol = pViewData->GetCurX();
++        SCROW nRow = pViewData->GetCurY();
++        SCTAB nTab = pViewData->GetTabNo();
++
++        pViewData->GetView()->MarkCursor( nCol, nRow, nTab );
++    }
++
+     //	Filter-Popup beendet sich mit eigenem Mausklick, nicht erst beim Klick
+     //	in das GridWindow, darum ist die folgende Abfrage nicht mehr noetig:
+ #if 0
+@@ -1783,7 +1809,7 @@
+             //		Gridwin - SelectionEngine
+             //
+ 
+-    if ( rMEvt.IsLeft() )
++    if ( rMEvt.IsLeft() || ( rMEvt.IsRight() && bMoveSingle ) )
+     {
+         ScViewSelectionEngine* pSelEng = pViewData->GetView()->GetSelEngine();
+         pSelEng->SetWindow(this);
+@@ -2257,6 +2283,8 @@
+ 
+ void __EXPORT ScGridWindow::MouseMove( const MouseEvent& rMEvt )
+ {
++    bMoveSingle = false;
++
+     aCurMousePos = rMEvt.GetPosPixel();
+ 
+     if ( rMEvt.IsLeaveWindow() && pNoteMarker && !pNoteMarker->IsByKeyboard() )
+@@ -2446,14 +2474,48 @@
+         {
+             BOOL bAlt = rMEvt.IsMod2();
+ 
++            //ScMarkData& rMark = pViewData->GetMarkData();
++            //EditView* pEditView = pViewData->GetEditView( eWhich );
++            //Cursor* pCur = pEditView->GetCursor();
++            //SCTAB nTab = pViewData->GetTabNo();
++            SCCOL nX = pViewData->GetCurX();
++            SCROW nY = pViewData->GetCurY();
++            Point aScrPos = pViewData->GetScrPos( nX, nY, eWhich, TRUE );
++
++            long nSizeXPix;
++            long nSizeYPix;
++
++            // get dimensions of cursor
++            pViewData->GetMergeSizePixel( nX, nY, nSizeXPix, nSizeYPix );
++
++
++            BOOL bLeft   = ((aCurMousePos.X() >= aScrPos.X() && aCurMousePos.X() <= aScrPos.X() + 1) && aCurMousePos.Y() >= aScrPos.Y() && aCurMousePos.Y() <= aScrPos.Y() + nSizeYPix );
++            BOOL bTop    = ((aCurMousePos.Y() >= aScrPos.Y() && aCurMousePos.Y() <= aScrPos.Y() + 1) && aCurMousePos.X() >= aScrPos.X() && aCurMousePos.X() <= aScrPos.X() + nSizeXPix );
++            // bottom and right borders actually count as the next cells that's why we do == instead of by range
++            // need to fix checking if click is on border but changes to a different cell or is this desireable?
++            BOOL bBottom = ((aCurMousePos.Y() == aScrPos.Y() + nSizeYPix - 1) &&
++                             aCurMousePos.X() >= aScrPos.X() && aCurMousePos.X() <= aScrPos.X() + nSizeXPix );
++            BOOL bRight  = ((aCurMousePos.X() == aScrPos.X() + nSizeXPix - 1) &&
++                             aCurMousePos.Y() >= aScrPos.Y() && aCurMousePos.Y() <= aScrPos.Y() + nSizeYPix );
++            //BOOL bBottom = ((aCurMousePos.Y() >= aScrPos.Y() + nSizeYPix - 1 && aCurMousePos.Y() <= aScrPos.Y() + nSizeYPix + 1) &&
++            //                 aCurMousePos.X() >= aScrPos.X() && aCurMousePos.X() <= aScrPos.X() + nSizeXPix );
++            //BOOL bRight  = ((aCurMousePos.X() >= aScrPos.X() + nSizeXPix - 1 && aCurMousePos.X() <= aScrPos.X() + nSizeXPix + 1) &&
++            //                 aCurMousePos.Y() >= aScrPos.Y() && aCurMousePos.Y() <= aScrPos.Y() + nSizeYPix );
++
+             if (bEditMode)									// Edit-Mode muss zuerst kommen!
+                 SetPointer( Pointer( POINTER_ARROW ) );
+-            else if ( !bAlt && !nButtonDown &&
+-                        GetEditUrl(rMEvt.GetPosPixel()) )
++            else if ( !bAlt && !nButtonDown && GetEditUrl(rMEvt.GetPosPixel()) )
+                 SetPointer( Pointer( POINTER_REFHAND ) );
++            else if ( ( bLeft || bTop || bBottom || bRight ) )
++            {
++                SetPointer( Pointer( POINTER_MOVE ) );
++                bMoveSingle = TRUE;
++                return;
++            }
+             else if ( DrawMouseMove(rMEvt) )				// setzt Pointer um
+                 return;
+         }
++
+     }
+ 
+     if ( pViewData->GetView()->GetSelEngine()->SelMouseMove( rMEvt ) )
+@@ -2765,6 +2827,12 @@
+ 
+     if ( nCmd == COMMAND_CONTEXTMENU && !SC_MOD()->GetIsWaterCan() )
+     {
++        // don't display context menu when we are over the cursor border, to implement right click dragging
++        if (bMoveSingle)
++        {
++            return;
++        }
++
+         if (pViewData->IsAnyFillMode())
+         {
+             pViewData->GetView()->StopRefMode();
+@@ -3832,11 +3900,11 @@
+     const ScDragData& rData = pScMod->GetDragData();
+ 
+     return DropTransferObj( rData.pCellTransfer, nDragStartX, nDragStartY,
+-                                PixelToLogic(rEvt.maPosPixel), rEvt.mnAction );
++                                PixelToLogic(rEvt.maPosPixel), rEvt.maPosPixel, rEvt.mnAction );
+ }
+ 
+ sal_Int8 ScGridWindow::DropTransferObj( ScTransferObj* pTransObj, SCCOL nDestPosX, SCROW nDestPosY,
+-                                        const Point& rLogicPos, sal_Int8 nDndAction )
++                                        const Point& rLogicPos, const Point& rMousePos, sal_Int8 nDndAction )
+ {
+     if ( !pTransObj )
+         return 0;
+@@ -3859,6 +3927,8 @@
+         bIsMove = ( nDndAction & DND_ACTION_MOVE && !bIsNavi );
+     }
+ 
++    bool bIsRight = ( nDndAction == DND_ACTION_RIGHT && !bIsNavi );
++
+     BOOL bIsLink = ( nDndAction == DND_ACTION_LINK );
+ 
+     ScRange aSource = pTransObj->GetRange();
+@@ -3949,6 +4019,7 @@
+                 {
+                     // call with bApi = TRUE to avoid error messages in drop handler
+                     bDone = pDocSh->GetDocFunc().InsertCells( aDest, NULL, meDragInsertMode, TRUE /*bRecord*/, TRUE /*bApi*/, TRUE /*bPartOfPaste*/ );
++
+                     if ( bDone )
+                     {
+                         if ( nThisTab == nSourceTab )
+@@ -3976,6 +4047,195 @@
+                         // call with bApi = TRUE to avoid error messages in drop handler
+                         bDone = pView->LinkBlock( aSource, aDest.aStart, TRUE /*bApi*/ );
+                     }
++                    else if ( bIsRight )
++                    {
++                        ScPopupMenu maPopup(ScResId( RID_POPUP_RIGHTDRAGDROP ));
++
++                        // GetMousePosPixel() returns the position from the start of the drag.. need to fix this, workaround segfaults :S
++                        //EditView* pEditView = pViewData->GetEditView( eWhich );
++                        //Cursor* pCur = pEditView->GetCursor();
++                        sal_uInt16 nItemId = maPopup.Execute( this, rMousePos);//Point(nDestPosX * pCur->GetWidth(), nDestPosY * pCur->GetHeight() )); //GetMousePosPixel()); //Point(nDestPosX, nDestPosY));
++
++                        //maPopup.Execute(pViewData->GetView()->GetWindowByPos( eWhich ), Point(0,0));/*rLogicPos);*/
++
++                        // follow excel's format for now
++                        switch ( nItemId )
++                        {
++                        case RID_RIGHTDRAGDROP_MOVE:
++                            // Move Here
++                            bIsMove = TRUE;
++                            bDone = pView->MoveBlockTo( aSource, aDest.aStart, bIsMove, TRUE /*bRecord*/, TRUE /*bPaint*/, TRUE /*bApi*/ );
++                            break;
++
++                        case RID_RIGHTDRAGDROP_COPY:
++                            // Copy Here
++                            bIsMove = FALSE;
++                            bDone = pView->MoveBlockTo( aSource, aDest.aStart, bIsMove, TRUE /*bRecord*/, TRUE /*bPaint*/, TRUE /*bApi*/ );
++                            break;
++
++                        case RID_RIGHTDRAGDROP_COPYVALUES:
++                            // Copy Here as Values Only
++                            break;
++
++                        case RID_RIGHTDRAGDROP_COPYFORMATS:
++                            // Copy Here as Formats Only
++                            break;
++
++                        case RID_RIGHTDRAGDROP_LINK:
++                            // Link Here
++                            bIsLink = TRUE;
++                            bDone = pView->LinkBlock( aSource, aDest.aStart, TRUE /*bApi*/ );
++                            break;
++
++                        case RID_RIGHTDRAGDROP_HYPERLINK:
++                            // Create Hyperlink Here
++                            break;
++
++                        case RID_RIGHTDRAGDROP_SHIFTDOWNC:
++                            // Shift Down and Copy
++                            meDragInsertMode = INS_CELLSDOWN;
++                            aUndo = ScGlobal::GetRscString( bIsMove ? STR_UNDO_MOVE : STR_UNDO_COPY );
++                            pDocSh->GetUndoManager()->EnterListAction( aUndo, aUndo );
++
++                            bDone = TRUE;
++                            bIsMove = FALSE;
++                            if ( meDragInsertMode != INS_NONE )
++                            {
++                                // call with bApi = TRUE to avoid error messages in drop handler
++                                bDone = pDocSh->GetDocFunc().InsertCells( aDest, NULL, meDragInsertMode, TRUE /*bRecord*/, TRUE /*bApi*/, TRUE /*bPartOfPaste*/ );
++                                if ( bDone )
++                                {
++                                    if ( nThisTab == nSourceTab )
++                                    {
++                                        if ( meDragInsertMode == INS_CELLSDOWN &&
++                                             nDestPosX == aSource.aStart.Col() && nDestPosY < aSource.aStart.Row() )
++                                        {
++                                            bDone = aSource.Move( 0, nSizeY, 0, pSourceDoc );
++                                        }
++                                        else if ( meDragInsertMode == INS_CELLSRIGHT &&
++                                                  nDestPosY == aSource.aStart.Row() && nDestPosX < aSource.aStart.Col() )
++                                        {
++                                            bDone = aSource.Move( nSizeX, 0, 0, pSourceDoc );
++                                        }
++                                    }
++                                    pDocSh->UpdateOle( pViewData );
++                                    pView->CellContentChanged();
++                                }
++                            }
++                            bDone = pView->MoveBlockTo( aSource, aDest.aStart, bIsMove, TRUE /*bRecord*/, TRUE /*bPaint*/, TRUE /*bApi*/ );
++                            break;
++
++                        case RID_RIGHTDRAGDROP_SHIFTRIGHTC:
++                            // Shift Right and Copy
++                            meDragInsertMode = INS_CELLSRIGHT;
++                            aUndo = ScGlobal::GetRscString( bIsMove ? STR_UNDO_MOVE : STR_UNDO_COPY );
++                            pDocSh->GetUndoManager()->EnterListAction( aUndo, aUndo );
++
++                            bDone = TRUE;
++                            bIsMove = FALSE;
++                            if ( meDragInsertMode != INS_NONE )
++                            {
++                                // call with bApi = TRUE to avoid error messages in drop handler
++                                bDone = pDocSh->GetDocFunc().InsertCells( aDest, NULL, meDragInsertMode, TRUE /*bRecord*/, TRUE /*bApi*/, TRUE /*bPartOfPaste*/ );
++                                if ( bDone )
++                                {
++                                    if ( nThisTab == nSourceTab )
++                                    {
++                                        if ( meDragInsertMode == INS_CELLSDOWN &&
++                                             nDestPosX == aSource.aStart.Col() && nDestPosY < aSource.aStart.Row() )
++                                        {
++                                            bDone = aSource.Move( 0, nSizeY, 0, pSourceDoc );
++                                        }
++                                        else if ( meDragInsertMode == INS_CELLSRIGHT &&
++                                                  nDestPosY == aSource.aStart.Row() && nDestPosX < aSource.aStart.Col() )
++                                        {
++                                            bDone = aSource.Move( nSizeX, 0, 0, pSourceDoc );
++                                        }
++                                    }
++                                    pDocSh->UpdateOle( pViewData );
++                                    pView->CellContentChanged();
++                                }
++                            }
++                            bDone = pView->MoveBlockTo( aSource, aDest.aStart, bIsMove, TRUE /*bRecord*/, TRUE /*bPaint*/, TRUE /*bApi*/ );
++                            break;
++
++                        case RID_RIGHTDRAGDROP_SHIFTDOWNM:
++                            // Shift Down and Move
++                            meDragInsertMode = INS_CELLSDOWN;
++                            aUndo = ScGlobal::GetRscString( bIsMove ? STR_UNDO_MOVE : STR_UNDO_COPY );
++                            pDocSh->GetUndoManager()->EnterListAction( aUndo, aUndo );
++
++                            bDone = TRUE;
++                            bIsMove = TRUE;
++                            if ( meDragInsertMode != INS_NONE )
++                            {
++                                // call with bApi = TRUE to avoid error messages in drop handler
++                                bDone = pDocSh->GetDocFunc().InsertCells( aDest, NULL, meDragInsertMode, TRUE /*bRecord*/, TRUE /*bApi*/, TRUE /*bPartOfPaste*/ );
++                                if ( bDone )
++                                {
++                                    if ( nThisTab == nSourceTab )
++                                    {
++                                        if ( meDragInsertMode == INS_CELLSDOWN &&
++                                             nDestPosX == aSource.aStart.Col() && nDestPosY < aSource.aStart.Row() )
++                                        {
++                                            bDone = aSource.Move( 0, nSizeY, 0, pSourceDoc );
++                                        }
++                                        else if ( meDragInsertMode == INS_CELLSRIGHT &&
++                                                  nDestPosY == aSource.aStart.Row() && nDestPosX < aSource.aStart.Col() )
++                                        {
++                                            bDone = aSource.Move( nSizeX, 0, 0, pSourceDoc );
++                                        }
++                                    }
++                                    pDocSh->UpdateOle( pViewData );
++                                    pView->CellContentChanged();
++                                }
++                            }
++                            bDone = pView->MoveBlockTo( aSource, aDest.aStart, bIsMove, TRUE /*bRecord*/, TRUE /*bPaint*/, TRUE /*bApi*/ );
++                            break;
++
++                        case RID_RIGHTDRAGDROP_SHIFTRIGHTM:
++                            // Shift Right and Move
++                            meDragInsertMode = INS_CELLSRIGHT;
++                            aUndo = ScGlobal::GetRscString( bIsMove ? STR_UNDO_MOVE : STR_UNDO_COPY );
++                            pDocSh->GetUndoManager()->EnterListAction( aUndo, aUndo );
++
++                            bDone = TRUE;
++                            bIsMove = TRUE;
++                            if ( meDragInsertMode != INS_NONE )
++                            {
++                                // call with bApi = TRUE to avoid error messages in drop handler
++                                bDone = pDocSh->GetDocFunc().InsertCells( aDest, NULL, meDragInsertMode, TRUE /*bRecord*/, TRUE /*bApi*/, TRUE /*bPartOfPaste*/ );
++                                if ( bDone )
++                                {
++                                    if ( nThisTab == nSourceTab )
++                                    {
++                                        if ( meDragInsertMode == INS_CELLSDOWN &&
++                                             nDestPosX == aSource.aStart.Col() && nDestPosY < aSource.aStart.Row() )
++                                        {
++                                            bDone = aSource.Move( 0, nSizeY, 0, pSourceDoc );
++                                        }
++                                        else if ( meDragInsertMode == INS_CELLSRIGHT &&
++                                                  nDestPosY == aSource.aStart.Row() && nDestPosX < aSource.aStart.Col() )
++                                        {
++                                            bDone = aSource.Move( nSizeX, 0, 0, pSourceDoc );
++                                        }
++                                    }
++                                    pDocSh->UpdateOle( pViewData );
++                                    pView->CellContentChanged();
++                                }
++                            }
++                            bDone = pView->MoveBlockTo( aSource, aDest.aStart, bIsMove, TRUE /*bRecord*/, TRUE /*bPaint*/, TRUE /*bApi*/ );
++                            break;
++
++                        case 0:
++                            // nothing selected
++                        case RID_RIGHTDRAGDROP_CANCEL:
++                            // Cancel
++                        default:
++                            // Need to return DND_ACTION_NONE to prevent moving the shaded area if nothing is to be done.
++                            return DND_ACTION_NONE;
++                        }
++                    }
+                     else
+                     {
+                         // call with bApi = TRUE to avoid error messages in drop handler
+@@ -4317,7 +4577,7 @@
+         {
+             // keep a reference to the data in case the selection is changed during paste
+             uno::Reference<datatransfer::XTransferable> xRef( pCellTransfer );
+-            DropTransferObj( pCellTransfer, nPosX, nPosY, aLogicPos, DND_ACTION_COPY );
++            DropTransferObj( pCellTransfer, nPosX, nPosY, aLogicPos, rPosPixel, DND_ACTION_COPY );
+         }
+         else
+         {
+--- sc/source/ui/inc/gridwin.hxx.orig2	2010-08-16 21:54:09.998000096 -0500
++++ sc/source/ui/inc/gridwin.hxx	2010-08-16 21:54:18.584000098 -0500
+@@ -116,6 +116,8 @@
+ 
+     ::boost::shared_ptr<Rectangle> mpAutoFillRect;
+ 
++    bool                    bMoveSingle;
++
+     /** 
+      * Stores current visible column and row ranges, used to avoid expensive 
+      * operations on objects that are outside visible area. 
+--- sc/inc/sc.hrc.orig2	2010-08-14 09:16:59.107000093 -0500
++++ sc/inc/sc.hrc	2010-08-14 09:31:40.135000093 -0500
+@@ -1643,6 +1643,21 @@
+ 
+ #define SC_DIALOGS_END                  (SC_DIALOGS_START + 155)
+ 
++// Popup for right dragging.
++#define RID_POPUP_RIGHTDRAGDROP			(SC_DIALOGS_START + 156)
++#define RID_RIGHTDRAGDROP_MOVE			(SC_DIALOGS_START + 157)
++#define RID_RIGHTDRAGDROP_COPY			(SC_DIALOGS_START + 158)
++#define RID_RIGHTDRAGDROP_COPYVALUES	(SC_DIALOGS_START + 159)
++#define RID_RIGHTDRAGDROP_COPYFORMATS	(SC_DIALOGS_START + 160)
++#define RID_RIGHTDRAGDROP_LINK			(SC_DIALOGS_START + 161)
++#define RID_RIGHTDRAGDROP_HYPERLINK		(SC_DIALOGS_START + 162)
++#define RID_RIGHTDRAGDROP_SHIFTDOWNC	(SC_DIALOGS_START + 163)
++#define RID_RIGHTDRAGDROP_SHIFTRIGHTC	(SC_DIALOGS_START + 164)
++#define RID_RIGHTDRAGDROP_SHIFTDOWNM	(SC_DIALOGS_START + 165)
++#define RID_RIGHTDRAGDROP_SHIFTRIGHTM	(SC_DIALOGS_START + 166)
++#define RID_RIGHTDRAGDROP_CANCEL		(SC_DIALOGS_START + 167)
++
++
+ #ifndef STD_MASKCOLOR
+ #define STD_MASKCOLOR Color { Red = 0xFF00; Green = 0x0000; Blue = 0xFF00; }
+ #endif
+--- sc/source/ui/navipi/navipi.src.orig2	2010-08-14 09:36:21.672000092 -0500
++++ sc/source/ui/navipi/navipi.src	2010-08-15 17:25:02.982000089 -0500
+@@ -370,45 +370,70 @@
+         };
+     };
+ };
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
++Menu RID_POPUP_RIGHTDRAGDROP
++{
++    ItemList =
++    {
++        MenuItem
++        {
++            Identifier = RID_RIGHTDRAGDROP_MOVE ;
++            Text [ en-US ] = "Move Here" ;
++        };
++        MenuItem
++        {
++            Identifier = RID_RIGHTDRAGDROP_COPY ;
++            Text [ en-US ] = "Copy Here" ;
++        };
++        //MenuItem
++        //{
++        //    Identifier = RID_RIGHTDRAGDROP_COPYVALUES ;
++        //    Text [ en-US ] = "Copy Here as Values Only" ;
++        //};
++        //MenuItem
++        //{
++        //    Identifier = RID_RIGHTDRAGDROP_COPYFORMATS ;
++        //    Text [ en-US ] = "Copy Here as Formats Only" ;
++        //};
++        MenuItem
++        {
++            Identifier = RID_RIGHTDRAGDROP_LINK ;
++            Text [ en-US ] = "Link Here" ;
++        };
++        //MenuItem
++        //{
++        //    Identifier = RID_RIGHTDRAGDROP_HYPERLINK ;
++        //    Text [ en-US ] = "Create Hyperlink Here" ;
++        //};
++        //////////////////////////////////////////////////
++        MenuItem { Separator = TRUE ; };
++        //////////////////////////////////////////////////
++        MenuItem
++        {
++            Identifier = RID_RIGHTDRAGDROP_SHIFTDOWNC ;
++            Text [ en-US ] = "Shift Down and Copy" ;
++        };
++        MenuItem
++        {
++            Identifier = RID_RIGHTDRAGDROP_SHIFTRIGHTC ;
++            Text [ en-US ] = "Shift Right and Copy" ;
++        };
++        MenuItem
++        {
++            Identifier = RID_RIGHTDRAGDROP_SHIFTDOWNM ;
++            Text [ en-US ] = "Shift Down and Move" ;
++        };
++        MenuItem
++        {
++            Identifier = RID_RIGHTDRAGDROP_SHIFTRIGHTM ;
++            Text [ en-US ] = "Shift Right and Move" ;
++        };
++        //////////////////////////////////////////////////
++        MenuItem { Separator = TRUE ; };
++        //////////////////////////////////////////////////
++        MenuItem
++        {
++            Identifier = RID_RIGHTDRAGDROP_CANCEL ;
++            Text [ en-US ] = "Cancel" ;
++        };
++    };
++};
+--- vcl/source/window/seleng.cxx.orig2	2010-08-10 11:35:56.392000035 -0500
++++ vcl/source/window/seleng.cxx	2010-08-14 08:20:22.702000092 -0500
+@@ -202,7 +202,7 @@
+ BOOL SelectionEngine::SelMouseButtonDown( const MouseEvent& rMEvt )
+ {
+     nFlags &= (~SELENG_CMDEVT);
+-    if ( !pFunctionSet || !pWin || rMEvt.GetClicks() > 1 || rMEvt.IsRight() )
++    if ( !pFunctionSet || !pWin || rMEvt.GetClicks() > 1)
+         return FALSE;
+ 
+     USHORT nModifier = rMEvt.GetModifier() | nLockedMods;
+--- vcl/source/window/winproc.cxx.orig2	2010-08-12 20:54:52.205000092 -0500
++++ vcl/source/window/winproc.cxx	2010-08-13 23:26:41.251000089 -0500
+@@ -546,8 +546,8 @@
+             // den Status der Maustasten, damit man mit Mod1 z.B. sofort
+             // in den Kopiermodus gehen kann.
+             const MouseSettings& rMSettings = pMouseDownWin->GetSettings().GetMouseSettings();
+-            if ( (nCode & (MOUSE_LEFT | MOUSE_RIGHT | MOUSE_MIDDLE)) ==
+-                 (rMSettings.GetStartDragCode() & (MOUSE_LEFT | MOUSE_RIGHT | MOUSE_MIDDLE)) )
++            if ( ( (nCode & (MOUSE_LEFT | MOUSE_RIGHT | MOUSE_MIDDLE)) ==
++                 (rMSettings.GetStartDragCode() & (MOUSE_LEFT | MOUSE_RIGHT | MOUSE_MIDDLE)) ) || ( nCode & MOUSE_RIGHT ) )
+             {
+                 if ( !pMouseDownWin->ImplGetFrameData()->mbStartDragCalled )
+                 {
+@@ -697,8 +697,8 @@
+                 pChild->ImplGetFrameData()->mnFirstMouseX      = nMouseX;
+                 pChild->ImplGetFrameData()->mnFirstMouseY      = nMouseY;
+                 pChild->ImplGetFrameData()->mnFirstMouseCode   = nCode;
+-                pChild->ImplGetFrameData()->mbStartDragCalled  = !((nCode & (MOUSE_LEFT | MOUSE_RIGHT | MOUSE_MIDDLE)) ==
+-                                                            (rMSettings.GetStartDragCode() & (MOUSE_LEFT | MOUSE_RIGHT | MOUSE_MIDDLE)));
++                pChild->ImplGetFrameData()->mbStartDragCalled  = !( ((nCode & (MOUSE_LEFT | MOUSE_RIGHT | MOUSE_MIDDLE)) ==
++                                                            (rMSettings.GetStartDragCode() & (MOUSE_LEFT | MOUSE_RIGHT | MOUSE_MIDDLE))) || ( nCode & MOUSE_RIGHT ) );
+             }
+             pChild->ImplGetFrameData()->mnMouseDownTime = nMsgTime;
+         }
+--- vcl/unx/source/dtrans/X11_selection.cxx.orig2	2010-08-13 21:04:01.229000093 -0500
++++ vcl/unx/source/dtrans/X11_selection.cxx	2010-08-14 08:22:34.206000092 -0500
+@@ -2763,9 +2763,10 @@
+                 sendDropPosition( true, rMessage.xkey.time );
+         }
+     }
+-    else if(
++    else if((
+             ( rMessage.type == ButtonPress || rMessage.type == ButtonRelease ) &&
+-            rMessage.xbutton.button == m_nDragButton )
++            rMessage.xbutton.button == m_nDragButton ) ||
++            ( rMessage.xbutton.button == Button3 ) )
+     {
+         bool bCancel = true;
+         if( m_aDropWindow != None )
+@@ -2783,7 +2784,7 @@
+                     dtde.Context		= new DropTargetDropContext( m_aCurrentDropWindow, m_nDropTimestamp, *this );
+                     dtde.LocationX		= x;
+                     dtde.LocationY		= y;
+-                    dtde.DropAction		= m_nUserDragAction;
++                    dtde.DropAction		= ( rMessage.xbutton.button == Button3 ) ? DNDConstants::ACTION_RIGHT : m_nUserDragAction;
+                     dtde.SourceActions	= m_nSourceActions;
+                     dtde.Transferable	= m_xDragSourceTransferable;
+                     m_bDropSent					= true;
+--- svtools/inc/svtools/transfer.hxx.orig2	2010-08-14 00:03:15.653000092 -0500
++++ svtools/inc/svtools/transfer.hxx	2010-08-14 01:10:08.078000092 -0500
+@@ -73,6 +73,7 @@
+ #define DND_ACTION_MOVE		::com::sun::star::datatransfer::dnd::DNDConstants::ACTION_MOVE
+ #define DND_ACTION_COPYMOVE ::com::sun::star::datatransfer::dnd::DNDConstants::ACTION_COPY_OR_MOVE
+ #define DND_ACTION_LINK		::com::sun::star::datatransfer::dnd::DNDConstants::ACTION_LINK
++#define DND_ACTION_RIGHT    ::com::sun::star::datatransfer::dnd::DNDConstants::ACTION_RIGHT
+ 
+ #define DND_POINTER_NONE	0
+ #define DND_IMAGE_NONE		0
+--- offapi/com/sun/star/datatransfer/dnd/DNDConstants.idl.orig2	2010-08-14 01:09:16.240000096 -0500
++++ offapi/com/sun/star/datatransfer/dnd/DNDConstants.idl	2010-08-14 01:09:23.002000093 -0500
+@@ -76,6 +76,12 @@
+     const byte ACTION_REFERENCE = 0x04;
+     
+     //=============================================================================
++    /** Action for right click dragging.
++    */
++
++    const byte ACTION_RIGHT = 0x08;
++
++    //=============================================================================
+     /** Action default.
+     */
+ 
