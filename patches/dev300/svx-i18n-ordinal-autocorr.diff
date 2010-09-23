@@ -1,5 +1,5 @@
 diff --git editeng/source/misc/svxacorr.cxx editeng/source/misc/svxacorr.cxx
-index db86806..a4e6273 100644
+index db86806..99aa65e 100644
 --- editeng/source/misc/svxacorr.cxx
 +++ editeng/source/misc/svxacorr.cxx
 @@ -47,6 +47,7 @@
@@ -10,7 +10,7 @@ index db86806..a4e6273 100644
  #include <unotools/localedatawrapper.hxx>
  #include <unotools/transliterationwrapper.hxx>
  #include <com/sun/star/lang/XMultiServiceFactory.hpp>
-@@ -488,48 +489,54 @@ BOOL SvxAutoCorrect::FnChgOrdinalNumber(
+@@ -488,48 +489,58 @@ BOOL SvxAutoCorrect::FnChgOrdinalNumber(
          if( !lcl_IsInAsciiArr( sImplEndSkipChars, rTxt.GetChar( nEndPos - 1 ) ))
              break;
  
@@ -74,36 +74,53 @@ index db86806..a4e6273 100644
 -            // dann pruefe mal, ob alle bis zum Start alle Zahlen sind
 -            for( xub_StrLen n = nEndPos - 3; nSttPos < n; )
 -                if( !rCC.isDigit( rTxt, --n ) )
--                {
++            uno::Sequence< rtl::OUString > aSuffixes = xOrdSuffix->getOrdinalSuffix( nNum, rCC.getLocale( ) );
++            for ( sal_Int32 nSuff = 0; nSuff < aSuffixes.getLength(); nSuff++ )
++            {
++                String sSuffix( aSuffixes[ nSuff ] );
++                String sEnd = rTxt.Copy( nNumEnd + 1, nEndPos - nNumEnd - 1 );
++
++                if ( sSuffix == sEnd )
+                 {
 -                    bChg = !rCC.isLetter( rTxt, n );
 -                    break;
--                }
-+            String sSuffix( xOrdSuffix->getOrdinalSuffix( nNum, rCC.getLocale( ) ) );
-+            String sEnd = rTxt.Copy( nNumEnd + 1, nEndPos - nNumEnd - 1 );
- 
++                    // Check if the ordinal suffix has to be set as super script
++                    if ( rCC.isLetter( sSuffix ) )
++                    {
++                        // Do the change
++                        SvxEscapementItem aSvxEscapementItem( DFLT_ESC_AUTO_SUPER,
++                                                            DFLT_ESC_PROP, SID_ATTR_CHAR_ESCAPEMENT );
++                        rDoc.SetAttr( nNumEnd + 1 , nEndPos,
++                                        SID_ATTR_CHAR_ESCAPEMENT,
++                                        aSvxEscapementItem);
++                    }
+                 }
+-
 -            if( bChg )		// dann setze mal das Escapement Attribut
-+            if ( sSuffix == sEnd )
-             {
+-            {
 -                SvxEscapementItem aSvxEscapementItem( DFLT_ESC_AUTO_SUPER,
 -                                                    DFLT_ESC_PROP, SID_ATTR_CHAR_ESCAPEMENT );
 -                rDoc.SetAttr( nEndPos - 2, nEndPos,
 -                                SID_ATTR_CHAR_ESCAPEMENT,
 -                                aSvxEscapementItem);
-+                // Check if the ordinal suffix has to be set as super script
-+                if ( rCC.isLetter( sSuffix ) )
-+                {
-+                    // Do the change
-+                    SvxEscapementItem aSvxEscapementItem( DFLT_ESC_AUTO_SUPER,
-+                                                        DFLT_ESC_PROP, SID_ATTR_CHAR_ESCAPEMENT );
-+                    rDoc.SetAttr( nNumEnd + 1 , nEndPos,
-+                                    SID_ATTR_CHAR_ESCAPEMENT,
-+                                    aSvxEscapementItem);
-+                }
              }
          }
  
+diff --git i18npool/inc/ordinalsuffix.hxx i18npool/inc/ordinalsuffix.hxx
+index e91b5ec..1f067f0 100644
+--- i18npool/inc/ordinalsuffix.hxx
++++ i18npool/inc/ordinalsuffix.hxx
+@@ -44,7 +44,7 @@ class OrdinalSuffix : public cppu::WeakImplHelper2
+         virtual ~OrdinalSuffix();
+ 
+         // XOrdinalSuffix
+-        virtual rtl::OUString SAL_CALL getOrdinalSuffix( sal_Int32 nNumber, const com::sun::star::lang::Locale &rLocale) throw(com::sun::star::uno::RuntimeException);
++        virtual com::sun::star::uno::Sequence< rtl::OUString > SAL_CALL getOrdinalSuffix( sal_Int32 nNumber, const com::sun::star::lang::Locale &rLocale ) throw(com::sun::star::uno::RuntimeException);
+ 
+         // XServiceInfo
+         virtual rtl::OUString SAL_CALL getImplementationName() throw(com::sun::star::uno::RuntimeException);
 diff --git i18npool/source/ordinalsuffix/ordinalsuffix.cxx i18npool/source/ordinalsuffix/ordinalsuffix.cxx
-index 378a95b..d3cae97 100644
+index 378a95b..4f629f1 100644
 --- i18npool/source/ordinalsuffix/ordinalsuffix.cxx
 +++ i18npool/source/ordinalsuffix/ordinalsuffix.cxx
 @@ -31,10 +31,14 @@
@@ -122,22 +139,22 @@ index 378a95b..d3cae97 100644
  using namespace ::rtl;
  
  namespace com { namespace sun { namespace star { namespace i18n {
-@@ -83,13 +87,49 @@ static OUString getOrdinalSuffixEn( sal_Int32 nNumber )
+@@ -51,50 +55,61 @@ OrdinalSuffix::~OrdinalSuffix()
  }
  
  
+-static OUString getOrdinalSuffixEn( sal_Int32 nNumber )
 +/*
 + * For this method to properly return the ordinal suffix for other locales
 + * than english ones, ICU 4.2+ has to be used.
 + */
- OUString SAL_CALL OrdinalSuffix::getOrdinalSuffix( sal_Int32 nNumber,
--        const Locale &aLocale ) throw( RuntimeException )
++uno::Sequence< OUString > SAL_CALL OrdinalSuffix::getOrdinalSuffix( sal_Int32 nNumber,
 +        const lang::Locale &aLocale ) throw( RuntimeException )
  {
-     OUString retValue;
+-    OUString retValue;
 -
--    if (aLocale.Language.equalsAsciiL("en",2))
--        retValue = getOrdinalSuffixEn( nNumber );
+-    switch( labs( nNumber ) % 100 )
++    uno::Sequence< OUString > retValue;
 +    
 +    // Get the value from ICU
 +    UErrorCode nCode = U_ZERO_ERROR;
@@ -149,30 +166,111 @@ index 378a95b..d3cae97 100644
 +            icu::URBNF_ORDINAL, rIcuLocale, nCode );
 +
 +    if ( U_SUCCESS( nCode ) ) 
-+    {
-+        // format the string
-+        icu::UnicodeString icuRet;
-+        formatter.format( (int32_t)nNumber, icuRet );
-+
-+        // Apply NFKC normalization to get normal letters
-+        icu::UnicodeString normalized;
-+        nCode = U_ZERO_ERROR;
-+        icu::Normalizer::normalize( icuRet, UNORM_NFKC, 0, normalized, nCode );
-+        if ( U_SUCCESS( nCode ) ) 
+     {
+-        case 11: case 12: case 13:
+-            retValue = OUString::createFromAscii( "th" );
+-            break;
+-        default:
+-            switch( nNumber % 10 )
++        int32_t nRuleSets = formatter.getNumberOfRuleSetNames( );
++        for ( int32_t i = 0; i < nRuleSets; i++ )
 +        {
-+            // Convert the normalized UnicodeString to OUString
-+            OUString sValue( reinterpret_cast<const sal_Unicode *>( normalized.getBuffer( ) ), normalized.length() );
++            icu::UnicodeString ruleSet = formatter.getRuleSetName( i );
++            // format the string
++            icu::UnicodeString icuRet;
++            icu::FieldPosition icuPos;
++            formatter.format( (int32_t)nNumber, ruleSet, icuRet, icuPos, nCode );
 +
-+            // Remove the number to get the prefix
-+            sal_Int32 len = OUString::valueOf( nNumber ).getLength( );
-+            retValue = sValue.copy( len );
++            if ( U_SUCCESS( nCode ) )
+             {
+-                case 1:
+-                    retValue = OUString::createFromAscii( "st" );
+-                    break;
+-                case 2:
+-                    retValue = OUString::createFromAscii( "nd" );
+-                    break;
+-                case 3:
+-                    retValue = OUString::createFromAscii( "rd" );
+-                    break;
+-                default:
+-                    retValue = OUString::createFromAscii( "th" );
+-                    break;
++                // Apply NFKC normalization to get normal letters
++                icu::UnicodeString normalized;
++                nCode = U_ZERO_ERROR;
++                icu::Normalizer::normalize( icuRet, UNORM_NFKC, 0, normalized, nCode );
++                if ( U_SUCCESS( nCode ) && ( normalized != icuRet ) ) 
++                {
++                    // Convert the normalized UnicodeString to OUString
++                    OUString sValue( reinterpret_cast<const sal_Unicode *>( normalized.getBuffer( ) ), normalized.length() );
++
++                    // Remove the number to get the prefix
++                    sal_Int32 len = OUString::valueOf( nNumber ).getLength( );
++                    
++                    sal_Int32 newLength = retValue.getLength() + 1;
++                    retValue.realloc( newLength );
++                    retValue[ newLength - 1 ] = sValue.copy( len );
++                }
+             }
+-            break;
 +        }
-+    }
-+    else 
-+    { 
-+        if (aLocale.Language.equalsAsciiL("en",2))
-+            retValue = getOrdinalSuffixEn( nNumber );
-+    }
+     }
  
      return retValue;
  }
+ 
+ 
+-OUString SAL_CALL OrdinalSuffix::getOrdinalSuffix( sal_Int32 nNumber,
+-        const Locale &aLocale ) throw( RuntimeException )
+-{
+-    OUString retValue;
+-
+-    if (aLocale.Language.equalsAsciiL("en",2))
+-        retValue = getOrdinalSuffixEn( nNumber );
+-
+-    return retValue;
+-}
+-
+-
+ const sal_Char cOrdinalSuffix[] = "com.sun.star.i18n.OrdinalSuffix";
+ 
+ OUString SAL_CALL OrdinalSuffix::getImplementationName(void) throw( RuntimeException )
+diff --git offapi/com/sun/star/i18n/XOrdinalSuffix.idl offapi/com/sun/star/i18n/XOrdinalSuffix.idl
+index e88c900..083e67f 100644
+--- offapi/com/sun/star/i18n/XOrdinalSuffix.idl
++++ offapi/com/sun/star/i18n/XOrdinalSuffix.idl
+@@ -45,22 +45,24 @@ module com { module sun { module star { module i18n {
+     ATTENTION: This interface is marked <em>internal</em> and does not
+     have the <em>published</em> flag, which means it is subject to
+     change without notice and should not be used outside the OOo core.
+-    The current version is a draft and works only for English language
+-    locales. Future enhancements adding functionality for other locales
+-    should use the 'ordinal' RuleBasedNumberFormat of the ICU if
+-    possible, see
+-    http://icu.sourceforge.net/apiref/icu4c/classRuleBasedNumberFormat.html
+-    which might make it necessary to change the interface.
+  */
+ 
+ interface XOrdinalSuffix : com::sun::star::uno::XInterface
+ {
+     //------------------------------------------------------------------------
+-    /** Returns the ordinal suffix for the number, for example,
+-        "<b>st</b>", "<b>nd</b>", "<b>rd</b>", "<b>th</b>"
+-        in an English locale.
++    /** Returns all the possible ordinal suffixes for the number.
++
++        This method will provide "<b>st</b>", "<b>nd</b>", "<b>rd</b>",
++        "<b>th</b>" for an English locale, depending on the provided number.
++        In some locales like French, Italian or Spanish it ca return several
++        suffixes for one number.
++
++        Examples: for the number '1', the values will be <b>st</b> in
++        English, but <b>er</b> and <b>re</b> in French. All these values
++        may depend on the underlying version of ICU.
++
+      */
+-    string getOrdinalSuffix( [in] long nNumber, [in] com::sun::star::lang::Locale aLocale );
++    sequence< string > getOrdinalSuffix( [in] long nNumber, [in] com::sun::star::lang::Locale aLocale );
+ };
+ 
+ //============================================================================
