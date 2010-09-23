@@ -1,95 +1,16 @@
-diff -u -r -N -x unxlngi6.pro i18npool/source/ordinalsuffix/ordinalsuffix.cxx i18npool/source/ordinalsuffix/ordinalsuffix.cxx
---- i18npool/source/ordinalsuffix/ordinalsuffix.cxx	2009-08-04 15:49:26.000000000 +0200
-+++ i18npool/source/ordinalsuffix/ordinalsuffix.cxx	2009-08-06 15:51:57.000000000 +0200
-@@ -34,10 +34,14 @@
- #include <string.h>
- #include "ordinalsuffix.hxx"
- 
-+#include <unicode/rbnf.h>
-+#include <unicode/normlzr.h>
-+
-+#define CSTR( ouStr ) rtl::OUStringToOString( ouStr, RTL_TEXTENCODING_UTF8 ).getStr( )
- 
- using namespace ::com::sun::star::i18n;
- using namespace ::com::sun::star::uno;
--using namespace ::com::sun::star::lang;
-+using namespace ::com::sun::star;
- using namespace ::rtl;
- 
- namespace com { namespace sun { namespace star { namespace i18n {
-@@ -86,13 +90,49 @@
- }
- 
- 
-+/*
-+ * For this method to properly return the ordinal suffix for other locales
-+ * than english ones, ICU 4.2+ has to be used.
-+ */
- OUString SAL_CALL OrdinalSuffix::getOrdinalSuffix( sal_Int32 nNumber,
--        const Locale &aLocale ) throw( RuntimeException )
-+        const lang::Locale &aLocale ) throw( RuntimeException )
- {
-     OUString retValue;
-+    
-+    // Get the value from ICU
-+    UErrorCode nCode = U_ZERO_ERROR;
-+    const icu::Locale rIcuLocale( 
-+            CSTR( aLocale.Language ), 
-+            CSTR( aLocale.Country ), 
-+            CSTR( aLocale.Variant ) );
-+    icu::RuleBasedNumberFormat formatter( 
-+            icu::URBNF_ORDINAL, rIcuLocale, nCode );
- 
--    if (aLocale.Language.equalsAsciiL("en",2))
--        retValue = getOrdinalSuffixEn( nNumber );
-+    if ( U_SUCCESS( nCode ) ) 
-+    {
-+        // format the string
-+        icu::UnicodeString icuRet;
-+        formatter.format( (int32_t)nNumber, icuRet );
-+
-+        // Apply NFKC normalization to get normal letters
-+        icu::UnicodeString normalized;
-+        nCode = U_ZERO_ERROR;
-+        icu::Normalizer::normalize( icuRet, UNORM_NFKC, 0, normalized, nCode );
-+        if ( U_SUCCESS( nCode ) ) 
-+        {
-+            // Convert the normalized UnicodeString to OUString
-+            OUString sValue( reinterpret_cast<const sal_Unicode *>( normalized.getBuffer( ) ), normalized.length() );
-+
-+            // Remove the number to get the prefix
-+            sal_Int32 len = OUString::valueOf( nNumber ).getLength( );
-+            retValue = sValue.copy( len );
-+        }
-+    }
-+    else 
-+    { 
-+        if (aLocale.Language.equalsAsciiL("en",2))
-+            retValue = getOrdinalSuffixEn( nNumber );
-+    }
- 
-     return retValue;
- }
-diff -u -r -N -x unxlngi6.pro svx/source/editeng/svxacorr.cxx svx/source/editeng/svxacorr.cxx
---- svx/source/editeng/svxacorr.cxx	2009-08-07 17:06:55.000000000 +0200
-+++ svx/source/editeng/svxacorr.cxx	2009-08-07 16:48:59.000000000 +0200
-@@ -63,6 +63,7 @@
- #endif
+diff --git editeng/source/misc/svxacorr.cxx editeng/source/misc/svxacorr.cxx
+index db86806..a4e6273 100644
+--- editeng/source/misc/svxacorr.cxx
++++ editeng/source/misc/svxacorr.cxx
+@@ -47,6 +47,7 @@
+ #include <com/sun/star/i18n/UnicodeType.hdl>
  #include <unotools/collatorwrapper.hxx>
  #include <com/sun/star/i18n/CollatorOptions.hpp>
 +#include <com/sun/star/i18n/XOrdinalSuffix.hpp>
  #include <unotools/localedatawrapper.hxx>
  #include <unotools/transliterationwrapper.hxx>
  #include <com/sun/star/lang/XMultiServiceFactory.hpp>
-@@ -522,7 +522,6 @@
-     return 0 != cChar;
- }
- 
--
- BOOL SvxAutoCorrect::FnChgOrdinalNumber(
-                                 SvxAutoCorrDoc& rDoc, const String& rTxt,
-                                 xub_StrLen nSttPos, xub_StrLen nEndPos,
-@@ -541,52 +540,58 @@
+@@ -488,48 +489,54 @@ BOOL SvxAutoCorrect::FnChgOrdinalNumber(
          if( !lcl_IsInAsciiArr( sImplEndSkipChars, rTxt.GetChar( nEndPos - 1 ) ))
              break;
  
@@ -110,14 +31,16 @@ diff -u -r -N -x unxlngi6.pro svx/source/editeng/svxacorr.cxx svx/source/editeng
 -            sSecond[]	= "nd",       	/* 2 */
 -            sThird[]	= "rd";       	/* 3 */
 -        static const sal_Char* __READONLY_DATA aNumberTab[ 4 ] =
--        {
--            sAll, sFirst, sSecond, sThird
--        };
 +        i--;
 +        bool isDigit = rCC.isDigit( rTxt, i );
 +        if ( foundEnd )
 +            validNumber |= isDigit;
- 
++
++        if ( isDigit && !foundEnd ) 
+         {
+-            sAll, sFirst, sSecond, sThird
+-        };
+-
 -        sal_Unicode c = rTxt.GetChar( nEndPos - 3 );
 -        if( ( c -= '0' ) > 3 )
 -            c = 0;
@@ -129,15 +52,14 @@ diff -u -r -N -x unxlngi6.pro svx/source/editeng/svxacorr.cxx svx/source/editeng
 -               ( 3 < nEndPos - nSttPos &&
 -                ( ((sal_Unicode)*(sAll+0)) == rTxt.GetChar( nEndPos - 2 ) &&
 -                  ((sal_Unicode)*(sAll+1)) == rTxt.GetChar( nEndPos - 1 )));
-+        if ( isDigit && !foundEnd ) 
-+        {
+-
+-        if( bChg )
 +            foundEnd = true;
 +            nNumEnd = i;
 +        }
 +    }
 +    while ( i > nSttPos );
- 
--        if( bChg )
++
 +    if ( foundEnd && validNumber ) {
 +        sal_Int32 nNum = rTxt.Copy( nSttPos, nNumEnd - nSttPos + 1 ).ToInt32( );
 +    
@@ -179,8 +101,78 @@ diff -u -r -N -x unxlngi6.pro svx/source/editeng/svxacorr.cxx svx/source/editeng
 +                }
              }
          }
--
-     }
+ 
+diff --git i18npool/source/ordinalsuffix/ordinalsuffix.cxx i18npool/source/ordinalsuffix/ordinalsuffix.cxx
+index 378a95b..d3cae97 100644
+--- i18npool/source/ordinalsuffix/ordinalsuffix.cxx
++++ i18npool/source/ordinalsuffix/ordinalsuffix.cxx
+@@ -31,10 +31,14 @@
+ #include <string.h>
+ #include "ordinalsuffix.hxx"
+ 
++#include <unicode/rbnf.h>
++#include <unicode/normlzr.h>
 +
-     return bChg;
- } 
++#define CSTR( ouStr ) rtl::OUStringToOString( ouStr, RTL_TEXTENCODING_UTF8 ).getStr( )
+ 
+ using namespace ::com::sun::star::i18n;
+ using namespace ::com::sun::star::uno;
+-using namespace ::com::sun::star::lang;
++using namespace ::com::sun::star;
+ using namespace ::rtl;
+ 
+ namespace com { namespace sun { namespace star { namespace i18n {
+@@ -83,13 +87,49 @@ static OUString getOrdinalSuffixEn( sal_Int32 nNumber )
+ }
+ 
+ 
++/*
++ * For this method to properly return the ordinal suffix for other locales
++ * than english ones, ICU 4.2+ has to be used.
++ */
+ OUString SAL_CALL OrdinalSuffix::getOrdinalSuffix( sal_Int32 nNumber,
+-        const Locale &aLocale ) throw( RuntimeException )
++        const lang::Locale &aLocale ) throw( RuntimeException )
+ {
+     OUString retValue;
+-
+-    if (aLocale.Language.equalsAsciiL("en",2))
+-        retValue = getOrdinalSuffixEn( nNumber );
++    
++    // Get the value from ICU
++    UErrorCode nCode = U_ZERO_ERROR;
++    const icu::Locale rIcuLocale( 
++            CSTR( aLocale.Language ), 
++            CSTR( aLocale.Country ), 
++            CSTR( aLocale.Variant ) );
++    icu::RuleBasedNumberFormat formatter( 
++            icu::URBNF_ORDINAL, rIcuLocale, nCode );
++
++    if ( U_SUCCESS( nCode ) ) 
++    {
++        // format the string
++        icu::UnicodeString icuRet;
++        formatter.format( (int32_t)nNumber, icuRet );
++
++        // Apply NFKC normalization to get normal letters
++        icu::UnicodeString normalized;
++        nCode = U_ZERO_ERROR;
++        icu::Normalizer::normalize( icuRet, UNORM_NFKC, 0, normalized, nCode );
++        if ( U_SUCCESS( nCode ) ) 
++        {
++            // Convert the normalized UnicodeString to OUString
++            OUString sValue( reinterpret_cast<const sal_Unicode *>( normalized.getBuffer( ) ), normalized.length() );
++
++            // Remove the number to get the prefix
++            sal_Int32 len = OUString::valueOf( nNumber ).getLength( );
++            retValue = sValue.copy( len );
++        }
++    }
++    else 
++    { 
++        if (aLocale.Language.equalsAsciiL("en",2))
++            retValue = getOrdinalSuffixEn( nNumber );
++    }
+ 
+     return retValue;
+ }
