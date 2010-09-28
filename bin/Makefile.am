@@ -30,7 +30,7 @@ script_files = \
 	ootesttool.in \
 	ootool.in \
 	ootouch \
-	ooo-pack-sources \
+	lo-pack-sources \
 	ooo-unpack-sources \
 	openoffice-xlate-lang \
 	owner \
