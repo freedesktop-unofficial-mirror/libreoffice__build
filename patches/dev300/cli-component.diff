@@ -1,0 +1,1062 @@
+diff --git cli_ure/prj/build.lst cli_ure/prj/build.lst
+index 268240c..c5aac81 100644
+--- cli_ure/prj/build.lst
++++ cli_ure/prj/build.lst
+@@ -6,7 +6,9 @@ ure	cli_ure\source				nmake   -   w,vc7   ure_source_source ure_inc NULL
+ ure	cli_ure\source\climaker		nmake	-	w,vc7	ure_source_climaker ure_source_basetypes.w ure_inc NULL
+ ure	cli_ure\unotypes			nmake	-	w,vc7	ure_unotypes ure_source_version ure_source_source.w ure_source_climaker.w ure_inc NULL
+ ure	cli_ure\source\ure			nmake	-	w,vc7	ure_source_ure ure_source_version ure_source_source.w ure_source_basetypes.w ure_unotypes.w ure_inc NULL
+-ure	cli_ure\source\uno_bridge	nmake	-	w,vc7	ure_source_uno_bridge ure_source_basetypes.w ure_unotypes.w ure_source_ure.w ure_inc NULL
++ure	cli_ure\source\cli_callback			nmake   -   w,vc7   ure_source_cli_callback ure_inc NULL
++ure	cli_ure\source\uno_bridge	nmake	-	w,vc7	ure_source_uno_bridge ure_source_cli_callback.w ure_source_basetypes.w ure_unotypes.w ure_source_ure.w ure_inc NULL
++ure	cli_ure\source\cli_loader	nmake	-	all	ure_source_uno_loader ure_source_uno_bridge.w ure_source_basetypes.w ure_unotypes.w ure_source_ure.w ure_inc NULL
+ ure	cli_ure\source\native		nmake	-	w,vc7	ure_source_native ure_source_version ure_source_source.w ure_source_ure.w ure_unotypes.w ure_source_uno_bridge.w ure_inc NULL
+ 
+ #ure	cli_ure\util			nmake	-	w,vc7	ure_util ure_source_ure.w ure_source_native.w NULL
+diff --git cli_ure/source/cli_callback/cli_callback.cxx cli_ure/source/cli_callback/cli_callback.cxx
+new file mode 100644
+index 0000000..ef6129e
+--- /dev/null
++++ cli_ure/source/cli_callback/cli_callback.cxx
+@@ -0,0 +1,163 @@
++#include "cli_callback.hxx"
++#include "uno/environment.h"
++#include "osl/diagnose.h"
++
++// The redirectedxxxfunc functions below are to be used with the Managed 
++// cli bridge. Native code communicating with the cli bridge we cannot control 
++// when the shutdown of the clr runtime occurs, communicating with 
++// managed code in the (mixed) bridge dll after or during the clr shutdown
++// results in unexpected results,  unhandled exceptions & unexpected exits.
++// The cli bridge inserts the proxyfree, proxyquire, proxyrelease, proxydispatch
++// as the uno_Interface handlers, proxyfree & friends call the equivelant
++// redirectedfreefunc & friends handlers.
++// So... while normal processing occurs the calling sequence is
++// uno_Interface.free -> proxyfree -> redirectfreefunc -> cli_proxy_free
++// when the cli bridge dll is about to exit ( but before shutting down the clr )
++// redirectedfreefunc & friends are set to harmless noop functions e.g.
++// uno_Interface.free -> proxyfree -> redirectfreefunc -> noopfree
++// This ensure that any calls from a bridge proxy object are harmlessly
++// ignored during or after the bridge libraries shutdown & detatch
++// #FIXME idealy  Cli_proxy ( see cli_proxy.cxx & cli_proxy.h ) itself should be
++// modified to be a listener for a shutdown starting message and should
++// replaces it's own handlers. However the equivelant noop functions still will
++// need to exist in real native a ( not mixed ) dll ( or at least thats my
++// experience sofar ). At the same time not sure if there is a better solution
++// and this rather heavy handed approach I think will work as well ( with little
++// effort for the moment.
++
++freefunc redirectedfreefunc = NULL;
++acquirefunc redirectedacquirefunc = NULL;
++releasefunc redirectedreleasefunc = NULL;
++dispatchfunc redirecteddispatchfunc = NULL;
++
++extern "C"
++void SAL_CALL noopfree( uno_ExtEnvironment * env, void * proxy ) SAL_THROW_EXTERN_C()
++{
++    OSL_TRACE("noopfree"); 
++}
++
++extern "C"
++void SAL_CALL noopacquire( uno_Interface * pUnoI ) SAL_THROW_EXTERN_C()
++{
++    OSL_TRACE("noopacquire");
++}
++
++extern "C"
++void SAL_CALL nooprelease( uno_Interface * pUnoI ) SAL_THROW_EXTERN_C()
++{
++    OSL_TRACE("nooprelease");
++}
++extern "C"
++void SAL_CALL noopdispatch(
++    uno_Interface * pUnoI, typelib_TypeDescription const * member_td,
++    void * uno_ret, void * uno_args [], uno_Any ** uno_exc ) SAL_THROW_EXTERN_C()
++{
++    OSL_TRACE("noopdispatch");
++}
++
++
++extern "C"
++void SAL_CALL proxyfree( uno_ExtEnvironment * env, void * proxy ) SAL_THROW_EXTERN_C()
++{
++    OSL_TRACE("proxyfree"); 
++    redirectedfreefunc( env, proxy );
++}
++
++extern "C"
++void SAL_CALL proxyacquire( uno_Interface * pUnoI ) SAL_THROW_EXTERN_C()
++{
++    OSL_TRACE("proxyacquire");
++    redirectedacquirefunc( pUnoI );
++}
++
++extern "C"
++void SAL_CALL proxyrelease( uno_Interface * pUnoI ) SAL_THROW_EXTERN_C()
++{
++    OSL_TRACE("proxyrelease");
++    redirectedreleasefunc( pUnoI );
++}
++extern "C"
++void SAL_CALL proxydispatch(
++    uno_Interface * pUnoI, typelib_TypeDescription const * member_td,
++    void * uno_ret, void * uno_args [], uno_Any ** uno_exc ) SAL_THROW_EXTERN_C()
++{
++    OSL_TRACE("proxydispatch");
++    redirecteddispatchfunc( pUnoI, member_td, uno_ret, uno_args, uno_exc );
++}
++
++CallBackHandler::CallBackHandler() 
++{
++    OSL_TRACE("CallBackHandler");
++    resetHandlers(); // initialiase handler to noops
++}
++
++CallBackHandler::~CallBackHandler() 
++{
++    OSL_TRACE("~CallBackHandler");
++}
++
++void 
++CallBackHandler::resetHandlers()
++{
++    OSL_TRACE("CallBackHandler::resetHandlers");
++
++    redirectedfreefunc = noopfree;
++    redirectedacquirefunc = noopacquire;
++    redirectedreleasefunc = nooprelease;
++    redirecteddispatchfunc = noopdispatch;
++}
++
++
++CallBackHandler&
++CallBackHandler::instance()
++{
++    static CallBackHandler inst;
++    return inst;
++}
++
++void CallBackHandler::setAcquireHandler( acquirefunc pFunc )
++{
++    OSL_TRACE("setAcquireHandler");
++    redirectedacquirefunc = pFunc;
++}
++
++void CallBackHandler::setReleaseHandler( releasefunc pFunc )
++{
++    OSL_TRACE("setReleaseHandler");
++    redirectedreleasefunc = pFunc;
++}
++
++void CallBackHandler::setDispatchHandler( dispatchfunc pFunc )
++{
++    OSL_TRACE("setDispatchHandler");
++    redirecteddispatchfunc = pFunc;
++}
++
++void CallBackHandler::setFreeHandler( freefunc pFunc )
++{
++    redirectedfreefunc = pFunc;
++}
++
++acquirefunc
++CallBackHandler::getAcquireHandler()
++{
++    return proxyacquire;
++}
++
++releasefunc
++CallBackHandler::getReleaseHandler()
++{
++    return proxyrelease;
++}
++
++dispatchfunc
++CallBackHandler::getDispatchHandler()
++{
++    return proxydispatch;
++}
++
++freefunc
++CallBackHandler::getFreeHandler()
++{
++    return proxyfree;
++}
+diff --git cli_ure/source/cli_callback/makefile.mk cli_ure/source/cli_callback/makefile.mk
+new file mode 100644
+index 0000000..cdeafac
+--- /dev/null
++++ cli_ure/source/cli_callback/makefile.mk
+@@ -0,0 +1,48 @@
++PRJ=..$/..
++PRJNAME=cli_ure
++
++TARGET=cli_callback
++
++VISIBILITY_HIDDEN=TRUE
++NO_BSYMBOLIC=	TRUE
++ENABLE_EXCEPTIONS=TRUE
++USE_DEFFILE = TRUE
++
++# --- Settings -----------------------------------------------------
++
++.INCLUDE :  settings.mk
++DLLPRE =
++
++SHL1TARGET= $(TARGET)$(DLLPOSTFIX)
++
++# ------------------------------------------------------------------
++
++
++SLOFILES= \
++		$(SLO)$/cli_callback.obj
++
++
++SHL1OBJS = $(SLOFILES)
++SHL1DEPN=
++SHL1IMPLIB=i$(TARGET)
++SHL1DEF=$(MISC)$/$(SHL1TARGET).def
++DEF1NAME=$(SHL1TARGET)
++#SHL1USE_EXPORTS=name
++SHL1VERSIONMAP = msvc.map
++
++SHL1DEF = $(MISC)$/$(SHL1TARGET).def
++DEF1NAME = $(SHL1TARGET)
++
++SHL1STDLIBS= \
++                $(CPPUHELPERLIB) \
++		$(COMPHELPERLIB) \
++                $(CPPULIB) \
++                $(TOOLSLIB) \
++                $(SALLIB)
++
++                                                                              
++SHL1LIBS=$(SLB)$/$(TARGET).lib
++
++# --- Targets ------------------------------------------------------
++
++.INCLUDE :	target.mk
+diff --git cli_ure/source/cli_callback/msvc.map cli_ure/source/cli_callback/msvc.map
+new file mode 100644
+index 0000000..429f750
+--- /dev/null
++++ cli_ure/source/cli_callback/msvc.map
+@@ -0,0 +1,6 @@
++UDK_3_0_0 {
++    global:
++
++    local:
++    *;
++};
+diff --git cli_ure/source/inc/cli_callback.hxx cli_ure/source/inc/cli_callback.hxx
+new file mode 100644
+index 0000000..dea95d1
+--- /dev/null
++++ cli_ure/source/inc/cli_callback.hxx
+@@ -0,0 +1,36 @@
++#ifndef _UNO_DUMMY_H_
++#define _UNO_DUMMY_H_
++
++#include "uno/dispatcher.h"
++#include "typelib/typedescription.h"
++#include "uno/any2.h"
++#include "uno/environment.h"
++
++
++typedef void (SAL_CALL * freefunc)( uno_ExtEnvironment * env, void * proxy ) SAL_THROW_EXTERN_C();
++typedef void (SAL_CALL * acquirefunc)( uno_Interface * pInterface ) SAL_THROW_EXTERN_C();
++typedef void (SAL_CALL * releasefunc)( uno_Interface * pInterface ) SAL_THROW_EXTERN_C();
++typedef void (SAL_CALL * dispatchfunc)( uno_Interface * pUnoI, typelib_TypeDescription const * member_td, void * uno_ret, void * uno_args [], uno_Any ** uno_exc ) SAL_THROW_EXTERN_C();
++
++
++class __declspec(dllexport) CallBackHandler
++{
++public:
++    static CallBackHandler& instance();
++    void resetHandlers();
++    void setAcquireHandler( acquirefunc pFunc );
++    void setReleaseHandler( releasefunc pFunc );
++    void setDispatchHandler( dispatchfunc pFunc );
++    void setFreeHandler( freefunc pFunc );
++
++   acquirefunc getAcquireHandler();
++   releasefunc getReleaseHandler();
++   dispatchfunc getDispatchHandler();
++   freefunc getFreeHandler();
++private:
++    CallBackHandler();
++    ~CallBackHandler();
++};
++
++#endif
++
+diff --git cli_ure/source/inc/cli_loader_wrapper.h cli_ure/source/inc/cli_loader_wrapper.h
+new file mode 100644
+index 0000000..aa6f177
+--- /dev/null
++++ cli_ure/source/inc/cli_loader_wrapper.h
+@@ -0,0 +1,5 @@
++#ifndef INCLUDED_CLI_WRAPPER_H
++#define INCLUDED_CLI_WRAPPER_H
++// wrapper function to load managed CLI Loader
++    __declspec(dllexport) void* getCLILoader();
++#endif
+diff --git cli_ure/source/uno_bridge/cli_environment.cxx cli_ure/source/uno_bridge/cli_environment.cxx
+index 88ee3cb..713b378 100644
+--- cli_ure/source/uno_bridge/cli_environment.cxx
++++ cli_ure/source/uno_bridge/cli_environment.cxx
+@@ -35,6 +35,8 @@
+ #using <system.dll>
+ #include "osl/diagnose.h"
+ #include "cli_proxy.h"
++#include "cli_callback.hxx"
++#include <stdlib.h>
+ 
+ using namespace System::Runtime::Remoting;
+ using namespace System::Runtime::Remoting::Proxies;
+@@ -51,18 +53,60 @@ inline System::String* Cli_environment::createKey(System::String* oid, System::T
+     return System::String::Concat(oid, t->get_FullName());
+ }
+ 
++int aboutToShutdown(void)
++{
++    OSL_TRACE("about to shutdown");
++    // Clr shutdown is about to happen, we have to ensure that no 
++    // code located in this dll cannot be called from native code
++    // trying to do this in object finalizers etc. is already too late
++    // E.g. a static uno reference ( located in native code ) to an object
++    // object located in this bridge will more than likely when destructing 
++    // call cli_proxy_release while the clr either cleaning up or already 
++    // shutdown ( but before this dll has detatched )
++    // Any call from native code into managed code during or after the clr
++    // shutdown will result in a core ( or undefined behaviour )
++    // Taking this action might result in some resource leakage but
++    // thats unavoidable
++    
++    CallBackHandler::instance().resetHandlers(); 
++    return 0;
++}
++
+ 
+ inline Cli_environment::Cli_environment()
+ {
++    OSL_TRACE("Cli_environment::Cli_environment() !!!");
+ #if OSL_DEBUG_LEVEL >= 2
+     _numRegisteredObjects = 0;
+ #endif    
++    CliProxy::setUpProxyHandlers(); // insert a native code handler ( that will redirect to the managed c++ hanlder, when the clr is about to shutdown we reset the native handlers to be a noop ( but located in a native dll ) so no clr code is called ( which causes crazy exceptions and undefined madness )
++    _onexit_m( aboutToShutdown );
+ }
+ 
+ Cli_environment::~Cli_environment()
+ {
++    OSL_TRACE("Cli_environment::~Cli_environment()");
++    IEnumerator* iEnum = m_objects->Keys->GetEnumerator();
++    while( iEnum->MoveNext() )
++    {
++        System::String* key = static_cast< System::String* >( iEnum->get_Current() );
++        Trace::WriteLine(System::String::Format(
++               new System::String(S"Cli_environment::~Cli_environment() "
++               S"has oid {0} "),
++               key ));
++
++    }
++
+     OSL_ENSURE(_numRegisteredObjects == 0,
+                "cli uno bridge: CLI environment contains unrevoked objects");
++
++#if OSL_DEBUG_LEVEL >= 2
++    if (_numRegisteredObjects != 0 )
++    {
++        OSL_TRACE("<sigh... CLI environment contains unrevoked objects");
++    }
++#endif
++
+ }
+ 
+ 
+diff --git cli_ure/source/uno_bridge/cli_loaderwrapper.cxx cli_ure/source/uno_bridge/cli_loaderwrapper.cxx
+new file mode 100644
+index 0000000..01b0503
+--- /dev/null
++++ cli_ure/source/uno_bridge/cli_loaderwrapper.cxx
+@@ -0,0 +1,64 @@
++// Use UNICODE Windows and C API.
++#define _UNICODE
++#define UNICODE
++
++#ifdef _MSC_VER
++#pragma warning(push, 1)
++#endif
++#include <windows.h>
++#include "uno/environment.hxx"
++#ifdef _MSC_VER
++#pragma warning(pop)
++#endif
++
++#include <tchar.h>
++
++#include "com/sun/star/loader/XImplementationLoader.hpp"
++
++#include "cli_loader_wrapper.h"
++#include "rtl/ustring.hxx"
++#include "uno/mapping.hxx"
++#define OUSTR(x) ::rtl::OUString( RTL_CONSTASCII_USTRINGPARAM(x) )
++
++#using "cli_ure.dll"
++
++using namespace ::rtl;
++using namespace ::com::sun::star;
++using namespace ::com::sun::star::uno;
++using namespace ::uno::util;
++
++    void* getCLILoader()
++    {
++    ::com::sun::star::uno::Mapping mapping(
++        OUSTR(UNO_LB_CLI), OUSTR(CPPU_CURRENT_LANGUAGE_BINDING_NAME) );
++    OSL_ASSERT( mapping.is() );
++    if (! mapping.is())
++        if (! mapping.is())
++        {
++            throw ::com::sun::star::uno::RuntimeException(
++                OUSTR("cannot get mapping from CLI to C++!"),
++                ::com::sun::star::uno::Reference<
++                  ::com::sun::star::uno::XInterface >() );
++        }
++        System::Object* pObj = new ::uno::util::ManagedCodeLoader();
++        System::Runtime::InteropServices::GCHandle handle(
++            ::System::Runtime::InteropServices::GCHandle::Alloc( pObj ) );
++        typelib_InterfaceTypeDescription* pType_XImplementationLoader = NULL;
++        com::sun::star::loader::XImplementationLoader::static_type().getDescription( (typelib_TypeDescription **) & pType_XImplementationLoader);
++
++
++        void* ret = mapping.mapInterface(
++            reinterpret_cast< void * >(
++                ::System::Runtime::InteropServices::GCHandle::op_Explicit( handle )
++#if defined _WIN32
++                 .ToInt32()
++#elif defined _WIN64
++                 .ToInt64()
++#else
++#error ERROR: either _WIN64 or _WIN32 must be defined
++            ERROR: either _WIN64 or _WIN32 must be defined
++#endif        
++            ), pType_XImplementationLoader );
++        handle.Free();
++        return ret;
++    }
+diff --git cli_ure/source/uno_bridge/cli_proxy.cxx cli_ure/source/uno_bridge/cli_proxy.cxx
+index e5a9b51..6735733 100644
+--- cli_ure/source/uno_bridge/cli_proxy.cxx
++++ cli_ure/source/uno_bridge/cli_proxy.cxx
+@@ -34,6 +34,7 @@
+ #include "cli_proxy.h"
+ #include "cli_base.h"
+ #include "cli_bridge.h"
++#include "cli_callback.hxx"
+ 
+ #using <mscorlib.dll>
+ #using <cli_ure.dll>
+@@ -105,6 +106,7 @@ UnoInterfaceInfo::UnoInterfaceInfo(Bridge const * bridge, uno_Interface* unoI,
+ UnoInterfaceInfo::~UnoInterfaceInfo()
+ {
+     //accessing unmanaged objects is ok.
++   OSL_TRACE("UnoInterfaceInfo::~UnoInterfaceInfo()");
+    m_bridge->m_uno_env->revokeInterface(
+             m_bridge->m_uno_env, m_unoI );
+    m_bridge->release();
+@@ -141,6 +143,7 @@ UnoInterfaceProxy::UnoInterfaceProxy(
+ 
+ UnoInterfaceProxy::~UnoInterfaceProxy()
+ {
++   OSL_TRACE("UnoInterfaceProxy::~UnoInterfaceProxy()" );
+ #if OSL_DEBUG_LEVEL >= 2
+     sd::Trace::WriteLine(System::String::Format(
+                new System::String(S"cli uno bridge: Destroying proxy "
+@@ -422,6 +425,7 @@ srrm::IMessage* UnoInterfaceProxy::Invoke(srrm::IMessage* callmsg)
+ {
+     try
+     {
++        OSL_TRACE("UnoInterfaceProxy::Invoke ");
+         sc::IDictionary* props= callmsg->Properties;
+         srrm::LogicalCallContext* context=
+             static_cast<srrm::LogicalCallContext*>(
+@@ -672,9 +676,9 @@ CliProxy::CliProxy(Bridge const* bridge, System::Object* cliI,
+     m_nInheritedInterfaces(0)
+ {
+     m_bridge->acquire();
+-    uno_Interface::acquire = cli_proxy_acquire;
+-    uno_Interface::release = cli_proxy_release;
+-    uno_Interface::pDispatcher = cli_proxy_dispatch;
++    uno_Interface::acquire = CallBackHandler::instance().getAcquireHandler();//cli_proxy_acquire;
++    uno_Interface::release = CallBackHandler::instance().getReleaseHandler();//cli_proxy_release;
++    uno_Interface::pDispatcher = CallBackHandler::instance().getDispatchHandler();//cli_proxy_dispatch;
+ 
+     m_unoType.makeComplete();
+     m_type= mapUnoType(m_unoType.get());
+@@ -898,7 +902,7 @@ uno_Interface* CliProxy::create(Bridge const * bridge,
+     (*bridge->m_uno_env->registerProxyInterface)(
+        bridge->m_uno_env,
+        reinterpret_cast<void**>(&proxy),
+-       cli_proxy_free,
++       CallBackHandler::instance().getFreeHandler(),//cli_proxy_free,
+        ousOid.pData, (typelib_InterfaceTypeDescription*) pTD);
+     //register original interface
+     CliEnvHolder::g_cli_env->registerInterface(cliI, mapUnoString(ousOid.pData),
+@@ -926,7 +930,8 @@ inline void CliProxy::acquire() const
+         // register at uno env
+         (*m_bridge->m_uno_env->registerProxyInterface)(
+             m_bridge->m_uno_env, &that,
+-            cli_proxy_free, m_usOid.pData,
++            cli_proxy_free, 
++            m_usOid.pData,
+             (typelib_InterfaceTypeDescription *)m_unoType.get() );
+ #if OSL_DEBUG_LEVEL >= 2
+         OSL_ASSERT( this == (void const * const)that );
+@@ -947,6 +952,14 @@ inline void CliProxy::release() const
+             m_bridge->m_uno_env, const_cast< CliProxy * >( this ) );
+     }
+ }
++void CliProxy::setUpProxyHandlers()
++{
++    CallBackHandler& cbHandler = CallBackHandler::instance();
++    cbHandler.setAcquireHandler( cli_proxy_acquire );
++    cbHandler.setReleaseHandler( cli_proxy_release );
++    cbHandler.setDispatchHandler( cli_proxy_dispatch );
++    cbHandler.setFreeHandler( cli_proxy_free );
++}
+ }
+ 
+ 
+@@ -956,6 +969,7 @@ extern "C"
+ void SAL_CALL cli_proxy_free( uno_ExtEnvironment *, void * proxy )
+     SAL_THROW_EXTERN_C()
+ {
++    OSL_TRACE("cli_proxy_free ..");
+     cli_uno::CliProxy * cliProxy = reinterpret_cast<
+         cli_uno::CliProxy * >( proxy );
+ 
+@@ -966,6 +980,7 @@ extern "C"
+ void SAL_CALL cli_proxy_acquire( uno_Interface * pUnoI )
+     SAL_THROW_EXTERN_C()
+ {
++    OSL_TRACE("cli_proxy_acquire ..");
+     CliProxy const * cliProxy = static_cast< CliProxy const * >( pUnoI );
+     cliProxy->acquire();
+ }
+@@ -974,6 +989,7 @@ extern "C"
+ void SAL_CALL cli_proxy_release( uno_Interface * pUnoI )
+     SAL_THROW_EXTERN_C()
+ {
++    OSL_TRACE("cli_proxy_release ..");
+     CliProxy * cliProxy = static_cast< CliProxy * >( pUnoI );
+     cliProxy->release();
+ }
+@@ -986,6 +1002,7 @@ void SAL_CALL cli_proxy_dispatch(
+     void * uno_ret, void * uno_args [], uno_Any ** uno_exc )
+     SAL_THROW_EXTERN_C()
+ {
++    OSL_TRACE("cli_proxy_dispatch B ..");
+     CliProxy * proxy = static_cast< CliProxy* >( pUnoI );
+     try
+     {
+@@ -1171,8 +1188,3 @@ void SAL_CALL cli_proxy_dispatch(
+ #endif
+     }
+ }
+-
+-
+-
+-
+-
+diff --git cli_ure/source/uno_bridge/cli_proxy.h cli_ure/source/uno_bridge/cli_proxy.h
+index 1471ae5..b9eb838 100644
+--- cli_ure/source/uno_bridge/cli_proxy.h
++++ cli_ure/source/uno_bridge/cli_proxy.h
+@@ -178,6 +178,9 @@ protected:
+ //Cannot make this __gc because a managed type cannot derive from unmanaged type
+ struct CliProxy: public uno_Interface
+ {
++
++    static void setUpProxyHandlers();
++
+     mutable oslInterlockedCount m_ref;
+     const Bridge* m_bridge;
+     const gcroot<System::Object*> m_cliI;
+@@ -295,5 +298,6 @@ struct CliProxy: public uno_Interface
+     inline void acquire() const;
+     inline void release() const;
+ };
++
+ }
+ #endif
+diff --git cli_ure/source/uno_bridge/makefile.mk cli_ure/source/uno_bridge/makefile.mk
+index b7682ae..8d4c816 100644
+--- cli_ure/source/uno_bridge/makefile.mk
++++ cli_ure/source/uno_bridge/makefile.mk
+@@ -65,16 +65,18 @@ SLOFILES = \
+     $(SLO)$/cli_bridge.obj		\
+     $(SLO)$/cli_data.obj		\
+     $(SLO)$/cli_proxy.obj		\
+-    $(SLO)$/cli_uno.obj
++    $(SLO)$/cli_uno.obj			\
++    $(SLO)$/cli_loaderwrapper.obj	\
+ 
+ SHL1OBJS = $(SLOFILES)
+-
++CALLBACKLIB = $(LB)$/icli_callback.lib
+ SHL1TARGET = $(TARGET)
+ 
+ SHL1STDLIBS = \
+     $(CPPULIB)			\
+     $(SALLIB)			\
+-    mscoree.lib
++    mscoree.lib			\
++    $(CALLBACKLIB) \
+ 
+ .IF "$(CCNUMVER)" >= "001399999999"
+ SHL1STDLIBS += \
+
+diff --git scp2/source/ooo/ure.scp scp2/source/ooo/ure.scp
+index 008df5d..4d16b0d 100755
+--- scp2/source/ooo/ure.scp
++++ scp2/source/ooo/ure.scp
+@@ -425,6 +425,25 @@ End
+ #endif
+
+ #if defined WNT && defined _MSC
++File gid_File_Dl_Cli_Loader
++    TXT_FILE_BODY;
++    Dir = SCP2_URE_DL_DIR;
++    Name = STRING(CONCAT4(cli_loader,DLLPOSTFIX,.uno,.dll));
++    Styles = (PACKED, UNO_COMPONENT, VERSION_INDEPENDENT_COMP_ID);
++    RegistryID = gid_Starregistry_Services_Rdb_Ure;
++End
++#endif
++
++#if defined WNT && defined _MSC
++File gid_File_Dl_Cli_Callback
++    TXT_FILE_BODY;
++    Dir = SCP2_URE_DL_DIR;
++    Name = STRING(CONCAT3(cli_callback,DLLPOSTFIX,.dll));
++    Styles = (PACKED, VERSION_INDEPENDENT_COMP_ID);
++End
++#endif
++
++#if defined WNT && defined _MSC
+
+ File gid_File_Dl_Cli_Ure_Assembly
+     TXT_FILE_BODY;
+diff --git cli_ure/prj/d.lst cli_ure/prj/d.lst
+index 261bb2c..4052b9c 100644
+--- cli_ure/prj/d.lst
++++ cli_ure/prj/d.lstt
+@@ -2,6 +2,8 @@
+ ..\%__SRC%\bin\climaker.pdb %_DEST%\bin%_EXT%\climaker.pdb
+ ..\%__SRC%\bin\climaker.exe.config %_DEST%\bin%_EXT%\climaker.exe.config
+ 
++..\%__SRC%\bin\cli_loader*.dll %_DEST%\bin%_EXT%\cli_loader*.dll
++..\%__SRC%\lib\cli_loader*.so %_DEST%\lib%_EXT%\cli_loader*.so
+ ..\%__SRC%\bin\cli_*.dll %_DEST%\bin%_EXT%\cli_*.dll
+ ..\%__SRC%\bin\cli_*.pdb %_DEST%\bin%_EXT%\cli_*.pdb
+ ..\%__SRC%\bin\cli_*.config %_DEST%\bin%_EXT%\cli_*.config
+--- /dev/null
++++ cli_ure/source/cli_loader/cli_loader.cxx
+@@ -0,0 +1,168 @@
++// MARKER(update_precomp.py): autogen include statement, do not remove
++#include "precompiled_cli_ure.hxx"
++#include <comphelper/processfactory.hxx>
++#include <comphelper/uno3.hxx>
++#include <com/sun/star/lang/XMultiComponentFactory.hpp>
++#include <com/sun/star/loader/XImplementationLoader.hpp>
++#include <com/sun/star/beans/XPropertySet.hpp>
++#include <com/sun/star/container/XNamed.hpp>
++#include <com/sun/star/lang/XServiceInfo.hpp>
++#include <com/sun/star/lang/XInitialization.hpp>
++#include <com/sun/star/util/XMacroExpander.hpp>
++#include <cppuhelper/implbase2.hxx>
++#include "uno/mapping.hxx"
++#ifdef WNT
++#include "cli_loader_wrapper.h"
++#endif
++#include <fstream.h>
++
++// for debug
++#include <comphelper/anytostring.hxx>
++
++using namespace ::com::sun::star;
++
++typedef ::cppu::WeakImplHelper2< loader::XImplementationLoader, lang::XServiceInfo > CliLoader_BASE;
++
++
++namespace cli_loader
++{
++    ::rtl::OUString SAL_CALL getImplementationName();
++
++    uno::Reference< uno::XInterface > SAL_CALL create( uno::Reference< uno::XComponentContext > const & xContext ) SAL_THROW( () );
++
++    uno::Sequence< ::rtl::OUString > SAL_CALL getSupportedServiceNames();
++}
++
++#ifdef WNT
++uno::Reference< loader::XImplementationLoader >
++create_object ()
++{
++    OSL_TRACE("In create_object for managed loader....");
++    // interact with managed c++
++    uno::Reference< loader::XImplementationLoader > xLoader = reinterpret_cast< loader::XImplementationLoader* >( getCLILoader() );
++    return xLoader;
++}
++#endif
++
++class CliLoader : public CliLoader_BASE
++{
++    uno::Reference< uno::XComponentContext > mxContext;
++    uno::Reference< loader::XImplementationLoader > mxLoader;
++    uno::Reference< util::XMacroExpander > mxExpander;
++public:
++    CliLoader( const uno::Reference< uno::XComponentContext >& rxContext ) : mxContext( rxContext )
++    {
++        OSL_TRACE("***** CliLoader::CliLoader() ");
++        if (!(mxContext->getValueByName( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( "/singletons/com.sun.star.util.theMacroExpander"))) >>= mxExpander)
++        || !mxExpander.is())
++        {
++            throw uno::RuntimeException( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( "component context fails to supply singleton" " com.sun.star.util.theMacroExpander of type" " com.sun.star.util.XMacroExpander")), mxContext);        
++        }
++#ifdef WNT
++        static uno::Reference< loader::XImplementationLoader > xLoader( create_object() );
++        mxLoader = xLoader;
++#else
++        uno::Reference< uno::XMultiComponentFactory > factory = mxContext->getServiceManager();
++        mxLoader = factory->createInstanceWithContext( rtl::OUString::createFromAscii("org.openoffice.loader.MonoLoader" ), mxContext ); 
++#endif
++        if ( mxLoader.is() )
++        {
++            // set the service factory
++            uno::Sequence< uno::Any > args(1);
++            args[ 0 ] <<= rxContext->getServiceManager();
++            uno::Reference< lang::XInitialization > xInitialize( mxLoader, uno::UNO_QUERY_THROW );
++            OSL_TRACE("CliLoader::CliLoader() about to call initialise");
++            xInitialize->initialize( args );
++        }
++        else 
++        {
++            OSL_TRACE("**  CliLoader::CliLoader(): No loader found ");
++        }
++
++    }
++    ~CliLoader()
++    {
++        OSL_TRACE("** CliLoader::~CliLoader() ");
++    }
++
++    // Methods
++    virtual uno::Reference< uno::XInterface > SAL_CALL activate( const ::rtl::OUString& implementationName, const ::rtl::OUString& implementationLoaderUrl, const ::rtl::OUString& locationUrl, const uno::Reference< registry::XRegistryKey >& xKey ) throw (loader::CannotActivateFactoryException, uno::RuntimeException)
++    {
++        // try to instatiate a mono loader and return a reference to it
++        OSL_TRACE("**** in CliLoader::activate");
++        if ( mxLoader.is() )
++        {
++            OSL_TRACE("*** CliLoader::activate() about to call activate on 0x%x", mxLoader.get() );
++             return mxLoader->activate( implementationName, implementationLoaderUrl, locationUrl, xKey );
++        }
++        return NULL;
++    }
++
++    virtual ::sal_Bool SAL_CALL writeRegistryInfo( const uno::Reference< registry::XRegistryKey >& xKey, const ::rtl::OUString& implementationLoaderUrl, const ::rtl::OUString& locationUrl ) throw (registry::CannotRegisterImplementationException, uno::RuntimeException)
++    { 
++        if ( mxLoader.is() )
++        {
++             return mxLoader->writeRegistryInfo( xKey, implementationLoaderUrl, locationUrl );
++        }
++        return sal_False;
++    }
++
++    virtual ::rtl::OUString SAL_CALL getImplementationName(  ) throw (uno::RuntimeException){ return cli_loader::getImplementationName(); }
++
++    virtual ::sal_Bool SAL_CALL supportsService( const ::rtl::OUString& ServiceName ) throw (uno::RuntimeException)
++    {
++        sal_Bool bRes = sal_False;
++        uno::Sequence< ::rtl::OUString > sServices = cli_loader::getSupportedServiceNames();
++        const ::rtl::OUString* pService = sServices.getConstArray();
++        const ::rtl::OUString* pEnd = sServices.getConstArray() + sServices.getLength();
++        for ( ; pService != pEnd ;  ++pService )
++        {
++            if ( (*pService).equals( ServiceName ) )
++            {
++                bRes = sal_True;
++                break;
++            }
++        }
++        return bRes;
++    }
++
++    virtual uno::Sequence< ::rtl::OUString > SAL_CALL getSupportedServiceNames(  ) throw (uno::RuntimeException){ return cli_loader::getSupportedServiceNames(); }
++
++};
++
++namespace cli_loader
++{
++    ::rtl::OUString SAL_CALL getImplementationName()
++    {
++        static ::rtl::OUString* pImplName = 0;
++        if ( !pImplName )
++        {
++            ::osl::MutexGuard aGuard( ::osl::Mutex::getGlobalMutex() );
++            if ( !pImplName )
++            {
++                static ::rtl::OUString aImplName( RTL_CONSTASCII_USTRINGPARAM( "org.openoffice.loader.CliLoader" ) );
++                pImplName = &aImplName;
++            }
++        }
++        return *pImplName;
++    }
++
++    uno::Reference< uno::XInterface > SAL_CALL create(
++    uno::Reference< uno::XComponentContext > const & xContext )
++    SAL_THROW( () )
++    {
++        OSL_TRACE("** In create for monoloader");
++        // mimic java loader, just hava a single entry point ( Mono implementation 
++        // loader )
++        // #FIXME use whatever boiler plate static initialisatioon foo that is 
++        // available ( seem to recall there is some helpers for that )
++        static uno::Reference < lang::XTypeProvider  > xLoader( new CliLoader( xContext ) );
++        return xLoader;
++    }
++
++    uno::Sequence< ::rtl::OUString > SAL_CALL getSupportedServiceNames()
++    {
++        const ::rtl::OUString strName( ::cli_loader::getImplementationName() );
++        return uno::Sequence< ::rtl::OUString >( &strName, 1 );
++    }	
++}
+diff --git cli_ure/source/cli_loader/cli_loader.xml cli_ure/source/cli_loader/cli_loader.xml
+new file mode 100644
+index 0000000..06e6c73
+--- /dev/null
++++ cli_ure/source/cli_loader/cli_loader.xml
+@@ -0,0 +1,26 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<!DOCTYPE module-description PUBLIC "-//StarOffice//DTD ComponentDescription 1.0//EN" "module-description.dtd">
++<module-description xmlns:xlink="http://www.w3.org/1999/xlink">
++
++    <module-name>mono_loader</module-name>
++    
++    <component-description>
++        <author>Noel Power </author>
++        <name>Mono Loader</name>
++        <description>Loader for components located in mono assemblies</description>
++        <loader-name>com.sun.star.loader.SharedLibrary</loader-name>
++        <language>c++</language>
++        <status value="drafts"/>
++        <supported-service>org.openoffice.loader.MonoLoader</supported-service>
++        <type>com.sun.star.uno.XComponentContext</type>        
++    </component-description>
++    
++    <project-build-dependency>cppuhelper</project-build-dependency>
++    <project-build-dependency>cppu</project-build-dependency>
++    <project-build-dependency>sal</project-build-dependency>
++
++    <runtime-module-dependency>cppuhelper3$(COM)</runtime-module-dependency>
++    <runtime-module-dependency>cppu3</runtime-module-dependency>
++    <runtime-module-dependency>sal3</runtime-module-dependency>
++    
++</module-description>
+diff --git cli_ure/source/cli_loader/makefile.mk cli_ure/source/cli_loader/makefile.mk
+new file mode 100644
+index 0000000..2cde26e
+--- /dev/null
++++ cli_ure/source/cli_loader/makefile.mk
+@@ -0,0 +1,81 @@
++#*************************************************************************
++#
++# DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
++# 
++# Copyright 2008 by Sun Microsystems, Inc.
++#
++# OpenOffice.org - a multi-platform office productivity suite
++#
++# $RCSfile: makefile.mk,v $
++#
++# $Revision: 1.0 $
++#
++# This file is part of OpenOffice.org.
++#
++# OpenOffice.org is free software: you can redistribute it and/or modify
++# it under the terms of the GNU Lesser General Public License version 3
++# only, as published by the Free Software Foundation.
++#
++# OpenOffice.org is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU Lesser General Public License version 3 for more details
++# (a copy is included in the LICENSE file that accompanied this code).
++#
++# You should have received a copy of the GNU Lesser General Public License
++# version 3 along with OpenOffice.org.  If not, see
++# <http://www.openoffice.org/license.html>
++# for a copy of the LGPLv3 License.
++#
++#*************************************************************************
++
++PRJ=..$/..
++
++PRJNAME=cli_ure
++TARGET=cli_loader
++
++VISIBILITY_HIDDEN=TRUE
++NO_BSYMBOLIC=	TRUE
++ENABLE_EXCEPTIONS=TRUE
++COMP1TYPELIST=$(TARGET)
++COMPRDB=$(SOLARBINDIR)$/types.rdb
++
++# --- Settings -----------------------------------------------------
++
++.INCLUDE :  settings.mk
++CFLAGS+=$(MONO_CFLAGS)
++DLLPRE =
++
++# ------------------------------------------------------------------
++
++#.INCLUDE :  ..$/cppumaker.mk
++
++SLOFILES= \
++		$(SLO)$/service.obj \
++		$(SLO)$/cli_loader.obj \
++
++SHL1TARGET= $(TARGET)$(DLLPOSTFIX).uno
++SHL1IMPLIB=     i$(TARGET)
++
++SHL1VERSIONMAP=$(SOLARENV)/src/component.map
++SHL1DEF=$(MISC)$/$(SHL1TARGET).def
++DEF1NAME=$(SHL1TARGET)
++                                                                              
++SHL1STDLIBS= \
++                $(CPPUHELPERLIB) \
++		$(COMPHELPERLIB) \
++                $(CPPULIB) \
++                $(TOOLSLIB) \
++                $(SALLIB) \
++
++.IF "$(GUI)" == "WNT"
++                SHL1STDLIBS+= $(LB)$/icli_uno.lib
++.ENDIF
++
++                                                                              
++SHL1DEPN=
++SHL1LIBS=$(SLB)$/$(TARGET).lib
++
++# --- Targets ------------------------------------------------------
++
++.INCLUDE :	target.mk
+diff --git cli_ure/source/cli_loader/service.cxx cli_ure/source/cli_loader/service.cxx
+new file mode 100644
+index 0000000..dd38d85
+--- /dev/null
++++ cli_ure/source/cli_loader/service.cxx
+@@ -0,0 +1,104 @@
++/*************************************************************************
++ *
++ * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
++ * 
++ * Copyright 2008 by Sun Microsystems, Inc.
++ *
++ * OpenOffice.org - a multi-platform office productivity suite
++ *
++ * $RCSfile: service.cxx,v $
++ * $Revision: 1.0 $
++ *
++ * This file is part of OpenOffice.org.
++ *
++ * OpenOffice.org is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU Lesser General Public License version 3
++ * only, as published by the Free Software Foundation.
++ *
++ * OpenOffice.org is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU Lesser General Public License version 3 for more details
++ * (a copy is included in the LICENSE file that accompanied this code).
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * version 3 along with OpenOffice.org.  If not, see
++ * <http://www.openoffice.org/license.html>
++ * for a copy of the LGPLv3 License.
++ *
++ ************************************************************************/
++
++// MARKER(update_precomp.py): autogen include statement, do not remove
++#include "precompiled_cli_ure.hxx"
++#include "cppuhelper/implementationentry.hxx"
++#include "com/sun/star/lang/XMultiServiceFactory.hpp"
++#include "com/sun/star/registry/XRegistryKey.hpp"
++
++// =============================================================================
++// component exports
++// =============================================================================
++using namespace ::com::sun::star;
++using namespace ::com::sun::star::uno;
++
++namespace cli_loader
++{
++    // =============================================================================
++    // component operations
++    // =============================================================================
++
++    uno::Reference< XInterface > SAL_CALL create(
++        Reference< XComponentContext > const & xContext )
++        SAL_THROW( () );
++
++    // -----------------------------------------------------------------------------
++
++    ::rtl::OUString SAL_CALL getImplementationName();
++
++    Sequence< ::rtl::OUString > SAL_CALL getSupportedServiceNames();
++
++    Reference<XInterface> SAL_CALL create(
++        Sequence<Any> const &, Reference<XComponentContext> const & );
++} // end mono_loader
++
++
++    // =============================================================================
++
++    const ::cppu::ImplementationEntry s_component_entries [] =
++    {
++        {
++            ::cli_loader::create, ::cli_loader::getImplementationName,
++            ::cli_loader::getSupportedServiceNames, 
++            ::cppu::createSingleComponentFactory,
++            0, 0
++        },
++        { 0, 0, 0, 0, 0, 0 }
++    };
++
++extern "C"
++{
++    SAL_DLLPUBLIC_EXPORT  void SAL_CALL component_getImplementationEnvironment( 
++        const sal_Char ** ppEnvTypeName, uno_Environment ** )
++    {
++        OSL_TRACE("In component_getImplementationEnv");
++        *ppEnvTypeName = CPPU_CURRENT_LANGUAGE_BINDING_NAME;
++    }
++
++    SAL_DLLPUBLIC_EXPORT  sal_Bool SAL_CALL component_writeInfo( 
++        lang::XMultiServiceFactory * pServiceManager, registry::XRegistryKey * pRegistryKey )
++    {
++        OSL_TRACE("In component_writeInfo");
++        if ( ::cppu::component_writeInfoHelper(
++            pServiceManager, pRegistryKey, s_component_entries ) )
++            return sal_True;
++        return sal_False;
++    }
++
++    SAL_DLLPUBLIC_EXPORT  void * SAL_CALL component_getFactory( 
++        const sal_Char * pImplName, lang::XMultiServiceFactory * pServiceManager,
++        registry::XRegistryKey * pRegistryKey )
++    {
++        OSL_TRACE("In component_getFactory");
++        return ::cppu::component_getFactoryHelper( 
++            pImplName, pServiceManager, pRegistryKey, s_component_entries );
++    }
++}

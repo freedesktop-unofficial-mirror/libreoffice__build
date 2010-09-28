@@ -1,0 +1,504 @@
+diff --git cli_ure/source/ure/makefile.mk cli_ure/source/ure/makefile.mk
+index 3e02908..91c122f 100644
+--- cli_ure/source/ure/makefile.mk
++++ cli_ure/source/ure/makefile.mk
+@@ -41,6 +41,12 @@ TARGET = ure
+ 
+ .INCLUDE : $(BIN)$/cliureversion.mk
+ 
++TMPCSC = $(CSC)
++
++.IF "$(ENABLE_MONO)" == "YES"
++TMPCSC = gmcs
++.ENDIF
++
+ ASSEMBLY_ATTRIBUTES = $(MISC)$/assembly_ure_$(TARGET).cs
+ 
+ POLICY_ASSEMBLY_FILE=$(BIN)$/$(CLI_URE_POLICY_ASSEMBLY).dll
+@@ -57,6 +63,9 @@ CSFILES = \
+     uno$/util$/WeakAdapter.cs					\
+     uno$/util$/WeakBase.cs						\
+     uno$/util$/WeakComponentBase.cs	\
++    uno$/util$/RegistrationClassFinder.cs \
++    uno$/util$/Factory.cs \
++    uno$/util$/ManagedCodeLoader.cs \
+     $(ASSEMBLY_ATTRIBUTES)
+ 
+ .IF "$(CCNUMVER)" <= "001399999999"
+@@ -74,11 +83,12 @@ $(ASSEMBLY_ATTRIBUTES) : assembly.cs makefile.mk $(BIN)$/cliuno.snk $(BIN)$/cliu
+     >> $@
+ .ENDIF
+ 
+-$(BIN)$/cli_ure.dll : $(CSFILES) $(BIN)$/cli_uretypes.dll $(BIN)$/cliureversion.mk 
+-    $(CSC) $(CSCFLAGS) \
++$(BIN)$/cli_ure.dll : $(CSFILES) $(BIN)$/cli_uretypes.dll $(BIN)$/cliureversion.mk $(BIN)$/cli_basetypes.dll
++    $(TMPCSC) $(CSCFLAGS) \
+         -target:library \
+         -out:$@ \
+         -reference:$(OUT)$/bin$/cli_uretypes.dll \
++        -reference:$(OUT)$/bin$/cli_basetypes.dll \
+         -reference:System.dll \
+         $(CSFILES)
+     @echo "If code has changed then provide a policy assembly and change the version!"
+diff --git cli_ure/source/ure/uno/util/Factory.cs cli_ure/source/ure/uno/util/Factory.cs
+new file mode 100644
+index 0000000..35b298e
+--- /dev/null
++++ cli_ure/source/ure/uno/util/Factory.cs
+@@ -0,0 +1,180 @@
++using System;
++using System.Reflection;
++
++using unoidl.com.sun.star.lang;
++using unoidl.com.sun.star.uno;
++using unoidl.com.sun.star.registry;
++namespace uno.util {
++
++public class Factory : WeakComponentBase , unoidl.com.sun.star.lang.XSingleComponentFactory, unoidl.com.sun.star.lang.XServiceInfo
++{
++    public static XSingleComponentFactory createComponentFactory(
++        Type impl_class, String[] supported_services )
++    {
++        return new Factory( impl_class, supported_services );
++    }
++
++    public static bool writeRegistryServiceInfo(
++        String impl_name, String[] supported_services, XRegistryKey xKey )
++    {
++        Console.WriteLine( "#####  HERE ##### ");
++        try
++        {
++            Console.WriteLine( "##### " + typeof( Factory ).ToString() + ".writeRegistryServiceInfo creating new key for SERVICES" );
++ 
++            unoidl.com.sun.star.registry.XRegistryKey xNewKey = xKey.createKey( "/" + impl_name + "/UNO/SERVICES" );
++            for ( int nPos = 0; nPos < supported_services.Length; ++nPos )
++            {
++                xNewKey.createKey( supported_services[ nPos ] );
++                Console.WriteLine( "##### " + typeof( Factory ).ToString() + ".writeRegistryServiceInfo created new key fo " + supported_services[ nPos ] );
++            }
++            return true;
++        }
++        catch ( unoidl.com.sun.star.registry.InvalidRegistryException exc)
++        {
++            Console.WriteLine( "##### " + typeof( Factory ).ToString() + ".writeRegistryServiceInfo - exc: " + exc );
++        }
++        return false;
++    }
++    
++    private String m_impl_name;
++    private String [] m_supported_services;
++    private Type m_impl_class;
++    private MethodInfo m_method;
++    private ConstructorInfo m_ctor;
++    
++    // ctor
++    private Factory( Type impl_class, String[] supported_services )
++    {
++        m_impl_name = impl_class.ToString();
++        m_supported_services = supported_services;
++        m_impl_class = impl_class;
++        m_method = null;
++        m_ctor = null;
++        
++        Type[] mparams = { typeof ( unoidl.com.sun.star.uno.XComponentContext ) };
++        
++        try
++        {
++            // seeking for "public static Object __create( XComponentContext )"
++            m_method = m_impl_class.GetMethod("__create", BindingFlags.Public | BindingFlags.Static, null, CallingConventions.Any, mparams, null );
++            if ( m_method.ReturnType != typeof ( Object ) )
++                m_method = null;
++        }
++        catch (System.Exception /*exc*/)
++        {
++        }
++        
++        if (null == m_method)
++        {
++            try
++            {
++                Console.WriteLine( "searching for ctor with unoidl.com.sun.star.uno.XComponentContext ");
++                // ctor with context
++                m_ctor = m_impl_class.GetConstructor( new Type[] { typeof ( unoidl.com.sun.star.uno.XComponentContext ) }  );
++                Console.WriteLine( "found ctor ? " + ( m_ctor != null ).ToString() );
++            
++            }
++            catch (System.Exception /*exc*/)
++            {
++
++                // else take default ctor
++                m_ctor = m_impl_class.GetConstructor(null);
++            }
++        }
++    }
++    
++    //______________________________________________________________________________________________
++    private Object instantiate( XComponentContext xContext )
++//        throws com.sun.star.uno.Exception
++    {
++        try
++        {
++            Console.WriteLine( "instantiating " + m_impl_class.ToString() + " using " );
++            if (null != m_method)
++            {
++                Console.WriteLine( "\t__create( XComponentContext )..." );
++                return m_method.Invoke( null, new Object [] { xContext } );
++            }
++            if (null != m_ctor)
++            {
++                Console.WriteLine( "\tctor( XComponentContext )..." );
++                return m_ctor.Invoke( new Object[] { xContext } );
++            }
++            Console.WriteLine( "\tdefault ctor ..." );
++            // #FIXME check this
++            return m_impl_class.GetConstructor(null).Invoke(null); // default ctor
++        }
++        catch ( System.Exception e )
++        {
++            Console.WriteLine( "\tcontructing component " + m_impl_class.ToString() + " failed exc: " + e );
++            throw new unoidl.com.sun.star.uno.RuntimeException( e.ToString(), null );
++        }
++        // #FIXME sort out the exception foo below
++/*
++        catch (java.lang.reflect.InvocationTargetException exc)
++        {
++            Throwable targetException = exc.getTargetException();
++            if (targetException instanceof java.lang.RuntimeException)
++                throw (java.lang.RuntimeException)targetException;
++            else if (targetException instanceof com.sun.star.uno.RuntimeException)
++                throw (com.sun.star.uno.RuntimeException)targetException;
++            else if (targetException instanceof com.sun.star.uno.Exception)
++                throw (com.sun.star.uno.Exception)targetException;
++            else
++                throw new com.sun.star.uno.Exception( targetException.toString(), this );
++        }
++        catch (IllegalAccessException exc)
++        {
++            throw new com.sun.star.uno.RuntimeException( exc.toString(), this );
++        }
++        catch (InstantiationException exc)
++        {
++            throw new com.sun.star.uno.RuntimeException( exc.toString(), this );
++        }
++*/
++    }
++    // XSingleComponentFactory impl
++    //______________________________________________________________________________________________
++    public Object createInstanceWithContext(
++        unoidl.com.sun.star.uno.XComponentContext xContext )
++//        throws com.sun.star.uno.Exception
++    {
++        return instantiate( xContext );
++    }
++    //______________________________________________________________________________________________
++    public Object createInstanceWithArgumentsAndContext(
++        uno.Any[] arguments, unoidl.com.sun.star.uno.XComponentContext xContext )
++//        throws com.sun.star.uno.Exception
++    {
++        Object inst = instantiate( xContext );
++        unoidl.com.sun.star.lang.XInitialization xInit = ( unoidl.com.sun.star.lang.XInitialization ) inst;
++        xInit.initialize( arguments );
++        return inst;
++    }
++    
++    // XServiceInfo impl
++    //______________________________________________________________________________________________
++    public String getImplementationName()
++    {
++        return m_impl_name;
++    }
++    //______________________________________________________________________________________________
++    public bool supportsService( String service_name )
++    {
++        for ( int nPos = 0; nPos < m_supported_services.Length; ++nPos )
++        {
++            if (m_supported_services[ nPos ] == service_name )
++                return true;
++        }
++        return false;
++    }
++    //______________________________________________________________________________________________
++    public String [] getSupportedServiceNames()
++    {
++        return m_supported_services;
++    }
++}
++
++}
++
+diff --git cli_ure/source/ure/uno/util/ManagedCodeLoader.cs cli_ure/source/ure/uno/util/ManagedCodeLoader.cs
+new file mode 100644
+index 0000000..e8b23d6
+--- /dev/null
++++ cli_ure/source/ure/uno/util/ManagedCodeLoader.cs
+@@ -0,0 +1,197 @@
++using System;
++using System.Reflection;
++
++using unoidl.com.sun.star.lang;
++using unoidl.com.sun.star.uno;
++using unoidl.com.sun.star.registry;
++
++namespace uno.util
++{
++  
++
++// loader for cs components
++public class ManagedCodeLoader : uno.util.WeakBase, unoidl.com.sun.star.loader.XImplementationLoader, unoidl.com.sun.star.lang.XServiceInfo, unoidl.com.sun.star.lang.XInitialization
++{
++    private unoidl.com.sun.star.lang.XMultiServiceFactory multiServiceFactory;
++    private String[] supportedServices = {
++        "com.sun.star.loader.ManagedCodeLoader"
++    };
++
++    private unoidl.com.sun.star.util.XMacroExpander m_xMacroExpander = null;
++    private String EXPAND_PROTOCOL_PREFIX = "vnd.sun.star.expand:";
++
++    /** Expands macrofied url using the macro expander singleton.
++     */
++    private String expand_url( String url )
++    {
++            Console.WriteLine( "#1 expand_url " + url );
++
++        if (url != null && url.StartsWith( EXPAND_PROTOCOL_PREFIX ))
++        {
++            try
++            {
++                if (m_xMacroExpander == null)
++                {
++                    Console.WriteLine( "#2 attempt to get macroexpander ");
++                    unoidl.com.sun.star.beans.XPropertySet xProps = ( unoidl.com.sun.star.beans.XPropertySet ) multiServiceFactory;
++                    if (xProps == null)
++                    {
++                        throw new unoidl.com.sun.star.uno.RuntimeException(
++                            "service manager does not support XPropertySet!",
++                            this );
++                    }
++                    unoidl.com.sun.star.uno.XComponentContext xContext = (unoidl.com.sun.star.uno.XComponentContext) xProps.getPropertyValue( "DefaultContext" ).Value;
++                    m_xMacroExpander = ( unoidl.com.sun.star.util.XMacroExpander )xContext.getValueByName( "/singletons/com.sun.star.util.theMacroExpander" ).Value;
++                    Console.WriteLine( "#3 got macroexpander ");
++                }
++                /* #FIXME there must be a better way of doing this
++                   1. the Uri.UnescapeDataString is not available
++                   for mono on sled ( not sure about what later versions on
++                   other platforms provide
++                   2. unescape probably won't do exactly what we want
++                   3. unescape besides being deprecated is protected :-/ hence
++                      MyCrappyDecoder 
++                */
++                // decode uric class chars
++                String macro = System.Uri.UnescapeDataString( url.Substring( EXPAND_PROTOCOL_PREFIX.Length ).Replace( "+", "%2B" ) );
++                Console.WriteLine( "#4 decoded url " + macro);
++                // expand macro string
++                String ret = m_xMacroExpander.expandMacros( macro );
++                Console.WriteLine( "#5 decoded & expanded url " + ret);
++                return ret;
++            }
++            catch (unoidl.com.sun.star.uno.Exception exc)
++            {
++                throw new unoidl.com.sun.star.uno.RuntimeException(
++                    exc.ToString(), this );
++            }
++            catch ( System.Exception exc)
++            {
++                throw new unoidl.com.sun.star.uno.RuntimeException(
++                    exc.ToString(), this );
++            }
++        }
++        return url;
++    }
++
++    // XImplementationLoader 
++    public System.Object activate(String implementationName, String implementationLoaderUrl, String locationUrl, unoidl.com.sun.star.registry.XRegistryKey key )
++    {
++        locationUrl = expand_url( locationUrl ); 
++        Console.WriteLine( "*** *** ManagedCodeLoader.activate( " +  implementationName + ", " + implementationLoaderUrl + ", " + locationUrl + ") ****" );
++        // implementationName will be the class ( or Type ) name
++        // locationUrl is the name of the assembly it will be in
++        
++        // here's a cheap and nasty facimile of what the java loader does
++        Type clazz = null;
++
++        try
++        {
++            clazz = RegistrationClassFinder.find( locationUrl );
++        }
++        catch (System.NullReferenceException e)
++        {
++            throw new unoidl.com.sun.star.loader.CannotActivateFactoryException( "can not activate exception because " + implementationName + "\nexc: " + e, null );
++        }
++        catch (System.Exception e)
++        {
++            throw new unoidl.com.sun.star.loader.CannotActivateFactoryException( "can not activate exception because " + implementationName + "\nexc: " + e, null );
++        }
++
++        System.Object returnObject = null;
++        MethodInfo compfac_method;
++        try
++        {
++            Type[] compParams = { typeof(String) };
++            compfac_method =  clazz.GetMethod( "__getComponentFactory" , compParams );
++            if ( compfac_method != null )
++            {
++                Object ret = compfac_method.Invoke( clazz, new Object [] { implementationName } );
++                if ( ret != null )
++                    returnObject = ( unoidl.com.sun.star.lang.XSingleComponentFactory )ret;
++            }
++    
++        }
++        catch ( System.Exception e )
++        {
++            throw new unoidl.com.sun.star.loader.CannotActivateFactoryException( "Failed to activate factory for " + implementationName + "\nexc: " + e, null );
++        }
++        return returnObject;
++    }
++    public bool writeRegistryInfo(unoidl.com.sun.star.registry.XRegistryKey key, String implementationLoaderUrl, String locationUrl)
++    {
++        locationUrl = expand_url( locationUrl ); 
++        Console.WriteLine( "*** H E R E *** ManagedCodeLoader.writeRegistryInfo( " + implementationLoaderUrl  + ", " +  locationUrl + ") ****" );
++        bool bReturn = false;
++        // implementationName will be the class ( or Type ) name
++        // locationUrl is the name of the assembly it will be in
++        
++        // here's a cheap and nasty facsimile of what the java loader does
++        Type clazz = null;
++
++        try
++        {
++            Console.WriteLine( "*** *** ManagedCodeLoader.writeRegistryInfo( " + implementationLoaderUrl  + ", " +  locationUrl + ") ABOUT to call find :-/ ****" );
++            clazz = RegistrationClassFinder.find( locationUrl );
++        }
++        catch (System.NullReferenceException /*e*/ )
++        {
++            throw new unoidl.com.sun.star.registry.CannotRegisterImplementationException(  "Failed to find " + clazz.ToString(), null );
++        }
++        catch (System.Exception e )
++        {
++            throw new unoidl.com.sun.star.registry.CannotRegisterImplementationException(  e.ToString(), null );
++        }
++        MethodInfo compfac_method;
++        try
++        {
++            Type[] regParams = { typeof(unoidl.com.sun.star.registry.XRegistryKey ) };
++            compfac_method =  clazz.GetMethod( "__writeRegistryServiceInfo" , regParams );
++            if ( compfac_method != null )
++            {
++                Object ret = compfac_method.Invoke( clazz, new Object [] { key } );
++                if ( ret != null )
++                    bReturn = ( bool )ret;
++            }
++    
++        }
++        catch ( System.Exception e )
++        {
++            throw new unoidl.com.sun.star.registry.CannotRegisterImplementationException(  e.ToString(), null );
++        }
++        return bReturn;
++
++    }
++    // XInitialization
++    public void initialize( uno.Any[] args )
++    {
++        Console.WriteLine( "*** *** Entering ManagedCodeLoader.initialize() ");
++        if ( args.Length == 0 )
++            // probably need to change to uno.Exception
++            throw new System.Exception("No arguments passed to initialize");
++        multiServiceFactory = (unoidl.com.sun.star.lang.XMultiServiceFactory)args[0].Value;
++        if ( multiServiceFactory == null )
++            Console.WriteLine( " Bad multiservice factory " );
++        Console.WriteLine( "*** *** Leaving ManagedCodeLoader.initialize() ");
++        
++    }
++    // XServiceInfo
++    public String getImplementationName() 
++    {
++        return GetType().ToString();
++    }    
++    public bool supportsService(String serviceName) 
++    {
++        for ( int i = 0; i < supportedServices.Length; i++ ) {
++            if ( supportedServices[i] == serviceName )
++                return true;
++        }
++        return false;
++    }
++    public String[] getSupportedServiceNames() 
++    {
++        return supportedServices;
++    }    
++}
++
++}
+diff --git cli_ure/source/ure/uno/util/RegistrationClassFinder.cs cli_ure/source/ure/uno/util/RegistrationClassFinder.cs
+new file mode 100644
+index 0000000..4f16d79
+--- /dev/null
++++ cli_ure/source/ure/uno/util/RegistrationClassFinder.cs
+@@ -0,0 +1,33 @@
++using System;
++using System.Reflection;
++
++namespace uno.util
++{
++public class RegistrationClassFinder
++{
++    public static Type find( String url )
++    {
++        // LoadFrom can't handle escaped urls 
++        // #FIXME how does one do this in CSharp
++        Console.WriteLine( "## Find Url {0}", url );
++        url =  System.Uri.UnescapeDataString( url );
++        Console.WriteLine( "## Find Url escaped {0}", url );
++        url = url.Replace( "%20"," " ) ;
++        Console.WriteLine( "## after tweaking Url escaped {0}", url );
++        Assembly assem = Assembly.LoadFrom( url );
++        // we expect a component providing assembly to provide a Registration class
++        // name. The name is in the static field 'name' of a class called 
++        // 'component.RegistrationClass'. The 'name' is the actual name of the 
++        // class that provides the following component methods
++        // __getComponentFactory & __writeRegistryServiceInfo that are needed by the
++        // loader
++        // Of course we could use someother method, maybe bury the name in 
++        // the component.dll.config ?
++        FieldInfo f = assem.GetType("component.RegistrationClass").GetField( "name", BindingFlags.Public | BindingFlags.Static );
++        String sTypeName = (String)f.GetValue( null );
++        // Try to find the RegistrationClass
++        return assem.GetType( sTypeName );
++        
++    }
++}
++}
+diff --git desktop/source/deployment/registry/component/dp_component.cxx desktop/source/deployment/registry/component/dp_component.cxx
+index 9ae71d5..38d6a69 100644
+--- desktop/source/deployment/registry/component/dp_component.cxx
++++ desktop/source/deployment/registry/component/dp_component.cxx
+@@ -720,6 +720,16 @@ Reference<deployment::XPackage> BackendImpl::bindPackage_(
+                                 OUSTR("com.sun.star.loader.Python"),
+                                 bRemoved, identifier);
+                         }
++                        if (value.EqualsIgnoreCaseAscii("Mono") || value.EqualsIgnoreCaseAscii("Cli") ){
++                            return new BackendImpl::ComponentPackageImpl(
++                                this, url, name, m_xPythonComponentTypeInfo,
++ #if WNT
++                                OUSTR("org.openoffice.loader.CliLoader"),
++ #else
++                                OUSTR("org.openoffice.loader.MonoLoader"),
++ #endif
++                                bRemoved, identifier);
++                        }
+                     }
+                 }
+             }
+
+diff --git cli_ure/prj/build.lst cli_ure/prj/build.lst
+index 268240c..bb595ae 100644
+--- cli_ure/prj/build.lst
++++ cli_ure/prj/build.lst
+@@ -6,7 +6,7 @@ ure	cli_ure\source				nmake   -   w,vc7   ure_source_source ure_inc NULL
+ ure	cli_ure\source\basetypes	nmake	-	w,vc7	ure_source_basetypes ure_source_version ure_source_source.w ure_inc NULL
+ ure	cli_ure\source\climaker		nmake	-	w,vc7	ure_source_climaker ure_source_basetypes.w ure_inc NULL
+ ure	cli_ure\unotypes			nmake	-	w,vc7	ure_unotypes ure_source_version ure_source_source.w ure_source_climaker.w ure_inc NULL
+-ure	cli_ure\source\ure			nmake	-	w,vc7	ure_source_ure ure_source_version ure_source_source.w ure_unotypes.w ure_inc NULL
++ure	cli_ure\source\ure			nmake	-	w,vc7	ure_source_ure ure_source_version ure_source_source.w ure_source_basetypes.w ure_unotypes.w ure_inc NULL
+ ure	cli_ure\source\uno_bridge	nmake	-	w,vc7	ure_source_uno_bridge ure_source_basetypes.w ure_unotypes.w ure_source_ure.w ure_inc NULL
+ ure	cli_ure\source\native		nmake	-	w,vc7	ure_source_native ure_source_version ure_source_source.w ure_source_ure.w ure_unotypes.w ure_source_uno_bridge.w ure_inc NULL

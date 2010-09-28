@@ -1,0 +1,627 @@
+diff --git cli_ure/source/mono_bridge/bridge.cs cli_ure/source/mono_bridge/bridge.cs
+index 20f1ecc..1fe6184 100644
+--- cli_ure/source/mono_bridge/bridge.cs
++++ cli_ure/source/mono_bridge/bridge.cs
+@@ -1679,9 +1679,9 @@ public unsafe class Bridge
+ 
+         for (int i = 0; i < nParams; ++i)
+         {
+-            // FIXME it's a TypeDescriptionReference
+-            TypeDescription *type = (TypeDescription *)parameters[i].pTypeRef;
+-
++            TypeDescriptionReference *typeref = (TypeDescriptionReference *)parameters[i].pTypeRef;
++            TypeDescription *type = null;
++            TypeDescriptionReference.GetDescription(&type, typeref);
+             unoArgPtrs[i] = unoArgs + i;
+             if ((type->eTypeClass == TypeClass.STRUCT ||
+                  type->eTypeClass == TypeClass.EXCEPTION) &&
+@@ -1696,7 +1696,7 @@ public unsafe class Bridge
+             if (parameters[i].bIn != 0)
+             {
+                 // FIXME error handling
+-                MapToUno(unoArgPtrs[i], args[i], type, false /* no assign */);
++                MapToUno(unoArgPtrs[i], args[i], (TypeDescription*)typeref, false /* no assign */);
+             }
+         }
+ 
+@@ -1828,13 +1828,27 @@ public unsafe class Bridge
+                 MapToManaged(ref args[i], unoArgs[i], parameters[i].pTypeRef, null, false);
+ 
+         object invocationResult = null;
++        Exception exc = null;
+         try
+         {
+             invocationResult = method.Invoke(managedI, args);
+         }
+         catch (TargetInvocationException e)
+         {
+-            Exception exc = e.InnerException;
++            exc = e.InnerException;
++        }
++        catch (Exception e)
++        {
++            exc = e;
++        }
++        if ( exc != null )
++        {
++            if ( !( exc is unoidl.com.sun.star.uno.Exception ) )
++            {
++                // #FIXME put more info in here trace, stack etc. ( when I
++                // figure out how to do that in mono )
++                exc = new unoidl.com.sun.star.uno.RuntimeException( exc.ToString(), null );
++            }
+             TypeDescription* td = null;
+             // FIXME leak
+             TypeDescriptionReference.GetDescription(&td, MapManagedType(exc.GetType()));
+@@ -1844,11 +1858,6 @@ public unsafe class Bridge
+             (*unoExc)->pData = memExc;
+             return;
+         }
+-        catch (Exception e)
+-        {
+-            // FIXME
+-        }
+-
+         // convert out, in/out params
+         for (int i = 0; i < nParams; ++i)
+         {
+diff --git cli_ure/source/mono_loader/makefile.mk cli_ure/source/mono_loader/makefile.mk
+new file mode 100644
+index 0000000..6fadcd2
+--- /dev/null
++++ cli_ure/source/mono_loader/makefile.mk
+@@ -0,0 +1,78 @@
++#*************************************************************************
++#
++# DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
++# 
++# Copyright 2008 by Sun Microsystems, Inc.
++#
++# OpenOffice.org - a multi-platform office productivity suite
++#
++# $RCSfile: makefile.mk,v $
++#
++# $Revision: 1.0 $
++#
++# This file is part of OpenOffice.org.
++#
++# OpenOffice.org is free software: you can redistribute it and/or modify
++# it under the terms of the GNU Lesser General Public License version 3
++# only, as published by the Free Software Foundation.
++#
++# OpenOffice.org is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU Lesser General Public License version 3 for more details
++# (a copy is included in the LICENSE file that accompanied this code).
++#
++# You should have received a copy of the GNU Lesser General Public License
++# version 3 along with OpenOffice.org.  If not, see
++# <http://www.openoffice.org/license.html>
++# for a copy of the LGPLv3 License.
++#
++#*************************************************************************
++
++PRJ=..$/..
++
++PRJNAME=cli_ure
++TARGET=mono_loader
++
++VISIBILITY_HIDDEN=TRUE
++NO_BSYMBOLIC=	TRUE
++ENABLE_EXCEPTIONS=TRUE
++COMP1TYPELIST=$(TARGET)
++COMPRDB=$(SOLARBINDIR)$/types.rdb
++
++# --- Settings -----------------------------------------------------
++
++.INCLUDE :  settings.mk
++CFLAGS+=$(MONO_CFLAGS)
++DLLPRE =
++
++# ------------------------------------------------------------------
++
++#.INCLUDE :  ..$/cppumaker.mk
++
++SLOFILES= \
++		$(SLO)$/service.obj \
++		$(SLO)$/mono_loader.obj
++
++SHL1TARGET= $(TARGET)$(DLLPOSTFIX).uno
++SHL1IMPLIB=     i$(TARGET)
++
++SHL1VERSIONMAP=$(SOLARENV)/src/component.map
++SHL1DEF=$(MISC)$/$(SHL1TARGET).def
++DEF1NAME=$(SHL1TARGET)
++                                                                              
++SHL1STDLIBS= \
++                $(CPPUHELPERLIB) \
++		$(COMPHELPERLIB) \
++                $(CPPULIB) \
++                $(TOOLSLIB) \
++                $(SALLIB)
++
++SHL1STDLIBS+=$(MONO_LIBS)
++                                                                              
++SHL1DEPN=
++SHL1LIBS=$(SLB)$/$(TARGET).lib
++
++# --- Targets ------------------------------------------------------
++
++.INCLUDE :	target.mk
+diff --git cli_ure/source/mono_loader/mono_loader.cxx cli_ure/source/mono_loader/mono_loader.cxx
+new file mode 100644
+index 0000000..ed090cb
+--- /dev/null
++++ cli_ure/source/mono_loader/mono_loader.cxx
+@@ -0,0 +1,255 @@
++/*************************************************************************
++ *
++ * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
++ * 
++ * Copyright 2008 by Sun Microsystems, Inc.
++ *
++ * OpenOffice.org - a multi-platform office productivity suite
++ *
++ * $RCSfile: eventhelper.cxx,v $
++ * $Revision: 1.0 $
++ *
++ * This file is part of OpenOffice.org.
++ *
++ * OpenOffice.org is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU Lesser General Public License version 3
++ * only, as published by the Free Software Foundation.
++ *
++ * OpenOffice.org is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU Lesser General Public License version 3 for more details
++ * (a copy is included in the LICENSE file that accompanied this code).
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * version 3 along with OpenOffice.org.  If not, see
++ * <http://www.openoffice.org/license.html>
++ * for a copy of the LGPLv3 License.
++ *
++ ************************************************************************/
++
++// MARKER(update_precomp.py): autogen include statement, do not remove
++#include "precompiled_cli_ure.hxx"
++#include <comphelper/processfactory.hxx>
++#include <comphelper/uno3.hxx>
++#include <com/sun/star/lang/XMultiComponentFactory.hpp>
++#include <com/sun/star/loader/XImplementationLoader.hpp>
++#include <com/sun/star/beans/XPropertySet.hpp>
++#include <com/sun/star/container/XNamed.hpp>
++#include <com/sun/star/lang/XServiceInfo.hpp>
++#include <com/sun/star/lang/XInitialization.hpp>
++#include <com/sun/star/util/XMacroExpander.hpp>
++#include <cppuhelper/implbase2.hxx>
++#include "uno/mapping.hxx"
++
++// for debug
++#include <comphelper/anytostring.hxx>
++
++extern "C" {
++#include <mono/jit/jit.h>
++#include <mono/metadata/object.h>
++#include <mono/metadata/environment.h>
++#include <mono/metadata/assembly.h>
++#include <mono/metadata/debug-helpers.h>
++#include <mono/metadata/threads.h>
++}
++
++using namespace ::com::sun::star;
++#define OUSTR(x) ::rtl::OUString( RTL_CONSTASCII_USTRINGPARAM(x) )
++
++//static const char CLIURE_DLL[] = "$URE_LIB_DIR/cli_ure.dll";
++static const char CLIURE_DLL[] = "$URE_INTERNAL_LIB_DIR/cli_ure.dll";
++typedef ::cppu::WeakImplHelper2< loader::XImplementationLoader, lang::XServiceInfo > MonoLoader_BASE;
++
++namespace mono_loader
++{
++    ::rtl::OUString SAL_CALL getImplementationName();
++
++    uno::Reference< uno::XInterface > SAL_CALL create( uno::Reference< uno::XComponentContext > const & xContext ) SAL_THROW( () );
++
++    uno::Sequence< ::rtl::OUString > SAL_CALL getSupportedServiceNames();
++}
++
++uno::Reference< loader::XImplementationLoader >
++create_object (MonoDomain *domain, MonoImage *image)
++{
++	MonoClass *klass;
++
++	klass = mono_class_from_name (image, "uno.util", "ManagedCodeLoader");
++	if (!klass) {
++		OSL_TRACE ("Can't find ManagedCodeLoader in assembly %s", mono_image_get_filename (image));
++		return NULL;
++	}
++	MonoObject* obj = mono_object_new (domain, klass);
++	/* mono_object_new () only allocates the storage: 
++	 * it doesn't run any constructor. Tell the runtime to run
++	 * the default argumentless constructor.
++	 */
++	mono_runtime_object_init (obj);
++        static uno::Reference< loader::XImplementationLoader > xLoader;
++        // not sure if this is correct ( I'm loosely following 'to_uno'
++        // method in cli_ure/source/native/native_share.h ) 
++
++        loader::XImplementationLoader* pLoader = NULL;
++        OSL_TRACE("About to call mapInterface for XImplementionLoader returned from Mono");
++        // we are storing the object so... I guess we need to tell the gc not
++        // to bother about this object
++        //mono_gchandle_new( obj, false ); // where do we release that ? do we even need to do this?
++        guint32 nHandle = mono_gchandle_new( obj, true ); // where do we release that ? do we even need to do this?
++        uno::Mapping mapping( OUSTR( UNO_LB_CLI ), OUSTR( CPPU_CURRENT_LANGUAGE_BINDING_NAME ) );
++        OSL_ASSERT( mapping.is() );
++        if (! mapping.is() )
++            return NULL;
++
++        mapping.mapInterface( 
++            reinterpret_cast< void ** >( &pLoader ), 
++            reinterpret_cast< void * >( obj ), ::getCppuType( &xLoader ) );
++        mono_gchandle_free ( nHandle ); // copying what cli_ure/source/native/native_share.h does for DotNet 
++        xLoader.set( pLoader, SAL_NO_ACQUIRE /* takeover ownership */ );  
++        OSL_TRACE("We appear to have got an XImplementationLoader that has a value? %s", xLoader.is() ? "yes" : "no " );
++        return xLoader;
++}
++
++
++class MonoLoader : public MonoLoader_BASE
++{
++    class MonoCleanUp
++    {
++    public:
++        MonoCleanUp() { OSL_TRACE("MonoCleanUp created "); }
++        ~MonoCleanUp() 
++        { 
++            OSL_TRACE("~MonoCleanUp"); 
++            // loader only uses the root domain
++            mono_jit_cleanup (mono_get_root_domain());
++        }
++    };
++    uno::Reference< uno::XComponentContext > mxContext;
++    uno::Reference< loader::XImplementationLoader > mxLoader;
++    uno::Reference< util::XMacroExpander > mxExpander;
++    uno::Reference< loader::XImplementationLoader > getLoader( const char* file) 
++    {
++        OSL_TRACE("** enter getLoader()");
++        // init only once
++        static MonoDomain* domain = mono_jit_init (file);
++        // when is a good time to trigger clean up ?
++        //static MonoCleanUp cleaner;
++        // hmm appears we need to attach this thread to the domain
++        mono_thread_attach( domain );
++	MonoAssembly *assembly;
++       
++	assembly = mono_domain_assembly_open ( domain, file);
++        OSL_TRACE("** open of assembly %s = 0x%x", file, assembly);
++        if ( !assembly )
++            throw uno::RuntimeException( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( "Failed to open assembly " ) ) + rtl::OUString::createFromAscii( file ), NULL );
++        return create_object (domain, mono_assembly_get_image (assembly));         
++    }
++
++
++public:
++    MonoLoader( const uno::Reference< uno::XComponentContext >& rxContext ) : mxContext( rxContext )
++    {
++        if (!(mxContext->getValueByName( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( "/singletons/com.sun.star.util.theMacroExpander"))) >>= mxExpander)
++        || !mxExpander.is())
++        {
++            throw uno::RuntimeException( rtl::OUString( RTL_CONSTASCII_USTRINGPARAM( "component context fails to supply singleton" " com.sun.star.util.theMacroExpander of type" " com.sun.star.util.XMacroExpander")), mxContext);        
++        }
++        rtl::OUString dllPath =  mxExpander->expandMacros( rtl::OUString(  RTL_CONSTASCII_USTRINGPARAM( CLIURE_DLL ) ) );
++        OSL_TRACE("**** location for dll is %s", rtl::OUStringToOString( dllPath, RTL_TEXTENCODING_UTF8 ).getStr() );
++        OSL_TRACE("** MonoLoader::MonoLoader() ");
++        mxLoader = getLoader( rtl::OUStringToOString( dllPath, RTL_TEXTENCODING_UTF8 ).getStr() );
++        if ( mxLoader.is() )
++        {
++            // set the service factory
++            uno::Sequence< uno::Any > args(1);
++            args[ 0 ] <<= rxContext->getServiceManager();
++            uno::Reference< lang::XInitialization > xInitialize( mxLoader, uno::UNO_QUERY_THROW );
++            OSL_TRACE("MonoLoader::MonoLoader() about to call initialise");
++            xInitialize->initialize( args );
++        }
++        else 
++            OSL_TRACE("**  MonoLoader::MonoLoader(): No Mono loader found ");
++
++    }
++    ~MonoLoader()
++    {
++        OSL_TRACE("** MonoLoader::~MonoLoader() ");
++    }
++    // Methods
++    virtual uno::Reference< uno::XInterface > SAL_CALL activate( const ::rtl::OUString& implementationName, const ::rtl::OUString& implementationLoaderUrl, const ::rtl::OUString& locationUrl, const uno::Reference< registry::XRegistryKey >& xKey ) throw (loader::CannotActivateFactoryException, uno::RuntimeException)
++    {
++        // try to instatiate a mono loader and return a reference to it
++        OSL_TRACE("**** in MonoLoader::activate");
++        if ( mxLoader.is() )
++        {
++            OSL_TRACE("*** MonoLoader::activate() about to call activate on 0x%x", mxLoader.get() );
++            return mxLoader->activate( implementationName, implementationLoaderUrl, locationUrl, xKey );
++        }
++        return NULL;
++    }
++
++    virtual ::sal_Bool SAL_CALL writeRegistryInfo( const uno::Reference< registry::XRegistryKey >& xKey, const ::rtl::OUString& implementationLoaderUrl, const ::rtl::OUString& locationUrl ) throw (registry::CannotRegisterImplementationException, uno::RuntimeException)
++    { 
++        if ( mxLoader.is() )
++            return mxLoader->writeRegistryInfo( xKey, implementationLoaderUrl, locationUrl );
++        return sal_False;
++    }
++    virtual ::rtl::OUString SAL_CALL getImplementationName(  ) throw (uno::RuntimeException){ return mono_loader::getImplementationName(); }
++    virtual ::sal_Bool SAL_CALL supportsService( const ::rtl::OUString& ServiceName ) throw (uno::RuntimeException)
++    {
++        sal_Bool bRes = sal_False;
++        uno::Sequence< ::rtl::OUString > sServices = mono_loader::getSupportedServiceNames();
++        const ::rtl::OUString* pService = sServices.getConstArray();
++        const ::rtl::OUString* pEnd = sServices.getConstArray() + sServices.getLength();
++        for ( ; pService != pEnd ;  ++pService )
++        {
++            if ( (*pService).equals( ServiceName ) )
++            {
++                bRes = sal_True;
++                break;
++            }
++        }
++        return bRes;
++    }
++    virtual uno::Sequence< ::rtl::OUString > SAL_CALL getSupportedServiceNames(  ) throw (uno::RuntimeException){ return mono_loader::getSupportedServiceNames(); }
++
++};
++
++namespace mono_loader
++{
++    ::rtl::OUString SAL_CALL getImplementationName()
++    {
++        static ::rtl::OUString* pImplName = 0;
++        if ( !pImplName )
++        {
++            ::osl::MutexGuard aGuard( ::osl::Mutex::getGlobalMutex() );
++            if ( !pImplName )
++            {
++                static ::rtl::OUString aImplName( RTL_CONSTASCII_USTRINGPARAM( "org.openoffice.loader.MonoLoader" ) );
++                pImplName = &aImplName;
++            }
++        }
++        return *pImplName;
++    }
++
++    uno::Reference< uno::XInterface > SAL_CALL create(
++    uno::Reference< uno::XComponentContext > const & xContext )
++    SAL_THROW( () )
++    {
++        OSL_TRACE("** In create for monoloader");
++        // mimic java loader if I read it correctly it just has a single entry 
++        // point ( Mono implementation loader should do the same? #TODO maybe )
++        // #FIXME use whatever boiler plate static initialisatioon foo that is 
++        // available ( seem to recall there is some helpers for that )
++        // static uno::Reference < lang::XTypeProvider  > xLoader( new MonoLoader( xContext ) );
++        // hmm lets not do it for now  
++        uno::Reference < lang::XTypeProvider  > xLoader( new MonoLoader( xContext ) );
++        return xLoader;
++    }
++
++    uno::Sequence< ::rtl::OUString > SAL_CALL getSupportedServiceNames()
++    {
++        const ::rtl::OUString strName( ::mono_loader::getImplementationName() );
++        return uno::Sequence< ::rtl::OUString >( &strName, 1 );
++    }	
++}
+diff --git cli_ure/source/mono_loader/mono_loader.xml cli_ure/source/mono_loader/mono_loader.xml
+new file mode 100644
+index 0000000..06e6c73
+--- /dev/null
++++ cli_ure/source/mono_loader/mono_loader.xml
+@@ -0,0 +1,26 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<!DOCTYPE module-description PUBLIC "-//StarOffice//DTD ComponentDescription 1.0//EN" "module-description.dtd">
++<module-description xmlns:xlink="http://www.w3.org/1999/xlink">
++
++    <module-name>mono_loader</module-name>
++    
++    <component-description>
++        <author>Noel Power </author>
++        <name>Mono Loader</name>
++        <description>Loader for components located in mono assemblies</description>
++        <loader-name>com.sun.star.loader.SharedLibrary</loader-name>
++        <language>c++</language>
++        <status value="drafts"/>
++        <supported-service>org.openoffice.loader.MonoLoader</supported-service>
++        <type>com.sun.star.uno.XComponentContext</type>        
++    </component-description>
++    
++    <project-build-dependency>cppuhelper</project-build-dependency>
++    <project-build-dependency>cppu</project-build-dependency>
++    <project-build-dependency>sal</project-build-dependency>
++
++    <runtime-module-dependency>cppuhelper3$(COM)</runtime-module-dependency>
++    <runtime-module-dependency>cppu3</runtime-module-dependency>
++    <runtime-module-dependency>sal3</runtime-module-dependency>
++    
++</module-description>
+diff --git cli_ure/source/mono_loader/service.cxx cli_ure/source/mono_loader/service.cxx
+new file mode 100644
+index 0000000..39eed95
+--- /dev/null
++++ cli_ure/source/mono_loader/service.cxx
+@@ -0,0 +1,133 @@
++/*************************************************************************
++ *
++ * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
++ * 
++ * Copyright 2008 by Sun Microsystems, Inc.
++ *
++ * OpenOffice.org - a multi-platform office productivity suite
++ *
++ * $RCSfile: service.cxx,v $
++ * $Revision: 1.0 $
++ *
++ * This file is part of OpenOffice.org.
++ *
++ * OpenOffice.org is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU Lesser General Public License version 3
++ * only, as published by the Free Software Foundation.
++ *
++ * OpenOffice.org is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU Lesser General Public License version 3 for more details
++ * (a copy is included in the LICENSE file that accompanied this code).
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * version 3 along with OpenOffice.org.  If not, see
++ * <http://www.openoffice.org/license.html>
++ * for a copy of the LGPLv3 License.
++ *
++ ************************************************************************/
++
++// MARKER(update_precomp.py): autogen include statement, do not remove
++#include "precompiled_cli_ure.hxx"
++#include "cppuhelper/implementationentry.hxx"
++#include "com/sun/star/lang/XMultiServiceFactory.hpp"
++#include "com/sun/star/registry/XRegistryKey.hpp"
++
++// =============================================================================
++// component exports
++// =============================================================================
++using namespace ::com::sun::star;
++using namespace ::com::sun::star::uno;
++
++namespace mono_loader
++{
++    // =============================================================================
++    // component operations
++    // =============================================================================
++
++    uno::Reference< XInterface > SAL_CALL create(
++        Reference< XComponentContext > const & xContext )
++        SAL_THROW( () );
++
++    // -----------------------------------------------------------------------------
++
++    ::rtl::OUString SAL_CALL getImplementationName();
++
++    Sequence< ::rtl::OUString > SAL_CALL getSupportedServiceNames();
++
++    Reference<XInterface> SAL_CALL create(
++        Sequence<Any> const &, Reference<XComponentContext> const & );
++} // end mono_loader
++
++namespace mono_testcomponent
++{
++    // =============================================================================
++    // component operations
++    // =============================================================================
++
++    uno::Reference< XInterface > SAL_CALL create(
++        Reference< XComponentContext > const & xContext )
++        SAL_THROW( () );
++
++    // -----------------------------------------------------------------------------
++
++    ::rtl::OUString SAL_CALL getImplementationName();
++
++    Sequence< ::rtl::OUString > SAL_CALL getSupportedServiceNames();
++
++    Reference<XInterface> SAL_CALL create(
++        Sequence<Any> const &, Reference<XComponentContext> const & );
++} // end mono_testcomponent
++
++
++
++    // =============================================================================
++
++    const ::cppu::ImplementationEntry s_component_entries [] =
++    {
++        {
++            ::mono_loader::create, ::mono_loader::getImplementationName,
++            ::mono_loader::getSupportedServiceNames, 
++            ::cppu::createSingleComponentFactory,
++            0, 0
++        },
++/*
++        {
++            ::mono_testcomponent::create, ::mono_testcomponent::getImplementationName,
++            ::mono_testcomponent::getSupportedServiceNames, 
++            ::cppu::createSingleComponentFactory,
++            0, 0
++        },
++*/
++        { 0, 0, 0, 0, 0, 0 }
++    };
++
++extern "C"
++{
++    SAL_DLLPUBLIC_EXPORT  void SAL_CALL component_getImplementationEnvironment( 
++        const sal_Char ** ppEnvTypeName, uno_Environment ** )
++    {
++        OSL_TRACE("In component_getImplementationEnv");
++        *ppEnvTypeName = CPPU_CURRENT_LANGUAGE_BINDING_NAME;
++    }
++
++    SAL_DLLPUBLIC_EXPORT  sal_Bool SAL_CALL component_writeInfo( 
++        lang::XMultiServiceFactory * pServiceManager, registry::XRegistryKey * pRegistryKey )
++    {
++        OSL_TRACE("In component_writeInfo");
++        if ( ::cppu::component_writeInfoHelper(
++            pServiceManager, pRegistryKey, s_component_entries ) )
++            return sal_True;
++        return sal_False;
++    }
++
++    SAL_DLLPUBLIC_EXPORT  void * SAL_CALL component_getFactory( 
++        const sal_Char * pImplName, lang::XMultiServiceFactory * pServiceManager,
++        registry::XRegistryKey * pRegistryKey )
++    {
++        OSL_TRACE("In component_getFactory");
++        return ::cppu::component_getFactoryHelper( 
++            pImplName, pServiceManager, pRegistryKey, s_component_entries );
++    }
++}
+diff --git scp2/source/ooo/ure.scp scp2/source/ooo/ure.scp
+index 39acafe..194ec13 100755
+--- scp2/source/ooo/ure.scp
++++ scp2/source/ooo/ure.scp
+@@ -421,6 +421,16 @@ File gid_File_Dl_LogUnoUno
+     Styles = (PACKED, VERSION_INDEPENDENT_COMP_ID);
+ End
+ 
++#ifdef UNX // currently we only will build this on unix
++File gid_File_Dl_MonoLoader
++    TXT_FILE_BODY;
++    Dir = SCP2_URE_DL_DIR;
++    Name = STRING(CONCAT4(mono_loader,DLLPOSTFIX,.uno,UNXSUFFIX));
++    Styles = (PACKED, UNO_COMPONENT, VERSION_INDEPENDENT_COMP_ID);
++    RegistryID = gid_Starregistry_Services_Rdb_Ure;
++End
++#endif
++
+ #if (defined WNT && defined _MSC) || defined ENABLE_MONO
+ File gid_File_Dl_Cli_Uno
+     TXT_FILE_BODY;
+diff --git cli_ure/prj/build.lst cli_ure/prj/build.lst
+index 1c21fd5..6b65166 100644
+--- cli_ure/prj/build.lst
++++ cli_ure/prj/build.lst
+@@ -10,5 +10,6 @@ ure	cli_ure\unotypes				nmake   -       all     ure_unotypes ure_source_version
+ ure	cli_ure\source\ure                      nmake   -       all     ure_source_ure ure_source_bootstrap.u ure_source_version ure_source_source ure_source_basetypes ure_unotypes ure_inc NULL
+ ure	cli_ure\source\uno_bridge		nmake	-		w,vc7	ure_source_uno_bridge ure_source_basetypes ure_unotypes ure_source_ure ure_inc NULL
+ ure	cli_ure\source\mono_bridge      nmake   -       u       ure_source_mono_bridge ure_unotypes ure_source_ure ure_inc NULL
++ure	cli_ure\source\mono_loader      nmake   -       u       ure_source_mono_loader ure_unotypes ure_source_ure ure_inc NULL
+ ure	cli_ure\source\native           nmake   -       w,vc7   ure_source_native ure_source_version ure_source_source ure_source_ure ure_unotypes ure_source_uno_bridge ure_inc NULL
+ #ure	cli_ure\util                    nmake   -       w,vc7   ure_util ure_source_ure ure_source_native NULL
+diff --git cli_ure/prj/d.lst cli_ure/prj/d.lst
+index 53cc64a..237c21e 100644
+--- cli_ure/prj/d.lst
++++ cli_ure/prj/d.lst
+@@ -9,6 +9,7 @@
+ ..\%__SRC%\bin\cli_*.config %_DEST%\bin%_EXT%\cli_*.config
+ ..\%__SRC%\bin\policy*.dll %_DEST%\bin%_EXT%\policy*.dll
+ ..\%__SRC%\bin\cli_uno.* %_DEST%\bin%_EXT%\cli_uno.*
++..\%__SRC%\lib\mono_loader*.so %_DEST%\lib%_EXT%\mono_loader*.so
+ 
+ ..\%__SRC%\bin\cliuno.snk %_DEST%\bin%_EXT%\cliuno.snk
+ 
