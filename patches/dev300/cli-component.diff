@@ -24,10 +24,10 @@ index 0000000..ef6129e
 +#include "osl/diagnose.h"
 +
 +// The redirectedxxxfunc functions below are to be used with the Managed 
-+// cli bridge. Native code communicating with the cli bridge we cannot control 
++// cli bridge. Native code communicating with the cli bridge does not know 
 +// when the shutdown of the clr runtime occurs, communicating with 
 +// managed code in the (mixed) bridge dll after or during the clr shutdown
-+// results in unexpected results,  unhandled exceptions & unexpected exits.
++// results in... unexpected results ;-) e.g. unhandled exceptions & unexpected exits etc.
 +// The cli bridge inserts the proxyfree, proxyquire, proxyrelease, proxydispatch
 +// as the uno_Interface handlers, proxyfree & friends call the equivelant
 +// redirectedfreefunc & friends handlers.
@@ -41,10 +41,10 @@ index 0000000..ef6129e
 +// #FIXME idealy  Cli_proxy ( see cli_proxy.cxx & cli_proxy.h ) itself should be
 +// modified to be a listener for a shutdown starting message and should
 +// replaces it's own handlers. However the equivelant noop functions still will
-+// need to exist in real native a ( not mixed ) dll ( or at least thats my
++// need to exist in a real native ( e.g. not mixed ) dll ( or at least thats my
 +// experience sofar ). At the same time not sure if there is a better solution
-+// and this rather heavy handed approach I think will work as well ( with little
-+// effort for the moment.
++// and this rather heavy handed ( but simple ) approach will I think work well ( with little
++// effort for the moment ).
 +
 +freefunc redirectedfreefunc = NULL;
 +acquirefunc redirectedacquirefunc = NULL;
@@ -314,7 +314,7 @@ index 88ee3cb..713b378 100644
  
  using namespace System::Runtime::Remoting;
  using namespace System::Runtime::Remoting::Proxies;
-@@ -51,18 +53,60 @@ inline System::String* Cli_environment::createKey(System::String* oid, System::T
+@@ -51,18 +53,61 @@ inline System::String* Cli_environment::createKey(System::String* oid, System::T
      return System::String::Concat(oid, t->get_FullName());
  }
  
@@ -322,8 +322,8 @@ index 88ee3cb..713b378 100644
 +{
 +    OSL_TRACE("about to shutdown");
 +    // Clr shutdown is about to happen, we have to ensure that no 
-+    // code located in this dll cannot be called from native code
-+    // trying to do this in object finalizers etc. is already too late
++    // code located in this dll can be called from native code.
++    // Trying to do this in object finalizers etc. is already too late
 +    // E.g. a static uno reference ( located in native code ) to an object
 +    // object located in this bridge will more than likely when destructing 
 +    // call cli_proxy_release while the clr either cleaning up or already 
@@ -331,7 +331,8 @@ index 88ee3cb..713b378 100644
 +    // Any call from native code into managed code during or after the clr
 +    // shutdown will result in a core ( or undefined behaviour )
 +    // Taking this action might result in some resource leakage but
-+    // thats unavoidable
++    // thats unavoidable :-/ ( #FIXME is there a better way to co-operate
++    // and co-ordinate between the bridge and the clr )
 +    
 +    CallBackHandler::instance().resetHandlers(); 
 +    return 0;
@@ -513,12 +514,15 @@ index e5a9b51..6735733 100644
              (typelib_InterfaceTypeDescription *)m_unoType.get() );
  #if OSL_DEBUG_LEVEL >= 2
          OSL_ASSERT( this == (void const * const)that );
-@@ -947,6 +952,14 @@ inline void CliProxy::release() const
+@@ -947,6 +952,17 @@ inline void CliProxy::release() const
              m_bridge->m_uno_env, const_cast< CliProxy * >( this ) );
      }
  }
 +void CliProxy::setUpProxyHandlers()
 +{
++    // #FIXME - we need to have a mutex protecting
++    // where the proxy handlers are called  &
++    // where the proxy handlers are modified
 +    CallBackHandler& cbHandler = CallBackHandler::instance();
 +    cbHandler.setAcquireHandler( cli_proxy_acquire );
 +    cbHandler.setReleaseHandler( cli_proxy_release );
@@ -868,38 +872,7 @@ new file mode 100644
 index 0000000..2cde26e
 --- /dev/null
 +++ cli_ure/source/cli_loader/makefile.mk
-@@ -0,0 +1,81 @@
-+#*************************************************************************
-+#
-+# DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
-+# 
-+# Copyright 2008 by Sun Microsystems, Inc.
-+#
-+# OpenOffice.org - a multi-platform office productivity suite
-+#
-+# $RCSfile: makefile.mk,v $
-+#
-+# $Revision: 1.0 $
-+#
-+# This file is part of OpenOffice.org.
-+#
-+# OpenOffice.org is free software: you can redistribute it and/or modify
-+# it under the terms of the GNU Lesser General Public License version 3
-+# only, as published by the Free Software Foundation.
-+#
-+# OpenOffice.org is distributed in the hope that it will be useful,
-+# but WITHOUT ANY WARRANTY; without even the implied warranty of
-+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-+# GNU Lesser General Public License version 3 for more details
-+# (a copy is included in the LICENSE file that accompanied this code).
-+#
-+# You should have received a copy of the GNU Lesser General Public License
-+# version 3 along with OpenOffice.org.  If not, see
-+# <http://www.openoffice.org/license.html>
-+# for a copy of the LGPLv3 License.
-+#
-+#*************************************************************************
-+
+@@ -0,0 +1,50 @@
 +PRJ=..$/..
 +
 +PRJNAME=cli_ure
@@ -955,36 +928,7 @@ new file mode 100644
 index 0000000..dd38d85
 --- /dev/null
 +++ cli_ure/source/cli_loader/service.cxx
-@@ -0,0 +1,104 @@
-+/*************************************************************************
-+ *
-+ * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
-+ * 
-+ * Copyright 2008 by Sun Microsystems, Inc.
-+ *
-+ * OpenOffice.org - a multi-platform office productivity suite
-+ *
-+ * $RCSfile: service.cxx,v $
-+ * $Revision: 1.0 $
-+ *
-+ * This file is part of OpenOffice.org.
-+ *
-+ * OpenOffice.org is free software: you can redistribute it and/or modify
-+ * it under the terms of the GNU Lesser General Public License version 3
-+ * only, as published by the Free Software Foundation.
-+ *
-+ * OpenOffice.org is distributed in the hope that it will be useful,
-+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
-+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-+ * GNU Lesser General Public License version 3 for more details
-+ * (a copy is included in the LICENSE file that accompanied this code).
-+ *
-+ * You should have received a copy of the GNU Lesser General Public License
-+ * version 3 along with OpenOffice.org.  If not, see
-+ * <http://www.openoffice.org/license.html>
-+ * for a copy of the LGPLv3 License.
-+ *
-+ ************************************************************************/
+@@ -0,0 +1,75 @@
 +
 +// MARKER(update_precomp.py): autogen include statement, do not remove
 +#include "precompiled_cli_ure.hxx"
