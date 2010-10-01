@@ -34,9 +34,6 @@ EXTRA_DIST=\
 	openabout_translateorgza.png \
 	openintro_pld.bmp \
 	openabout_pld.bmp \
-	openintro_fsfhu.bmp \
-	nologoinstall_fsfhu.bmp \
-	ooobitmap_fsfhu.bmp \
 	patchability-extras.zip \
 	sg3.sdg sg3.sdv sg3.thm \
 	sofficerc-upstream \
