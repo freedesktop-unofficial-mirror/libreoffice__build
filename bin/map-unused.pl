@@ -1,4 +1,4 @@
-#!/usr/bin/perl
+#!/usr/bin/env perl
 
 # The worst offenders in bloated sym tables:
 @map_source = (
