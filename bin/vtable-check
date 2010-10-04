@@ -8,14 +8,52 @@ use strict;
 
 my $list_sizes = 0;
 
-sub read_vtables($$)
+sub read_obj_vtables($$)
 {
     my $vtables = shift;
     my $file = shift;
     my $pipe;
+    my $slot_size = 4;
+
+    # FIXME we may have duplicate hidden vtables across different libraries
+    my $libalias = ''; # $file;
+#    $libalias =~ s/.*\///g;
+
+    open ($pipe, "objdump -t $file |") || die "Can't objdump -T $file: $!";
+    while (<$pipe>) {
+	my $line = $_;
+
+	$slot_size = 8 if (/elf64-x86_64/); # testme
+	$slot_size = 4 if (/elf32-i?86/);
+
+	next if (/\*UND\*/);
+	next if (! /\s+_ZT[vV]/);
+#       00000000         w        O  .data.rel.ro._ZTV16ReturnActionEdit                000001c8 _ZTV16ReturnActionEdit
+#	00000000         w        O  .data.rel.ro._ZTVN3com3sun4star3uno10XInterfaceE   00000014 .hidden _ZTVN3com3sun4star3uno10XInterfaceE
+	$line =~ /([0-9a-f]*)\s+([gw ])\s+..\s+(\S*)\s*([0-9a-f]+)\s+(.*)$/  || die "un-parseable vtable entry '$_'";
+
+	my ($address, $linkage, $type, $sizehex, $symbol) = ($1, $2, $3, $4, $5);
+	my $size = hex ($sizehex) / $slot_size;
+	$symbol =~ s/.hidden/$libalias/;
+
+	print "$size $symbol\n";
+	die "Vtable '$symbol' multiply defined ('$line')" if (defined ($vtables->{$symbol}));
+	$vtables->{$symbol} = $size;
+    }
+}
+
+sub read_so_vtables($$)
+{
+    my $vtables = shift;
+    my $file = shift;
+    my $pipe;
+    my $slot_size = 4;
 
     open ($pipe, "objdump -T $file |") || die "Can't objdump -T $file: $!";
     while (<$pipe>) {
+	$slot_size = 8 if (/elf64-x86_64/); # testme
+	$slot_size = 4 if (/elf32-i?86/);
+
 	next if (/\*UND\*/);
 	next if (! /\s+_ZT[vV]/);
 
@@ -23,6 +61,8 @@ sub read_vtables($$)
 	/([0-9a-f]*)\s+([gw ])\s+..\s+(\S*)\s*([0-9a-f]+)\s+(\S*)\s+(.*)$/  || die "un-parseable vtable entry '$_'";
 
 	my ($address, $linkage, $type, $sizehex, $ver, $symbol) = ($1, $2, $3, $4, $5, $6);
+	$type =~ /O/ || next;
+
 	my $size = hex ($sizehex);
 	die "Vtable '$symbol' multiply defined" if (defined ($vtables->{$symbol}));
 	$vtables->{$symbol} = $size;
@@ -37,6 +77,7 @@ sub print_syntax()
     print STDERR "  accidentally created new virtual methods\n";
     print STDERR "  --list      prints out all vtable sizes\n";
     print STDERR "  --help      help\n";
+    exit(1);
 }
 
 #
@@ -62,10 +103,14 @@ print STDERR "reading vtables ";
 
 for my $file (@files) {
     my %vtables = ();
-    read_vtables (\%vtables, $file);
+    if ($file =~ /\.so$/) {
+	read_so_vtables (\%vtables, $file);
+	print STDERR ".";
+    } else {
+	read_obj_vtables (\%vtables, $file);
+    }
     next if (!keys (%vtables));
     $libs{$file} = \%vtables;
-    print STDERR ".";
 }
 print STDERR "\n";
 
@@ -78,7 +123,12 @@ for my $file (keys %libs) {
 	if (defined $global_syms{$sym}) {
 #	    print "multiply defined vtable '$sym'\n";
 	    if ($global_syms{$sym} != $vtables->{$sym}) {
-		die "Error - serious vtable size mismatch on $sym\n";
+		print STDERR "Error - serious vtable size mismatch on $sym\n";
+		for my $ff (keys %libs) {
+		    if (defined $libs{$ff}->{$sym}) {
+			print STDERR "\tdefined in $ff: size " . $libs{$ff}->{$sym} . "\n";
+		    }
+		}
 	    }
 	}
 	$global_syms{$sym} = $vtables->{$sym};
@@ -89,6 +139,8 @@ print STDERR "ed.\n";
 if ($list_sizes) {
     for my $file (sort keys %libs) {
 	my $vtables = $libs{$file};
+
+	print "Sizes are in virtual function pointer slots\n";
 
 	print "file: $file\n";
 	for my $sym (sort { $vtables->{$a} cmp $vtables->{$b} } keys %{$vtables}) {
