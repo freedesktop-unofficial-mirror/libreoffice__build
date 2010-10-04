@@ -29,7 +29,11 @@ automake --gnu --add-missing --copy --warnings=no-portability || exit 1;
 # intltoolize --copy --force --automake
 autoconf || exit 1;
 if test "x$NOCONFIGURE" = "x"; then
-    eval `echo ./configure $old_args "$@"`
+    if test -n "$old_args" ; then
+        eval `echo ./configure $old_args`
+    else
+        ./configure "$@"
+    fi
 else
     echo "Skipping configure process."
 fi
