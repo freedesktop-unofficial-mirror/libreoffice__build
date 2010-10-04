@@ -1,12 +1,10 @@
-#!/usr/bin/php
-<?php
 /*
  *   LibreOffice extension for syntax highlighting
  *   Copyright (C) 2008  Cédric Bosdonnat cedric.bosdonnat.ooo@free.fr
  *
  *   This library is free software; you can redistribute it and/or
  *   modify it under the terms of the GNU Library General Public
- *   License as published by the Free Software Foundation; 
+ *   License as published by the Free Software Foundation;
  *   version 2 of the License.
  *
  *   This library is distributed in the hope that it will be useful,
@@ -18,21 +16,25 @@
  *   License along with this library; if not, write to the Free
  *   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
+package org.libreoffice.coooder.comp.test;
 
-include("geshi/geshi.php");
+import junit.framework.Test;
 
-// get the arguments
+import org.libreoffice.coooder.comp.test.base.UnoTestSuite;
 
-$sourceFile = $argv[1];
-$destDir = $argv[2];
 
-// Read the file
-$source = file_get_contents($sourceFile);
-$lang = basename($sourceFile, ".txt");
+public class AllTests  {
 
-// Run Geshi
-$geshi = new GeSHi($source, $lang);
-$highlighted = $geshi->parse_code();
+    public static Test suite() {
 
-// Write to the ouput directory
-file_put_contents("$destDir/$lang.html", $highlighted);
+        // The tests to run by the suite
+        Class[] testClasses = new Class[] {
+                SyntaxTest.class
+        };
+
+        // Create the test suite
+        UnoTestSuite suite = new UnoTestSuite(testClasses);
+
+        return suite;
+    }
+}

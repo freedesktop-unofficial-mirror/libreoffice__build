@@ -1,7 +1,7 @@
 #!/bin/sh
 
-#   OpenOffice.org extension for syntax highlighting
-#   Copyright (C) 2008  Cédric Bosdonnat cedricbosdo@openoffice.org
+#   LibreOffice extension for syntax highlighting
+#   Copyright (C) 2008  Cédric Bosdonnat cedric.bosdonnat.ooo@free.fr
 #
 #   This library is free software; you can redistribute it and/or
 #   modify it under the terms of the GNU Library General Public
@@ -17,7 +17,7 @@
 #   License along with this library; if not, write to the Free
 #   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
-OUTPUT_DIR=../config/org/openoffice/langs
+OUTPUT_DIR=../config/org/libreoffice/langs
 GESHI_VERSION=1.0.8
 
 ## Change this to fetch the latest language definitions from GeSHi's website

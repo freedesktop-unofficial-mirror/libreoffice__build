@@ -1,8 +1,8 @@
 #!/usr/bin/php
 <?php
 /*
- *   OpenOffice.org extension for syntax highlighting
- *   Copyright (C) 2008  Cédric Bosdonnat cedricbosdo@openoffice.org
+ *   LibreOffice extension for syntax highlighting
+ *   Copyright (C) 2008  Cédric Bosdonnat cedric.bosdonnat.ooo@free.fr
  *
  *   This library is free software; you can redistribute it and/or
  *   modify it under the terms of the GNU Library General Public
