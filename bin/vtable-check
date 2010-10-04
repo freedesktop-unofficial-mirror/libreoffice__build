@@ -1,0 +1,99 @@
+#!/usr/bin/perl -w
+
+use strict;
+
+#
+# Use example: vtable-check *.so
+#
+
+my $list_sizes = 0;
+
+sub read_vtables($$)
+{
+    my $vtables = shift;
+    my $file = shift;
+    my $pipe;
+
+    open ($pipe, "objdump -T $file |") || die "Can't objdump -T $file: $!";
+    while (<$pipe>) {
+	next if (/\*UND\*/);
+	next if (! /\s+_ZT[vV]/);
+
+#        0058dc3e        g       DF  .text    0000000f      Base        _ZTv0_n12_N10SwDocShellD0Ev
+	/([0-9a-f]*)\s+([gw ])\s+..\s+(\S*)\s*([0-9a-f]+)\s+(\S*)\s+(.*)$/  || die "un-parseable vtable entry '$_'";
+
+	my ($address, $linkage, $type, $sizehex, $ver, $symbol) = ($1, $2, $3, $4, $5, $6);
+	my $size = hex ($sizehex);
+	die "Vtable '$symbol' multiply defined" if (defined ($vtables->{$symbol}));
+	$vtables->{$symbol} = $size;
+    }
+}
+
+sub print_syntax()
+{
+    print STDERR "vtable-check [--list] [--help] <list-of-so-files>\n";
+    print STDERR "  this tool generates signatures for vtable sizes, that can be compared\n";
+    print STDERR "  between patches to ensure that no incomplete type changes have \n";
+    print STDERR "  accidentally created new virtual methods\n";
+    print STDERR "  --list      prints out all vtable sizes\n";
+    print STDERR "  --help      help\n";
+}
+
+#
+# munge options
+#
+my @files = ();
+for my $arg (@ARGV) {
+    if ($arg =~ m/^--list/) {
+	$list_sizes = 1;
+    } elsif ($arg =~ m/^--help/) {
+	print_syntax();
+    } else {
+	push @files, $arg;
+    }
+}
+print_syntax() if (!@files);
+
+#
+# read relocation data from elf shared libraries
+#
+my %libs;
+print STDERR "reading vtables ";
+
+for my $file (@files) {
+    my %vtables = ();
+    read_vtables (\%vtables, $file);
+    next if (!keys (%vtables));
+    $libs{$file} = \%vtables;
+    print STDERR ".";
+}
+print STDERR "\n";
+
+print STDERR "sanity check";
+
+my %global_syms = ();
+for my $file (keys %libs) {
+    my $vtables = $libs{$file};
+    for my $sym (%{$vtables}) {
+	if (defined $global_syms{$sym}) {
+#	    print "multiply defined vtable '$sym'\n";
+	    if ($global_syms{$sym} != $vtables->{$sym}) {
+		die "Error - serious vtable size mismatch on $sym\n";
+	    }
+	}
+	$global_syms{$sym} = $vtables->{$sym};
+    }
+}
+print STDERR "ed.\n";
+
+if ($list_sizes) {
+    for my $file (sort keys %libs) {
+	my $vtables = $libs{$file};
+
+	print "file: $file\n";
+	for my $sym (sort { $vtables->{$a} cmp $vtables->{$b} } keys %{$vtables}) {
+	    print $vtables->{$sym} . "\t$sym\n";
+	}
+	print "\n";
+    }
+}
