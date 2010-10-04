@@ -16,8 +16,6 @@ requote_args ()
     sed -e 's/.*configure //' -e 's/=\(\([^"'"'"'-]\|-[^-]\| \)*\)\( \|$\)/="\1" /g'
 }
 
-new_args=`echo $@ | requote_args`
-
 old_args=""
 if test $# -eq 0 && test -f config.log; then
     old_args=`grep '\$ ./configure' config.log | requote_args`
@@ -31,7 +29,7 @@ automake --gnu --add-missing --copy --warnings=no-portability || exit 1;
 # intltoolize --copy --force --automake
 autoconf || exit 1;
 if test "x$NOCONFIGURE" = "x"; then
-    eval `echo ./configure $new_args $old_args`
+    eval `echo ./configure $old_args "$@"`
 else
     echo "Skipping configure process."
 fi
