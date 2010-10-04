@@ -1,4 +1,4 @@
-#!@PYTHON@
+#!/usr/bin/python
 
 import zipfile
 import xml.dom.minidom
