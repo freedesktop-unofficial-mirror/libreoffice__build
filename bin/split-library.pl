@@ -1,4 +1,4 @@
-#!/usr/bin/perl -w
+#!/usr/bin/env perl
 
 # Tool to help you to split a library into more ones.  Choose one or more
 # objects (let's say <blah>.o) that you need in the library, and:

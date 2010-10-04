@@ -1,4 +1,4 @@
-#!/usr/bin/perl -w
+#!/usr/bin/env perl
 
 # find-duplicates:
 # Gets the duplicates across modules for the class constructor symbols
