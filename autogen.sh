@@ -27,7 +27,7 @@ fi
 touch ChangeLog
 
 aclocal $ACLOCAL_FLAGS || exit 1;
-automake --gnu --add-missing --copy || exit 1;
+automake --gnu --add-missing --copy --warnings=no-portability || exit 1;
 # intltoolize --copy --force --automake
 autoconf || exit 1;
 if test "x$NOCONFIGURE" = "x"; then
