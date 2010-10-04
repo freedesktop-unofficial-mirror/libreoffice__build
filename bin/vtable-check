@@ -6,18 +6,23 @@ use strict;
 # Use example: vtable-check *.so
 #
 
-my $list_sizes = 0;
+my $list_sizes = 1;
+my $lo_path;
+my $archdir = 'unxlngi6.pro';
 
-sub read_obj_vtables($$)
+sub read_obj_vtables($$$)
 {
     my $vtables = shift;
     my $file = shift;
     my $pipe;
     my $slot_size = 4;
 
-    # FIXME we may have duplicate hidden vtables across different libraries
-    my $libalias = ''; # $file;
-#    $libalias =~ s/.*\///g;
+    # FIXME: we may have duplicate hidden vtables across different
+    # libraries - attempt to hide this with libalias - though we may
+    # have multiple libraries in the same project that in reality do
+    # not conflict. We should ideally depend on some library file
+    # list description in the output directory instead ...
+    my $libalias = shift;
 
     open ($pipe, "objdump -t $file |") || die "Can't objdump -T $file: $!";
     while (<$pipe>) {
@@ -36,8 +41,12 @@ sub read_obj_vtables($$)
 	my $size = hex ($sizehex) / $slot_size;
 	$symbol =~ s/.hidden/$libalias/;
 
-	print "$size $symbol\n";
-	die "Vtable '$symbol' multiply defined ('$line')" if (defined ($vtables->{$symbol}));
+#	print "$size $symbol\n";
+	if (defined ($vtables->{$symbol})) {
+	    if ($size != $vtables->{$symbol}) {
+		print STDERR "Error - serious vtable size mismatch on $symbol: $size, " . $vtables->{$symbol} . "\n";
+	    }
+	}
 	$vtables->{$symbol} = $size;
     }
 }
@@ -64,19 +73,39 @@ sub read_so_vtables($$)
 	$type =~ /O/ || next;
 
 	my $size = hex ($sizehex);
-	die "Vtable '$symbol' multiply defined" if (defined ($vtables->{$symbol}));
+
+	if (defined ($vtables->{$symbol})) {
+	    if ($size != $vtables->{$symbol}) {
+		print STDERR "Error - serious vtable size mismatch on $symbol: $size, " . $vtables->{$symbol} . "\n";
+	    }
+	}
 	$vtables->{$symbol} = $size;
     }
 }
 
+sub scan_objdir($$$)
+{
+    my $dir;
+    my ($vtables, $path, $libalias) = @_;
+
+    opendir ($dir, $path) || die "Can't open $path: $!";
+    while (my $name = readdir ($dir)) {
+	$name =~ /^\./ && next;
+	read_obj_vtables ($vtables, "$path/$name", $libalias);
+    }
+    closedir ($dir);
+}
+
 sub print_syntax()
 {
-    print STDERR "vtable-check [--list] [--help] <list-of-so-files>\n";
+    print STDERR "vtable-check [--list] [--help] [--lo-path=] <list-of-object-files>\n";
     print STDERR "  this tool generates signatures for vtable sizes, that can be compared\n";
     print STDERR "  between patches to ensure that no incomplete type changes have \n";
     print STDERR "  accidentally created new virtual methods\n";
-    print STDERR "  --list      prints out all vtable sizes\n";
-    print STDERR "  --help      help\n";
+    print STDERR "  --list            prints out all vtable sizes\n";
+    print STDERR "  --lo-path=<path>  scan an entire LibreOffice(LO) build tree\n";
+    print STDERR "  --archdir=<name>  name of the LO binary output directory for this arch\n";
+    print STDERR "  --help            help\n";
     exit(1);
 }
 
@@ -87,30 +116,52 @@ my @files = ();
 for my $arg (@ARGV) {
     if ($arg =~ m/^--list/) {
 	$list_sizes = 1;
+    } elsif ($arg =~ m/^--lo-path=(.*)$/) {
+	$lo_path = $1;
+    } elsif ($arg =~ m/^--archdir=(.*)$/) {
+	$archdir = $1;
     } elsif ($arg =~ m/^--help/) {
 	print_syntax();
     } else {
 	push @files, $arg;
     }
 }
-print_syntax() if (!@files);
+print_syntax() if (!@files && !defined $lo_path);
 
 #
-# read relocation data from elf shared libraries
+# read relocation data from misc. object files
 #
 my %libs;
 print STDERR "reading vtables ";
 
-for my $file (@files) {
-    my %vtables = ();
-    if ($file =~ /\.so$/) {
-	read_so_vtables (\%vtables, $file);
+if (defined $lo_path) {
+    # scan LibreOffice source tree ...
+    my $dir;
+    opendir ($dir, $lo_path) || die "Can't open $lo_path: $!";
+    while (my $name = readdir ($dir)) {
+	$name =~ /^\./ && next;
+	-d "$lo_path/$name/$archdir/slo" || next;
+
+	my %vtables = ();
+	scan_objdir (\%vtables, "$lo_path/$name/$archdir/slo", $name);
+	$libs{$name} = \%vtables;
 	print STDERR ".";
-    } else {
-	read_obj_vtables (\%vtables, $file);
     }
-    next if (!keys (%vtables));
-    $libs{$file} = \%vtables;
+    closedir ($dir);
+    print STDERR "\n";
+} else {
+    # scan command-line arguments
+    for my $file (@files) {
+	my %vtables = ();
+	if ($file =~ /\.so$/) {
+	    read_so_vtables (\%vtables, $file);
+	    print STDERR ".";
+	} else {
+	    read_obj_vtables (\%vtables, $file, '');
+	}
+	next if (!keys (%vtables));
+	$libs{$file} = \%vtables;
+    }
 }
 print STDERR "\n";
 
@@ -136,16 +187,14 @@ for my $file (keys %libs) {
 }
 print STDERR "ed.\n";
 
-if ($list_sizes) {
-    for my $file (sort keys %libs) {
-	my $vtables = $libs{$file};
+print "Sizes are in virtual function pointer slots\n";
 
-	print "Sizes are in virtual function pointer slots\n";
+for my $file (sort keys %libs) {
+    my $vtables = $libs{$file};
 
-	print "file: $file\n";
-	for my $sym (sort { $vtables->{$a} cmp $vtables->{$b} } keys %{$vtables}) {
-	    print $vtables->{$sym} . "\t$sym\n";
-	}
-	print "\n";
+    print "file: $file\n";
+    for my $sym (sort { $vtables->{$a} cmp $vtables->{$b} } keys %{$vtables}) {
+	print $vtables->{$sym} . "\t$sym\n";
     }
+    print "\n";
 }
