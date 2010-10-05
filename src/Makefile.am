@@ -30,7 +30,6 @@ EXTRA_DIST=\
 	openabout_translateorgza.png \
 	openintro_pld.bmp \
 	openabout_pld.bmp \
-	patchability-extras.zip \
 	sg3.sdg sg3.sdv sg3.thm \
 	sofficerc-upstream \
 	tango_mainapp_16.png \
