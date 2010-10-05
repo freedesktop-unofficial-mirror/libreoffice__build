@@ -1,7 +1,6 @@
 SUBDIRS=piece
 
 script_files = \
-	add_acor.py \
 	amt-license-patch \
 	applyflags \
 	bash-completion.in \
