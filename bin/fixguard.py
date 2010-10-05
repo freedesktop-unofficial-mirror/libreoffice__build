@@ -5,7 +5,7 @@ import os
 import shutil
 import tempfile
 
-exp = '#ifndef.*_(?:H|HXX|HRC|HPP)_*\s*\n(#include.*\n)#endif.*\n'
+exp = '#ifndef.*_(?:H|HXX|HRC|HPP)_*[ \t]*\/*.*\n(#include.*\n)#endif[ \t]*\/*.*\n'
 
 filename = sys.argv[1]
 if not os.path.isfile(filename):
