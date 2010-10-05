@@ -47,3 +47,5 @@ if [ -d .git ] ; then
         fi
     done
 fi
+git config branch.master.rebase true
+git config branch.autosetuprebase always
