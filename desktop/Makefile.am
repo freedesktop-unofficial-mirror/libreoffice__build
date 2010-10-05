@@ -15,7 +15,7 @@ clean-local:
 	      $(old_gnome_files:.in=)
 
 %.desktop.in: %.desktop.in.in $(top_builddir)/intltool-merge $(wildcard $(top_srcdir)/po/*.po)
-	$(top_builddir)/intltool-merge $(top_srcdir)/po $< $@ -d -u -c $(top_builddir)/po/.intltool-merge-cache
+	$(top_builddir)/intltool-merge -d -u -c $(top_builddir)/po/.intltool-merge-cache $(top_srcdir)/po $< $@
 
 %: %.in
 	sed -e "s|\@OOO_BINSUFFIX\@|@OOO_BINSUFFIX@|" $< > $@
