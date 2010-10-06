@@ -17,7 +17,7 @@ which dot > /dev/null 2>&1 || {
 shopt -s expand_aliases
 
 # Title of the documentation
-DOXYGEN_PROJECT_PREFIX="ooo-build"
+DOXYGEN_PROJECT_PREFIX="LibreOffice"
 
 # suck setup
 BINDIR=`dirname $0`
@@ -104,10 +104,10 @@ cat - > $BASE_OUTPUT/index.html <<EOF
 <!DOCTYPE HTML PUBLIC "-//IETF//DTD HTML//EN">
 <html>
     <head>
-        <title>OOo Source Code Documentation (fragmentary)</title>
+        <title>LibreOffice Source Code Documentation (fragmentary)</title>
     </head>
     <body>
-        <h1>OOo Source Code Documentation (fragmentary)</h1>
+        <h1>LibreOffice Source Code Documentation (fragmentary)</h1>
         <ul>
 EOF
 
