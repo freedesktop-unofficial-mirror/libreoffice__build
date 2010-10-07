@@ -2,31 +2,31 @@ SUBDIRS=sdf-templates
 
 EXTRA_DIST=${wildcard *.po} \
 	${wildcard *.sdf} \
-	ooo-build.pot \
+	lo-build.pot \
 	README \
 	POTFILES.in
 
-ooo_build_po_files = ${wildcard ooo-build-*.po}
+lo_build_po_files = ${wildcard lo-build-*.po}
 
-update-sdf: $(ooo_build_po_files:ooo-build-%.po=ooo-build-%.sdf)
+update-sdf: $(lo_build_po_files:lo-build-%.po=lo-build-%.sdf)
 
-ooo-build.sdf: ${wildcard sdf-templates/*.sdf}
+lo-build.sdf: ${wildcard sdf-templates/*.sdf}
 	cat $^ | \
 	sed -e 's/^\([^\t]*\t[^\t]*\t[^\t]*\t[^\t]*\t[^\t]*\t[^\t]*\t[^\t]*\t[^\t]*\t\)[0-9]*/\1999/' \
 	    -e 's/^\([^\t]*\t[^\t]*\t[^\t]*\t[^\t]*\t[^\t]*\t[^\t]*\t[^\t]*\t[^\t]*\t[^\t]*\t[^\t]*\t[^\t]*\t[^\t]*\t[^\t]*\t[^\t]*\t\)[-: 0-9]*/\12002-02-02 02:02:02/' | \
 	sort -u >$@
 
-ooo-build.pot: ooo-build.sdf /usr/bin/oo2po
-	oo2po -P --multifile=onefile ooo-build.sdf $@
+lo-build.pot: lo-build.sdf /usr/bin/oo2po
+	oo2po -P --multifile=onefile lo-build.sdf $@
 
-ooo-build-*.po: ooo-build.pot /usr/bin/pot2po
-	pot2po -t $@ -i ooo-build.pot -o $@.new
+lo-build-*.po: lo-build.pot /usr/bin/pot2po
+	pot2po -t $@ -i lo-build.pot -o $@.new
 	mv $@.new $@
 
 # ../bin/po2sdf is a crazy hack until
 # http://bugs.locamotion.org/show_bug.cgi?id=487" is fixed"
-ooo-build-%.sdf: ooo-build-%.po ooo-build.sdf /usr/bin/po2oo ../bin/po2sdf
-	../bin/po2sdf $* ooo-build.sdf $< $@
+lo-build-%.sdf: lo-build-%.po lo-build.sdf /usr/bin/po2oo ../bin/po2sdf
+	../bin/po2sdf $* lo-build.sdf $< $@
 
 /usr/bin/oo2po /usr/bin/pot2po /usr/bin/po2po:
 	echo "Error: $@ does not exit" ; \
