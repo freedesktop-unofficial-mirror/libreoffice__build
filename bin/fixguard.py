@@ -6,6 +6,8 @@ import shutil
 import tempfile
 
 exp = '#ifndef.*_(?:H|HXX|HRC|HPP)_*[ \t]*\/*.*\n(#include.*\n)#endif[ \t]*\/*.*\n'
+# alternative pattern to remove commented out include quards
+#exp = '//.*#ifndef.*_(?:H|HXX|HRC|HPP)_*[ \t]*\/*.*\n(//.*#include.*\n)//.*#endif[ \t]*\/*.*\n'
 
 filename = sys.argv[1]
 if not os.path.isfile(filename):
