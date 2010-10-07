@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 
 # Find all dependencies based on prj/build.lst (transitive closure)
 # [not the ideal implementation, but it was fast to write ;-)]

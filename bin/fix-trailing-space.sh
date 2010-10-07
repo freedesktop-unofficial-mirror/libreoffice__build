@@ -1,4 +1,4 @@
-#! /bin/bash
+#!/bin/sh
 
 # when git commit gives the following, feed this error output as input to this script
 # l10ntools/java/jpropex/java/JPropEx.java:28: trailing whitespace.

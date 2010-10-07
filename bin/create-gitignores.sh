@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 
 # create .gitignores for the the OOo tree
 # run in build/xyz680-mABC

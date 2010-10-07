@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 
 [ -f prj/build.lst ] || { echo -e "create-tests-lst.sh: Creates prj/tests.lst\nError: Must be in project subdir" ; exit 1 ; }
 
