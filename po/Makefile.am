@@ -19,7 +19,7 @@ lo-build.sdf: ${wildcard sdf-templates/*.sdf}
 lo-build.pot: lo-build.sdf /usr/bin/oo2po
 	oo2po -P --multifile=onefile lo-build.sdf $@
 
-lo-build-*.po: lo-build.pot /usr/bin/pot2po
+lo-build-%.po: lo-build.pot /usr/bin/pot2po
 	pot2po -t $@ -i lo-build.pot -o $@.new
 	mv $@.new $@
 
