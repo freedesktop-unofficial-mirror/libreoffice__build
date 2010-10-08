@@ -1,0 +1,141 @@
+#!/bin/sh
+
+usage()
+{
+    echo "This script generates LO git commit summary"
+    echo
+    echo "Usage: ${0##*/} [--help] [--build] [--pieces] [--piece=<piece>] build-dir summary.log [git_log_param...]"
+    echo
+    echo "Options:"
+    echo
+    echo "	--help		print this help"
+    echo "	--build 	summarize just changes in the libreoffice/build repo"
+    echo "	--pieces	do not include changes from the libreoffice/build repo"
+    echo "	--piece=<piece>	summarize just chnages from the given piece"
+    echo "      build-dir       directory with the libreoffice/build clone; the piece repos"
+    echo "                      must be cloned in the build-dir/clone/<piece> subdirectories"
+    echo "      summary.log     output file"
+    echo "      git_log_param   extra parameters passed to the git log command to define"
+    echo "                      the area of interest , e.g. --after=\"2010-09-27\" or"
+    echo "                      TAG..HEAD"
+}
+
+build_sum="yes"
+pieces_sum="yes"
+piece=
+build_dir=
+summary_log=
+export git_log_params=
+while test -n "$1" ; do
+    case "$1" in
+	--help)
+	    usage
+	    exit 0;
+	    ;;
+	--build)
+	    pieces_sum=
+	    piece=
+	    ;;
+	--pieces)
+	    build_sum=
+	    ;;
+	--piece=*)
+	    build_sum=
+	    pieces_sum="yes"
+	    piece=`echo $1 | sed "s|--piece=||"`
+	    ;;
+	*)
+	    if test -z "$build_dir" ; then
+	        build_dir="$1"
+	    elif test -z "$summary_log" ; then
+	        summary_log="$1";
+	    else
+	        git_log_params="$git_log_params $1"
+	    fi
+    esac
+    shift
+done
+
+if test -z "$build_dir" ; then
+    echo "Error: please, define directory with the cloned libreoffice/build repo"
+    exit 1;
+fi
+
+if test -z "$summary_log" ; then
+    echo "Error: please, define the output file"
+    exit 1;
+fi
+
+if test ! -d "$build_dir/.git" -o ! -f "$build_dir/download.in" -o ! -d "$build_dir/clone" ; then
+    echo "Error: invalid build dir: \"$build_dir\""
+    echo "       it must point to a clone of libreoffice/build git repo"
+    exit 1;
+fi
+
+
+
+get_git_log()
+{
+    git_dir="$1"
+    temp_dir="$2"
+    repo="$3"
+
+    echo "Getting log from the repo: $repo"
+    cd $git_dir
+#    git log --pretty='format:%an: %s%n' $git_log_params >$temp_dir/$repo.log
+    git log --pretty='format:    + %s [%an]' $git_log_params | sort -u >$temp_dir/$repo.log
+    cd - >/dev/null 2>&1
+}
+
+add_to_paterns()
+{
+    sed -e "s|\#|\\\#|" \
+	-e "s|\[|\\\[|" \
+	-e "s|\]|\\\]|" $1 >>"$2"
+}
+
+temp_dir=`mktemp -d /tmp/lo-git-commit-summary-XXXXXX`
+
+# get logs
+if test "$build_sum" = "yes" ; then
+    get_git_log "$build_dir" "$temp_dir" "build"
+fi
+
+if test "$pieces_sum" = "yes" ; then
+    for piece in `ls $build_dir/clone` ; do
+        test -d "$build_dir/clone/$piece" || continue;
+        get_git_log "$build_dir/clone/$piece" "$temp_dir" "$piece"
+    done
+fi
+
+# special sections
+echo "Looking for build bits..."
+
+grep -h -i " build" $temp_dir/*.log | sort -u >"$temp_dir/build.special"
+#sed -e "s|\(.*\)|'\1'|" "$temp_dir/build.special" >"$temp_dir/special.filter"
+add_to_paterns "$temp_dir/build.special" "$temp_dir/special.patterns"
+
+echo "Looking for global changes..."
+
+cat $temp_dir/*.log | sort | uniq -c | grep -v "      1" | cut -c 9- | grep -v -f "$temp_dir/special.patterns" >"$temp_dir/common.special"
+#sed -e "s|\(.*\)|'\1'|"  "$temp_dir/common.special" >>"$temp_dir/special.filter"
+add_to_paterns "$temp_dir/common.special" "$temp_dir/special.patterns"
+
+echo "Generating summary..."
+
+rm -rf "$summary_log"
+
+echo "+ common:" >>"$summary_log"
+cat "$temp_dir/common.special" >>"$summary_log"
+
+for log in `ls $temp_dir/*.log` ; do
+    piece=`echo $log | sed "s|$temp_dir/\(.*\)\.log\$|\1|"`
+    echo "+ $piece:" >>"$summary_log"
+    grep -v -f "$temp_dir/special.patterns" "$log" >>"$summary_log"
+done
+
+echo "+ build bits:" >>"$summary_log"
+cat "$temp_dir/build.special" >>"$summary_log"
+
+cp "$temp_dir/special.patterns" /prace
+rm -rf "$temp_dir"
