@@ -30,7 +30,7 @@ if test "x$NOCONFIGURE" = "x"; then
     if test -n "$old_args" ; then
         eval `echo ./configure $old_args`
     else
-        ./configure "$@"
+        ./configure --enable-maintainer-mode "$@"
     fi
 else
     echo "Skipping configure process."
