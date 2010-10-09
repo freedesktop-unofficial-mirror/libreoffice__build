@@ -2,15 +2,45 @@
 use Switch;
 use File::Temp qw/ tempfile tempdir /;
 
+sub download($$$$) {
+    my ($remote, $destdir, $targetfile, $extract) = @_;
+
+    my $GET_CMD='@GET_CMD@';
+    # option to specify output-filename (or to use remote name)
+    my $set_output = "";
+    if ($targetfile) {
+        if ($GET_CMD =~ /curl$/) {
+            $set_output = "-o \"$targetfile\"";
+        } else {
+            $set_output = "-O \"$targetfile\"";
+        }
+    } elsif ($GET_CMD =~ /curl$/) {
+        $set_output = "-O";
+    }
+
+    die "Target directory does not exist!" unless ( -d $destdir );
+    my $result = system( "cd \"$destdir\" ; $GET_CMD \"$remote\" $set_output" );
+
+    return $result if ( $extract == 0 );
+
+    # extraction was requested
+    die "requested to untar nothing!" unless ($targetfile);
+    if ( $result != 0 ) {
+        unlink("$destdir/$targetfile");
+        return $result;
+    }
+    my $tarswitch = "j";
+    $tarswitch = "z" if ($targetfile =~ /gz$/ );
+    $result = system( "cd \"$destdir\" ; tar -x".$tarswitch."f \"$targetfile\" > /dev/null 2>&1");
+    unlink($destdir."/".$targetfile);
+
+    return $result;
+}
+
 sub webget($$$$)
 {
     my ($src, $dest, $name, $is_cgit) = @_;
     my $result;
-
-    $save_as = '';
-    if ( $name ne '' ) {
-        $save_as = "-O \"$name\"";
-    }
 
     if ( $is_cgit && $name ne '' ) {
         # it must be piece source and must be repacked
@@ -21,14 +51,10 @@ sub webget($$$$)
         print "Get $src -> $dest/libreoffice-$name-${ooo_sourceversion}.tar.bz2\n";
 
         # first try to get the tarball into a temporary directory
-        my $tempdir = tempdir( '/tmp/libreoffice-download-XXXXXX' );
+        my $tempdir = tempdir( 'libreoffice-download-XXXXXX', TMPDIR => 1, CLEANUP =>1 );
 
-        $result = system( "cd $tempdir ; $WGET \"$src\" -O temp.tar.bz2" );
-
-        if ( $result == 0 ) {
-                # try to unpack the tarball in the temp dir
-                $result = system( "cd $tempdir ; tar -xjf temp.tar.bz2 > /dev/null 2>&1" );
-            }
+        # try to download and extract
+        $result = download($src, $tempdir, "temp.tar.bz2", 1);
 
         # cgit is known to be broken, try plan B (download gzip variant) if bzip2 download failed
         if ( $result != 0 ) {
@@ -37,29 +63,20 @@ sub webget($$$$)
 
             if ( $gzip_src ne $src ) {
                 print "Bad archive, go for plan B: get $gzip_src and repack\n";
-                $result = system( "cd $tempdir ; $WGET \"$gzip_src\"  -O temp.tar.gz" );
-                    if ( $result == 0 ) {
-                        # try to unpack the tarball in the temp dir
-                        $result = system( "cd $tempdir ; tar -xzf temp.tar.gz > /dev/null 2>&1" );
-                    }
-                }
+                $result = download($gzip_src, $tempdir, "temp.tar.gz", 1);
             }
+        }
 
         # pack the files to the final archive, use the ooo-pack-source helper tool
         if ( $result == 0 ) {
-                # first, remove temp tarballs
-                unlink "$tempdir/temp.tar.bz2", "$tempdir/temp.tar.gz";
                 # pack the files
                 # FIXME: it would be more safe to use $temp_dir/$git_tag instead of $tempdir/*
                 $result = system( "cd $dest; $ooo_pack_sources --set-version=$ooo_sourceversion --piece=$name $tempdir/*" );
-            }
-
-            # remove temp files
-            system( "rm -rf $tempdir" );
+        }
     } else {
         # normal file, easy go
         print "Get $src -> $dest/$name\n";
-        $result = system( "cd $dest ; $WGET \"$src\" $save_as" );
+        $result = download($src, $dest, $name, 0);
     }
 
     return ( $result == 0 );
@@ -218,7 +235,6 @@ if ( '@UPSTREAM_NAME@' ne '' ) {
     $SRC_URLS{'@UPSTREAM_NAME@.*'} = '@MIRROR@/upstream-copy';
 }
 
-$WGET='@WGET@';
 if ('@SPLIT@' eq '') {
     $SPLIT = 0;
 } else {
@@ -388,8 +404,6 @@ while ($arg = shift @ARGV) {
 # Defaults
 print "Downloading files for @OOO_SOURCEDIRNAME@\n";
 
--x $WGET || die "Can't find wget - install it and try again\n";
-
 if ('@SYSTEM_GCC@' eq '') {
     source_file( 'gcc-4.2.3.tar.bz2' );
     source_file( 'binutils-2.18.tar.bz2' );
@@ -405,9 +419,13 @@ if ($download_all && '@BUILD_WIN32@' eq '')
     source_file( '@BUILD_MOZILLA_SOURCE@' );
 }
 
-if ('@BUILD_WIN32@' ne '' || '@DISTRO@' eq 'LibreOfficeLinux'
-      || '@DISTRO@' eq 'LibreOfficeLinuxDevel'
-      || '@DISTRO@' eq 'LibreOfficeWin32' || '@DISTRO@' eq 'LibreOfficeMacOSX')
+my %requires_ant = (
+    LibreOfficeLinux      => 1,
+    LibreOfficeLinuxDevel => 1,
+    LibreOfficeWin32      => 1,
+    LibreOfficeMacOSX     => 1,
+);
+if ('@BUILD_WIN32@' || $requires_ant{@DISTRO@})
 {
     source_file( '@APACHE_ANT_TARBALL@' );
 }
@@ -629,7 +647,10 @@ download_files (\@files, \%SRC_URLS, '@SRCDIR@');
 download_external_sources();
 
 open (FILELIST, ">download.list");
-print FILELIST join ("\n", @files);
-print FILELIST "\n";
+foreach $entry (@files) {
+    print FILELIST $entry->{file}."\n" if ( $entry->{file} );
+}
+close FILELIST;
 
 print "Done\n";
+# vim: set ts=4 sw=4 expandtab :
