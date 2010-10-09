@@ -9,14 +9,9 @@ if test "z$1" = "z--clean"; then
     exit 1;
 fi
 
-requote_args ()
-{
-    sed -r -e 's/.*configure //' -e 's/(["'"'"'])/\\\1/g' -e 's/=(([^"'"'"'-]|-[^-]| )*)( |$)/="\1" /g'
-}
-
 old_args=""
 if test $# -eq 0 && test -f config.log; then
-    old_args=`grep '\$ ./configure' config.log | requote_args`
+    old_args=`perl -e 'while(<>) { if( /\\s+\\$ .\\/configure/ ) { s/.*configure //; s/(["'"'"'])/\\\\$1/g; s/=(([^-"'"'"' ]|-[^- ])*)( |$)/="$1" /g; print $_; } }' config.log`
     echo "re-using arguments from last configure: $old_args";
 fi
 
@@ -25,8 +20,11 @@ touch ChangeLog
 if test "z$ACLOCAL_FLAGS" = "z" -a "z`uname -s`" = "zDarwin" ; then
     ACLOCAL_FLAGS="-I ./m4/mac"
 fi
+if test "z`uname -s`" != "zDarwin" ; then
+    AUTOMAKE_EXTRA_FLAGS=--warnings=no-portability
+fi
 aclocal $ACLOCAL_FLAGS || exit 1;
-automake --gnu --add-missing --copy --warnings=no-portability || exit 1;
+automake --gnu --add-missing --copy $AUTOMAKE_EXTRA_FLAGS || exit 1;
 # intltoolize --copy --force --automake
 autoconf || exit 1;
 if test "x$NOCONFIGURE" = "x"; then
@@ -49,6 +47,6 @@ if [ -d .git ] ; then
             ln -s "../../git-hooks/$file" "$hook"
         fi
     done
+    git config branch.master.rebase true
+    git config branch.autosetuprebase always
 fi
-git config branch.master.rebase true
-git config branch.autosetuprebase always
