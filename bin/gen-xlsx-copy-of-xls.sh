@@ -94,7 +94,7 @@ xcl97esc.cxx
 xcl97rec.cxx
 "
 
-new-diff() {
+new_diff() {
     P="$1"
     FROM="$2"
     TO="$3"
@@ -111,15 +111,15 @@ new-diff() {
 
 (
     for I in $INC ; do
-        new-diff $HEADER $I $I
+        new_diff $HEADER $I $I
     done
     for I in $XLS_INC ; do
-        new-diff $XLS $I $I
+        new_diff $XLS $I $I
     done
     for I in $ADD_PREFIX ; do
-        new-diff $XLS $I xlsx-$I
+        new_diff $XLS $I xlsx-$I
     done
     for I in $ADD_PREFIX_97 ; do
-        new-diff $XLS97 $I xlsx-$I
+        new_diff $XLS97 $I xlsx-$I
     done
 ) > patches/dev300/xlsx-filter-as-a-separate-lib-xls-copy.diff
