@@ -32,11 +32,11 @@ do
     if test -x $TESTDIR/$t/run.sh ; then
         sh $TESTDIR/$t/run.sh "$ooinstall" "$TOOLSDIR"
         if test $? ; then
-            echo -e "$t\t:\t${GREEN}PASSED${CLEAR}"
+            printf "$t\t:\t${GREEN}PASSED${CLEAR}\n"
         else
-            echo -e "$t\t:\t${RED}FAILED${CLEAR}"
+            printf "$t\t:\t${RED}FAILED${CLEAR}\n"
         fi
     else
-        echo -e "$t\t:\t${ORANGE}SKIPPED${CLEAR}"
+        printf "$t\t:\t${ORANGE}SKIPPED${CLEAR}\n"
     fi
 done
