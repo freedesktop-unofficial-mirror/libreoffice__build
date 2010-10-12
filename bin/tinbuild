@@ -25,7 +25,7 @@ getCommitters ()
 	from_date="$1"
 
 	( git log '--pretty=tformat:%ce' --after="$from_date" ;
-	  bin/g log '--pretty=tformat:%ce' --after="$from_date" ) | sort | uniq
+	  bin/g -s log '--pretty=tformat:%ce' --after="$from_date" ) | sort | uniq
 }
 
 reportError ()
@@ -40,7 +40,7 @@ reportError ()
 		case "$error_kind" in
 			owner) to_mail="$OWNER"
 			       message="box broken" ;;
-			*)     if test -z "$prev_head" -o -z "$last_success" ; then
+			*)     if test -z "$last_success" ; then
 			          # we need at least one successful build to
 				  # be reliable
 			          to_mail="$OWNER"
@@ -62,17 +62,21 @@ Hi guys,
 One of you broke the build of LibreOffice master with your commit :-(
 Please commit and push a fix ASAP!
 
-The tinderbox
+Tinderbox info:
 
   `uname -a`
+`grep '\$ \.\/configure' config.log`
 
-configured with
+Commits since the last success:
 
-  `grep '\$ \.\/configure' config.log`
+===== build =====
+`git log '--pretty=tformat:%h  %s' --after="$from_date" | sed 's/^/  /'`
 
-says:
+`bin/g log '--pretty=tformat:%h  %s' --after="$from_date" | sed 's/^/  /'`
 
-"$*"
+Log says:
+
+$*
 EOF
 		) | mail -r "$OWNER" -s "$subject" $to_mail
 	else
@@ -81,6 +85,12 @@ EOF
 			exit 1
 		fi
 	fi
+}
+
+gitHeads()
+{
+	git rev-parse --verify HEAD
+	g rev-parse --verify HEAD
 }
 
 ## code
@@ -117,14 +127,16 @@ fi
 test $HTML_OUTPUT -eq 1 && export BUILD_HTML_OUTPUT=true
 
 # main
-good_head=""
-prev_head=""
+prev_success=""
 last_success=""
 while true; do
 	err_msg=""
 
 	# cleanup
 	$NICE make clean-local
+
+	# FIXME we need a more exact way to determine a 'good' date; this is not accurate
+	rough_checkout_date="`date --utc --rfc-3339=seconds`"
 
 	# try to build
 	if ! err_msg=$(./autogen.sh 2>&1); then
@@ -135,40 +147,40 @@ while true; do
 		reportError committer "building failed - error is:" printf '\n' "$(tail -n100 build.log)"
 	else
 		echo build done
+		cp build.log build/
+		gitHeads > build/git-heads.txt
 
-		prev_head=$good_head
+		prev_success=$last_success
 
 		# successful build, maybe do a smoketest/first.bas?
 
-		last_success="`date --utc --rfc-3339=seconds`"
-		good_head=$(git rev-parse --verify HEAD)
-		mv build "build-$good_head" || 
+		last_success=$rough_checkout_date
+		mv build "build-$last_success" ||
 		{
 			msg=
-			test -z "$prev_head" || msg=printf '\n' "Leaving build-$prev_head around, exiting now"
-			reportError owner "Cannot move 'build' to 'build-$good_head'" "$msg"
+			test -z "$prev_success" || msg=printf '\n' "Leaving 'build-$prev_success' around, exiting now"
+			reportError owner "Cannot move 'build' to 'build-$last_success'" "$msg"
 		}
 
-		# save it at least for one build
-		mv build.log "build-previous.log"
-
-		if test -n "$prev_head"; then
-			rm -rf "build-$prev_head"
+		if test -n "$prev_success"; then
+			rm -rf "build-$prev_success"
 		fi
 	fi
+
+	mv build.log "build-previous.log"
 
 	echo updating repo
 
 	# new commits?
 	while true; do
-		old_head=$(git rev-parse --verify HEAD) && err_msg=$(git pull -r 2>&1) && err_msg2=$(bin/g pull -r 2>&1) ||
+		old_head=$(gitHeads) && err_msg=$(git pull -r 2>&1) && err_msg2=$(bin/g pull -r 2>&1) ||
 		{
 			msg=
-			test -z "$prev_head" || msg=printf '\n' "Leaving build-$prev_head around, exiting now"
+			test -z "$prev_success" || msg=printf '\n' "Leaving 'build-$prev_success' around, exiting now"
 
 			reportError owner "git repo f*cked up - error is:" printf '\n' $err_msg $err_msg2 "$msg"
 		}
-		new_head=$(git rev-parse --verify HEAD)
+		new_head=$(gitHeads)
 		
 		if test "$old_head" != "$new_head"; then
 			break
