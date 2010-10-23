@@ -8,12 +8,12 @@
 # 3. When packaging (called from package-ooo), to install to DESTDIR
 
 use File::Find;
+use Cwd;
 
 %setup_vars = ();
-%configure_vars = ();
 
 $path = '';
-$do_link = 0;
+$linked='';
 
 sub suck_setup($)
 {
@@ -47,41 +47,9 @@ sub wanted {
 
 suck_setup ("./setup") || suck_setup ("bin/setup") || die "can't find bin/setup";
 
-print "Sucking env from build setup\n";
-my $fname = `ls $setup_vars{'OOBUILDDIR'}/*.[sS]et.sh`;
-open ($Vars, $fname) || die "Can't open $fname: $!";
-while (<$Vars>) {
-    /^alias/ && next;
-    /([^=]*)=\S*"(.*)"\S*/ || next;
-    if (!defined $configure_vars{$1}) {
-	$configure_vars{$1} = $2;
-#	print "Configure var '$1' -> '$2'\n";
-    }
-}
-close ($Vars);
-
-print "Performing environment substitutions ...\n";
-my @substitutions = ( 'SOLARENVINC', 'SOLARENV', 'SRC_ROOT', 'UPD', 'INPATH',
-		      'OUTPATH', 'SOLARVER', 'JAVA_HOME' );
-# perform substitutions
-for my $subst (@substitutions) {
-    for my $key (keys %configure_vars) {
-#	$configure_vars{$key} =~ m/\$$subst/ && print "Match $subst in $key\n";
-	$configure_vars{$key} =~ s/\$$subst/$configure_vars{$subst}/g;
-    }
-}    
-
-# Workaround for system Mozilla
-if ( $configure_vars{'SYSTEM_MOZILLA'} eq 'YES' ) {
-    $configure_vars{'LD_LIBRARY_PATH'} = "$configure_vars{'MOZ_LIB'}:$configure_vars{'LD_LIBRARY_PATH'}";
-}
-
-# Workaround for the Python
-$configure_vars{'PYTHONPATH'} = "$setup_vars{'OOBUILDDIR'}/instsetoo_native/$configure_vars{'INPATH'}/bin:$configure_vars{'SOLARVERSION'}/$configure_vars{'INPATH'}/lib:$configure_vars{'SOLARVERSION'}/$configure_vars{'INPATH'}/lib/python/lib-dynload";
-
 for $arg (@ARGV) {
     if ($arg eq '-l') {
-	$do_link = 1;
+	$linked = '-l';
 
     } elsif ($arg eq '-h' || $arg eq '--help') {
 	$help = 1;
@@ -98,68 +66,10 @@ if ($help) {
     exit 1;
 }
 
-print "Setting up environment\n";
-for $a (keys %configure_vars) {
-    $ENV{$a} = $configure_vars{$a};
-}
-my $BUILD=undef;
-my $LAST_MINOR=undef;
-open MINORMK, "$ENV{'SOLARENV'}/inc/minor.mk";
-while (<MINORMK>) {
-	my $t = "\$" . $_;
-	if(/^BUILD/ || /^LAST_MINOR/) {
-		eval $t;
-	}
-}
-close MINORMK;
-$ENV{LAST_MINOR} = $LAST_MINOR;
-$ENV{OUT} = "../$configure_vars{'INPATH'}";
-$ENV{LOCAL_OUT} = $ENV{OUT};
-$ENV{LOCAL_COMMON_OUT} = $ENV{OUT};
-# FIXME: the following variable helps to install localizations even if some
-# files are not localized (like Japanese, Chinese wordbook), it makes
-# the installer to use the English localization of the file instead.
-$ENV{DEFAULT_TO_ENGLISH_FOR_PACKING} = 1;
+$sources_path=Cwd::realpath$setup_vars{'OOBUILDDIR'});
 
-$langs=$setup_vars{OOO_LANGS_LIST};
-$langs='en-US' if $langs eq '';
-$langs =~ s/\s+/,/g;
-# FIXME: hack... we get a useless , at the end which makes it being e.g. zu#
-# which breaks the build...
-$langs =~ s/,'/'/;
-
-$destdir='';
-if ( defined $setup_vars{OODESTDIR} &&
-     $setup_vars{OODESTDIR} ne "" ) {
-    $destdir = "-destdir \"$setup_vars{OODESTDIR}\"";
-}
-
-$strip='';
-if ( defined $setup_vars{OOO_STRIP} &&
-     $setup_vars{OOO_STRIP} eq "no" ) {
-    $strip = "-dontstrip";
-}
-
-print "Running OOo installer\n";
-system ("cd $setup_vars{OOBUILDDIR}/instsetoo_native/util ; " .
-	"perl -d:DProf -w $configure_vars{SOLARENV}/bin/make_installer.pl " .
-	"-f openoffice.lst -l $langs -p LibreOffice " .
-	"-buildid $BUILD $destdir $strip " .
-	"-simple $path") && die "Failed to install: $!";
-
-if ($configure_vars{BUILD_TYPE} =~ m/ODK/) {
-    print "Running SDK installer\n";
-    system ("cd $setup_vars{OOBUILDDIR}/instsetoo_native/util ; " .
-	"perl -w $configure_vars{SOLARENV}/bin/make_installer.pl " .
-	"-f openoffice.lst -l en-US -p LibreOffice_SDK " .
-	"-buildid $BUILD $destdir $strip " .
-	"-simple $path") && die "Failed to install: $!";
-}
-print "Installer finished\n";
-
-if ($do_link) {
-    `$configure_vars{SOLARENV}/bin/linkoo $path $configure_vars{SRC_ROOT}`;
-}
+# Call the solenv/bin/ooinstall
+system ("cd $sources_path/solenv/bin/ooinstall $linked $path");
 
 print "Installing extra dictionaries...\n";
 system ("cd $setup_vars{TOOLSDIR}/bin ; " .
