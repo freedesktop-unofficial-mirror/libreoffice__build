@@ -164,7 +164,8 @@ $(BUILDDIR)/install/program/ooenv: $(STAMP_DIR)/build
 	fi
 
 smoketest: $(BUILDDIR)/install/program/ooenv
-	echo framework/required/f_topten.bas | $(OOBUILDDIR)/testautomation/tools/run_tests/run_tests.sh -p $(BUILDDIR)/install/basis*/program/testtool.bin
+	( . $(OOBUILDDIR)/*.Set.sh ; export SAL_USE_VCLPLUGIN="svp" ; \
+	  cd $(OOBUILDDIR)/test && build && deliver && cd $(OOBUILDDIR)/smoketestoo_native && build )
 
 id : $(OOBUILDDIR)/ID
 $(OOBUILDDIR)/ID : $(STAMP_DIR)/build
