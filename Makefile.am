@@ -163,8 +163,8 @@ $(BUILDDIR)/install/program/ooenv: $(STAMP_DIR)/build
 	   $(BUILDDIR)/install/program/unopkg add -v --shared $(BUILDDIR)/bin/tweakconfig.oxt ; \
 	fi
 
+# Run smoketest, but timeout in 15 minutes if it got stuck
 smoketest: $(BUILDDIR)/install/program/ooenv
-	# Run smoketest, but timeout in 15 minutes if it got stuck
 	( ( . $(OOBUILDDIR)/*.Set.sh ; export SAL_USE_VCLPLUGIN="svp" ; \
 	    cd $(OOBUILDDIR)/test && build.pl && deliver.pl && \
 	    cd $(OOBUILDDIR)/smoketestoo_native && build.pl ) & \
