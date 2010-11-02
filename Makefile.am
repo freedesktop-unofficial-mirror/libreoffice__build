@@ -168,9 +168,9 @@ smoketest: $(BUILDDIR)/install/program/ooenv
 	( ( . $(OOBUILDDIR)/*.Set.sh ; export SAL_USE_VCLPLUGIN="svp" ; \
 	    cd $(OOBUILDDIR)/test && build.pl && deliver.pl && \
 	    cd $(OOBUILDDIR)/smoketestoo_native && build.pl ) & \
-	  ( COMMAND_PID=$! ; DELAY=$((15*60)) ; \
+	  ( COMMAND_PID=$$! ; DELAY=$$((15*60)) ; \
 	    while test "$$DELAY" -gt "0" && ps "$$COMMAND_PID" > /dev/null ; do \
-	        sleep 1 ; DELAY=$(($DELAY-1)) ; \
+	        sleep 1 ; DELAY=$$(($$DELAY-1)) ; \
 	    done ; \
 	    ps "$$COMMAND_PID" > /dev/null && ( kill "$$COMMAND_PID" ; echo "Smoketest timed out, killed." ; exit 1 ) ) )
 
