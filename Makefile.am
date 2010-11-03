@@ -36,7 +36,6 @@ STAMP_DIR=$(top_builddir)/stamp
 
 unpack : $(OOBUILDDIR)/unpack $(top_srcdir)/bin/unpack
 $(OOBUILDDIR)/unpack :
-	$(TOOLSDIR)/bin/transform --revert $(TOOLSDIR) $(OOBUILDDIR)
 	test -n "$(OOO_GIT_MANAGED)" && $(TOOLSDIR)/bin/gob --build-dir=$(OOBUILDDIR) prepare || true
 	if test -d $(OOBUILDDIR)/applied_patches ; then \
 		FLAGS=`$(TOOLSDIR)/bin/applyflags $(TOOLSDIR)/bin` ; \
@@ -71,20 +70,17 @@ $(STAMP_DIR)/patch.apply : $(top_srcdir)/patches/apply.pl \
 		     $(OOBUILDDIR)/external/unicows/*.dll || true; \
 	fi
 
-	$(TOOLSDIR)/bin/transform --revert $(TOOLSDIR) $(OOBUILDDIR)
 	test -n "$(OOO_GIT_MANAGED)" && $(TOOLSDIR)/bin/gob --build-dir=$(OOBUILDDIR) prepare || true
 	FLAGS=`$(TOOLSDIR)/bin/applyflags $(TOOLSDIR)/bin` ; \
 	CURSOURCE=$(OOO_SOURCEDIRNAME); test -f $(OOBUILDDIR)/.source && CURSOURCE=`cat $(OOBUILDDIR)/.source`; \
 	chmod +x $(TOOLSDIR)/patches/apply.pl && $(TOOLSDIR)/patches/apply.pl $(APPLY_DIR) $(OOBUILDDIR) $$FLAGS --tag=$$CURSOURCE ;
 	test -n "$(OOO_GIT_MANAGED)" && $(TOOLSDIR)/bin/gob --build-dir=$(OOBUILDDIR) postpare || true
-	$(TOOLSDIR)/bin/transform --apply $(TOOLSDIR) $(OOBUILDDIR)
 	test -n "$(OOO_GIT_MANAGED)" && cd $(OOBUILDDIR) && git commit -am 'Font munging.' || true
 	$(TOOLSDIR)/bin/fix-deps $(OOBUILDDIR)
 	rm -f $(STAMP_DIR)/build
 	touch $@
 
 patch.unapply:
-	$(TOOLSDIR)/bin/transform --revert $(TOOLSDIR) $(OOBUILDDIR)
 	FLAGS=`$(TOOLSDIR)/bin/applyflags $(TOOLSDIR)/bin` ; \
 	chmod +x $(TOOLSDIR)/patches/apply.pl && $(TOOLSDIR)/patches/apply.pl $(APPLY_DIR) $(OOBUILDDIR) $$FLAGS -R ;
 	rm -f $(STAMP_DIR)/patch.apply
@@ -98,7 +94,6 @@ refresh: $(STAMP_DIR)/refresh
 $(STAMP_DIR)/refresh : $(CLONEDIR)/repos_changed
 	echo $(OOO_GIT)
 	if test "z$(OOO_GIT)" != "z" ; then \
-	    $(TOOLSDIR)/bin/transform --revert $(TOOLSDIR) $(OOBUILDDIR) ; \
 	    FLAGS=`$(TOOLSDIR)/bin/applyflags $(TOOLSDIR)/bin` ; \
 	    chmod +x $(TOOLSDIR)/patches/apply.pl && $(TOOLSDIR)/patches/apply.pl $(APPLY_DIR) $(OOBUILDDIR) $$FLAGS -R ; \
 	    echo "Rsyncing changes from the repos to the build tree - [ go and have some $(DRINK) ] ..." ; \
@@ -198,7 +193,7 @@ test: $(BUILDDIR)/install/program/ooenv
 	bin/run-tests.sh $(BUILDDIR)/install
 
 vtable_check:
-	$(TOOLSDIR)/bin/transform --lo-path=$(OOBUILDDIR)
+	$(TOOLSDIR)/bin/vtable-check --lo-path=$(OOBUILDDIR)
 
 help:
 	@echo "-----------------------------------------------------------------------------------"

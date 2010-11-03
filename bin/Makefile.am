@@ -11,10 +11,8 @@ script_files = \
 	defuzzpatch \
 	extract-gsi \
 	extract-new-strings \
-	font-munge \
 	fix-deps \
 	generate-bash-completion \
-	help-font-munge \
 	install-dictionaries \
 	install-mono \
 	install-sdk \
@@ -43,7 +41,6 @@ script_files = \
 	unopkg-regenerate-cache \
 	unpack \
 	setup.in \
-	transform \
 	sloppypatch.pl \
 	README
 
