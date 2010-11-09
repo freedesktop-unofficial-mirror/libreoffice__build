@@ -157,11 +157,11 @@ $(BUILDDIR)/install/program/ooenv: $(STAMP_DIR)/build
 	if test -f $(BUILDDIR)/bin/tweakconfig.oxt$(OOBUILDDIR)/applied_patches ; then \
 	   $(BUILDDIR)/install/program/unopkg add -v --shared $(BUILDDIR)/bin/tweakconfig.oxt ; \
 	fi
-	echo ""
+	@echo ""
 	@echo "-----------------------------------------------------------------------------------"
-	echo ""
-	echo "Your development build of LibreOffice has been installed using"
-	echo "links to the build tree into $(BUILDDIR)/install."
+	@echo ""
+	@echo "Your development build of LibreOffice has been installed using"
+	@echo "links to the build tree into $(BUILDDIR)/install."
 
 # Run smoketest, but timeout in 15 minutes if it got stuck
 smoketest: $(BUILDDIR)/install/program/ooenv
