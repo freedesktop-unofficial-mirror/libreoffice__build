@@ -6,6 +6,7 @@ TOOLSDIR=$2
 . $TOOLSDIR/bin/setup >/dev/null 2>&1
 
 LOGS=`dirname $0`/log
+OUTDIR=`dirname $0`/out
 
 function get_deps()
 {
@@ -44,7 +45,7 @@ function validate()
     # Need to save a log for each file and a summary log
     STATUS="FAILED"
     RESULT=0
-    LINES_COUNT='cat $FILE_LOG | wc -l'
+    LINES_COUNT=`cat $FILE_LOG | wc -l`
     if test "$LINES_COUNT" == "0"; then
         STATUS="PASSED"
         RESULT=1
@@ -62,6 +63,11 @@ get_deps
 TEST_FILES_DIR=$CLONEDIR/test-files
 cd $TEST_FILES_DIR && make
 cd $OLDPWD
+
+# Load and save the test files
+soffice.bin -convert-to docx:"Office Open XML Text" -outdir $OUTDIR $TEST_FILES_DIR/ooxml-strict/tmp/*.docx
+soffice.bin -convert-to xlsx:"Calc Office Open XML" -outdir $OUTDIR $TEST_FILES_DIR/ooxml-strict/tmp/*.xslx
+soffice.bin -convert-to pptx:"Impress Office Open XML" -outdir $OUTDIR $TEST_FILES_DIR/ooxml-strict/tmp/*.pptx
 
 # Validate the test files
 RESULT=0
