@@ -19,15 +19,22 @@ function get_deps()
         git clone $OOO_GIT/contrib/test-files
     fi
 
-    # OfficeOTron
-    # TODO Replace by the SVN copy once the patch is integrated upstream
-    #      http://code.google.com/p/officeotron/issues/detail?id=6
-    OFFICEOTRON=officeotron-0.5.5-Beta.jar
-    OFFICEOTRONMD5=7b70b7955b7289a8d1502e9c0abf8302
-    if test ! -a $SRCDIR/$OFFICEOTRON ; then
-        cd $SRCDIR
-        wget "http://download.go-oo.org/$OFFICEOTRONMD5-$OFFICEOTRON" -O $OFFICEOTRON
+    #OfficeOTron
+    cd $CLONEDIR
+    if test -d officeotron ; then
+        cd officeotron
+        svn update
+    else
+        svn checkout http://officeotron.googlecode.com/svn/trunk/ officeotron
     fi
+
+    # Make / update the officeotrong jar file
+    cd $CLONEDIR/officeotron
+    ant application
+
+    # Get the version
+    OFFICEOTRON_VERSION=`cat build.xml | grep 'name="version"' | sed -e 's:.*name="version"\ value="\([^"]\+\)".*:\1:'`
+    OFFICEOTRON="java -jar $CLONEDIR/officeotron/dist/officeotron-$OFFICEOTRON_VERSION.jar"
 }
 
 function validate()
@@ -40,7 +47,7 @@ function validate()
     if test ! -a $SUMMARY_LOG; then
         touch $SUMMARY_LOG
     fi
-    java -jar $SRCDIR/officeotron-0.5.5-Beta.jar $1 >$FILE_LOG 2>&1
+    $OFFICEOTRON --errors-only $1 >$FILE_LOG 2>&1
 
     # Need to save a log for each file and a summary log
     STATUS="FAILED"
@@ -65,14 +72,17 @@ cd $TEST_FILES_DIR && make
 cd $OLDPWD
 
 # Load and save the test files
-soffice.bin -convert-to docx:"Office Open XML Text" -outdir $OUTDIR $TEST_FILES_DIR/ooxml-strict/tmp/*.docx
-soffice.bin -convert-to xlsx:"Calc Office Open XML" -outdir $OUTDIR $TEST_FILES_DIR/ooxml-strict/tmp/*.xslx
-soffice.bin -convert-to pptx:"Impress Office Open XML" -outdir $OUTDIR $TEST_FILES_DIR/ooxml-strict/tmp/*.pptx
+if test -e $ooinstall/program/ooenv; then
+    . $ooinstall/program/ooenv
+fi
+$ooinstall/program/soffice.bin -convert-to docx:"Office Open XML Text" -outdir $OUTDIR $TEST_FILES_DIR/ooxml-strict/tmp/*.docx
+$ooinstall/program/soffice.bin -convert-to xlsx:"Calc Office Open XML" -outdir $OUTDIR $TEST_FILES_DIR/ooxml-strict/tmp/*.xslx
+$ooinstall/program/soffice.bin -convert-to pptx:"Impress Office Open XML" -outdir $OUTDIR $TEST_FILES_DIR/ooxml-strict/tmp/*.pptx
 
 # Validate the test files
 RESULT=0
-for f in `ls $TEST_FILES_DIR/ooxml-strict/tmp`; do
-    validate $TEST_FILES_DIR/ooxml-strict/tmp/$f
+for f in `ls $OUTDIR`; do
+    validate $OUTDIR/$f
     if test $? != 0; then
         RESULT=1
     fi
