@@ -1,8 +1,58 @@
+Fix for double-click on fields in form protected docs
+
+From: Cédric Bosdonnat <cedricbosdo@openoffice.org>
+
+
+---
+
+ sw/source/core/crsr/bookmrk.cxx |    3 ++
+ sw/source/core/crsr/crbm.cxx    |    4 ++-
+ sw/source/core/crsr/swcrsr.cxx  |   48 +++++++++++++++++++++++++++++----------
+ sw/source/ui/wrtsh/wrtsh1.cxx   |    6 +++++
+ 4 files changed, 46 insertions(+), 15 deletions(-)
+
+
+diff --git sw/source/core/crsr/bookmrk.cxx sw/source/core/crsr/bookmrk.cxx
+index e216e27..4b72389 100644
+--- sw/source/core/crsr/bookmrk.cxx
++++ sw/source/core/crsr/bookmrk.cxx
+@@ -92,6 +92,7 @@ namespace
+         if ( aEndMark && ( ch_end != aEndMark ) )
+         {
+             io_pDoc->InsertString(aEndPaM, aEndMark);
++            rEnd.nContent++;
+         }
+         io_pDoc->EndUndo(UNDO_UI_REPLACE, NULL);
+     };
+@@ -115,7 +116,7 @@ namespace sw { namespace mark
+ 
+     bool MarkBase::IsCoveringPosition(const SwPosition& rPos) const
+     {
+-        return GetMarkStart() <= rPos && rPos <= GetMarkEnd(); 
++        return GetMarkStart() <= rPos && rPos < GetMarkEnd(); 
+     }
+ 
+     void MarkBase::SetMarkPos(const SwPosition& rNewPos)
+diff --git sw/source/core/crsr/crbm.cxx sw/source/core/crsr/crbm.cxx
+index b662c68..0f9b206 100644
+--- sw/source/core/crsr/crbm.cxx
++++ sw/source/core/crsr/crbm.cxx
+@@ -251,8 +251,8 @@ bool SwCrsrShell::GotoFieldmark(::sw::mark::IFieldmark const * const pMark)
+     // watch Crsr-Moves
+     CrsrStateHelper aCrsrSt(*this);
+     aCrsrSt.SetCrsrToMark(pMark);
+-    //aCrsrSt.m_pCrsr->GetPoint()->nContent--;
+-    //aCrsrSt.m_pCrsr->GetMark()->nContent++;
++    aCrsrSt.m_pCrsr->GetPoint()->nContent++;
++    aCrsrSt.m_pCrsr->GetMark()->nContent--;
+     if(aCrsrSt.RollbackIfIllegal()) return false;
+ 
+     UpdateCrsr(SwCrsrShell::SCROLLWIN|SwCrsrShell::CHKRANGE|SwCrsrShell::READONLY);
 diff --git sw/source/core/crsr/swcrsr.cxx sw/source/core/crsr/swcrsr.cxx
-index bcf2b0c..5272571 100644
+index bcf2b0c..c02e8f5 100644
 --- sw/source/core/crsr/swcrsr.cxx
 +++ sw/source/core/crsr/swcrsr.cxx
-@@ -1372,22 +1372,44 @@ BOOL SwCursor::SelectWordWT( sal_Int16 nWordType, const Point* pPt )
+@@ -1372,22 +1372,46 @@ BOOL SwCursor::SelectWordWT( sal_Int16 nWordType, const Point* pPt )
      const SwTxtNode* pTxtNd = GetNode()->GetTxtNode();
      if( pTxtNd && pBreakIt->GetBreakIter().is() )
      {
@@ -24,6 +74,7 @@ index bcf2b0c..5272571 100644
 +            SwPosition& rStart = pMark->GetMarkStart();
 +            GetPoint()->nNode = rStart.nNode;
 +            GetPoint()->nContent = rStart.nContent;
++            GetPoint()->nContent++; // Don't select the start delimiter
 +
 +            SwPosition& rEnd = pMark->GetMarkEnd();
 +
@@ -33,6 +84,7 @@ index bcf2b0c..5272571 100644
 -                GetMark()->nContent = (xub_StrLen)aBndry.startPos;
 +                GetMark()->nNode = rEnd.nNode;
 +                GetMark()->nContent = rEnd.nContent;
++                GetMark()->nContent--; //Don't select the end delimiter
 +            }
 +            bRet = TRUE;
 +        }
@@ -59,3 +111,20 @@ index bcf2b0c..5272571 100644
              }
          }
      }
+diff --git sw/source/ui/wrtsh/wrtsh1.cxx sw/source/ui/wrtsh/wrtsh1.cxx
+index a7cd77a..5195b09 100644
+--- sw/source/ui/wrtsh/wrtsh1.cxx
++++ sw/source/ui/wrtsh/wrtsh1.cxx
+@@ -1773,6 +1773,12 @@ SwWrtShell::SwWrtShell( SwDoc& rDoc, Window *_pWin, SwView &rShell,
+     SET_CURR_SHELL( this );
+     SetSfxViewShell( (SfxViewShell *)&rShell );
+     SetFlyMacroLnk( LINK(this, SwWrtShell, ExecFlyMac) );
++	
++    // place the cursor on the first field...
++	IFieldmark *pBM = NULL;
++	if ( IsFormProtected() && ( pBM = GetFieldmarkAfter( ) ) !=NULL ) {
++	    GotoFieldmark(pBM);
++	}
+ }
+ 
+ /*
