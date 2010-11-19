@@ -1,0 +1,224 @@
+#!/usr/bin/perl
+    eval 'exec /usr/bin/perl -S $0 ${1+"$@"}'
+        if $running_under_some_shell;
+#!/usr/bin/perl
+
+use strict;
+use File::Copy;
+use File::Temp qw/ tempfile tempdir /;
+
+sub find_item($$)
+{
+    my ($file, $item) = @_;
+
+    open (FILE, "$file") ||
+        die "can't open \"$file\" for reading: $!\n";
+
+#    print "Looking for: $item\n";
+    my $found_value;
+    while ((my $line = <FILE>) && (!defined $found_value)) {
+        chomp $line;
+
+#        print "$line\n";
+        if ($line =~ /^(.*$item[\s\:=])\s*([^\s\)]*)/) {
+#            print "  found: $2\n";
+            $found_value="$2";
+        }
+    }
+    close (FILE);
+
+    return $found_value;
+}
+
+sub replace_items($$)
+{
+    my ($file, $p_items) = @_;
+
+    open (FILE, "$file") ||
+        die "can't open \"$file\" for reading: $!\n";
+
+    my ( $tmp_fh, $tmp_filename ) = tempfile( "$file.XXXXXX" );
+    if ( !defined $tmp_fh ) {
+        close (FILE);
+        die "Error: can't create temporary file: \"$file.XXXXXX\"\n";
+    }
+
+    while (my $line = <FILE>) {
+        chomp $line;
+
+        foreach my $item (keys %{$p_items})
+        {
+            if ($line =~ /^(.*$item[\s\:=]\s*)[^\s\)]*(.*)$/) {
+                $line = $1 . %{$p_items}->{$item} . $2;
+            }
+        }
+
+        print ${tmp_fh} "$line\n";
+    }
+    close (FILE);
+    close (${tmp_fh});
+
+    # preserve permissions on target file by applying them to temp file
+    my ( $mode, $uid, $gid ) = ( stat($file) )[ 2, 4, 5 ];
+    $mode = $mode & 07777;
+
+    chmod $mode, $tmp_filename;
+    chown $uid, $gid, $tmp_filename;
+
+    rename ($tmp_filename, $file) ||
+        die "Can't rename \"$tmp_filename\" to \"$file\": $!\n";
+}
+
+sub inc_ver($)
+{
+    my ($ver) = @_;
+    my $last_ver;
+
+    if ($ver =~ /.*(\d+)$/) {
+        $last_ver = $1;
+    } else {
+        die "Error: do not know how to increment: $ver\n";
+    }
+
+    my $new_last_ver = $last_ver + 1;
+    $ver =~ s/$last_ver$/$new_last_ver/;
+
+    return $ver;
+}
+
+sub get_versions($$)
+{
+    my ($p_config_files, $p_versions) = @_;
+
+    %{$p_versions}->{'minor.mk'}{'BUILD'} = find_item(%{$p_config_files}->{'minor.mk'}, "BUILD");
+    %{$p_versions}->{'openoffice.lst'}{'OOOPACKAGEVERSION'} = find_item (%{$p_config_files}->{'openoffice.lst'}, "OOOPACKAGEVERSION");
+    %{$p_versions}->{'openoffice.lst'}{'SHORT_PRODUCTEXTENSION'} = find_item (%{$p_config_files}->{'openoffice.lst'}, "SHORT_PRODUCTEXTENSION");
+}
+
+sub set_versions($$)
+{
+    my ($p_config_files, $p_versions) = @_;
+
+    foreach my $config (keys %{$p_config_files}) {
+        replace_items(%{$p_config_files}->{$config}, \%{%{$p_versions}->{$config}});
+    }
+}
+
+sub show_versions($)
+{
+    my ($p_versions) = @_;
+
+    print "Product version:       " . %{$p_versions}->{'openoffice.lst'}{'OOOPACKAGEVERSION'} . %{$p_versions}->{'openoffice.lst'}{'SHORT_PRODUCTEXTENSION'} . "\n";
+    print "Windows build Version: " . %{$p_versions}->{'minor.mk'}{'BUILD'} . "\n";
+}
+
+sub usage()
+{
+    print "This tool helps to modify LO versions in the git sources\n\n" .
+
+          "Usage:\n".
+          "\tlo-pack-sources [--help] [--show] [--inc] [--force-build=<ver>]\n" .
+          "\t                [--force-prod-micro=<ver>] build_dir\n" .
+
+          "Options:\n\n" .
+          "\t--help: print this help\n" .
+          "\t--show: show current version\n" .
+          "\t--inc:  increment current version (win build version and product\n" .
+          "\t        micro version)\n" .
+          "\t--force-build: force windows build version, e.g. 4567\n" .
+          "\t--force-prod-micro: force product micro version, .e.g. beta1\n" .
+          "\tbuild_dir: path to the clone of libreoffice/build; it expects\n" .
+          "\t           that other pieces are cloned in the clone subdirectory\n";
+}
+
+my $show;
+my $inc;
+my $build_dir;
+my $build_ver_force;
+my $prod_micro_ver_force;
+my %versions;
+my %config_files;
+
+###################
+# Arguments parsing
+###################
+
+for my $arg (@ARGV) {
+    if ($arg eq '--help' || $arg eq '-h') {
+        usage;
+        exit 0;
+    } elsif ($arg eq '--show') {
+        $show=1;
+    } elsif ($arg eq '--inc') {
+        $inc=1;
+    } elsif ($arg =~ '--force-build=(.*)') {
+        $build_ver_force=$1;
+    } elsif ($arg =~ '--force-prod-micro=(.*)') {
+        $prod_micro_ver_force=$1;
+    } elsif ($arg =~ /^-/ ) {
+        die "Error: unknown option: $arg\n";
+    } else {
+        if (! defined $build_dir) {
+            $build_dir = $arg;
+        } else {
+            die "Error: Too many arguments $arg\n";
+        }
+    }
+}
+
+###################
+# Initial checks
+###################
+
+unless ( defined $build_dir ) {
+    die "Error: undefined directory with build repo, try --help\n";
+}
+
+unless ( -d "$build_dir" ) {
+    die "Error: not a directory: $build_dir\n";
+}
+
+my $bootstrap_dir = "$build_dir/clone/bootstrap";
+unless ( -d "$bootstrap_dir" ) {
+    die "Error: not a directory: $bootstrap_dir\n";
+}
+
+# current versions
+
+$config_files{'minor.mk'} = "$bootstrap_dir/solenv/inc/minor.mk";
+$config_files{'openoffice.lst'} = "$bootstrap_dir/instsetoo_native/util/openoffice.lst";
+
+get_versions(\%config_files, \%versions);
+
+print "Current values:\n";
+print "---------------\n";
+show_versions(\%versions);
+
+if (defined $show) {
+    exit 0;
+}
+
+print "\n";
+unless (defined $inc || defined $build_ver_force || defined $prod_micro_ver_force) {
+    print "No change requested\n";
+    exit 0;
+}
+
+# new versions
+if ($inc) {
+    $versions{'minor.mk'}{'BUILD'} = inc_ver($versions{'minor.mk'}{'BUILD'});
+    $versions{'openoffice.lst'}{'SHORT_PRODUCTEXTENSION'} = inc_ver($versions{'openoffice.lst'}{'SHORT_PRODUCTEXTENSION'});
+}
+$versions{'minor.mk'}{'BUILD'} = $build_ver_force if (defined $build_ver_force);
+$versions{'openoffice.lst'}{'SHORT_PRODUCTEXTENSION'} = $prod_micro_ver_force if (defined $prod_micro_ver_force);
+
+# update also (Build:XXX) in the RSCREVISION variable
+$versions{'minor.mk'}{'Build'} = $versions{'minor.mk'}{'BUILD'};
+
+print "New values:\n";
+print "---------------\n";
+show_versions(\%versions);
+
+set_versions(\%config_files, \%versions);
+
+print "\nUpdate succeeded\n";
