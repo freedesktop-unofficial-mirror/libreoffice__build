@@ -206,7 +206,7 @@ help:
 	@echo "    * clean:           removes the whole build tree"
 	@echo ""
 	@echo "-----------------------------------------------------------------------------------"
-	@echo " DEVELOPEMENT TARGETS"
+	@echo " DEVELOPMENT TARGETS"
 	@echo "-----------------------------------------------------------------------------------"
 	@echo ""
 	@echo "    * dev-install:     installs with links to the build tree"
