@@ -160,7 +160,6 @@ void DPTestBase::run()
     fprintf(stdout, "checking results for normal display mode...\n");
     verifyTableResults(data);
 
-    // ----------------------------------------------------------------------
     // Verify results with reference item.
 
     static const sal_Int32 refTypeList[] = {

@@ -37,22 +37,13 @@
 
 namespace css = ::com::sun::star;
 
-/*-----------------------------------------------------
-	20.11.2003 11:31
------------------------------------------------------*/
 MyListener::MyListener(const css::uno::Reference< css::lang::XMultiServiceFactory >& xSMGR)
 	: m_xSMGR(xSMGR)
 {}
 
-/*-----------------------------------------------------
-	20.11.2003 11:32
------------------------------------------------------*/
 MyListener::~MyListener()
 {}
 
-/*-----------------------------------------------------
-    20.11.2003 12:04
------------------------------------------------------*/
 css::uno::Any SAL_CALL MyListener::execute(const css::uno::Sequence< css::beans::NamedValue >& lArguments)
 	throw (css::lang::IllegalArgumentException,
 		   css::uno::Exception,
@@ -127,18 +118,12 @@ css::uno::Any SAL_CALL MyListener::execute(const css::uno::Sequence< css::beans:
 	return css::uno::Any();
 }
 
-/*-----------------------------------------------------
-    20.11.2003 12:13
------------------------------------------------------*/
 ::rtl::OUString SAL_CALL MyListener::getImplementationName()
     throw (css::uno::RuntimeException)
 {
     return ::rtl::OUString::createFromAscii(MYLISTENER_IMPLEMENTATIONNAME);
 }
 
-/*-----------------------------------------------------
-    20.11.2003 12:13
------------------------------------------------------*/
 css::uno::Sequence< ::rtl::OUString > SAL_CALL MyListener::getSupportedServiceNames()
     throw (css::uno::RuntimeException)
 {
@@ -147,9 +132,6 @@ css::uno::Sequence< ::rtl::OUString > SAL_CALL MyListener::getSupportedServiceNa
     return lNames;
 }
 
-/*-----------------------------------------------------
-    20.11.2003 12:14
------------------------------------------------------*/
 sal_Bool SAL_CALL MyListener::supportsService(const ::rtl::OUString& sServiceName)
     throw (css::uno::RuntimeException)
 {
@@ -159,9 +141,6 @@ sal_Bool SAL_CALL MyListener::supportsService(const ::rtl::OUString& sServiceNam
            );
 }
 
-/*-----------------------------------------------------
-	20.11.2003 11:31
------------------------------------------------------*/
 css::uno::Reference< css::uno::XInterface > MyListener::st_createInstance(const css::uno::Reference< css::lang::XMultiServiceFactory >& xSMGR)
 {
 	MyListener* pListener = new MyListener(xSMGR);
