@@ -164,10 +164,11 @@ $(BUILDDIR)/install/program/ooenv: $(STAMP_DIR)/build
 	@echo "links to the build tree into $(BUILDDIR)/install."
 
 # Run smoketest, but timeout in 15 minutes if it got stuck
-smoketest: $(BUILDDIR)/install/program/ooenv
-	( . $(OOBUILDDIR)/*.Set.sh ; export SAL_USE_VCLPLUGIN="svp" ; \
+smoketest: $(STAMP_DIR)/build
+	( . $(OOBUILDDIR)/*.Set.sh ; export SAL_USE_VCLPLUGIN="svp" ; export EPM=yes ; export PKGFORMAT=archive ; \
 	  cd $(OOBUILDDIR)/test && build.pl && deliver.pl && \
-	  cd $(OOBUILDDIR)/smoketestoo_native && \
+	  cd $(OOBUILDDIR)/instsetoo_native && build.pl && deliver.pl && \
+	  cd $(OOBUILDDIR)/smoketestoo_native && build.pl && deliver.pl && \
 	  $(TOOLSDIR)/bin/timeout3 -t $$((15*60)) build.pl )
 
 id : $(OOBUILDDIR)/ID
