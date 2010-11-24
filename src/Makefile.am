@@ -23,8 +23,8 @@ EXTRA_DIST=\
 	openabout_nld.bmp \
 	openintro_ark.bmp \
 	openabout_ark.png \
-	openintro_fw.bmp \
-	openabout_fw.bmp \
+	openintro_fw.png \
+	openabout_fw.png \
 	openintro_gentoo.bmp \
 	openintro_translateorgza.bmp \
 	openabout_translateorgza.png \
