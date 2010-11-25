@@ -47,6 +47,4 @@ if [ -d .git ] ; then
             ln -s "../../git-hooks/$file" "$hook"
         fi
     done
-    git config branch.master.rebase true
-    git config branch.autosetuprebase always
 fi
