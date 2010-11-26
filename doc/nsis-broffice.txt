@@ -1,0 +1,187 @@
+TODO:
+	+ remove obsolete go-oo artwork from:
+		+ setup_native/source/win32/nsis/
+
+Notes on nsis installer - and bitmap foo ...
+	+ script.cpp: update_bitmap (IDB_BITMAP1 ...)
+		+ CheckBitmap foo ...
+CheckBitmap "${NSISDIR}\Contrib\Graphics\Checks\classic-cross.bmp"
+		+ this is just images to close the dialog [x] type things
+		  ... in a strip.
+		+ not the wizard bitmap
+
+
+dialog:
+"Please wait while setup is Loading" ... [ with libreoffice download logo ]
+
+wizard:
+"Thank you for downloading LibreOffice 3.3"
+	instsetoo_native/inc_openoffice/windows/msi_languages/Nsis.ulf
+
+	+ breaks in InstallOptions.dll ...
+
+	Template built from:
+
+solenv/bin/modules/installer/download.pm:        my $templatefilename = "downloadtemplate.nsi"
+;
+
+setup_native/prj/d.lst:..\source\win32\nsis\downloadtemplate.nsi %_DEST%\bin%_EXT%\downloadtemplate.nsi
+
+* code is in setup_native/source/win32/nsis/
+	+ fun !
+
+
+
+!include "MUI.nsh"
+
+...
+
+!insertmacro MUI_PAGE_WELCOME
+!insertmacro MUI_PAGE_DIRECTORY
+!insertmacro MUI_PAGE_INSTFILES
+
+!define MUI_HEADERIMAGE_BITMAP BANNERBMPPLACEHOLDER
+!define MUI_WELCOMEFINISHPAGE_BITMAP WELCOMEBMPPLACEHOLDER
+
+solenv/bin/modules/installer/download.pm:    replace_one_variable($templatefile, "BANNERBMPPLACEHOLDER", $$completefilenameref);
+
+inside put_banner_bmp_into_template [!]:
+	include the path to the banner.bmp into nsi template [!]
+
+
+      !insertmacro MUI_DEFAULT MUI_HEADERIMAGE_BITMAP "${NSISDIR}\Contrib\Graphics\Header\nsis.bmp"
+		+ I guess - only sets the var if not already set [!]
+
+** We already have the capability from MUI.nsh:
+	-> Contrib/Modern UI/System.nsh
+	+ to have an RTL bitmap instead:
+
+      !ifdef MUI_HEADERIMAGE_BITMAP_RTL
+        !ifndef MUI_HEADERIMAGE_UNBITMAP_RTL
+          !define MUI_HEADERIMAGE_UNBITMAP_RTL "${MUI_HEADERIMAGE_BITMAP_RTL}"
+          !ifdef MUI_HEADERIMAGE_BITMAP_RTL_NOSTRETCH
+            !insertmacro MUI_SET MUI_HEADERIMAGE_UNBITMAP_RTL_NOSTRETCH
+		** !defines this symbol ...
+
+
+      !insertmacro MUI_DEFAULT MUI_HEADERIMAGE_BITMAP "${NSISDIR}\Contrib\Graphics\Header\nsis.bmp"
+
+
+
+    !ifdef MUI_HEADERIMAGE_${UNINSTALLER}BITMAP_RTL
+
+    StrCmp $(^RTL) 0 mui.headerimageinit_nortl
+
+        File "/oname=$PLUGINSDIR\modern-header.bmp" "${MUI_HEADERIMAGE_${UNINSTALLER}BITMAP_RTL}"
+
+        !ifndef MUI_HEADERIMAGE_${UNINSTALLER}BITMAP_RTL_NOSTRETCH
+          SetBrandingImage /IMGID=1046 /RESIZETOFIT "$PLUGINSDIR\modern-header.bmp"
+        !else
+          SetBrandingImage /IMGID=1046 "$PLUGINSDIR\modern-header.bmp"
+        !endif
+
+        Goto mui.headerimageinit_done
+
+      mui.headerimageinit_nortl:
+
+	Sections like this seem to do the real donkey work ...
+	'SetBrandingImage' ...
+
+
+Source/tokens.cpp:{TOK_SETBRANDINGIMAGE,"SetBrandingImage",1,2,"[/IMGID=image_item_id_in_dialog] [/RESIZETOFIT] bitmap.bmp",TP_CODE},
+	vs. AddBrandingImage ... [!?]
+
+
+
+
+So ... it seems that the command to be using is SetBrandingImage:
+
+!macro BIMAGE IMAGE PARMS
+        Push $0
+        GetTempFileName $0
+        File /oname=$0 "${IMAGE}"
+        SetBrandingImage ${PARMS} $0
+        Delete $0
+        Pop $0
+!macroend
+
+and it looks like all of this dynamic goodness is exported to the macro language quite nicely:
+
+Section ""
+        ; You can also use the BI_NEXT macro here...
+        MessageBox MB_YESNO "We can change the branding image from within a section too!$\nDo you want me to change it?" IDNO done
+                !insertmacro BIMAGE "${NSISDIR}\Contrib\Graphics\Wizard\nsis.bmp" ""
+        done:
+        WriteUninstaller uninst.exe
+SectionEnd
+
+I suggest that we do a certain amount of in-lining of the (URGH!) awful MUI.nsh -> System.nsh logic; and/or if we can clobber this macro:
+
+!macro MUI_HEADERIMAGE_INIT UNINSTALLER
+
+to be a tad more clever.
+
+
+
+
+--------------- language pieces ---------------
+
+* or how to detect what language we're using ...
+
+const char *CEXEBuild::GetLangNameAndCP(LANGID lang, unsigned int *codepage/*=NULL*/) {
+	+ hmm ... related to this ?
+	+ win32's osl_getProcessLocale uses: GetUserDefaultLCID()
+		+ and GetLocaleInfo with that id ...
+
+    /* call GetLocaleInfo to retrieve the iso codes */
+    if( GetLocaleInfo( localeId, LOCALE_SISO639LANGNAME , langCode, 4 )  &&
+        GetLocaleInfo( localeId, LOCALE_SISO3166CTRYNAME , ctryCode, 4 ) )
+
+	for pt_BR - first, second.
+
+
+  {"KERNEL32", "GetUserDefaultUILanguage"},
+	+ seems to call a similar function ...
+
+exehead/Ui.c:
+
+FORCE_INLINE int NSISCALL ui_doinstall(void)
+{
+  header *header = g_header;
+  static WNDCLASS wc; // richedit subclassing and bgbg creation
+
+  // detect default language
+  // more information at:
+  //   http://msdn.microsoft.com/library/default.asp?url=/library/en-us/intl/nls_0xrn.asp
+
+  LANGID (WINAPI *GUDUIL)();
+
+  GUDUIL = myGetProcAddress(MGA_GetUserDefaultUILanguage);
+  if (GUDUIL)
+  {
+    // Windows ME/2000+
+    myitoa(state_language, GUDUIL());
+	// Prints it as a %d to this string ...
+
+	+ urk - generates a string of that number ... [ most odd ]
+
+  // set default language
+  set_language();
+
+  ... which does a: ...
+
+  LANGID lang=myatoi(state_language);
+
+  * Beautiful ! *
+	* this sets selected_langtable & cur_langtable - to the right entry ...
+
+http://msdn.microsoft.com/en-us/library/dd318693%28v=VS.85%29.aspx
+
+	* If this lang is 0x416 [ cf. myitoa ... ] == 1046 decimal
+		** this is portugese_brazilian ... **
+
+
+	* how can that be set / fetched from the script !?
+		+ hmm [!] ...
+
+
