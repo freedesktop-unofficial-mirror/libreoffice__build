@@ -44,16 +44,24 @@ sub report($$$) {
 
         if ( defined( $old_head ) ) {
             if ( $old_head ne $new_head ) {
-                if ( open COMMITS, "git rev-list $new_head ^$old_head | tac |" ) {
-                    while ( <COMMITS> ) {
-                        chomp;
-                        print "Sending report about $_ in $key\n";
-                        qx(libreoffice-ciabot.pl $repo $_ $branch_name)
+                my $ret = system("git rev-parse -q --verify $new_head^2 >/dev/null");
+                if ($ret != 0) {
+                    # not a merge commit, announce every commit
+                    if ( open COMMITS, "git rev-list $new_head ^$old_head | tac |" ) {
+                        while ( <COMMITS> ) {
+                            chomp;
+                            print "Sending report about $_ in $key\n";
+                            qx(libreoffice-ciabot.pl $repo $_ $branch_name)
+                        }
+                        close COMMITS;
                     }
-                    close COMMITS;
-                }
-                else {
-                    error( "Cannot call git rev-list." );
+                    else {
+                        error( "Cannot call git rev-list." );
+                    }
+                } else {
+                    # just process the merge commit itself
+                    print "Sending report about $new_head in $key\n";
+                    qx(libreoffice-ciabot.pl $repo $new_head $branch_name)
                 }
             }
         }
