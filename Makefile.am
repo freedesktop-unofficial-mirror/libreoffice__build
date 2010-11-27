@@ -97,7 +97,7 @@ $(STAMP_DIR)/refresh : $(CLONEDIR)/repos_changed
 	    FLAGS=`$(TOOLSDIR)/bin/applyflags $(TOOLSDIR)/bin` ; \
 	    chmod +x $(TOOLSDIR)/patches/apply.pl && $(TOOLSDIR)/patches/apply.pl $(APPLY_DIR) $(OOBUILDDIR) $$FLAGS -R ; \
 	    echo "Rsyncing changes from the repos to the build tree - [ go and have some $(DRINK) ] ..." ; \
-	    rsync -prL --exclude .git --exclude 'unxlng??.pro' --exclude 'wntmsci??.pro' --exclude '/solver' --exclude '/install' "$(RAWBUILDDIR)/" "$(OOBUILDDIR)/" ; \
+	    rsync -prL --exclude .git --exclude 'unxlng??.pro' --exclude 'wntmsci??.pro' --exclude '/solver' --exclude '/clone' --exclude '/install' "$(RAWBUILDDIR)/" "$(OOBUILDDIR)/" ; \
 	    rm -f $(STAMP_DIR)/patch.apply ; \
 	fi
 	touch $@

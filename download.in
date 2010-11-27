@@ -238,12 +238,6 @@ if ( '@UPSTREAM_NAME@' ne '' ) {
     $SRC_URLS{'@UPSTREAM_NAME@.*'} = '@MIRROR@/upstream-copy';
 }
 
-if ('@SPLIT@' eq '') {
-    $SPLIT = 0;
-} else {
-    $SPLIT = 1;
-}
-
 # Files to download
 @files = ();
 
@@ -260,36 +254,54 @@ sub source_file
     push @files, { 'file' => "$file", 'save_as' => "$save_as", 'is_cgit' => $is_cgit };
 }
 
+sub source_file_bootstrap
+{
+    if ( -d 'clone')
+    {
+	print "migrate rawbuild structure to a bootstrap-build";
+	system( "./bin/migrate-rawbuild-to-dir");
+    }
+
+    if ( -d "@RAWBUILDDIR@" )
+    {
+	print "bootstrap repo already there, skipping " . '@OOO_GIT@' . "/bootstrap (make sure to boostrap/g pull -r)\n";
+    }
+    else
+    {
+	if ( -d '@OOO_GIT@' . "/bootstrap" )
+	{
+	    print "* mkworkdir from " . '@OOO_GIT@' . "/bootstrap\n";
+	    system( "@OOO_GIT@/bootstrap/bin/mkworkdir -d . --as bootstrap") || die "error make a workdir set";
+	}
+	else
+	{
+	    print "* cloning from " . '@OOO_GIT@' . "/bootstrap\n";
+	    system( "git clone " . '@OOO_GIT@' . "/bootstrap " ) || die "error cloning bootstrap";
+	    system( "@RAWBUILDDIR@/g clone" ) || die "error cloning the repos";
+	}
+    }
+}
+
 sub source_file_ooo($)
 {
     my ($upstream_what) = @_;
     my $what = $upstream_what;
 
-    if (!$SPLIT) {
-        if ( "$upstream_what" eq "l10n" ) {
-            $what = "lang";
-        } elsif ( "$upstream_what" eq "sdk" ) {
-            $what = "sdk_oo";
-        } elsif ( "$upstream_what" eq "libs_extern_sys" ) {
-            $what = "system";
-        }
-    }
-
     if ( '@OOO_GIT@' ne "" ) {
-		if ( -d "@CLONEDIR@/$what" ) {
-			print "* repo already there, skipping " . '@OOO_GIT@' . "/$what (make sure to bin/g pull -r)\n";
-		} else {
-			if ( -d '@OOO_GIT@' . "/$what" ) {
-				print "* git-new-workdir from " . '@OOO_GIT@' . "/$what\n";
-				system( "cd @CLONEDIR@ ; @TOOLSDIR@/bin/git-new-workdir " . '@OOO_GIT@' . "/$what " . '@CLONEDIR@' . "/$what" ) && exit 1;
-			} else {
-				print "* cloning from " . '@OOO_GIT@' . "/$what\n";
-				system( "cd @CLONEDIR@ ; git clone " . '@OOO_GIT@' . "/$what " ) && exit 1;
-			}
-		}
+	if ( -d "@CLONEDIR@/$what" ) {
+	    print "* repo already there, skipping " . '@OOO_GIT@' . "/$what (make sure to bin/g pull -r)\n";
+	} else {
+	    if ( -d '@OOO_GIT@' . "/$what" ) {
+		print "* git-new-workdir from " . '@OOO_GIT@' . "/$what\n";
+		system( "cd @CLONEDIR@ ; @TOOLSDIR@/bin/git-new-workdir " . '@OOO_GIT@' . "/$what " . '@CLONEDIR@' . "/$what" ) && exit 1;
+	    } else {
+		print "* cloning from " . '@OOO_GIT@' . "/$what\n";
+		system( "cd @CLONEDIR@ ; git clone " . '@OOO_GIT@' . "/$what " ) && exit 1;
+	    }
+	}
 
-        system( "cd @CLONEDIR@/$what ; git status | grep '^# Your branch is'" );
-        system( "for file in `cd git-hooks ; echo *`
+	system( "cd @CLONEDIR@/$what ; git status | grep '^# Your branch is'" );
+	system( "for file in `cd git-hooks ; echo *`
                  do
                      cd @CLONEDIR@/$what
                      hook=\".git/hooks/\$file\"
@@ -298,10 +310,6 @@ sub source_file_ooo($)
                          ln -s \"../../../../git-hooks/\$file\" \"\$hook\"
                      fi
                  done" );
-    }
-    elsif ( '@SOURCE_TYPE@' eq "UPSTREAM" ) {
-        die "Up-stream doesn't have a package split" if ($SPLIT);
-        source_file( '@UPSTREAM_URI@' . "&lang=$upstream_what", '@UPSTREAM_NAME@' . "_$upstream_what.tar.bz2" );
     }
     elsif ( '@SOURCE_TYPE@' eq "MIRROR" ) {
         source_file( '@UPSTREAM_NAME@' . "_$upstream_what.tar.bz2" );
@@ -388,9 +396,6 @@ sub download_files($$$)
 if (!-d "@SRCDIR@") {
     `mkdir -p @SRCDIR@`;
 }
-if ( !-d "@CLONEDIR@" ) {
-    `mkdir -p @CLONEDIR@`;
-}
 
 my $download_all = 0;
 
@@ -409,11 +414,6 @@ print "Downloading files for @OOO_SOURCEDIRNAME@\n";
 if ('@SYSTEM_GCC@' eq '') {
     source_file( 'gcc-4.2.3.tar.bz2' );
     source_file( 'binutils-2.18.tar.bz2' );
-}
-
-if (!$SPLIT && ($download_all || '@BUILD_WIN32@' ne ''))
-{
-    source_file_ooo( "system" );
 }
 
 if ($download_all && '@BUILD_WIN32@' eq '')
@@ -498,7 +498,9 @@ if ('@MDBTOOLS_SRC@' ne '') {
     source_file( '@MDBTOOLS_SRC@' );
 }
 
-if ($SPLIT) {
+if ( '@OOO_GIT@' ne "" ) {
+    source_file_bootstrap();
+} else {
     source_file_ooo( "artwork" );
     source_file_ooo( "base" );
     source_file_ooo( "bootstrap" );
@@ -518,22 +520,15 @@ if ($SPLIT) {
     source_file_ooo( "writer" );
 # for now ...
     source_file_ooo( "libs-extern-sys" );
-} else {
-    source_file_ooo( "core" );
-}
 
-if ('@ENABLE_EXTENSIONS@' eq 'YES') {
-    source_file_ooo( "extensions" );
+    if ('@ENABLE_EXTENSIONS@' eq 'YES') {
+	source_file_ooo( "extensions" );
+    }
 }
-
 source_file( '@OOO_CUSTOM_IMAGES@') if '@OOO_CUSTOM_IMAGES@';
 source_file( '@OOO_EXTRA_ARTWORK@' ) if '@OOO_EXTRA_ARTWORK@';
 # Temporary utf-8ization of bibliograpy bits
 source_file( "biblio.tar.bz2" );
-
-if (!$SPLIT && ($download_all || '@ENABLE_BINFILTER@' eq 'TRUE')) {
-    source_file_ooo( "binfilter" );
-}
 
 if ( $download_all || ( '@OOO_LANGS@' ne '' && '@OOO_LANGS@' ne 'en-US' ) || '@BUILD_WIN32@' ne '' ) {
     source_file_ooo( "l10n" );
@@ -617,19 +612,6 @@ foreach (@templang) {
 }
 
 my $distro = '@DISTRO@';
-if ($distro eq 'ArchLinux' ||
-    $distro eq 'Ark' ||
-    $distro eq 'DroplineGNOME' ||
-    $distro eq 'Frugalware' || $distro eq 'Frugalware64' ||
-    $distro eq 'Gentoo.conf' ||
-    $distro eq 'openmamba' ||
-    $distro eq 'SUSE-9.1' || $distro eq 'SUSE-9.2' || $distro eq 'SUSE-9.3' ||
-    $distro eq 'Slackware' ||
-    $distro eq 'NovellWin32' || $distro eq 'GoOoWin32' ||
-    $distro eq 'OxygenOfficeLinux' || $distro eq 'OxygenOfficeWindows' ||
-    $distro eq 'translate-org-za-linux' || $distro eq 'translate-org-za-win32' || $distro eq 'Pardus') {
-    source_file_ooo( "libs_extern_sys" ) if !$SPLIT;
-}
 
 if ($download_all ||
     $distro =~ m/Debian/ ||
