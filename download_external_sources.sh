@@ -5,8 +5,11 @@
 export TARFILE_LOCATION
 export CLONEDIR
 
-if test -e $CLONEDIR/bootstrap/fetch_tarballs.sh -a -e $CLONEDIR/bootstrap/ooo.lst; then
-    $CLONEDIR/bootstrap/fetch_tarballs.sh $CLONEDIR/bootstrap/ooo.lst
+if test -e bootstrap/download -a -e bootstrap/ooo.lst; then
+    (
+        cd bootstrap
+        ./download ooo.lst
+    )
 else
     GIT_TAG=`echo $OOO_SOURCEDIRNAME | tr "a-z.-" "A-Z__"`
     tmp=`mktemp -q -d`
