@@ -1,0 +1,614 @@
+diff --git sc/inc/address.hxx sc/inc/address.hxx
+index 0961a23..75a848e 100644
+--- sc/inc/address.hxx
++++ sc/inc/address.hxx
+@@ -90,7 +90,7 @@ const SCSIZE   SCSIZE_MAX   = ::std::numeric_limits<SCSIZE>::max();
+ // Count values
+ const SCROW       MAXROWCOUNT    = MAXROWCOUNT_DEFINE;
+ const SCCOL       MAXCOLCOUNT    = MAXCOLCOUNT_DEFINE;
+-const SCTAB       MAXTABCOUNT    = 256;
++const SCTAB       MAXTABCOUNT    = 1024;
+ const SCCOLROW    MAXCOLROWCOUNT = MAXROWCOUNT;
+ // Maximum values
+ const SCROW       MAXROW         = MAXROWCOUNT - 1;
+diff --git sc/source/filter/excel/frmbase.cxx sc/source/filter/excel/frmbase.cxx
+index 1156561..71bf8da 100644
+--- sc/source/filter/excel/frmbase.cxx
++++ sc/source/filter/excel/frmbase.cxx
+@@ -103,7 +103,7 @@ void _ScRangeListTabs::Append( ScSingleRefData a, SCsTAB nTab, const BOOL b )
+ 	if( nTab < 0)
+ 		nTab = a.nTab;
+ 
+-    if( nTab >= 0 )
++    if( nTab >= 0 && nTab <= MAXTAB)
+     {
+         _ScRangeList*   p = ppTabLists[ nTab ];
+ 
+@@ -168,7 +168,7 @@ void _ScRangeListTabs::Append( ScComplexRefData a, SCsTAB nTab, const BOOL b )
+ 	if( nTab < -1)
+ 		nTab = a.Ref1.nTab;
+ 
+-    if( nTab >= 0 )
++    if( nTab >= 0 && nTab <= MAXTAB)
+     {
+         _ScRangeList*   p = ppTabLists[ nTab ];
+ 
+diff --git sc/source/filter/xml/XMLStylesExportHelper.cxx sc/source/filter/xml/XMLStylesExportHelper.cxx
+index 1639630..01e110d 100644
+--- sc/source/filter/xml/XMLStylesExportHelper.cxx
++++ sc/source/filter/xml/XMLStylesExportHelper.cxx
+@@ -1200,9 +1200,16 @@ rtl::OUString* ScColumnStyles::GetStyleName(const sal_Int32 nTable, const sal_In
+ 
+ //===========================================================================
+ 
++ScRowStyles::Cache::Cache() :
++    mnTable(-1), mnStart(-1), mnEnd(-1), mnStyle(-1) {}
++
++bool ScRowStyles::Cache::hasCache(sal_Int32 nTable, sal_Int32 nField) const
++{
++    return mnTable == nTable && mnStart <= nField && nField <= mnEnd;
++}
++
+ ScRowStyles::ScRowStyles()
+-    : ScColumnRowStylesBase(),
+-    aTables()
++    : ScColumnRowStylesBase()
+ {
+ }
+ 
+@@ -1215,29 +1222,49 @@ void ScRowStyles::AddNewTable(const sal_Int32 nTable, const sal_Int32 nFields)
+     sal_Int32 nSize(aTables.size() - 1);
+     if (nTable > nSize)
+         for (sal_Int32 i = nSize; i < nTable; ++i)
+-        {
+-            ScMysalInt32Vec aFieldsVec(nFields + 1, -1);
+-            aTables.push_back(aFieldsVec);
+-        }
++            aTables.push_back(new StylesType(0, nFields+1, -1));
+ }
+ 
+ sal_Int32 ScRowStyles::GetStyleNameIndex(const sal_Int32 nTable, const sal_Int32 nField)
+ {
+     DBG_ASSERT(static_cast<size_t>(nTable) < aTables.size(), "wrong table");
+-    if (static_cast<size_t>(nField) < aTables[nTable].size())
+-        return aTables[nTable][nField];
+-    else
+-        return aTables[nTable][aTables[nTable].size() - 1];
++    if (maCache.hasCache(nTable, nField))
++        // Cache hit !
++        return maCache.mnStyle;
++
++    StylesType& r = aTables[nTable];
++    if (!r.is_tree_valid())
++        r.build_tree();
++    sal_Int32 nStyle;
++    sal_Int32 nStart, nEnd;
++    if (r.search_tree(nField, nStyle, &nStart, &nEnd))
++    {
++        // Cache this value for better performance.
++        maCache.mnTable = nTable;
++        maCache.mnStart = nStart;
++        maCache.mnEnd = nEnd;
++        maCache.mnStyle = nStyle;
++        return nStyle;
++    }
++
++    return -1;
+ }
+ 
+ void ScRowStyles::AddFieldStyleName(const sal_Int32 nTable, const sal_Int32 nField,
+     const sal_Int32 nStringIndex)
+ {
+     DBG_ASSERT(static_cast<size_t>(nTable) < aTables.size(), "wrong table");
+-    DBG_ASSERT(aTables[nTable].size() >= static_cast<sal_uInt32>(nField), "wrong field");
+-    if (aTables[nTable].size() == static_cast<sal_uInt32>(nField))
+-        aTables[nTable].push_back(nStringIndex);
+-    aTables[nTable][nField] = nStringIndex;
++    StylesType& r = aTables[nTable];
++    r.insert_back(nField, nField+1, nStringIndex);
++}
++
++void ScRowStyles::AddFieldStyleName(const sal_Int32 nTable, const sal_Int32 nStartField,
++        const sal_Int32 nStringIndex, const sal_Int32 nEndField)
++{
++    DBG_ASSERT( nStartField <= nEndField, "bad field range");
++    DBG_ASSERT(static_cast<size_t>(nTable) < aTables.size(), "wrong table");
++    StylesType& r = aTables[nTable];
++    r.insert_back(nStartField, nEndField+1, nStringIndex);
+ }
+ 
+ rtl::OUString* ScRowStyles::GetStyleName(const sal_Int32 nTable, const sal_Int32 nField)
+diff --git sc/source/filter/xml/XMLStylesExportHelper.hxx sc/source/filter/xml/XMLStylesExportHelper.hxx
+index c61851d..8d92960 100644
+--- sc/source/filter/xml/XMLStylesExportHelper.hxx
++++ sc/source/filter/xml/XMLStylesExportHelper.hxx
+@@ -37,6 +37,9 @@
+ #include <com/sun/star/sheet/ValidationAlertStyle.hpp>
+ #include <com/sun/star/sheet/ValidationType.hpp>
+ 
++#include <boost/ptr_container/ptr_vector.hpp>
++#include <mdds/flat_segment_tree.hpp>
++
+ class ScDocument;
+ class ScXMLExport;
+ 
+@@ -272,12 +275,21 @@ public:
+     virtual rtl::OUString* GetStyleName(const sal_Int32 nTable, const sal_Int32 nField);
+ };
+ 
+-typedef std::vector<sal_Int32>	ScMysalInt32Vec;
+-typedef std::vector<ScMysalInt32Vec>	ScMyRowVectorVec;
+-
+ class ScRowStyles : public ScColumnRowStylesBase
+ {
+-    ScMyRowVectorVec				aTables;
++    typedef ::mdds::flat_segment_tree<sal_Int32, sal_Int32> StylesType;
++    ::boost::ptr_vector<StylesType> aTables;
++    struct Cache
++    {
++        sal_Int32 mnTable;
++        sal_Int32 mnStart;
++        sal_Int32 mnEnd;
++        sal_Int32 mnStyle;
++        Cache();
++
++        bool hasCache(sal_Int32 nTable, sal_Int32 nField) const;
++    };
++    Cache maCache;
+ 
+ public:
+     ScRowStyles();
+@@ -286,6 +298,7 @@ public:
+     virtual void AddNewTable(const sal_Int32 nTable, const sal_Int32 nFields);
+     sal_Int32 GetStyleNameIndex(const sal_Int32 nTable, const sal_Int32 nField);
+     void AddFieldStyleName(const sal_Int32 nTable, const sal_Int32 nField, const sal_Int32 nStringIndex);
++    void AddFieldStyleName(const sal_Int32 nTable, const sal_Int32 nStartField, const sal_Int32 nStringIndex, const sal_Int32 nEndField);
+     virtual rtl::OUString* GetStyleName(const sal_Int32 nTable, const sal_Int32 nField);
+ };
+ 
+diff --git sc/source/filter/xml/cachedattraccess.cxx sc/source/filter/xml/cachedattraccess.cxx
+new file mode 100644
+index 0000000..b5ef932
+--- /dev/null
++++ sc/source/filter/xml/cachedattraccess.cxx
+@@ -0,0 +1,70 @@
++/*
++ * Version: MPL 1.1 / GPLv3+ / LGPLv3+
++ *
++ * The contents of this file are subject to the Mozilla Public License Version
++ * 1.1 (the "License"); you may not use this file except in compliance with
++ * the License. You may obtain a copy of the License at
++ * http://www.mozilla.org/MPL/
++ *
++ * Software distributed under the License is distributed on an "AS IS" basis,
++ * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
++ * for the specific language governing rights and limitations under the
++ * License.
++ *
++ * The Initial Developer of the Original Code is
++ *       [ Kohei Yoshida <kyoshida@novell.com> ]
++ * Portions created by the Initial Developer are Copyright (C) 2010 the
++ * Initial Developer. All Rights Reserved.
++ *
++ * Contributor(s):
++ *
++ * Alternatively, the contents of this file may be used under the terms of
++ * either the GNU General Public License Version 3 or later (the "GPLv3+"), or
++ * the GNU Lesser General Public License Version 3 or later (the "LGPLv3+"),
++ * in which case the provisions of the GPLv3+ or the LGPLv3+ are applicable
++ * instead of those above.
++ */
++
++// MARKER(update_precomp.py): autogen include statement, do not remove
++#include "precompiled_sc.hxx"
++
++#include "cachedattraccess.hxx"
++#include "document.hxx"
++
++ScXMLCachedRowAttrAccess::Cache::Cache() :
++    mnTab(-1), mnRow1(-1), mnRow2(-1), mbValue(false) {}
++
++bool ScXMLCachedRowAttrAccess::Cache::hasCache(sal_Int32 nTab, sal_Int32 nRow) const
++{
++    return mnTab == nTab && mnRow1 <= nRow && nRow <= mnRow2;
++}
++
++ScXMLCachedRowAttrAccess::ScXMLCachedRowAttrAccess(ScDocument* pDoc) :
++    mpDoc(pDoc) {}
++
++bool ScXMLCachedRowAttrAccess::rowHidden(sal_Int32 nTab, sal_Int32 nRow)
++{
++    if (!maHidden.hasCache(nTab, nRow))
++    {
++        SCROW nRow1, nRow2;
++        maHidden.mbValue = mpDoc->RowHidden(
++            static_cast<SCTAB>(nTab), static_cast<SCROW>(nRow), &nRow1, &nRow2);
++        maHidden.mnRow1 = static_cast<sal_Int32>(nRow1);
++        maHidden.mnRow2 = static_cast<sal_Int32>(nRow2);
++    }
++    return maHidden.mbValue;
++}
++
++bool ScXMLCachedRowAttrAccess::rowFiltered(sal_Int32 nTab, sal_Int32 nRow)
++{
++    if (!maFiltered.hasCache(nTab, nRow))
++    {
++        SCROW nRow1, nRow2;
++        maFiltered.mbValue = mpDoc->RowFiltered(
++            static_cast<SCTAB>(nTab), static_cast<SCROW>(nRow), &nRow1, &nRow2);
++        maFiltered.mnRow1 = static_cast<sal_Int32>(nRow1);
++        maFiltered.mnRow2 = static_cast<sal_Int32>(nRow2);
++    }
++    return maFiltered.mbValue;
++}
++
+diff --git sc/source/filter/xml/cachedattraccess.hxx sc/source/filter/xml/cachedattraccess.hxx
+new file mode 100644
+index 0000000..5ef6e41
+--- /dev/null
++++ sc/source/filter/xml/cachedattraccess.hxx
+@@ -0,0 +1,63 @@
++/*
++ * Version: MPL 1.1 / GPLv3+ / LGPLv3+
++ *
++ * The contents of this file are subject to the Mozilla Public License Version
++ * 1.1 (the "License"); you may not use this file except in compliance with
++ * the License. You may obtain a copy of the License at
++ * http://www.mozilla.org/MPL/
++ *
++ * Software distributed under the License is distributed on an "AS IS" basis,
++ * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
++ * for the specific language governing rights and limitations under the
++ * License.
++ *
++ * The Initial Developer of the Original Code is
++ *       [ Kohei Yoshida <kyoshida@novell.com> ]
++ * Portions created by the Initial Developer are Copyright (C) 2010 the
++ * Initial Developer. All Rights Reserved.
++ *
++ * Contributor(s):
++ *
++ * Alternatively, the contents of this file may be used under the terms of
++ * either the GNU General Public License Version 3 or later (the "GPLv3+"), or
++ * the GNU Lesser General Public License Version 3 or later (the "LGPLv3+"),
++ * in which case the provisions of the GPLv3+ or the LGPLv3+ are applicable
++ * instead of those above.
++ */
++
++#ifndef __SC_FILTER_XML_CACHEDATTRACCESS_HXX__
++#define __SC_FILTER_XML_CACHEDATTRACCESS_HXX__
++
++#include "sal/types.h"
++
++class ScDocument;
++
++/**
++ * Wrapper for accessing hidden and filtered row attributes.  It caches last
++ * accessed values for a current range, to avoid fetching values for every
++ * single row.
++ */
++class ScXMLCachedRowAttrAccess
++{
++    struct Cache
++    {
++        sal_Int32   mnTab;
++        sal_Int32   mnRow1;
++        sal_Int32   mnRow2;
++        bool        mbValue;
++        Cache();
++        bool hasCache(sal_Int32 nTab, sal_Int32 nRow) const;
++    };
++
++public:
++    ScXMLCachedRowAttrAccess(ScDocument* pDoc);
++
++    bool rowHidden(sal_Int32 nTab, sal_Int32 nRow);
++    bool rowFiltered(sal_Int32 nTab, sal_Int32 nRow);
++private:
++    Cache maHidden;
++    Cache maFiltered;
++    ScDocument* mpDoc;
++};
++
++#endif
+diff --git sc/source/filter/xml/makefile.mk sc/source/filter/xml/makefile.mk
+index 51207d0..02f59d2 100644
+--- sc/source/filter/xml/makefile.mk
++++ sc/source/filter/xml/makefile.mk
+@@ -49,6 +49,7 @@ PROJECTPCHSOURCE=..\pch\filt_pch
+ 
+ SLOFILES =  \
+         $(SLO)$/sheetdata.obj \
++        $(SLO)$/cachedattraccess.obj \
+         $(SLO)$/xmlwrap.obj \
+         $(SLO)$/xmlimprt.obj \
+         $(SLO)$/xmlexprt.obj \
+diff --git sc/source/filter/xml/xmlexprt.cxx sc/source/filter/xml/xmlexprt.cxx
+index 0f15dc4..5829c50 100644
+--- sc/source/filter/xml/xmlexprt.cxx
++++ sc/source/filter/xml/xmlexprt.cxx
+@@ -69,6 +69,7 @@
+ #include "externalrefmgr.hxx"
+ #include "editutil.hxx"
+ #include "tabprotection.hxx"
++#include "cachedattraccess.hxx"
+ 
+ #include <xmloff/xmltoken.hxx>
+ #include <xmloff/xmlnmspe.hxx>
+@@ -1205,18 +1206,18 @@ void ScXMLExport::WriteRowContent()
+     }
+ }
+ 
+-void ScXMLExport::WriteRowStartTag(sal_Int32 nRow, const sal_Int32 nIndex,
+-    const sal_Int8 nFlag, const sal_Int32 nEqualRows)
++void ScXMLExport::WriteRowStartTag(
++    sal_Int32 nRow, const sal_Int32 nIndex, const sal_Int32 nEqualRows,
++    bool bHidden, bool bFiltered)
+ {
+     AddAttribute(sAttrStyleName, *pRowStyles->GetStyleNameByIndex(nIndex));
+-    if (nFlag)
+-        if (nFlag & CR_HIDDEN)
+-        {
+-            if (nFlag & CR_FILTERED)
+-                AddAttribute(XML_NAMESPACE_TABLE, XML_VISIBILITY, XML_FILTER);
+-            else
+-                AddAttribute(XML_NAMESPACE_TABLE, XML_VISIBILITY, XML_COLLAPSE);
+-        }
++    if (bHidden)
++    {
++        if (bFiltered)
++            AddAttribute(XML_NAMESPACE_TABLE, XML_VISIBILITY, XML_FILTER);
++        else
++            AddAttribute(XML_NAMESPACE_TABLE, XML_VISIBILITY, XML_COLLAPSE);
++    }
+     if (nEqualRows > 1)
+     {
+         rtl::OUStringBuffer aBuf;
+@@ -1250,7 +1251,9 @@ void ScXMLExport::CloseHeaderRows()
+     EndElement(XML_NAMESPACE_TABLE, XML_TABLE_HEADER_ROWS, sal_True);
+ }
+ 
+-void ScXMLExport::OpenNewRow(const sal_Int32 nIndex, const sal_Int8 nFlag, const sal_Int32 nStartRow, const sal_Int32 nEqualRows)
++void ScXMLExport::OpenNewRow(
++    const sal_Int32 nIndex, const sal_Int32 nStartRow, const sal_Int32 nEqualRows,
++    bool bHidden, bool bFiltered)
+ {
+     nOpenRow = nStartRow;
+     if (pGroupRows->IsGroupStart(nStartRow))
+@@ -1270,35 +1273,38 @@ void ScXMLExport::OpenNewRow(const sal_Int32 nIndex, const sal_Int8 nFlag, const
+             nEquals = aRowHeaderRange.EndRow - nStartRow + 1;
+         else
+             nEquals = nEqualRows;
+-        WriteRowStartTag(nStartRow, nIndex, nFlag, nEquals);
++        WriteRowStartTag(nStartRow, nIndex, nEquals, bHidden, bFiltered);
+         nOpenRow = nStartRow + nEquals - 1;
+         if (nEquals < nEqualRows)
+         {
+             CloseRow(nStartRow + nEquals - 1);
+-            WriteRowStartTag(nStartRow, nIndex, nFlag, nEqualRows - nEquals);
++            WriteRowStartTag(nStartRow, nIndex, nEqualRows - nEquals, bHidden, bFiltered);
+             nOpenRow = nStartRow + nEqualRows - 1;
+         }
+     }
+     else
+-        WriteRowStartTag(nStartRow, nIndex, nFlag, nEqualRows);
++        WriteRowStartTag(nStartRow, nIndex, nEqualRows, bHidden, bFiltered);
+ }
+ 
+-void ScXMLExport::OpenAndCloseRow(const sal_Int32 nIndex, const sal_Int8 nFlag,
+-    const sal_Int32 nStartRow, const sal_Int32 nEqualRows)
++void ScXMLExport::OpenAndCloseRow(
++    const sal_Int32 nIndex, const sal_Int32 nStartRow, const sal_Int32 nEqualRows,
++    bool bHidden, bool bFiltered)
+ {
+-    OpenNewRow(nIndex, nFlag, nStartRow, nEqualRows);
++    OpenNewRow(nIndex, nStartRow, nEqualRows, bHidden, bFiltered);
+     WriteRowContent();
+     CloseRow(nStartRow + nEqualRows - 1);
+     pRowFormatRanges->Clear();
+ }
+ 
+-void ScXMLExport::OpenRow(const sal_Int32 nTable, const sal_Int32 nStartRow, const sal_Int32 nRepeatRow)
++void ScXMLExport::OpenRow(const sal_Int32 nTable, const sal_Int32 nStartRow, const sal_Int32 nRepeatRow, ScXMLCachedRowAttrAccess& rRowAttr)
+ {
+     if (nRepeatRow > 1)
+     {
+         sal_Int32 nPrevIndex(0), nIndex;
+-        sal_Int8 nPrevFlag(0);
+-        sal_Int8 nFlag(0);
++        bool bPrevHidden = false;
++        bool bPrevFiltered = false;
++        bool bHidden = false;
++        bool bFiltered = false;
+         sal_Int32 nEqualRows(1);
+         sal_Int32 nEndRow(nStartRow + nRepeatRow);
+         sal_Int32 nRow;
+@@ -1308,14 +1314,20 @@ void ScXMLExport::OpenRow(const sal_Int32 nTable, const sal_Int32 nStartRow, con
+             {
+                 nPrevIndex = pRowStyles->GetStyleNameIndex(nTable, nRow);
+                 if (pDoc)
+-                    nPrevFlag = (pDoc->GetRowFlags(static_cast<SCROW>(nRow), static_cast<SCTAB>(nTable))) & (CR_HIDDEN | CR_FILTERED);
++                {
++                    bPrevHidden = rRowAttr.rowHidden(nTable, nRow);
++                    bPrevFiltered = rRowAttr.rowFiltered(nTable, nRow);
++                }
+             }
+             else
+             {
+                 nIndex = pRowStyles->GetStyleNameIndex(nTable, nRow);
+                 if (pDoc)
+-                    nFlag = (pDoc->GetRowFlags(static_cast<SCROW>(nRow), static_cast<SCTAB>(nTable))) & (CR_HIDDEN | CR_FILTERED);
+-                if (nIndex == nPrevIndex && nFlag == nPrevFlag &&
++                {
++                    bHidden = rRowAttr.rowHidden(nTable, nRow);
++                    bFiltered = rRowAttr.rowFiltered(nTable, nRow);
++                }
++                if (nIndex == nPrevIndex && bHidden == bPrevHidden && bFiltered == bPrevFiltered &&
+                     !(bHasRowHeader && ((nRow == aRowHeaderRange.StartRow) || (nRow - 1 == aRowHeaderRange.EndRow))) &&
+                     !(pGroupRows->IsGroupStart(nRow)) &&
+                     !(pGroupRows->IsGroupEnd(nRow - 1)))
+@@ -1325,27 +1337,32 @@ void ScXMLExport::OpenRow(const sal_Int32 nTable, const sal_Int32 nStartRow, con
+                     if (nRow < nEndRow)
+                     {
+                         ScRowFormatRanges* pTempRowFormatRanges = new ScRowFormatRanges(pRowFormatRanges);
+-                        OpenAndCloseRow(nPrevIndex, nPrevFlag, nRow - nEqualRows, nEqualRows);
++                        OpenAndCloseRow(nPrevIndex, nRow - nEqualRows, nEqualRows, bPrevHidden, bPrevFiltered);
+                         delete pRowFormatRanges;
+                         pRowFormatRanges = pTempRowFormatRanges;
+                     }
+                     else
+-                        OpenAndCloseRow(nPrevIndex, nPrevFlag, nRow - nEqualRows, nEqualRows);
++                        OpenAndCloseRow(nPrevIndex, nRow - nEqualRows, nEqualRows, bPrevHidden, bPrevFiltered);
+                     nEqualRows = 1;
+                     nPrevIndex = nIndex;
+-                    nPrevFlag = nFlag;
++                    bPrevHidden = bHidden;
++                    bPrevFiltered = bFiltered;
+                 }
+             }
+         }
+-        OpenNewRow(nPrevIndex, nPrevFlag, nRow - nEqualRows, nEqualRows);
++        OpenNewRow(nPrevIndex, nRow - nEqualRows, nEqualRows, bPrevHidden, bPrevFiltered);
+     }
+     else
+     {
+         sal_Int32 nIndex = pRowStyles->GetStyleNameIndex(nTable, nStartRow);
+-        sal_Int8 nFlag(0);
++        bool bHidden = false;
++        bool bFiltered = false;
+         if (pDoc)
+-            nFlag = (pDoc->GetRowFlags(static_cast<SCROW>(nStartRow), static_cast<SCTAB>(nTable))) & (CR_HIDDEN | CR_FILTERED);
+-        OpenNewRow(nIndex, nFlag, nStartRow, 1);
++        {
++            bHidden = rRowAttr.rowHidden(nTable, nStartRow);
++            bFiltered = rRowAttr.rowFiltered(nTable, nStartRow);
++        }
++        OpenNewRow(nIndex, nStartRow, 1, bHidden, bFiltered);
+     }
+     nOpenRow = nStartRow + nRepeatRow - 1;
+ }
+@@ -1376,11 +1393,12 @@ void ScXMLExport::ExportFormatRanges(const sal_Int32 nStartCol, const sal_Int32
+     const sal_Int32 nEndCol, const sal_Int32 nEndRow, const sal_Int32 nSheet)
+ {
+     pRowFormatRanges->Clear();
++    ScXMLCachedRowAttrAccess aRowAttr(pDoc);
+     if (nStartRow == nEndRow)
+     {
+         pCellStyles->GetFormatRanges(nStartCol, nEndCol, nStartRow, nSheet, pRowFormatRanges);
+         if (nOpenRow == - 1)
+-            OpenRow(nSheet, nStartRow, 1);
++            OpenRow(nSheet, nStartRow, 1, aRowAttr);
+         WriteRowContent();
+         pRowFormatRanges->Clear();
+     }
+@@ -1401,12 +1419,12 @@ void ScXMLExport::ExportFormatRanges(const sal_Int32 nStartCol, const sal_Int32
+                 DBG_ASSERT(nMaxRows, "something wents wrong");
+                 if (nMaxRows >= nTotalRows - nRows)
+                 {
+-                    OpenRow(nSheet, nStartRow + nRows, nTotalRows - nRows);
++                    OpenRow(nSheet, nStartRow + nRows, nTotalRows - nRows, aRowAttr);
+                     nRows += nTotalRows - nRows;
+                 }
+                 else
+                 {
+-                    OpenRow(nSheet, nStartRow + nRows, nMaxRows);
++                    OpenRow(nSheet, nStartRow + nRows, nMaxRows, aRowAttr);
+                     nRows += nMaxRows;
+                 }
+                 if (!pRowFormatRanges->GetSize())
+@@ -1416,7 +1434,7 @@ void ScXMLExport::ExportFormatRanges(const sal_Int32 nStartCol, const sal_Int32
+             }
+             if (nTotalRows == 1)
+                 CloseRow(nStartRow);
+-            OpenRow(nSheet, nEndRow, 1);
++            OpenRow(nSheet, nEndRow, 1, aRowAttr);
+             pRowFormatRanges->Clear();
+             pCellStyles->GetFormatRanges(0, nEndCol, nEndRow, nSheet, pRowFormatRanges);
+             WriteRowContent();
+@@ -1431,12 +1449,12 @@ void ScXMLExport::ExportFormatRanges(const sal_Int32 nStartCol, const sal_Int32
+                 sal_Int32 nMaxRows = pRowFormatRanges->GetMaxRows();
+                 if (nMaxRows >= nTotalRows - nRows)
+                 {
+-                    OpenRow(nSheet, nStartRow + nRows, nTotalRows - nRows);
++                    OpenRow(nSheet, nStartRow + nRows, nTotalRows - nRows, aRowAttr);
+                     nRows += nTotalRows - nRows;
+                 }
+                 else
+                 {
+-                    OpenRow(nSheet, nStartRow + nRows, nMaxRows);
++                    OpenRow(nSheet, nStartRow + nRows, nMaxRows, aRowAttr);
+                     nRows += nMaxRows;
+                 }
+                 if (!pRowFormatRanges->GetSize())
+@@ -1444,7 +1462,7 @@ void ScXMLExport::ExportFormatRanges(const sal_Int32 nStartCol, const sal_Int32
+                 WriteRowContent();
+                 CloseRow(nStartRow + nRows - 1);
+             }
+-            OpenRow(nSheet, nEndRow, 1);
++            OpenRow(nSheet, nEndRow, 1, aRowAttr);
+             pRowFormatRanges->Clear();
+             pCellStyles->GetFormatRanges(0, nEndCol, nEndRow, nSheet, pRowFormatRanges);
+             WriteRowContent();
+@@ -2625,14 +2643,13 @@ void ScXMLExport::_ExportAutoStyles()
+                                             }
+                                             sal_Int32 nOld(nRow);
+                                             nRow = pDoc->GetNextDifferentChangedRow(sal::static_int_cast<SCTAB>(nTable), static_cast<SCROW>(nRow), false);
+-                                            for (sal_Int32 i = nOld + 1; i < nRow; ++i)
+-                                                pRowStyles->AddFieldStyleName(nTable, i, nIndex);
++                                            if (nRow > nOld + 1)
++                                                pRowStyles->AddFieldStyleName(nTable, nOld + 1, nIndex, nRow - 1);
+                                         }
+                                         if (aCellAddress.EndRow > nRows)
+                                         {
+                                             sal_Int32 nIndex(pRowStyles->GetStyleNameIndex(nTable, nRows));
+-                                            for (sal_Int32 i = nRows + 1; i <= aCellAddress.EndRow; ++i)
+-                                                pRowStyles->AddFieldStyleName(nTable, i, nIndex);
++                                            pRowStyles->AddFieldStyleName(nTable, nRows + 1, nIndex, aCellAddress.EndRow);
+                                         }
+                                     }
+                                 }
+diff --git sc/source/filter/xml/xmlexprt.hxx sc/source/filter/xml/xmlexprt.hxx
+index dd703c9..c3ad3b6 100644
+--- sc/source/filter/xml/xmlexprt.hxx
++++ sc/source/filter/xml/xmlexprt.hxx
+@@ -64,6 +64,7 @@ class ScChartListener;
+ class SfxItemPool;
+ class ScAddress;
+ class ScBaseCell;
++class ScXMLCachedRowAttrAccess;
+ 
+ typedef std::vector< com::sun::star::uno::Reference < com::sun::star::drawing::XShapes > > ScMyXShapesVec;
+ 
+@@ -159,13 +160,14 @@ class ScXMLExport : public SvXMLExport
+     void ExportFormatRanges(const sal_Int32 nStartCol, const sal_Int32 nStartRow,
+         const sal_Int32 nEndCol, const sal_Int32 nEndRow, const sal_Int32 nSheet);
+     void WriteRowContent();
+-    void WriteRowStartTag(sal_Int32 nRow, const sal_Int32 nIndex, const sal_Int8 nFlag, const sal_Int32 nEmptyRows);
++    void WriteRowStartTag(sal_Int32 nRow, const sal_Int32 nIndex, const sal_Int32 nEmptyRows, bool bHidden, bool bFiltered);
+     void OpenHeaderRows();
+     void CloseHeaderRows();
+-    void OpenNewRow(const sal_Int32 nIndex, const sal_Int8 nFlag, const sal_Int32 nStartRow, const sal_Int32 nEmptyRows);
+-    void OpenAndCloseRow(const sal_Int32 nIndex, const sal_Int8 nFlag,
+-        const sal_Int32 nStartRow, const sal_Int32 nEmptyRows);
+-    void OpenRow(const sal_Int32 nTable, const sal_Int32 nStartRow, const sal_Int32 nRepeatRow);
++    void OpenNewRow(const sal_Int32 nIndex, const sal_Int32 nStartRow, const sal_Int32 nEmptyRows,
++                    bool bHidden, bool bFiltered);
++    void OpenAndCloseRow(const sal_Int32 nIndex, const sal_Int32 nStartRow, const sal_Int32 nEmptyRows, 
++                         bool bHidden, bool bFiltered);
++    void OpenRow(const sal_Int32 nTable, const sal_Int32 nStartRow, const sal_Int32 nRepeatRow, ScXMLCachedRowAttrAccess& rRowAttr);
+     void CloseRow(const sal_Int32 nRow);
+     void GetColumnRowHeader(sal_Bool& bHasColumnHeader, com::sun::star::table::CellRangeAddress& aColumnHeaderRange,
+         sal_Bool& bHasRowHeader, com::sun::star::table::CellRangeAddress& aRowHeaderRange,
+diff --git sc/source/ui/src/scerrors.src sc/source/ui/src/scerrors.src
+index bdb76b2..51ab222 100644
+--- sc/source/ui/src/scerrors.src
++++ sc/source/ui/src/scerrors.src
+@@ -132,7 +132,7 @@ Resource RID_ERRHDLSC
+     };
+     String SCWARN_IMPORT_SHEET_OVERFLOW & ERRCODE_RES_MASK
+     {
+-        Text [ en-US ] = "Some sheets could not be loaded because the maximum number of sheets was exceeded." ;
++        Text [ en-US ] = "Not all sheets have been loaded because the maximum number of sheets was exceeded.\n\nPlease be warned that re-saving this document will permanently delete those sheets that have not been loaded!" ;
+     };
+     String SCWARN_IMPORT_OPEN_FM3 & ERRCODE_RES_MASK
+     {
