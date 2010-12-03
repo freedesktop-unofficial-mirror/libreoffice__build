@@ -13,6 +13,9 @@
 
 # Get the oo installation to improve
 ooinstall=$1
+if test "${ooinstall:0:1}" != "/"; then
+    ooinstall=`pwd`/$ooinstall
+fi
 
 # Load the whole ooo-build config
 . `dirname $0`/setup >/dev/null 2>&1
