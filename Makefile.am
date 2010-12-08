@@ -34,8 +34,8 @@ STAMP_DIR=$(top_builddir)/stamp
 
 # Source preparation
 
-unpack : $(OOBUILDDIR)/unpack $(top_srcdir)/bin/unpack
-$(OOBUILDDIR)/unpack :
+unpack : $(OOBUILDDIR)/unpack
+$(OOBUILDDIR)/unpack : $(top_srcdir)/bin/unpack
 	$(TOOLSDIR)/bin/transform --revert $(TOOLSDIR) $(OOBUILDDIR)
 	test -n "$(OOO_GIT_MANAGED)" && $(TOOLSDIR)/bin/gob --build-dir=$(OOBUILDDIR) prepare || true
 	if test -d $(OOBUILDDIR)/applied_patches ; then \
@@ -56,9 +56,11 @@ $(STAMP_DIR)/artwork.install : $(OOBUILDDIR)/unpack \
 	$(TOOLSDIR)/bin/install-artwork $(top_srcdir)/src $(OOBUILDDIR)
 	touch $@
 
-patch.apply: $(OOBUILDDIR)/unpack $(STAMP_DIR)/refresh $(STAMP_DIR)/patch.apply
+patch.apply: $(STAMP_DIR)/patch.apply
 $(STAMP_DIR)/patch.apply : $(top_srcdir)/patches/apply.pl \
 			   $(top_srcdir)/patches/*/*.diff \
+			   $(OOBUILDDIR)/unpack \
+			   $(STAMP_DIR)/refresh \
 			   $(APPLY_DIR)/apply
 	if test "z$(BUILD_WIN32)" != "z"; then \
 	    cp -af $(BUILDDIR)/x86/* $(OOBUILDDIR)/external/dbghelp || true; \
