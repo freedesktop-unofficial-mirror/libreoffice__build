@@ -63,13 +63,11 @@ $(STAMP_DIR)/patch.apply : $(top_srcdir)/patches/apply.pl \
 			   $(APPLY_DIR)/apply
 	if test "z$(BUILD_WIN32)" != "z"; then \
 	    cp -af $(BUILDDIR)/x86/* $(OOBUILDDIR)/external/dbghelp || true; \
-	    cp -af $(BUILDDIR)/*.dll $(OOBUILDDIR)/external/unicows || true; \
 	    mv $(OOBUILDDIR)/external/dbghelp/DbgHelp.Dll  \
 		     $(OOBUILDDIR)/external/dbghelp/dbghelp.dll.temp || true; \
 	    mv $(OOBUILDDIR)/external/dbghelp/dbghelp.dll.temp  \
 		     $(OOBUILDDIR)/external/dbghelp/dbghelp.dll || true; \
-	    chmod +x $(OOBUILDDIR)/external/dbghelp/*.dll \
-		     $(OOBUILDDIR)/external/unicows/*.dll || true; \
+	    chmod +x $(OOBUILDDIR)/external/dbghelp/*.dll || true; \
 	fi
 
 	test -n "$(OOO_GIT_MANAGED)" && $(TOOLSDIR)/bin/gob --build-dir=$(OOBUILDDIR) prepare || true
