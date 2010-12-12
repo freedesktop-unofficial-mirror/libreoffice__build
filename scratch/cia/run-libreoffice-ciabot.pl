@@ -51,7 +51,11 @@ sub report($$$) {
                         while ( <COMMITS> ) {
                             chomp;
                             print "Sending report about $_ in $key\n";
-                            qx(libreoffice-ciabot.pl $repo $_ $branch_name)
+                            if (!$test) {
+                                qx(libreoffice-ciabot.pl $repo $_ $branch_name)
+                            } else {
+                                print "libreoffice-ciabot.pl '$repo' '$_' '$branch_name'\n";
+                            }
                         }
                         close COMMITS;
                     }
@@ -61,15 +65,23 @@ sub report($$$) {
                 } else {
                     # just process the merge commit itself
                     print "Sending report about $new_head in $key\n";
-                    qx(libreoffice-ciabot.pl $repo $new_head $branch_name)
+                    if (!$test) {
+                        qx(libreoffice-ciabot.pl $repo $new_head $branch_name)
+                    } else {
+                        print "libreoffice-ciabot.pl '$repo' '$new_head' '$branch_name'\n";
+                    }
                 }
             }
         }
         else {
             # TODO at some stage, we could play with git merge-base, and
             # report everything etc. but... ;-)
-            print "Sending report about $_ in a newly created branch $key\n";
-            qx(libreoffice-ciabot.pl $repo $new_head $branch_name)
+            print "Sending report about $key in a newly created branch $key\n";
+            if (!$test) {
+                qx(libreoffice-ciabot.pl $repo $new_head $branch_name)
+            } else {
+                print "libreoffice-ciabot.pl '$repo' '$new_head' '$branch_name'\n";
+            }
         }
     }
 }
@@ -100,6 +112,12 @@ print "Checking for changes in the libreoffice repo & sending reports to CIA.vc.
     "writer"
 );
 
+$test = 0;
+
+if ($test) {
+    @all_repos = ("test");
+}
+
 chomp( my $cwd = `pwd` );
 
 my %old_ref;
@@ -121,6 +139,13 @@ while ( 1 ) {
 	$old_ref{$repo} = $new_ref;
     }
 
-    # check every 5 minutes
-    sleep 5*60;
+    if (!$test) {
+        # check every 5 minutes
+        sleep 5*60;
+    } else {
+        print "Hit enter to report...\n";
+        <STDIN>;
+    }
 }
+
+# vim:set shiftwidth=4 softtabstop=4 expandtab:
