@@ -74,13 +74,21 @@ sub report($$$) {
             }
         }
         else {
-            # TODO at some stage, we could play with git merge-base, and
-            # report everything etc. but... ;-)
-            print "Sending report about $key in a newly created branch $key\n";
-            if (!$test) {
-                qx(libreoffice-ciabot.pl $repo $new_head $branch_name)
-            } else {
-                print "libreoffice-ciabot.pl '$repo' '$new_head' '$branch_name'\n";
+            # Report every commit which is not in master
+            if ( open COMMITS, "git rev-list $new_head ^refs/remotes/origin/master | tac |" ) {
+                while ( <COMMITS> ) {
+                    chomp;
+                    print "Sending report about $_ in $key (newly created branch)\n";
+                    if (!$test) {
+                        qx(libreoffice-ciabot.pl $repo $_ $branch_name)
+                    } else {
+                        print "libreoffice-ciabot.pl '$repo' '$_' '$branch_name'\n";
+                    }
+                }
+                close COMMITS;
+            }
+            else {
+                error( "Cannot call git rev-list." );
             }
         }
     }
