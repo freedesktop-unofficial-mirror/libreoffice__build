@@ -85,7 +85,6 @@ function validate()
 
 function batch_convert()
 {
-    set -x
     MAX_LOT=100
     files_lot=
     lot_size=0
@@ -104,7 +103,6 @@ function batch_convert()
         echo "\"$ooinstall/program/soffice\" -infilter=\"$1\" -convert-to "$2" -outdir "$3" $files_lot" >>"$RUN_LOG"
         "$ooinstall/program/soffice" -infilter="$1" -convert-to "$2" -outdir "$3" $files_lot >>"$RUN_LOG" 2>&1
     fi
-    set +x
 }
 
 # Clean the previous results
