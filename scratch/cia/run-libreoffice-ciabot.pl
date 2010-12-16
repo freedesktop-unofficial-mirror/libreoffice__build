@@ -74,8 +74,8 @@ sub report($$$) {
             }
         }
         else {
-            # Report every commit which is not in master
-            if ( open COMMITS, "git rev-list $new_head ^refs/remotes/origin/master | tac |" ) {
+            # Report the newest commit which is not in master
+            if ( open COMMITS, "git rev-list -n 1 $new_head ^refs/remotes/origin/master |" ) {
                 while ( <COMMITS> ) {
                     chomp;
                     print "Sending report about $_ in $key (newly created branch)\n";
