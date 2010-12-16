@@ -1,4 +1,4 @@
-#!env sh
+#!/usr/bin/env sh
 
 ooinstall=$1
 TOOLSDIR=$2
@@ -83,6 +83,30 @@ function validate()
     return $RESULT
 }
 
+function batch_convert()
+{
+    set -x
+    MAX_LOT=100
+    files_lot=
+    lot_size=0
+    for file in $4; do
+        files_lot+=" $file"
+        let lot_size++
+        if test "$lot_size" == "$MAX_LOT"; then
+            echo "\"$ooinstall/program/soffice\" -infilter=\"$1\" -convert-to \"$2\" -outdir $3 $files_lot" >>"$RUN_LOG"
+            "$ooinstall/program/soffice" -infilter="$1" -convert-to "$2" -outdir "$3" $files_lot >>"$RUN_LOG" 2>&1
+            files_lot=
+            lot_size=0
+        fi
+    done
+
+    if test "$lot_size" != "0"; then
+        echo "\"$ooinstall/program/soffice\" -infilter=\"$1\" -convert-to "$2" -outdir "$3" $files_lot" >>"$RUN_LOG"
+        "$ooinstall/program/soffice" -infilter="$1" -convert-to "$2" -outdir "$3" $files_lot >>"$RUN_LOG" 2>&1
+    fi
+    set +x
+}
+
 # Clean the previous results
 if test -d "$OUTDIR"; then
     rm -r "$OUTDIR"
@@ -103,12 +127,10 @@ cd "$OLDPWD"
 if test -e "$ooinstall/program/ooenv"; then
     . "$ooinstall/program/ooenv"
 fi
-echo "\"$ooinstall/program/soffice\" -convert-to docx:\"Office Open XML Text\" -outdir \"$OUTDIR\" $TEST_FILES_DIR/ooxml-strict/tmp/*.docx" >>"$RUN_LOG"
-"$ooinstall/program/soffice" -convert-to docx:"Office Open XML Text" -outdir "$OUTDIR" $TEST_FILES_DIR/ooxml-strict/tmp/*.docx >>"$RUN_LOG" 2>&1
-echo "\"$ooinstall/program/soffice\" -convert-to xlsx:\"Calc Office Open XML\" -outdir \"$OUTDIR\" $TEST_FILES_DIR/ooxml-strict/tmp/*.xlsx" >>"$RUN_LOG"
-"$ooinstall/program/soffice" -convert-to xlsx:"Calc Office Open XML" -outdir "$OUTDIR" $TEST_FILES_DIR/ooxml-strict/tmp/*.xlsx >>"$RUN_LOG" 2>&1
-echo "\"$ooinstall/program/soffice\" -convert-to pptx:\"Impress Office Open XML\" -outdir \"$OUTDIR\" $TEST_FILES_DIR/ooxml-strict/tmp/*.pptx" >>"$RUN_LOG"
-"$ooinstall/program/soffice" -convert-to pptx:"Impress Office Open XML" -outdir "$OUTDIR" $TEST_FILES_DIR/ooxml-strict/tmp/*.pptx >>"$RUN_LOG" 2>&1
+
+batch_convert 'Office Open XML Text' 'docx:Office Open XML Text' "$OUTDIR" "$TEST_FILES_DIR/ooxml-strict/tmp/*.docx"
+batch_convert 'Calc Office Open XML' 'xlsx:Calc Office Open XML' "$OUTDIR" "$TEST_FILES_DIR/ooxml-strict/tmp/*.xlsx"
+batch_convert 'Impress Office Open XML' 'pptx:Impress Office Open XML' "$OUTDIR" "$TEST_FILES_DIR/ooxml-strict/tmp/*.pptx"
 
 # Validate the test files
 RESULT=0
