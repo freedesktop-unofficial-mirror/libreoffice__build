@@ -175,10 +175,6 @@ id : $(OOBUILDDIR)/ID
 $(OOBUILDDIR)/ID : $(STAMP_DIR)/build
 	cd $(OOBUILDDIR); $(TOOLSDIR)/bin/create-ids
 
-tags: $(OOBUILDDIR)/tags
-$(OOBUILDDIR)/tags: $(STAMP_DIR)/build_prepared
-	cd $(OOBUILDDIR); $(TOOLSDIR)/bin/create-tags
-
 docs: $(BUILDDIR)/docs/index.html
 $(BUILDDIR)/docs/index.html: $(STAMP_DIR)/build
 	cd $(OOBUILDDIR); $(TOOLSDIR)/bin/mkdocs.sh $(BUILDDIR)/docs $(TOOLSDIR)/bin/doxygen.cfg
