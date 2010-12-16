@@ -1,5 +1,4 @@
-#!/bin/sh
-
+#!/usr/bin/env sh
 # runs all the test scripts in the test folder.
 # Args: <install dir>
 #
@@ -29,11 +28,11 @@ if [ -n $COLORTERM ]; then
 	CLEAR="\033[0m"
 fi
 
-for t in `ls -1 $TESTDIR`
+for t in `ls -1 "$TESTDIR"`
 do
     # Is there a run.sh executable script inside?
-    if test -x $TESTDIR/$t/run.sh ; then
-        sh $TESTDIR/$t/run.sh "$ooinstall" "$TOOLSDIR"
+    if test -x "$TESTDIR/$t/run.sh" ; then
+        sh "$TESTDIR/$t/run.sh" "$ooinstall" "$TOOLSDIR"
         if test $? ; then
             printf "$t\t:\t${GREEN}PASSED${CLEAR}\n"
         else

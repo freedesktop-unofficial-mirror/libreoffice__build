@@ -1,16 +1,19 @@
-#!/bin/sh
+#!env sh
 
 ooinstall=$1
 TOOLSDIR=$2
 
-. $TOOLSDIR/bin/setup >/dev/null 2>&1
+. "$TOOLSDIR/bin/setup" >/dev/null 2>&1
 
-RUN_LOG=`dirname $0`/run.log
-REDIRECT=">>$RUN_LOG 2>&1"
-touch $RUN_LOG
+RUN_LOG=`dirname "$0"`/run.log
+touch "$RUN_LOG"
 
-LOGS=`dirname $0`/log
-OUTDIR=`dirname $0`/out
+if test -e "$RUN_LOG"; then
+    rm "$RUN_LOG"
+fi
+
+LOGS=`dirname "$0"`/log
+OUTDIR=`dirname "$0"`/out
 
 function show_progress()
 {
@@ -28,26 +31,26 @@ function show_progress()
 function get_deps()
 {
     # The test data
-    cd $CLONEDIR
+    cd "$CLONEDIR"
     if test -d test-files ;then
         cd test-files
-        git pull -r >>$RUN_LOG 2>&1
+        git pull -r >>"$RUN_LOG" 2>&1
     else
-        git clone $OOO_GIT/contrib/test-files >>$RUN_LOG 2>&1
+        git clone $OOO_GIT/contrib/test-files >>"$RUN_LOG" 2>&1
     fi
 
     #OfficeOTron
-    cd $CLONEDIR
+    cd "$CLONEDIR"
     if test -d officeotron ; then
         cd officeotron
-        svn update >>$RUN_LOG 2>&1
+        svn update >>"$RUN_LOG" 2>&1
     else
-        svn checkout http://officeotron.googlecode.com/svn/trunk/ officeotron >>$RUN_LOG 2>&1
+        svn checkout http://officeotron.googlecode.com/svn/trunk/ officeotron >>"$RUN_LOG" 2>&1
     fi
 
     # Make / update the officeotrong jar file
-    cd $CLONEDIR/officeotron
-    ant application >>$RUN_LOG 2>&1
+    cd "$CLONEDIR/officeotron"
+    ant application >>"$RUN_LOG" 2>&1
 
     # Get the version
     OFFICEOTRON_VERSION=`cat build.xml | grep 'name="version"' | sed -e 's:.*name="version"\ value="\([^"]\+\)".*:\1:'`
@@ -58,34 +61,34 @@ function validate()
 {
     FILE_LOG=$LOGS/`basename $1`.log
 
-    mkdir -p `dirname $FILE_LOG`
+    mkdir -p `dirname "$FILE_LOG"`
 
     SUMMARY_LOG=$LOGS/validations.log
-    if test ! -a $SUMMARY_LOG; then
-        touch $SUMMARY_LOG
+    if test ! -a "$SUMMARY_LOG"; then
+        touch "$SUMMARY_LOG"
     fi
-    $OFFICEOTRON --errors-only $1 >$FILE_LOG 2>&1
+    $OFFICEOTRON --errors-only $1 >"$FILE_LOG" 2>&1
 
     # Need to save a log for each file and a summary log
     STATUS="FAILED"
     RESULT=0
-    LINES_COUNT=`cat $FILE_LOG | wc -l`
+    LINES_COUNT=`cat "$FILE_LOG" | wc -l`
     if test "$LINES_COUNT" == "0"; then
         STATUS="PASSED"
         RESULT=1
-        rm $FILE_LOG
+        rm "$FILE_LOG"
     fi
 
-    echo -e "$1:\t$STATUS" >>$SUMMARY_LOG
+    echo -e "$1:\t$STATUS" >>"$SUMMARY_LOG"
     return $RESULT
 }
 
 # Clean the previous results
-if test -d $OUTDIR; then
-    rm -r $OUTDIR
+if test -d "$OUTDIR"; then
+    rm -r "$OUTDIR"
 fi
-if test -d $LOGS; then
-    rm -r $LOGS
+if test -d "$LOGS"; then
+    rm -r "$LOGS"
 fi
 
 # Make sure we have the dependencies
@@ -93,24 +96,27 @@ get_deps
 
 # Generate the test files
 TEST_FILES_DIR=$CLONEDIR/test-files
-cd $TEST_FILES_DIR && make >>$RUN_LOG 2>&1
-cd $OLDPWD
+cd "$TEST_FILES_DIR" && make >>"$RUN_LOG" 2>&1
+cd "$OLDPWD"
 
 # Load and save the test files
-if test -e $ooinstall/program/ooenv; then
-    . $ooinstall/program/ooenv
+if test -e "$ooinstall/program/ooenv"; then
+    . "$ooinstall/program/ooenv"
 fi
-$ooinstall/program/soffice.bin -convert-to docx:"Office Open XML Text" -outdir $OUTDIR $TEST_FILES_DIR/ooxml-strict/tmp/*.docx >>$RUN_LOG 2>&1
-$ooinstall/program/soffice.bin -convert-to xlsx:"Calc Office Open XML" -outdir $OUTDIR $TEST_FILES_DIR/ooxml-strict/tmp/*.xslx >>$RUN_LOG 2>&1
-$ooinstall/program/soffice.bin -convert-to pptx:"Impress Office Open XML" -outdir $OUTDIR $TEST_FILES_DIR/ooxml-strict/tmp/*.pptx >>$RUN_LOG 2>&1
+echo "\"$ooinstall/program/soffice\" -convert-to docx:\"Office Open XML Text\" -outdir \"$OUTDIR\" $TEST_FILES_DIR/ooxml-strict/tmp/*.docx" >>"$RUN_LOG"
+"$ooinstall/program/soffice" -convert-to docx:"Office Open XML Text" -outdir "$OUTDIR" $TEST_FILES_DIR/ooxml-strict/tmp/*.docx >>"$RUN_LOG" 2>&1
+echo "\"$ooinstall/program/soffice\" -convert-to xlsx:\"Calc Office Open XML\" -outdir \"$OUTDIR\" $TEST_FILES_DIR/ooxml-strict/tmp/*.xlsx" >>"$RUN_LOG"
+"$ooinstall/program/soffice" -convert-to xlsx:"Calc Office Open XML" -outdir "$OUTDIR" $TEST_FILES_DIR/ooxml-strict/tmp/*.xlsx >>"$RUN_LOG" 2>&1
+echo "\"$ooinstall/program/soffice\" -convert-to pptx:\"Impress Office Open XML\" -outdir \"$OUTDIR\" $TEST_FILES_DIR/ooxml-strict/tmp/*.pptx" >>"$RUN_LOG"
+"$ooinstall/program/soffice" -convert-to pptx:"Impress Office Open XML" -outdir "$OUTDIR" $TEST_FILES_DIR/ooxml-strict/tmp/*.pptx >>"$RUN_LOG" 2>&1
 
 # Validate the test files
 RESULT=0
-out_count=`ls -1 $OUTDIR | wc -l`
+out_count=`ls -1 "$OUTDIR" | wc -l`
 validated=0
 show_progress "Validation" $validated
-for f in `ls $OUTDIR`; do
-    validate $OUTDIR/$f
+for f in `ls "$OUTDIR"`; do
+    validate "$OUTDIR/$f"
     if test $? != 0; then
         RESULT=1
     fi
