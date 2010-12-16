@@ -4,26 +4,22 @@ usage()
 {
     echo "This script generates LO git commit summary"
     echo
-    echo "Usage: ${0##*/} [--help] [--build] [--pieces] [--piece=<piece>] build-dir summary.log [git_log_param...]"
+    echo "Usage: ${0##*/} [--help] [--piece=<piece>] bootstrap-dir summary.log [git_log_param...]"
     echo
     echo "Options:"
     echo
     echo "	--help		print this help"
-    echo "	--build 	summarize just changes in the libreoffice/build repo"
-    echo "	--pieces	do not include changes from the libreoffice/build repo"
     echo "	--piece=<piece>	summarize just chnages from the given piece"
-    echo "      build-dir       directory with the libreoffice/build clone; the piece repos"
-    echo "                      must be cloned in the build-dir/clone/<piece> subdirectories"
+    echo "      bootstrap-dir   directory with the libreoffice/bootstrap clone; the other piece repos"
+    echo "                      must be cloned in the bootstrap-dir/clone/<piece> subdirectories"
     echo "      summary.log     output file"
     echo "      git_log_param   extra parameters passed to the git log command to define"
     echo "                      the area of interest , e.g. --after=\"2010-09-27\" or"
     echo "                      TAG..HEAD"
 }
 
-build_sum="yes"
-pieces_sum="yes"
-piece=
-build_dir=
+only_piece=
+bootstrap_dir=
 summary_log=
 export git_log_params=
 while test -n "$1" ; do
@@ -32,21 +28,12 @@ while test -n "$1" ; do
 	    usage
 	    exit 0;
 	    ;;
-	--build)
-	    pieces_sum=
-	    piece=
-	    ;;
-	--pieces)
-	    build_sum=
-	    ;;
 	--piece=*)
-	    build_sum=
-	    pieces_sum="yes"
-	    piece=`echo $1 | sed "s|--piece=||"`
+	    only_piece=`echo $1 | sed "s|--piece=||"`
 	    ;;
 	*)
-	    if test -z "$build_dir" ; then
-	        build_dir="$1"
+	    if test -z "$bootstrap_dir" ; then
+	        bootstrap_dir="$1"
 	    elif test -z "$summary_log" ; then
 	        summary_log="$1";
 	    else
@@ -56,8 +43,8 @@ while test -n "$1" ; do
     shift
 done
 
-if test -z "$build_dir" ; then
-    echo "Error: please, define directory with the cloned libreoffice/build repo"
+if test -z "$bootstrap_dir" ; then
+    echo "Error: please, define directory with the cloned libreoffice/bootstrap repo"
     exit 1;
 fi
 
@@ -66,9 +53,9 @@ if test -z "$summary_log" ; then
     exit 1;
 fi
 
-if test ! -d "$build_dir/.git" -o ! -f "$build_dir/download.in" -o ! -d "$build_dir/clone" ; then
-    echo "Error: invalid build dir: \"$build_dir\""
-    echo "       it must point to a clone of libreoffice/build git repo"
+if test ! -d "$bootstrap_dir/.git" -o ! -f "$bootstrap_dir/configure.in" -o ! -d "$bootstrap_dir/clone" ; then
+    echo "Error: invalid bootstrap dir: \"$bootstrap_dir\""
+    echo "       it must point to a clone of libreoffice/bootstrap git repo"
     exit 1;
 fi
 
@@ -97,14 +84,23 @@ add_to_paterns()
 temp_dir=`mktemp -d /tmp/lo-git-commit-summary-XXXXXX`
 
 # get logs
-if test "$build_sum" = "yes" ; then
-    get_git_log "$build_dir" "$temp_dir" "build"
+if test -z "$only_piece" -o "$only_piece" = "bootstrap" ; then
+    get_git_log "$bootstrap_dir" "$temp_dir" "bootstrap"
 fi
 
-if test "$pieces_sum" = "yes" ; then
-    for piece in `ls $build_dir/clone` ; do
-        test -d "$build_dir/clone/$piece" || continue;
-        get_git_log "$build_dir/clone/$piece" "$temp_dir" "$piece"
+if test "$only_piece" != "bootstrap" ; then
+    if test -z "$only_piece" ; then
+        pieces_list=`ls $bootstrap_dir/clone`
+    else
+        pieces_list="$only_piece"
+        if ! test -d "$bootstrap_dir/clone/$only_piece" ; then
+            echo "Error: wrong piece; directory does not exist: $bootstrap_dir/clone/$only_piece"
+            exit 1;
+        fi
+    fi
+    for piece in $pieces_list ; do
+        test -d "$bootstrap_dir/clone/$piece" || continue;
+        get_git_log "$bootstrap_dir/clone/$piece" "$temp_dir" "$piece"
     done
 fi
 
