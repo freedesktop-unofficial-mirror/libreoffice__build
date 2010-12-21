@@ -29,6 +29,9 @@ Unlike 'xmllint --format', this works even if the XML is corrupt, and unlike
 xmllint's --recover it does not alter the XML itself in any way (or at least
 tries not to, complain if there's a problem).
 
+If there are problems with the XML, there is also a comment inserted in the output
+file that warns about it (so that the problem is easy to spot).
+
 To compile (libQtCore from Qt4 is required, $QTDIR is the location, usually /usr):
 g++ -Wall -I$QTDIR/include/QtCore -I$QTDIR/include formatxml.cpp -lQtCore -L$QTDIR/lib -o formatxml
 
