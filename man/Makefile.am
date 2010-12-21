@@ -1,1 +1,1 @@
-EXTRA_DIST=openoffice.1.in unopkg.1.in
+EXTRA_DIST=libreoffice.1.in unopkg.1.in
