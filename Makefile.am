@@ -119,7 +119,6 @@ $(STAMP_DIR)/prebuild : $(OOBUILDDIR)/unpack
 	mkdir -p $(BUILDDIR)/man
 	mkdir -p $(BUILDDIR)/man/man1
 	mkdir -p $(OOBUILDDIR)
-	mkdir -p $(OOBUILDDIR)/external/msvcp71
 	touch $@
 
 build.tools : $(STAMP_DIR)/build.tools
