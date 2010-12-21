@@ -1,0 +1,105 @@
+diff --git sw/source/core/crsr/bookmrk.cxx sw/source/core/crsr/bookmrk.cxx
+index 4b72389..5b9ab9e 100644
+--- sw/source/core/crsr/bookmrk.cxx
++++ sw/source/core/crsr/bookmrk.cxx
+@@ -84,7 +84,7 @@ namespace
+         SwPaM aStartPaM(rStart);
+         SwPaM aEndPaM(rEnd);
+         io_pDoc->StartUndo(UNDO_UI_REPLACE, NULL);
+-        if( ( ch_start != aStartMark ) && ( rStart != rEnd ) )
++        if( ( ch_start != aStartMark ) && ( aEndMark != CH_TXT_ATR_FORMELEMENT ) )
+         {
+             io_pDoc->InsertString(aStartPaM, aStartMark);
+             rStart.nContent--;
+diff --git sw/source/core/crsr/pam.cxx sw/source/core/crsr/pam.cxx
+index de1dd08..65e4028 100644
+--- sw/source/core/crsr/pam.cxx
++++ sw/source/core/crsr/pam.cxx
+@@ -850,8 +850,10 @@ BOOL SwPaM::HasReadonlySel( bool bFormView ) const
+         else
+         {
+             // Form protection case
+-            bRet = ( pA != pB );
+-            bool bProtectForm = pDoc->get( IDocumentSettingAccess::PROTECT_FORM );
++            bool bAtStartA = pA != NULL && pA->GetMarkStart() == *GetPoint();
++            bool bAtStartB = pB != NULL && pB->GetMarkStart() == *GetMark();
++            bRet = ( pA != pB ) || bAtStartA || bAtStartB;
++             bool bProtectForm = pDoc->get( IDocumentSettingAccess::PROTECT_FORM );
+             if ( bProtectForm )
+                 bRet |= ( pA == NULL || pB == NULL );
+         }
+diff --git sw/source/filter/ww8/wrtw8nds.cxx sw/source/filter/ww8/wrtw8nds.cxx
+index 33d0b51..9dabf9f 100644
+--- sw/source/filter/ww8/wrtw8nds.cxx
++++ sw/source/filter/ww8/wrtw8nds.cxx
+@@ -1716,7 +1716,7 @@ void MSWordExportBase::OutputTextNode( const SwTxtNode& rNode )
+             IDocumentMarkAccess* const pMarkAccess = pDoc->getIDocumentMarkAccess();
+             if ( ch == CH_TXT_ATR_FIELDSTART )
+             {
+-                SwPosition aPosition( rNode, SwIndex( const_cast< SwTxtNode* >( &rNode ), nAktPos + 1 ) );
++                SwPosition aPosition( rNode, SwIndex( const_cast< SwTxtNode* >( &rNode ), nAktPos ) );
+                 ::sw::mark::IFieldmark const * const pFieldmark = pMarkAccess->getFieldmarkFor( aPosition );
+                 OSL_ENSURE( pFieldmark, "Looks like this doc is broken...; where is the Fieldmark for the FIELDSTART??" );
+ 
+@@ -1749,9 +1749,9 @@ void MSWordExportBase::OutputTextNode( const SwTxtNode& rNode )
+             }
+             else if ( ch == CH_TXT_ATR_FIELDEND )
+             {
+-                SwPosition aPosition( rNode, SwIndex( const_cast< SwTxtNode* >( &rNode ), nAktPos ) );
++                SwPosition aPosition( rNode, SwIndex( const_cast< SwTxtNode* >( &rNode ), nAktPos - 1 ) );
+                 ::sw::mark::IFieldmark const * const pFieldmark = pMarkAccess->getFieldmarkFor( aPosition );
+-                OSL_ENSURE( pFieldmark, "Looks like this doc is broken...; where is the Fieldmark for the FIELDSTART??" );
++                OSL_ENSURE( pFieldmark, "Looks like this doc is broken...; where is the Fieldmark for the FIELDEND??" );
+                 
+                 ww::eField eFieldId = lcl_getFieldId( pFieldmark );
+                 if ( pFieldmark->GetFieldname().equalsAscii( FIELD_UNHANDLED ) )
+diff --git sw/source/filter/ww8/ww8scan.hxx sw/source/filter/ww8/ww8scan.hxx
+index 42ae5df..c734e2e 100644
+--- sw/source/filter/ww8/ww8scan.hxx
++++ sw/source/filter/ww8/ww8scan.hxx
+@@ -685,7 +685,7 @@ public:
+     long Count() const { return ( pRef ) ? pRef->GetIMax() : 0; }
+ };
+ 
+-/// Iterator for footnotes and endnotes
++/// Iterator for fields
+ class WW8PLCFx_FLD : public WW8PLCFx
+ {
+ private:
+diff --git sw/source/ui/docvw/edtwin.cxx sw/source/ui/docvw/edtwin.cxx
+index ce150dd..e33a025 100644
+--- sw/source/ui/docvw/edtwin.cxx
++++ sw/source/ui/docvw/edtwin.cxx
+@@ -1715,9 +1715,17 @@ KEYINPUT_CHECKTABLE_INSDEL:
+                     break;
+ 
+                 case KEY_DELETE:
+-                    if (rSh.IsInFrontOfLabel() &&
+-                        rSh.NumOrNoNum(FALSE))
+-                        eKeyState = KS_NumOrNoNum;
++					if( !rSh.HasReadonlySel() )
++                    {
++                        if (rSh.IsInFrontOfLabel() &&
++                            rSh.NumOrNoNum(FALSE))
++                            eKeyState = KS_NumOrNoNum;
++                    }
++                    else
++                    {
++                        InfoBox( this, SW_RES( MSG_READONLY_CONTENT )).Execute();
++                        eKeyState = KS_Ende;
++                    }
+                     break;
+ 
+                 case KEY_DELETE | KEY_MOD2:
+@@ -1889,6 +1897,11 @@ KEYINPUT_CHECKTABLE_INSDEL:
+                             // <--
+                         }
+                     }
++                    else
++                    {
++                        InfoBox( this, SW_RES( MSG_READONLY_CONTENT )).Execute();
++                        eKeyState = KS_Ende;
++                    }
+                     break;
+ 
+                 case KEY_RIGHT:
