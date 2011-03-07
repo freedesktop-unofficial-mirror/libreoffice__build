@@ -65,7 +65,8 @@ BEGIN {
 		if (issues !="")
 			shortmessage = issues ": " shortmessage
 		print "#!/bin/bash"
-		print "[ -n ${SOLARSRC} ] || (echo \"no environment set!\" >2 && false)"
+		print "set -e"
+		print "[ -n ${SOLARSRC} ] || (echo \"no environment set!\" >&2 && false)"
 		print "cd ${SOLARSRC}"
 		print "MESSAGEFILE=`mktemp`"
 		print "cat > ${MESSAGEFILE} <<\"ENDOFAUTOMATEDLOGMESSAGE\""
