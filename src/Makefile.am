@@ -13,23 +13,23 @@ EXTRA_DIST=\
 	ooosetup_go-oo.ico \
 	ooobanner_go-oo.bmp \
 	ooobitmap_go-oo.bmp \
-	openintro_go-oo.bmp \
-	openabout_go-oo.bmp \
+	openintro_go-oo.png \
+	openabout_go-oo.png \
 	ooosetup_nld.ico \
 	ooobanner_nld.bmp \
 	ooobitmap_nld.bmp \
-	openintro_nld.bmp \
-	openintro_nld_eval.bmp \
-	openabout_nld.bmp \
-	openintro_ark.bmp \
+	openintro_nld.png \
+	openintro_nld_eval.png \
+	openabout_nld.png \
+	openintro_ark.png \
 	openabout_ark.png \
 	openintro_fw.png \
 	openabout_fw.png \
-	openintro_gentoo.bmp \
-	openintro_translateorgza.bmp \
+	openintro_gentoo.png \
+	openintro_translateorgza.png \
 	openabout_translateorgza.png \
-	openintro_pld.bmp \
-	openabout_pld.bmp \
+	openintro_pld.png \
+	openabout_pld.png \
 	sg3.sdg sg3.sdv sg3.thm \
 	sofficerc-upstream \
 	tango_mainapp_16.png \

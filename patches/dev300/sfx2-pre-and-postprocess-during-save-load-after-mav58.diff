@@ -1,0 +1,63 @@
+--- sfx2/source/doc/objstor.cxx.1	2011-02-16 17:27:36.171675700 +0200
++++ sfx2/source/doc/objstor.cxx	2011-02-16 20:04:33.221004900 +0200
+@@ -789,7 +789,7 @@
+             {
+                 pImp->nLoadedFlags = 0;
+                 pImp->bModelInitialized = sal_False;
+-                int end, pos = STRING_NOTFOUND;
++                int end = STRING_NOTFOUND, pos = STRING_NOTFOUND;
+                 String aUserData;
+                 static const char PREPROCESS_CONST[]="Preprocess=<";
+                 if (pFilter) {
+@@ -1243,6 +1243,51 @@
+     if( rMedium.GetErrorCode() || pMedium->GetErrorCode() || GetErrorCode() )
+         return sal_False;
+ 
++    uno::Reference< embed::XStorage > xNewTmpStorage;
++    String aUserData=rMedium.GetFilter()->GetUserData();
++    // check whether a postprocessing step is requested in the configuration
++    static const char POSTPROCESS_CONST[]="Postprocess=<";
++    int pos=aUserData.Search(::rtl::OUString::createFromAscii(POSTPROCESS_CONST).getStr(), 0);
++    int end=aUserData.Search( '>', pos+strlen(POSTPROCESS_CONST));
++    if (pos!=STRING_NOTFOUND && end!=STRING_NOTFOUND) {
++        String aAppName(aUserData, pos+strlen(POSTPROCESS_CONST), end-(pos+strlen(POSTPROCESS_CONST)));
++
++        // setup status bar
++        SfxItemSet *pSet2 = rMedium.GetItemSet();
++        const SfxUnoAnyItem *pItem=NULL;
++        SfxItemState ret=pSet2->GetItemState( SID_PROGRESS_STATUSBAR_CONTROL, TRUE, (const SfxPoolItem**)&pItem);
++        uno::Reference< ::com::sun::star::task::XStatusIndicator > xStatusIndicator;
++        if (ret==SFX_ITEM_SET && pItem!=NULL)
++        {
++            pItem->GetValue() >>= xStatusIndicator;
++        }
++
++        // create copy
++        ::rtl::OUString aTmpVersionURL = CreateTempCopyOfStorage_Impl( rMedium.GetStorage() );
++        rMedium.CloseAndRelease();
++
++        rtl::OUString aSourceFile;
++        osl::FileBase::getSystemPathFromFileURL(aTmpVersionURL, aSourceFile);
++        String aTargetFile(rMedium.GetPhysicalName());
++
++        // remove the current target file after it was copied
++        // the postprocess might crash and the unprocessed file would confuse users
++        String aTargetFileURL;
++        ::utl::LocalFileHelper::ConvertPhysicalNameToURL( aTargetFile, aTargetFileURL );
++        osl_removeFile(::rtl::OUString(aTargetFileURL).pData);
++
++        if (!invokeExternalApp(aAppName, aSourceFile, aTargetFile, xStatusIndicator))
++            return sal_False;
++
++        // create a new tmp storage
++        xNewTmpStorage=::comphelper::OStorageHelper::GetStorageFromURL( aTmpVersionURL, embed::ElementModes::READWRITE );
++        // it does not make sense to reopen the file if it was not saved correctly
++        rMedium.ReOpen();
++    }
++
++    if (xNewTmpStorage.is())
++        rMedium.SetStorage_Impl(xNewTmpStorage);
++
+     aStorer.PreserveScriptSignatureIfNecessary();
+ 
+     if( rMedium.GetErrorCode() || pMedium->GetErrorCode() || GetErrorCode() )

@@ -19,19 +19,27 @@ fi
 test -z "$PIECE_BUILD_NCPUS" && PIECE_BUILD_NCPUS=1
 test $PIECE_BUILD_NCPUS -lt 0 && PIECE_BUILD_NCPUS=1
 
-# reduce the number of jobs according to the available memory
+# define the expected maximal memory usage per process in MB
+if test `uname -i` = "x86_64" ; then
+    mem_per_process=300
+else
+    mem_per_process=200
+fi
+max_mem=`LANG=C free -t -m | sed -n "s|^Total: *\([0-9]*\).*$|\1|p"`
+
+# reduce paralelism according to the available memory
 # caused problem in the openSUSE Build Service
+# first start with number of CPUs
+if test -n "$PIECE_BUILD_NCPUS" && test "$PIECE_BUILD_NCPUS" -gt 1 ; then
+    max_cpus="$(($max_mem / $mem_per_process))"
+    test $PIECE_BUILD_NCPUS -gt $max_cpus && PIECE_BUILD_NCPUS=$max_cpus && echo "Warning: Reducing number of directories built in parallel to $max_cpus because of memory limits"
+    test $PIECE_BUILD_NCPUS -le 0 && PIECE_BUILD_NCPUS= && PIECE_USE_JOBS= && echo "Warning: Do not use the parallel build at all becuse of memory limits"
+fi
+# second check the number of directories that are procced in parallel
 if test -n "$PIECE_USE_JOBS" && test "$PIECE_USE_JOBS" -gt 1 ; then
-    # define the expected maximal memory usage per process in MB
-    if test `uname -i` = "x86_64" ; then
-	mem_per_process=250
-    else
-	mem_per_process=150
-    fi
-    max_mem=`LANG=C free -t -m | sed -n "s|^Total: *\([0-9]*\).*$|\1|p"`
     max_jobs="$(($max_mem / $mem_per_process / $PIECE_BUILD_NCPUS))"
-    test $PIECE_USE_JOBS -gt $max_jobs && PIECE_USE_JOBS=$max_jobs && echo "Warning: Reducing number of parallel jobs to $max_jobs because of memory limits"
-    test $PIECE_USE_JOBS -le 0 && PIECE_USE_JOBS= && echo "Warning: Do not use the parallel build at all because of memory limits"
+    test "$PIECE_USE_JOBS" -gt $max_jobs && PIECE_USE_JOBS=$max_jobs && echo "Warning: Reducing number of jobs per directory to $max_jobs because of memory limits"
+    test "$PIECE_USE_JOBS" -le 0 && PIECE_USE_JOBS= && echo "Warning: Do not start more jobs in one directory at all because of memory limits"
 fi
 
 # finally, set the build flags for the selected parallelism
