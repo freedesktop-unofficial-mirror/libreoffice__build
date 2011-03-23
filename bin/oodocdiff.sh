@@ -64,13 +64,14 @@ SORT=cat
 GS="gs"
 
 # Parse command line options
-while getopts r:t:skhq opt ; do
+while getopts r:t:n:skhq opt ; do
 	case "$opt" in
 		r) RES="$OPTARG" ;;
 		t) TMP="$OPTARG" ;;
 		s) SORT="sort -n -k2,2" ;;
 		k) KEEP=1 ;;
 		q) QUIET=1; GS="gs -q";;
+		n) CMPDIR="$OPTARG" ;;
 		h) usage; exit ;;
 		?) usage; exit ;;
 	esac
@@ -78,19 +79,20 @@ done
 
 shift $(($OPTIND - 1))
 
-mkdir $TMP/$$.cmpdir
+mkdir $TMP/${CMPDIR:=$$}
 
 test -z "$QUIET" && echo "Generating bitmap renderings of $1 ..."
-$GS -dNOPROMPT -dBATCH -sDEVICE=jpeg -r$RES -dNOPAUSE -sOutputFile=$TMP/$$.cmpdir/file1.%04d.jpeg $1
+$GS -dNOPROMPT -dBATCH -sDEVICE=jpeg -r$RES -dNOPAUSE -sOutputFile=$TMP/$CMPDIR/file1.%04d.jpeg $1
 
 test -z "$QUIET" && echo "Generating bitmap renderings of $2 ..."
-$GS -dNOPROMPT -dBATCH -sDEVICE=jpeg -r$RES -dNOPAUSE -sOutputFile=$TMP/$$.cmpdir/file2.%04d.jpeg $2
+$GS -dNOPROMPT -dBATCH -sDEVICE=jpeg -r$RES -dNOPAUSE -sOutputFile=$TMP/$CMPDIR/file2.%04d.jpeg $2
 
 test -z "$QUIET" && echo "Generating differences..."
-for file in $TMP/$$.cmpdir/file1.*; do test -z "$QUIET" && echo -n "$file: "; num=`echo $file | sed -e ' s/.*\.\(.*\)\..*/\1/'`; composite -compose difference $file $TMP/$$.cmpdir/file2.$num.jpeg - | identify -format %k -; done | $SORT
+for file in $TMP/$CMPDIR/file1.*; do test -z "$QUIET" && echo -n "$file: "; num=`echo $file | sed -e ' s/.*\.\(.*\)\..*/\1/'`; composite -compose difference $file $TMP/$CMPDIR/file2.$num.jpeg - | identify -format %k -; done | $SORT
 
 if test -n "$KEEP"; then
-	echo "Keeping temp images at $TMP/$$.cmpdir" >&2
+	echo "Keeping temp images at $TMP/$CMPDIR" >&2
 else
-    rm -rf $TMP/$$.cmpdir
+    rm -rf $TMP/$CMPDIR
 fi
+
