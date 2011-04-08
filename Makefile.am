@@ -1,4 +1,4 @@
-SUBDIRS = po desktop distro-configs bin etc patches man doc src stamp templates extensions
+SUBDIRS = po distro-configs bin etc patches man doc src stamp templates extensions
 
 EXTRA_DIST = \
         autogen.sh              \
