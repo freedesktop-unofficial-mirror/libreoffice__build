@@ -23,8 +23,6 @@ EXTRA_DIST=\
 	openabout_nld.png \
 	openintro_ark.png \
 	openabout_ark.png \
-	openintro_fw.png \
-	openabout_fw.png \
 	openintro_gentoo.png \
 	openintro_translateorgza.png \
 	openabout_translateorgza.png \
