@@ -43,16 +43,7 @@ $(OOBUILDDIR)/unpack : $(top_srcdir)/bin/unpack
 	fi
 	cd $(top_srcdir)/bin ; ./unpack
 	test -n "$(OOO_GIT_MANAGED)" && $(TOOLSDIR)/bin/gob --build-dir=$(OOBUILDDIR) postpare || true
-	rm -f $(STAMP_DIR)/build $(STAMP_DIR)/patch.apply \
-	      $(STAMP_DIR)/artwork.install
-	touch $@
-
-artwork.install : $(STAMP_DIR)/artwork.install
-$(STAMP_DIR)/artwork.install : $(OOBUILDDIR)/unpack \
-			      $(STAMP_DIR)/prebuild \
-			      $(wildcard $(top_srcdir)/src/*.png) \
-			      $(wildcard $(top_srcdir)/src/*.bmp)
-	$(TOOLSDIR)/bin/install-artwork $(top_srcdir)/src $(OOBUILDDIR)
+	rm -f $(STAMP_DIR)/build $(STAMP_DIR)/patch.apply
 	touch $@
 
 patch.apply: $(STAMP_DIR)/patch.apply
@@ -130,7 +121,6 @@ build.prepare : $(STAMP_DIR)/build_prepared
 $(STAMP_DIR)/build_prepared : $(OOBUILDDIR)/unpack \
 		     $(STAMP_DIR)/refresh \
 		     $(STAMP_DIR)/patch.apply \
-		     $(STAMP_DIR)/artwork.install \
 		     $(STAMP_DIR)/build.tools \
 		     $(STAMP_DIR)/prebuild
 	touch $@

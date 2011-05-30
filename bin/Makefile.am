@@ -16,7 +16,6 @@ script_files = \
 	install-dictionaries \
 	install-mono \
 	install-sdk \
-	install-artwork \
 	java-set-classpath.in \
 	localize-ooo \
 	make-win32-iso \
